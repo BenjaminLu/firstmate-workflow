@@ -20,7 +20,7 @@ import sys
 import tempfile
 import uuid
 
-KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict'}
+KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict', 'projection'}
 
 
 def unquoted(text):

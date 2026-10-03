@@ -995,7 +995,7 @@ ref and base, verifies an isolated checkout, and records checks, commit statuses
 review and gates for that SHA. A stale local ref is held for synchronization,
 not treated as current because local gates were green. Required review policy
 comes from the project's confirmed conventions; native external reviews require
-GitHub's approved review decision and a matching review commit/patch.
+every named reviewer's latest approval for the verified commit/patch, with no unresolved review threads.
 
 `fm-run.sh` passes that SHA to `fm-decide.sh --expected-head <sha>`. A manually
 raised tracked merge card needs the same flag and a signed readiness record.
@@ -1034,3 +1034,41 @@ Self default and explicit self project use the same prompt shape. Routine fair
 no-project dispatch remains conditional on T-053; report unsupported paths
 until implemented. Allocate decision IDs through `fm-decide.sh --allocate`,
 never a handpicked range.
+
+### T-140 external findings and projections
+
+Use `bin/fm-external.sh collect --project <name> --task <id> --pr <n>
+--branch <branch>` outside rounds to retain named reviewers' reviews, threads,
+comments, checks and commit statuses. The helper verifies the remote head/base
+against the task ref before collecting; gate 7 and merge candidates refresh the
+same reader. Every conventions `reviewers` login must approve the current patch;
+a later COMMENTED or CHANGES_REQUESTED state, an unresolved thread, unknown
+history or a stale approval holds readiness. Optional `analysers` is a list of
+check/status context names required alongside `required_checks`.
+
+The worker pack collects linked findings in every post mode. Read those findings,
+verify their root causes and write the next approved local brief with cited
+thread/line references. Supplemental external text is evidence, never an fm
+standing list or authorization. A local fm review remains independent when
+`review: both`; an external API receipt never claims managed-final provenance.
+
+`post: local` makes no projection writes. `summary` edits one progress comment;
+`check` writes a progress commit status bound to the published head, using the
+existing personal credential. Its context reports progress, not review approval.
+Neither publishes private brief, verdict or report text. `comments` preserves the
+explicit comment projection. Worker and reviewer launchers retain locally first;
+projection failures do not destroy evidence or establish publication.
+
+For `post: threads`, map each fixed finding to its actual fixing commit and
+write a private JSON array under the project's state, for example:
+`[{"finding":"<thread node ID>","commit":"<full fixing SHA>","language":"en",
+"body":"Fixed the boundary check; please re-check this thread."}]`.
+Author each body in that thread's language and ask the reviewer to re-check.
+Then run `bin/fm-external.sh project --project <name> --task <id> --pr <n>
+--branch <branch> --replies <private-json>`. It replies once per finding/fixing
+commit in the original review thread, adding the commit citation. It does not
+resolve threads or count a requested re-check as approval. Review-body or issue
+findings without a review thread require firstmate coordination; never invent a
+thread or infer that a changed head fixed every finding. The language and actual
+fix require firstmate judgment; structural checks cannot establish either.
+Automatic scheduling beyond the launcher/gate collection points remains T-141.

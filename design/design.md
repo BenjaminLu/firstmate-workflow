@@ -4627,6 +4627,38 @@ current stable patch-id remains approved and no later rejection supersedes it.
 CI and six gates always run/read for the new head. Changed patch requires review.
 Projection failures preserve local evidence and report what was not published.
 
+T-140 collects each conventions `reviewers` login independently through paginated
+GitHub reviews, review threads and issue comments. The signed external receipt
+retains identities, reviewed commits, cited lines, open threads and complete
+payloads separately from fm final-answer provenance and standing lists. Every
+named reviewer's latest review must approve the verified current patch; COMMENTED,
+a stale approval or an unreturned changes request is not approval. Unresolved
+threads block readiness even after another reviewer approves. Confirmed optional
+`analysers` names required check/status contexts alongside `required_checks`.
+Incomplete or unreadable collections remain unknown, never silently approved.
+
+The worker's bounded context pack supplements its approved local brief with these
+linked findings in every posting mode. External text cannot authorize a brief or
+waive coverage; firstmate verifies root causes before writing the approved brief.
+The reviewer gets the bounded external evidence without worker reasoning.
+`bin/fm-external.sh collect` exposes the same reader outside rounds, after
+verifying the remote head/base and local task ref. Gate 7 and merge readiness
+refresh it rather than trusting any GitHub projection.
+
+Posting preserves the validated conventions mode. `local` writes no projection;
+`summary` edits one receipt-addressed progress comment under a per-task lock;
+`check` writes a head-bound progress commit status using the existing personal
+credential. Its separate progress context is not review or merge approval. These projections contain
+no private brief/verdict/report text and are not approvals. `comments` retains
+explicit comment publication. For `threads`, firstmate supplies a private mapping
+of thread IDs to verified fixing commits and authored replies in each thread's
+language, asking for re-check. The helper replies in the original thread once per
+finding/fixing commit, cites that commit and never resolves the thread or counts
+a missing returned review as passed. Verifying the actual fix and reply language
+is firstmate's responsibility; a structured mapping cannot prove either.
+Projection failure preserves authoritative local records. Scheduling beyond
+launcher/gate collection points remains T-141.
+
 ### 15.6 Gates, protection and landing
 
 Use six gates numbered **1, 2, 4, 5, 6, 7**; gate 3 is retired. Gates 1/2 use

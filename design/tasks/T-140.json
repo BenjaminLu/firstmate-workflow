@@ -11,6 +11,7 @@
   "scope": [
     "bin/fm-review.sh",
     "bin/fm-worker.sh",
+    "bin/fm-config.sh",
     "bin/fm-external.sh",
     "bin/lib/**",
     "board/**",

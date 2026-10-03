@@ -98,6 +98,8 @@ from pathlib import Path
 p=Path(os.environ['BINDING_REMOTE'])
 r=json.loads(p.read_text())
 if sys.argv[1:3] == ['pr','view']: print(json.dumps({k:r.get(k) for k in sys.argv[sys.argv.index('--json')+1].split(',')}))
+elif sys.argv[2] == 'graphql': print(json.dumps({'data':{'repository':{'pullRequest':{'reviewThreads':{'nodes':[],'pageInfo':{'hasNextPage':False}}}}}}))
+elif '/issues/9/comments?' in sys.argv[2]: print('[]')
 elif '/reviews?' in sys.argv[2]: print(p.with_name('reviews.json').read_text())
 elif '/protection/' in sys.argv[2]: print(json.dumps({'contexts':['ci','security'],'checks':[]}))
 elif '/check-runs?' in sys.argv[2]: print(json.dumps({'check_runs':[{'id':1,'name':'ci','head_sha':r['headRefOid'],'status':'completed','conclusion':'success'}]}))
@@ -182,17 +184,17 @@ private = temporary/'home/projects/private-app'
 (private/'tasks/T-138.json').write_text((root/'design/tasks/T-138.json').read_text())
 (private/'state/config.yaml').write_text((root/'config.yaml').read_text())
 policy = dict(land='card',review='external',post='local',merge_method='merge',stacking='hold',repository='fixture/project',base='main',
-              confirmed=True,policy_confirmed=True,delete_branch=False,force_with_lease=False,required_checks=['ci','security'],
+              reviewers=['external-reviewer'],confirmed=True,policy_confirmed=True,delete_branch=False,force_with_lease=False,required_checks=['ci','security'],
               captain='fixture',intent='Verify native review',confirmed_at='2026-10-02',product='Fixture',
               watch_seconds=30,debounce_seconds=5,reinspect_seconds=60)
 (private/'CONVENTIONS.md').write_text('---\n'+''.join(k+': '+json.dumps(v)+'\n' for k,v in policy.items())+'---\n')
 os.environ.update(FM_EXTERNAL='1',FM_STATE_DIR=str(private/'state'),FM_TASKS_DIR=str(private/'tasks'),STATUS_STATE='success')
-review = dict(id=44,state='APPROVED',commit_id=changed,submitted_at='2026-10-02T00:00:00Z',body='Reviewed change',user={'login':'external-reviewer','id':45})
+review = dict(id=44,state='APPROVED',commit_id=changed,submitted_at='2026-10-02T00:00:00Z',body='Reviewed change',html_url='https://github.com/fixture/project/pull/9#pullrequestreview-44',user={'login':'external-reviewer','id':45})
 (temporary/'reviews.json').write_text(json.dumps([review]))
 from fm_binding import external_review
 external_store = Store(private/'state','private-app','T-138')
 receipt = external_review(external_store,root,'fixture/project',9,changed)
-assert receipt['reviewer']['login']=='external-reviewer' and receipt['head']==changed
+assert receipt['states']['external-reviewer']['review']['user']['login']=='external-reviewer' and receipt['head']==changed
 assert receipt['provenance']['final_source']=='github-review-api'
 assert external_store.directory == private/'state/evidence/T-138'
 assert not (root/'state/evidence/private-app').exists()

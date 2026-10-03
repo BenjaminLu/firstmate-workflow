@@ -109,7 +109,7 @@ def required_checks(root, repository, pr, head):
     if os.environ.get('FM_EXTERNAL') == '1':
         from fm_conventions import read_policy
         policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, os.environ.get('FM_BASE') or 'main')
-        names = policy['required_checks']
+        names = sorted(set(policy['required_checks'] + policy.get('analysers', [])))
     else:
         from urllib.parse import quote
         protection = github(repository, 'api', 'repos/' + repository + '/branches/' + quote(view['baseRefName'], safe='') + '/protection/required_status_checks')
@@ -158,42 +158,22 @@ def review_policy():
 
 
 def external_review(store, root, repo, pr, head):
-    """GitHub's native review decision is authority, never comment markers.
+    """All named reviewers and their threads, separately from local fm finals."""
+    from fm_conventions import read_policy
+    from fm_external import collect
+    policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repo)
+    record = collect(store, root, repo, pr, head, policy)
+    if not record['ready']:
+        raise ValueError('external review not ready: ' + '; '.join(record['blockers']))
+    return record
 
-    Unknown protection/review state cannot become an approval. This path is
-    distinct from T-163 managed assistant finals and never claims that level.
-    """
-    view = github(repo, 'pr', 'view', str(pr), '--repo', repo,
-                  '--json', 'headRefOid,reviewDecision')
-    if view.get('headRefOid') != head or view.get('reviewDecision') != 'APPROVED':
-        raise ValueError('external repository review is not approved for the authoritative head')
-    reviews = github(repo, 'api', 'repos/' + repo + '/pulls/' + str(pr) + '/reviews?per_page=100')
-    # Refuse an incomplete history instead of selecting an old approval from
-    # page one. A future pagination transport can remove this safe bound.
-    if not isinstance(reviews, list) or len(reviews) >= 100:
-        raise ValueError('complete external review history unavailable')
-    decisive = [r for r in reviews if r.get('state') in ('APPROVED', 'CHANGES_REQUESTED')]
-    if not decisive:
-        raise ValueError('external approval receipt unavailable')
-    latest = max(decisive, key=lambda r: (r.get('submitted_at', ''), r.get('id', 0)))
-    if latest['state'] != 'APPROVED':
-        raise ValueError('later external rejection supersedes approval')
-    reviewed_head = sha(latest.get('commit_id'))
-    base = git(root, 'merge-base', view_base(repo, pr), reviewed_head)
-    binding = source_binding(store.task, reviewed_head, base, Path(__file__).parents[2])
-    current_base = git(root, 'merge-base', view_base(repo, pr), head)
-    current = change(root, head, current_base)
-    git(root, 'merge-base', '--is-ancestor', base, current_base)
-    if binding['patch'] != current['patch'] or binding['files'] != current['files']:
-        raise ValueError('external approval covers a different patch')
-    prior = [r for r in store.records() if r['kind'] == 'external-verdict']
-    if prior and prior[-1].get('github_review') == latest and prior[-1].get('binding') == binding:
-        return prior[-1]
-    return store.append('external-verdict', 1, 'github:' + latest['user']['login'],
-                        reviewed_head, latest.get('body') or '', verdict='APPROVE',
-                        base=base, patch=binding['patch'], binding=binding, github_review=latest,
-                        provenance={'level':'legacy', 'final_source':'github-review-api'},
-                        vendor='github', model=None, reviewer=latest['user'], repository=repo, pr=int(pr))
+
+def review_identity(record):
+    # Full receipts remain signed and verified by Store. Only external evidence
+    # uses a decisive subset for readiness; fm final provenance is unchanged.
+    if record.get('kind') == 'external-verdict':
+        return record.get('readiness_signature', record['signature'])
+    return record['signature']
 
 
 def selected_review(store, root, repo, pr, head):
@@ -276,7 +256,7 @@ def main():
         if required_checks(root, repo, args.pr, head) != record['checks']:
             raise ValueError('required check/status evidence changed; refresh gates')
         selected, external = selected_review(store, root, repo, args.pr, head)
-        if selected['signature'] != record['verdict_signature'] or (external and external['signature'] != record.get('external_signature')):
+        if review_identity(selected) != record['verdict_signature'] or (external and review_identity(external) != record.get('external_signature')):
             raise ValueError('candidate review superseded')
         reviewed = record['review']
         binding = reviewed.get('binding', {})
@@ -309,8 +289,8 @@ def main():
     record = store.append('readiness', reviewed['round'], 'firstmate', head, '',
                          pr=int(args.pr), repository=repo, gates=[1,2,4,5,6,7], checks=checks,
                          gate_report_sha256=digest(report.encode()),
-                         verdict_signature=reviewed['signature'], review=reviewed,
-                         external_signature=external['signature'] if external else None)
+                         verdict_signature=review_identity(reviewed), review=reviewed,
+                         external_signature=review_identity(external) if external else None)
     print(json.dumps(record))
 
 

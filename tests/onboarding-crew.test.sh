@@ -81,8 +81,10 @@ else: sys.exit(2)
     def test_worker_report_is_retained_for_every_noncomment_projection(self):
         for projection in ('local','summary','check','threads'):
             with self.subTest(projection=projection):
-                out=self.run_block(function(worker,'post_note')+'post_note "$work/note" 9; echo "$spoke"',f'projection={projection}; spoke=0')
+                (self.home/'projections').unlink(missing_ok=True)
+                out=self.run_block(function(worker,'post_note')+'post_note "$work/note" 9; echo "$spoke"',f'projection={projection}; spoke=0; fm_external() {{ printf \"%s\\n\" \"$*\" >> \"$work/projections\"; }}')
                 self.assertEqual(out.strip().splitlines()[-1],'1')
+                self.assertIn('project --pr 9 --head abc --stage worker',(self.home/'projections').read_text())
                 self.assertIn('Private worker report',self.notes())
                 self.assertFalse((self.home/'comments').exists())
     def test_worker_question_without_implementation_is_private(self):
