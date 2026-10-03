@@ -467,7 +467,23 @@ def choose_name(alias, role, rosters, live, last, other_role, room, served=None)
     return name
 
 
+def concurrent_service():
+    spec = importlib.util.spec_from_file_location('fm_concurrent', Path(__file__).parent / 'lib/fm_concurrent.py')
+    module = importlib.util.module_from_spec(spec)
+    written, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try: spec.loader.exec_module(module)
+    finally: sys.dont_write_bytecode = written
+    return module
+
+
 def allocate(root, role, task, alias):
+    # Dispatch and identity publication share lock order: global, then project.
+    # A launch receipt holds the slot until this identity is visible.
+    with locked(Path(root).resolve() / 'state/dispatch.lock'):
+        return allocate_identity(root, role, task, alias)
+
+
+def allocate_identity(root, role, task, alias):
     if role not in ('worker', 'reviewer', 'firstmate'):
         raise ValueError('unsupported role')
     if not re.fullmatch(r'[A-Za-z0-9_-]+', task):
@@ -523,6 +539,12 @@ def allocate(root, role, task, alias):
                       round=number, attempt=attempt, one_role=True,
                       requested_alias=alias, run=str(run), created=time.time())
         save(run / 'identity.json', record)
+        # Bind allocation to its launcher before releasing either lock. A
+        # launcher killed before fm_identity returns must not reserve forever.
+        parent = os.getppid()
+        command = subprocess.run(['ps', '-p', str(parent), '-o', 'command='],
+                                 capture_output=True, text=True).stdout.strip()
+        save(run / 'process.json', dict(record, pid=parent, token=command or str(parent)))
     return run
 
 
@@ -2669,6 +2691,15 @@ def main(args):
             reconcile = retire_dead_crew(root)
             report = inspect(root); report['deck_reconcile'] = reconcile
             report['project'] = project_report(root)
+            coordinator = concurrent_service()
+            projects = coordinator.routes(root)
+            grouped = {p['name'] or 'firstmate-workflow': [] for p in projects}
+            for item in coordinator.live_rounds(projects):
+                # Only authorized routing/identity metadata crosses into status.
+                name = item['project'] or 'firstmate-workflow'
+                grouped[name].append({k: item[k] for k in
+                                      ('project', 'task', 'role', 'actor', 'name', 'round', 'attempt') if k in item})
+            report['live_by_project'] = grouped
             print(json.dumps(report, indent=2))
             print(pending_summary(report['unacknowledged']), file=sys.stderr)
         elif action == 'ack':

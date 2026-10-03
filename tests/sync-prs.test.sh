@@ -133,6 +133,28 @@ printf '%s\n' '[{"number":8,"state":"OPEN","title":"T-005: app","headRefName":"t
 FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --repo "$d4" >/dev/null 2>&1
 assert_ne "0" "$?" "a project that cannot be read makes the sync exit non-zero"
 assert_eq "example-app" "$(jq -r 'select(.pr==8)|.project' "$log4")" "but the other project is still synced"
+# T-053: explicit selection must neither query nor record another project.
+: > "$d4/ghcalls"
+printf '%s\n' '[{"number":10,"state":"OPEN","title":"T-010: selected app","headRefName":"t-010-app"}]' > "$d4/ghp/app.json"
+selected="$(FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --repo "$d4" --project example-app 2>&1)"
+assert_eq "0" "$?" "explicit project sync succeeds even when the other repository fails"
+assert_contains "$selected" "pr_opened #10" "selected sync records its new pull request"
+assert_eq "1" "$(wc -l < "$d4/ghcalls" | tr -d ' ')" "selected sync queries exactly one repository"
+assert_lacks "$(cat "$d4/ghcalls")" "owner/engine" "selected sync never queries the engine repository"
+assert_eq "example-app" "$(jq -r 'select(.pr==10)|.project' "$log4")" "selected sync writes to private project state"
+assert_eq "0" "$(jq -s 'map(select(.pr==10))|length' "$d4/state/events.jsonl")" "selected sync keeps private events out of engine state"
+n4="$(wc -l < "$log4" | tr -d ' ')"
+FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --project example-app --repo "$d4" >/dev/null 2>&1
+assert_eq "$n4" "$(wc -l < "$log4" | tr -d ' ')" "selected sync reads private state for deduplication"
+: > "$d4/ghcalls"
+FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --project unknown --repo "$d4" >/dev/null 2>&1
+assert_eq "65" "$?" "unknown project is refused before syncing"
+assert_eq "" "$(cat "$d4/ghcalls")" "unknown project never reaches GitHub"
+printf '[]\n' > "$d4/ghp/engine.json"
+FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --project firstmate-workflow --repo "$d4" >/dev/null 2>&1
+assert_eq "0" "$?" "explicit self project still syncs"
+assert_contains "$(cat "$d4/ghcalls")" "owner/engine" "explicit self project names the engine repository"
+assert_lacks "$(cat "$d4/ghcalls")" "example-org/example-app" "explicit self project excludes external repositories"
 rm -rf "$d4"
 
 # A tree whose config.yaml has no `projects:` map - every fixture written

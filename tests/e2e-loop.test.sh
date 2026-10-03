@@ -127,7 +127,8 @@ both="$(caller_fixture t-004-engine "$(printf '%s\n%s' \
   '{"type":"merged","task":"T-004","pr":7,"project":"example-app"}')" "$REGISTRY2")"
 cp "$DETAILS" "$both/state/decision-details/D-firstmate-workflow-T004-1.json"
 oboth="$(PATH="$both/bin:$PATH" bash "$both/bin/fm-run.sh" once --repo "$both" 2>&1)"
-assert_contains "$(cat "$both/calls")" "fm-gate --task T-004" "the engine's own #7 is still gated"
+assert_contains "$(cat "$both/calls")" "fm-gate --project firstmate-workflow --task T-004" "the engine's own #7 is still gated"
+assert_contains "$(cat "$both/calls")" "fm-sync-prs --repo $both --project firstmate-workflow" "run passes its resolved project to sync"
 assert_contains "$oboth" "asking the captain (D-firstmate-workflow-T004-1)" \
   "and carded, another project's merge notwithstanding"
 assert_eq "7 firstmate-workflow" \

@@ -96,6 +96,18 @@ else
   [ -z "${FM_PROJECT:-}" ] || { echo "fm-ready: named project needs $_storage_lib" >&2; exit 65; }
   FM_STATE_DIR="$ROOT/state"; FM_TASKS_DIR="$ROOT/design/tasks"
 fi
+READY_PROJECT="${FM_PROJECT:-}"
+READY_DEFAULT="$(fm_cfg default_project "$ROOT/config.yaml" 2>/dev/null || true)"
+if [ -z "$(fm_projects "$ROOT/config.yaml" 2>/dev/null)" ]; then
+  # Explicit canonical self and unnamed pre-registry callers share history.
+  READY_PROJECT=firstmate-workflow; READY_DEFAULT=firstmate-workflow
+elif [ -z "$READY_DEFAULT" ]; then
+  for candidate in $(fm_projects "$ROOT/config.yaml"); do
+    if [ "$(fm_project_get "$candidate" repo "$ROOT/config.yaml")" = . ]; then
+      READY_DEFAULT="$candidate"; break
+    fi
+  done
+fi
 TASKS="$FM_TASKS_DIR"; LOG="$FM_STATE_DIR/events.jsonl"; DIR="$FM_STATE_DIR/ready"
 [ -d "$TASKS" ] || die "no design/tasks/ under $ROOT"
 # The task list is one file per task (T-090), read all or nothing as
@@ -129,11 +141,12 @@ ready_tasks() {
   local log="$LOG" list
   [ -f "$log" ] || log=/dev/null
   list="$(tasks_list)" || die "a file in $TASKS does not read as one task"
-  jq -r --rawfile log "$log" '
+  jq -r --arg project "$READY_PROJECT" --arg default "$READY_DEFAULT" --rawfile log "$log" '
     def moves: ["dispatched","commit_pushed","pr_opened","gate_failed","gate_passed",
                 "review_opened","approved","review_failed","worker_crashed"];
     ([$log | split("\n")[] | select(length > 0) | (try fromjson catch null)
-      | select(type == "object" and (.task | type) == "string")]) as $ev
+      | select(type == "object" and (.task | type) == "string")
+      | select((.project // $default) == $project)]) as $ev
     | (reduce range(0; $ev | length) as $i ({};
         $ev[$i] as $e | (.[$e.task] // {stage: "untouched"}) as $s
         | if ($s.stage == "merged" or $s.stage == "closed") then .
@@ -160,8 +173,11 @@ rows="$(awk -F'\t' -v OFS='\t' '$2 == "ready" { print $1, $3, $4 }' <<< "$all_ro
 # state/decisions/<D-n>.json, and the card was a choice about this task. An A
 # on another task's card, or on a merge card, says nothing about this one.
 answered_a() {
+  if [[ "$1" =~ ^D-.*-T[^-]+-[0-9]+$ ]] && [ -n "$READY_PROJECT" ]; then
+    [[ "$1" == "D-$READY_PROJECT-T"* ]] || return 1
+  fi
   { [[ "$1" =~ $CARD_ID ]] || [[ "$1" =~ $SKILL_CARD ]]; } && [ -f "$FM_STATE_DIR/decisions/$1.json" ] \
-    && jq -e --arg t "$2" '.chosen == "A" and .task == $t and ((.kind // "choice") == "choice")' \
+    && jq -e --arg t "$2" --arg project "$READY_PROJECT" '.chosen == "A" and .task == $t and ((.kind // "choice") == "choice") and ((.project // $project) == $project)' \
          "$FM_STATE_DIR/decisions/$1.json" >/dev/null 2>&1
 }
 
@@ -252,6 +268,10 @@ if [ "$MODE" != judged ]; then
     fi
   done <<< "$rows"
   exit 0
+fi
+
+if [ -n "$READY_PROJECT" ] && [[ "$DECISION" =~ ^D-.*-T[^-]+-[0-9]+$ ]]; then
+  [[ "$DECISION" == "D-$READY_PROJECT-T${TASK#T-}-"* ]] || die "decision belongs to another project or task"
 fi
 
 # judged: only a task that is ready now can have been judged as ready
