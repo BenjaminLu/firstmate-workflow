@@ -8,7 +8,12 @@ binding_service_fixture() {
   cat > "$1/bin/lib/fm_binding.py" <<'PY'
 from fm_binding_real import source_binding, git, command, github, remote_head, sha, repository
 if __name__ == "__main__":
-    import argparse, json, os, re, subprocess
+    import argparse, json, os, re, subprocess, sys, runpy
+    from pathlib import Path
+    # Keep modes outside this fixture's overrides on the production parser.
+    if len(sys.argv) > 1 and sys.argv[1] not in ('head', 'base', 'checks', 'ready', 'candidate'):
+        runpy.run_path(str(Path(__file__).with_name('fm_binding_real.py')), run_name='__main__')
+        raise SystemExit(0)
     p=argparse.ArgumentParser()
     p.add_argument('mode'); p.add_argument('--task'); p.add_argument('--pr')
     p.add_argument('--gate-report',default='')
