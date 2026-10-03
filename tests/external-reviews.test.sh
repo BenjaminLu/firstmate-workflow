@@ -163,15 +163,21 @@ class ExternalReviews(unittest.TestCase):
         import fm_binding
         first=self.collect()
         gate=self.home/'state/gates/head.txt'; gate.parent.mkdir()
-        gate.write_text('HEAD:'+HEAD+'\n'+''.join('  + gate %s: ok\n'%n for n in (1,2,4,5,6,7)))
+        gate.write_text('HEAD:'+HEAD+'\nBASE:'+BASE+'\n'+''.join('  + gate %s: ok\n'%n for n in (1,2,4,5,6,7)))
         env=dict(FM_TARGET_ROOT=str(self.home),FM_STATE_DIR=str(self.home/'state'),
                  FM_EVIDENCE_PROJECT='app',FM_EXTERNAL='1')
+        def fetch(argv):
+            # Match live-base-binding.test.sh's exact repository/base fetch stub.
+            self.assertEqual(argv, ['git', '-C', str(self.home), 'fetch', '--no-tags',
+                                    'https://github.com/org/app.git', 'refs/heads/main'])
+            return b''
         def run(mode):
             with patch.dict(os.environ,env), patch.object(sys,'argv',['binding',mode,'--task','T-140',
                     '--pr','9','--head',HEAD,'--gate-report',str(gate)]), \
                  patch('fm_binding.repository',return_value='org/app'), \
-                 patch('fm_binding.remote_head',return_value={'headRefOid':HEAD}), \
+                 patch('fm_binding.remote_head',return_value={'headRefOid':HEAD,'baseRefName':'main'}), \
                  patch('fm_binding.view_base',return_value='main'), \
+                 patch('fm_binding.command',side_effect=fetch), \
                  patch('fm_binding.git',return_value=BASE), \
                  patch('fm_binding.source_binding',return_value=self.bound), \
                  patch('fm_binding.required_checks',return_value={'drone':'success'}), \
