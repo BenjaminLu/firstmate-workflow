@@ -113,10 +113,11 @@ with tempfile.TemporaryDirectory(prefix='fm-host-') as temporary:
     # Exercise start/status wiring while replacing only their unrelated service
     # effects. The real host collector, detector and settings readers run.
     herdr = root / 'bin/fm-herdr.py'
-    herdr.rename(root / 'bin/herdr-original.py')
-    herdr.write_text('import runpy, sys\nfrom pathlib import Path\n'
-                     'if __name__ == "__main__" and sys.argv[1] != "session":\n'
-                     '    runpy.run_path(str(Path(__file__).with_name("herdr-original.py")), run_name="__main__")\n')
+    # Keep the module's complete import surface for storage/registry readers;
+    # suppress only the session command's unrelated service effects.
+    herdr.write_text(herdr.read_text().replace(
+        "if __name__ == '__main__':",
+        "if __name__ == '__main__' and sys.argv[1] != 'session':"))
     (root / 'bin/fm-doctor.sh').write_text('#!/bin/sh\nexit 0\n')
     (home / '.claude').mkdir()
     (home / '.claude/settings.json').write_text('{"model":"opus"}')
@@ -146,6 +147,37 @@ with tempfile.TemporaryDirectory(prefix='fm-host-') as temporary:
     assert json.loads(external_record.read_text())['harness'] == 'claude'
     assert not (external_home / 'projects/outside/repo/state/session/host.json').exists()
     config.write_text(base)
+    # Collection is informational: missing code, a missing detector import,
+    # and a crashing collector must not block either session entry point.
+    collector = root / 'bin/lib/fm_host.py'
+    detector = root / 'bin/lib/fm_hooks.py'
+    collector_source, detector_source = collector.read_text(), detector.read_text()
+    for failure in ('missing-collector', 'missing-detector', 'crashing-collector'):
+        for mode in ('start', 'status'):
+            for previous in (None, 'claude'):
+                if previous is None:
+                    record.unlink(missing_ok=True)
+                else:
+                    host(previous)
+                if failure == 'missing-collector':
+                    collector.unlink()
+                elif failure == 'missing-detector':
+                    detector.unlink()
+                else:
+                    collector.write_text('raise RuntimeError("collector fixture failure")\n')
+                try:
+                    result = subprocess.run(['bash', '-c',
+                        'export FM_ENTRY_PID=$$ FM_ENTRY_SCRIPT=fm-session.sh; '
+                        'exec bash "$1/bin/fm-session.sh" "$2" --repo "$1"',
+                        'fixture', str(root), mode], env=dict(env, FM_HARNESS='claude'),
+                        capture_output=True, text=True)
+                    assert result.returncode == 0, (failure, mode, result.stderr)
+                    assert 'host refresh failed' in result.stderr, result.stderr
+                    assert json.loads(record.read_text()) == {
+                        'harness': None, 'cli_version': None, 'model': None, 'model_source': None}
+                finally:
+                    collector.write_text(collector_source)
+                    detector.write_text(detector_source)
     # No harness-owned model: no config.yaml guess. Unknown detector is
     # controlled here, rather than depending on this machine's process tree.
     sys.path.insert(0, str(root / 'bin/lib'))
