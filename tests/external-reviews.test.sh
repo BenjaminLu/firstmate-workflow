@@ -172,8 +172,18 @@ class ExternalReviews(unittest.TestCase):
         gh_fixture=str(root/'tests/lib/external-review-gh.py')
         def command(argv):
             if argv[:1] == ['git']:
-                self.assertEqual(argv, ['git', '-C', str(self.home), 'fetch', '--no-tags',
-                                        'https://github.com/org/app.git', 'refs/heads/main'])
+                self.assertEqual(argv[:3], ['git', '-C', str(self.home)])
+                args = argv[3:]
+                if args[0] == 'fetch':
+                    self.assertEqual(args[:3], ['fetch', '--no-tags', 'https://github.com/org/app.git'])
+                    source, self.fetched_ref = args[3].split(':')
+                    self.assertEqual(source, '+refs/heads/main')
+                    self.assertTrue(self.fetched_ref.startswith('refs/fm/fetch/'))
+                    return b''
+                if args[0] == 'rev-parse':
+                    self.assertEqual(args, ['rev-parse', self.fetched_ref])
+                    return BASE.encode()
+                self.assertEqual(args, ['update-ref', '-d', self.fetched_ref])
                 return b''
             if argv[:3] == [gh_fixture, 'pr', 'view']:
                 self.assertEqual(argv, [gh_fixture, 'pr', 'view', '9', '--repo', 'org/app',

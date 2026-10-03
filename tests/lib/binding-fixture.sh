@@ -7,6 +7,10 @@ binding_service_fixture() {
   cp "$ROOT/bin/lib/fm_binding.py" "$1/bin/lib/fm_binding_real.py"
   cat > "$1/bin/lib/fm_binding.py" <<'PY'
 from fm_binding_real import source_binding, git, command, github, remote_head, sha, repository
+def fetch_ref(*args, **kwargs):
+    from fm_binding_real import fetch_ref as fetch
+    return fetch(*args, **kwargs)
+
 if __name__ == "__main__":
     import argparse, json, os, re, subprocess, sys, runpy
     from pathlib import Path

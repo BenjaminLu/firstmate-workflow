@@ -1,0 +1,21 @@
+{
+  "id": "T-178",
+  "title": "no engine fetch reads the shared FETCH_HEAD: each fetch lands in its own private ref, so concurrent rounds cannot overwrite each other's evidence",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_binding.py",
+    "bin/lib/fm_stack.py",
+    "bin/lib/fm_autopilot.py",
+    "bin/lib/**",
+    "bin/ci.sh",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-178.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-04, reviewer-nikhil-t176-r1 approved PR #164, but its verdict was never recorded: the run exited 65 with 'fm-binding: authoritative PR head differs from fetched head or local task ref'. `authoritative()` in bin/lib/fm_binding.py:104-107 fetches `refs/pull/<n>/head`, then reads `FETCH_HEAD`. FETCH_HEAD is one file per repository, and T-177's reviewer fetched in the same repository about 16 seconds later and overwrote it. Gate 7 then refused the task (\"missing local verdict\"), and a whole review round had to be rerun. The captain approved the fix in chat ('派'). The same pattern is at fm_binding.py:237-239 (live base), fm_stack.py:88-92 (restack) and fm_autopilot.py:286-288 (review objects).",
+    "Private refs. Every engine fetch whose result is then read names its destination: `git fetch --no-tags <url> +<src>:refs/fm/fetch/<unique>`. `<unique>` is per call (e.g. pid plus a random token). The code reads that ref and deletes it in a `finally`, even on error. Nothing in bin/ reads FETCH_HEAD after this change. Add a ci.sh lint that refuses `FETCH_HEAD` in bin/ outside comments, so the pattern cannot return. Error messages and exit codes stay unchanged. The refs/fm/fetch/ namespace is never pushed, and never shows up as a branch.",
+    "Tests (fail first, git stubs answering like the real tool):\n- Two fetches interleaved in the same repository, one for PR A and one for PR B, each read their own head. On base, the second overwrites the first.\n- No refs/fm/fetch/* refs remain after either success or a raised error.\n- The lint is red on a planted FETCH_HEAD read.\nEvidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

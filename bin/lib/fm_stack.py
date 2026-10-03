@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-from fm_binding import command, git, github, remote_head, sha
+from fm_binding import command, fetch_ref, git, github, remote_head, sha
 from fm_conventions import read_policy
 
 
@@ -86,10 +86,8 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
         raise ValueError('task branch protection is unknown or protected')
     old_base = sha(parent_view['headRefOid'])
     url = 'https://github.com/' + repository + '.git'
-    git(root, 'fetch', '--no-tags', url, 'refs/heads/' + target)
-    new_base = sha(git(root, 'rev-parse', 'FETCH_HEAD'))
-    git(root, 'fetch', '--no-tags', url, 'refs/pull/' + str(parent) + '/head')
-    if git(root, 'rev-parse', 'FETCH_HEAD') != old_base:
+    new_base = fetch_ref(root, url, 'refs/heads/' + target)
+    if fetch_ref(root, url, 'refs/pull/' + str(parent) + '/head') != old_base:
         raise ValueError('merged parent head changed')
     # Never replay the parent's squash-merged commits onto its replacement.
     boundary = git(root, 'merge-base', old_base, expected)
