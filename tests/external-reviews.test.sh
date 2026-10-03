@@ -163,15 +163,34 @@ class ExternalReviews(unittest.TestCase):
         import fm_binding
         first=self.collect()
         gate=self.home/'state/gates/head.txt'; gate.parent.mkdir()
-        gate.write_text('HEAD:'+HEAD+'\n'+''.join('  + gate %s: ok\n'%n for n in (1,2,4,5,6,7)))
+        gate.write_text('HEAD:'+HEAD+'\nBASE:'+BASE+'\n'+''.join('  + gate %s: ok\n'%n for n in (1,2,4,5,6,7)))
         env=dict(FM_TARGET_ROOT=str(self.home),FM_STATE_DIR=str(self.home/'state'),
                  FM_EVIDENCE_PROJECT='app',FM_EXTERNAL='1')
+        view=dict(state='OPEN',headRefOid=HEAD,baseRefOid=BASE,
+                  baseRefName='main',headRefName='task')
+        fixture_command=fm_binding.command
+        gh_fixture=str(root/'tests/lib/external-review-gh.py')
+        def command(argv):
+            if argv[:1] == ['git']:
+                self.assertEqual(argv, ['git', '-C', str(self.home), 'fetch', '--no-tags',
+                                        'https://github.com/org/app.git', 'refs/heads/main'])
+                return b''
+            if argv[:3] == [gh_fixture, 'pr', 'view']:
+                self.assertEqual(argv, [gh_fixture, 'pr', 'view', '9', '--repo', 'org/app',
+                    '--json', 'headRefOid,baseRefOid,baseRefName,headRefName,state'])
+                return json.dumps(view).encode()
+            if argv[:2] == [gh_fixture, 'api']:
+                # Collection also reads reviews, threads and checks through command.
+                # The local fixture validates repository and endpoint arguments.
+                return fixture_command(argv)
+            self.fail('unexpected binding command: ' + repr(argv))
         def run(mode):
             with patch.dict(os.environ,env), patch.object(sys,'argv',['binding',mode,'--task','T-140',
                     '--pr','9','--head',HEAD,'--gate-report',str(gate)]), \
                  patch('fm_binding.repository',return_value='org/app'), \
-                 patch('fm_binding.remote_head',return_value={'headRefOid':HEAD}), \
+                 patch('fm_binding.remote_head',return_value=view), \
                  patch('fm_binding.view_base',return_value='main'), \
+                 patch('fm_binding.command',side_effect=command), \
                  patch('fm_binding.git',return_value=BASE), \
                  patch('fm_binding.source_binding',return_value=self.bound), \
                  patch('fm_binding.required_checks',return_value={'drone':'success'}), \

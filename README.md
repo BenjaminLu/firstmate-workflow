@@ -200,9 +200,21 @@ billing on purpose.
 ## Declaring a project
 
 Firstmate can run a crew on any repository. It knows nothing about that
-repository's toolchain; the repository says what it needs in the `project:`
-block of its `config.yaml`, and the gates and `bin/fm-session.sh start` run
-exactly that.
+repository's toolchain. The self contract is declared once in
+`config.yaml` in the top-level `project:` block. Both shell and Python readers
+accept that location or `projects.firstmate-workflow.project`; declaring both
+is an error. T-170 will move the block after these readers reach `main`. Session
+start/status use the same parser. External contracts are approved privately
+under `FM_HOME/projects/<name>/state/config.yaml`, never in the public registry.
+
+Gate 5 reads the complete verified contract snapshot in the task's approved
+pin, including `docs` and `check_env`. It never reads the tested branch's
+contract or the mutable engine config. Old self pins read their recorded
+commit and location without repinning. Allowing a task to edit config does
+not allow that task to change its own gates. The examples below show the
+contract body in the current top-level/private `project:` form. The supported
+registry form nests that block beneath `projects.firstmate-workflow`; the
+shipped self config stays at the top level until T-170.
 
 | key | required | meaning |
 |---|---|---|
@@ -226,11 +238,21 @@ block is an error, not an empty declaration.
 - **Gate 5** classifies the diff with `tests`, reverts the implementation, runs
   `setup`, then runs through `test` only the suites the diff touches: each
   changed test, then each other test file that names one of them (a suite
-  sourcing a changed helper). It requires red. When no suite can be run that
+  sourcing a changed helper). It requires green on head and red on base. When no suite can be run that
   way — no `test` declared, or no touched test left in the tree — it runs the
   whole `check` instead and says so. A missing `check` there, or a failing
   `setup`, fails the gate and says so. A diff whose every non-test path
   matches `docs` needs no new test; any other path still does.
+- **Current-head evidence** uses the selected project's repository and PR base,
+  including a stacked base. Before a full gate run, GitHub's head and fetched
+  head must match the local task ref; the isolated rebase checkout must match
+  too. Required check-runs and commit statuses must both be green on that SHA.
+  Names combine readable protection with captain-confirmed conventions;
+  unreadable protection needs confirmed checks and policy. Missing or running
+  evidence is pending, failures are failed, unreadable evidence is unknown.
+  Gate transcripts and signed readiness also bind the exact PR base tip;
+  head/base movement invalidates readiness. Gate 7 reads signed local final
+  verdicts under the project review policy; comments alone carry no authority.
 - **Gate runs are serialized** on one machine by a kernel lock on a file
   (`FM_GATE_LOCK`, by default `/tmp/fm-gate.lock`, whatever `TMPDIR` is): a
   second run waits for the first, and the lock goes with the run that held

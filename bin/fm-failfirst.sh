@@ -49,6 +49,8 @@
 # --head=<ref> selects a branch without changing the caller's checkout.
 # --gate uses declared docs exemptions and falls back to project.check when
 # no suite can be determined; it shares restoration, execution and reporting.
+# --contract=<file> supplies the verified JSON contract from the gate launcher;
+# with it, target config.yaml is never read and --setup cannot override the pin.
 #
 # Exit: 0 pass or not applicable, 1 fail, 64 usage, 70 it could not run.
 set -uo pipefail
@@ -65,11 +67,12 @@ FF_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --shard, --part and --merge take their value after `=`, in one word, as
 # bin/ci.sh's --shard=i/n does.
-GATE_MODE=''; HEAD_REF=HEAD
+GATE_MODE=''; HEAD_REF=HEAD; CONTRACT=''
 REPORT=''; SETUP=''; SETUP_GIVEN=''; JOBS=''; BASE_REF=''; SHARD=''; PART=''; MERGE=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --gate) GATE_MODE=1; shift ;;
+    --contract=*) CONTRACT="${1#--contract=}"; [ -n "$CONTRACT" ] || exit 64; shift ;;
     --head=*) HEAD_REF="${1#--head=}"; shift ;;
     --report) fm_need "fm-failfirst" "$@"; REPORT="${2-}"; shift 2 ;;
     --setup) fm_need "fm-failfirst" "$@"; SETUP="${2-}"; SETUP_GIVEN=1; shift 2 ;;
@@ -96,6 +99,9 @@ case "$JOBS" in
 esac
 if [ -n "$GATE_MODE" ] && { [ -n "$SHARD" ] || [ -n "$MERGE" ]; }; then
   echo "fm-failfirst: --gate cannot be sharded or merged" >&2; exit 64
+fi
+if [ -n "$CONTRACT" ] && { [ -z "$GATE_MODE" ] || [ -n "$SETUP_GIVEN" ]; }; then
+  echo "fm-failfirst: --contract requires --gate and cannot override pinned setup" >&2; exit 64
 fi
 SHARD_I=1; SHARD_N=1
 if [ -n "$SHARD" ]; then
@@ -135,9 +141,29 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-# The head's own declaration, as gate 5 reads the branch's.
+# Gate 5 supplies the verified pin, independent of any target config file.
+# Standalone CI retains its head declaration.
 P_SETUP=''; P_TEST=''; P_TESTS=''; P_CHECK=''; P_DOCS=''; P_ENV=()
-if git show "$HEAD_SHA:config.yaml" > "$work/config.yaml" 2>/dev/null && [ -s "$work/config.yaml" ]; then
+if [ -n "$CONTRACT" ]; then
+  # Validate before reading any field, including check_env (whose process
+  # substitution otherwise cannot propagate a parser failure).
+  jq -e '
+    type == "object" and
+    (keys - ["setup","check","test","tests","docs","check_env"] | length == 0) and
+    all(.setup,.check,.test; . == null or type == "string") and
+    all(.tests,.docs; . == null or (type == "array" and all(.[]; type == "string"))) and
+    (.check_env == null or (.check_env | type == "object" and
+      all(to_entries[]; (.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) and (.value | type == "string")))) and
+    (.test == null or .test == "" or (.test | contains("{file}")))
+  ' "$CONTRACT" >/dev/null || { say "invalid pinned gate contract"; exit 70; }
+  P_SETUP="$(jq -r '.setup // ""' "$CONTRACT")"
+  P_TEST="$(jq -r '.test // ""' "$CONTRACT")"
+  P_TESTS="$(jq -r '.tests // [] | .[]' "$CONTRACT")"
+  P_CHECK="$(jq -r '.check // ""' "$CONTRACT")"
+  P_DOCS="$(jq -r '.docs // [] | .[]' "$CONTRACT")"
+  while IFS= read -r -d '' kv; do P_ENV+=("$kv"); done < <(
+    jq -j '.check_env // {} | to_entries[] | .key + "=" + .value + "\u0000"' "$CONTRACT")
+elif git show "$HEAD_SHA:config.yaml" > "$work/config.yaml" 2>/dev/null && [ -s "$work/config.yaml" ]; then
   P_SETUP="$(fm_project setup "$work/config.yaml")" || { say "config.yaml's project block does not read"; exit 70; }
   P_TEST="$(fm_project test "$work/config.yaml")" || exit 70
   P_TESTS="$(fm_project tests "$work/config.yaml")" || exit 70

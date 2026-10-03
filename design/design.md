@@ -1208,13 +1208,18 @@ before or after an APPROVE and during a running review round. CI and the six
 gates always rerun on the head being merged, since they test the change
 combined with the current `main`.
 
-Gate 5 names no toolchain. The target repository declares its own in
-`config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
-`test`, `docs`; see the README), and the gates run exactly that, read from the
-branch under test in the shipped self path. T-049/T-050 replace that source
-with the approved pin (§15.2); then a scoped config change cannot alter its own
-gates. This consolidation does not claim that transition is implemented. Gate 5 asks for no new test only when every changed non-test path matches
-the declared `docs` globs; with none declared, nothing is exempt.
+Gate 5 names no toolchain. It reads the complete verified task pin's contract
+(`setup`, `check`, `check_env`, `tests`, `test`, `docs`) through the shared
+fail-first engine. Neither the tested branch nor a mutable engine copy can
+change that contract. A scoped config edit cannot alter its own gates.
+The self contract still lives once in the top-level `project:` block; T-170
+will move it to `projects.firstmate-workflow.project` after these readers reach
+`main`. Both shell and Python readers (including session start/status) accept
+either location and refuse a duplicate. Old pins retain their recorded commit
+and location without repinning. External contracts remain approved private
+snapshots.
+Gate 5 asks for no new test only when every changed non-test path matches
+the pinned `docs` globs; with none declared, nothing is exempt.
 An undeclared `check` where gate 5 must fall back to it, or a failed `setup`,
 fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
@@ -4506,9 +4511,12 @@ The engine registry carries only approved routing metadata, not private project
 contracts, designs or specs. Resolve external base, checks and gate contract
 from approved private project records. Self retains T-043's full contract:
 `setup`, `check`, `check_env`, `tests`, `test`, `docs`, and future fields. T-050
-moves the self top-level block unchanged to its registry entry in one commit;
-old pins re-derive from the location at their recorded commit. Never maintain
-two conflicting contract copies or let a branch change its own pinned gates.
+ships shell and Python readers for both the top-level `project:` block and
+`projects.firstmate-workflow.project`, refusing duplicate declarations. The
+self block remains at the top level; T-170 moves it once `main` reads both
+locations (captain's card D-firstmate-workflow-T050-3, 2026-10-03). Old pins
+re-derive from the location at their recorded commit without repinning. Never
+maintain two conflicting contract copies or let a branch change its own pinned gates.
 
 T-139 inspects merge methods, delete-on-merge, readable protection/checks,
 CODEOWNERS, PR template, CONTRIBUTING, commit style and last 30 PRs (reviewers,
@@ -4572,9 +4580,9 @@ The worker launcher writes pin 1 outside the sandbox before calling an adapter.
 A resumed task with an existing PR and no pin gets `source: first-pin-on-resume`
 from the current accepted base. Self sources record `<commit>:<path>` and
 SHA-256; a new spec absent from that base is explicitly `seeded`. Gate contracts
-always come from accepted engine base, including both the legacy top-level
-`project:` and a relocated self entry. External spec, design, conventions and
-contract bytes are private local snapshots; resolving them never requires those
+always come from accepted engine base, with readers accepting both the current
+top-level `project:` and the self registry entry planned for T-170. External
+spec, design, conventions and contract bytes are private local snapshots; resolving them never requires those
 files to exist on public engine main. Every reader uses `fm_spec_pins.py`, which
 verifies the complete append-only chain, each snapshot hash, identity and
 approval provenance, and re-derives committed self sources. Workers and
@@ -4603,8 +4611,8 @@ refuses reuse or an approval no later than the superseded pin approval, and appe
 Self repins identify uncommitted local spec/design/conventions explicitly;
 their gate contract still comes from accepted base. Omitted project and explicit
 `firstmate-workflow` retain the same self storage and behavior. The pin contains
-all contract fields, including `docs`; T-050 owns the remaining execution
-transition from the shared fail-first engine's branch contract to that pin.
+all contract fields, including `docs`; gate 5 passes the verified contract
+to the shared fail-first engine without consulting the target config.
 
 Before accepting evidence, synchronize and verify GitHub's authoritative PR head
 against the local task ref and isolated checkout. CI/check statuses, gates,
