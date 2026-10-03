@@ -1,0 +1,21 @@
+{
+  "id": "T-177",
+  "title": "the Python embedded in fm-review.sh and fm-sandbox.sh moves into bin/lib modules, behaviour unchanged",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-review.sh",
+    "bin/fm-sandbox.sh",
+    "bin/lib/**",
+    "bin/adapters/_contract.md",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-177.json"
+  ],
+  "acceptance": [
+    "Why. Same order and reasons as T-176 ('照你的意思全面重構，確保所有功能正常', 2026-10-03). bin/fm-review.sh (1321 lines) and bin/fm-sandbox.sh (1538 lines) carry about 900 and 500 lines of Python as bash heredocs. On 2026-10-03, T-173 round 3's sandbox regression sat in exactly such a block: `pinned_of()` inside fm-sandbox.sh, reported only as '<string>, line 156'. These are the two security-critical launchers: review provenance and the OS sandbox profile.",
+    "Move, do not rewrite. Each embedded program becomes a function in a bin/lib module, for example `fm_sandbox_profile.py` and `fm_review_*.py`. The bash side keeps its arguments, environment, stdout, stderr and exit codes. Generated sandbox profiles (Darwin sandbox-exec and Linux) are byte-identical before and after for the same inputs; a test proves this for every vendor adapter's profile. No policy changes: the never-readable floor, write roots, pinned/ read-only grant, network rules and refusals stay exactly as they are. Shell values are passed as arguments or environment variables, never spliced into Python source.",
+    "Every caller still works: the adapters, fm-worker.sh, the autopilot's review launch, fm-canary.sh and every fixture that builds a partial engine tree; copy the new modules there. Sweep tests/ for fixtures that copy fm-review.sh or fm-sandbox.sh.",
+    "Tests. The existing suites pass unchanged except for fixture file lists. Add the byte-identical profile test, and the same 'no embedded Python program longer than 5 lines' check as T-176, applied to these two files. Evidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}
