@@ -580,6 +580,44 @@ else
   pass "state/events.jsonl has a single writer"
 fi
 
+# FETCH_HEAD is repository-global; all fetched evidence must use a private ref.
+# Scan every text file in bin/, including this lint, without filename exemptions.
+if python3 - <<'PY_PRIVATE_FETCH'
+from pathlib import Path
+import shlex
+import sys
+
+forbidden = 'FETCH' + '_HEAD'
+bad = False
+for path in sorted(Path('bin').rglob('*')):
+    if not path.is_file():
+        continue
+    data = path.read_bytes()
+    if b'\0' in data:
+        continue
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        continue
+    for number, line in enumerate(text.splitlines(), 1):
+        if forbidden not in line or line.lstrip().startswith('#'):
+            continue
+        try:
+            active = ' '.join(shlex.split(line, comments=True))
+        except ValueError:
+            # Incomplete quoted snippets are still source, never an exemption.
+            active = line
+        if forbidden in active:
+            print(f'{path}:{number}: shared fetch pseudo-ref is forbidden')
+            bad = True
+sys.exit(1 if bad else 0)
+PY_PRIVATE_FETCH
+then
+  pass "private fetch refs"
+else
+  flunk "private fetch refs"
+fi
+
 stage "test hygiene"
 # an assertion that greps a source file is satisfied by a comment unless it
 # filters them out. This has been written three times now; the machine checks

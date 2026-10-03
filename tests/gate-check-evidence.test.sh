@@ -27,10 +27,18 @@ class Checks(unittest.TestCase):
                                ('git', dict(return_value=B)), ('github', dict(side_effect=self.github))]:
             p = patch.object(m, target, **kwargs); p.start(); self.addCleanup(p.stop)
     def fetch(self, argv):
-        # Match live-base-binding.test.sh's exact repository/base fetch stub.
-        self.assertEqual(['git', '-C', '/fixture', 'fetch', '--no-tags',
-                          'https://github.com/owner/repo.git',
-                          'refs/heads/' + self.view['baseRefName']], argv)
+        self.assertEqual(argv[:3], ['git', '-C', '/fixture'])
+        args = argv[3:]
+        if args[0] == 'fetch':
+            self.assertEqual(args[:3], ['fetch', '--no-tags', 'https://github.com/owner/repo.git'])
+            source, self.fetched_ref = args[3].split(':')
+            self.assertEqual(source, '+refs/heads/' + self.view['baseRefName'])
+            self.assertTrue(self.fetched_ref.startswith('refs/fm/fetch/'))
+            return b''
+        if args[0] == 'rev-parse':
+            self.assertEqual(args, ['rev-parse', self.fetched_ref])
+            return B.encode()
+        self.assertEqual(args, ['update-ref', '-d', self.fetched_ref])
         return b''
     def github(self, repo, *args):
         self.assertEqual('owner/repo', repo)
@@ -75,7 +83,7 @@ class Checks(unittest.TestCase):
         with patch.object(m, 'remote_head', side_effect=[self.view, dict(self.view, baseRefOid=H)]):
             with self.assertRaisesRegex(ValueError, 'moved'): self.read()
     def test_stale_local_task_ref_refused_after_remote_update(self):
-        with patch.object(m, 'command', return_value=b''), patch.object(m, 'git', side_effect=[H, B]):
+        with patch.object(m, 'fetch_ref', return_value=H), patch.object(m, 'git', return_value=B):
             with self.assertRaisesRegex(ValueError, 'local task ref'):
                 m.authoritative(Path('/fixture'), 'task', 'owner/repo', 9)
     def test_final_readiness_refuses_late_remote_movement(self):
