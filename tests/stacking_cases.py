@@ -31,9 +31,10 @@ class Stacking(unittest.TestCase):
         with patch.object(binding, 'repository', return_value='owner/repo'), \
              patch.object(binding, 'remote_head', return_value={
                  'baseRefName': 'parent', 'baseRefOid': A}), \
-             patch.object(binding, 'git', return_value=B), \
+             patch.object(binding, 'command', return_value=b''), \
+             patch.object(binding, 'git', side_effect=[A, B]), \
              patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
-            with self.assertRaisesRegex(ValueError, 'candidate base moved'):
+            with self.assertRaisesRegex(ValueError, 'local base is stale; synchronize'):
                 binding.local_gate_base('/repo', 9, 'main')
 
     def test_storage_setup_preserves_installed_binding(self):
@@ -116,11 +117,13 @@ class Stacking(unittest.TestCase):
         view = {'state': 'OPEN', 'baseRefName': 't-1-parent', 'baseRefOid': A,
                 'headRefOid': B, 'headRefName': 't-2-child'}
         with patch.object(binding, 'remote_head', return_value=view), \
+             patch.object(binding, 'command', return_value=b''), \
              patch.object(binding, 'git', return_value=A), \
              patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
             self.assertEqual(binding.view_base('owner/repo', 2), 't-1-parent')
         with patch.object(binding, 'remote_head', return_value=view), \
-             patch.object(binding, 'git', return_value=B), \
+             patch.object(binding, 'command', return_value=b''), \
+             patch.object(binding, 'git', side_effect=[A, B]), \
              patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
             with self.assertRaises(ValueError):
                 binding.view_base('owner/repo', 2)

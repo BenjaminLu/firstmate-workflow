@@ -215,15 +215,21 @@ def selected_review(store, root, repo, pr, head):
 
 
 def view_base(repo, pr):
-    return verified_base(remote_head(repo, pr))
+    return verified_base(remote_head(repo, pr), repo)
 
 
-def verified_base(view):
+def verified_base(view, repo=None):
     name = view['baseRefName']
     if not name or name.startswith('-'):
         raise ValueError('invalid authoritative base')
-    if git(os.environ['FM_TARGET_ROOT'], 'rev-parse', name + '^{commit}') != view['baseRefOid']:
-        raise ValueError('candidate base moved; refresh gates')
+    root = os.environ['FM_TARGET_ROOT']
+    repo = repo or repository(root)
+    # The PR's recorded base OID may lag behind its base branch's live tip.
+    command(['git', '-C', str(root), 'fetch', '--no-tags',
+             'https://github.com/' + repo + '.git', 'refs/heads/' + name])
+    live_base = sha(git(root, 'rev-parse', 'FETCH_HEAD'))
+    if git(root, 'rev-parse', name + '^{commit}') != live_base:
+        raise ValueError('local base is stale; synchronize before accepting')
     return name
 
 
@@ -231,13 +237,14 @@ def local_gate_base(root, pr, project_base):
     # Individual local gates also work before a PR exists, or without an
     # origin. Full runs and gate 6 keep the strict authoritative binding.
     try:
-        view = remote_head(repository(root), pr)
+        repo = repository(root)
+        view = remote_head(repo, pr)
     except ValueError:
         return project_base
     if view['baseRefName'] == project_base:
         return project_base
     # Once a stacked PR is known, a stale parent must not fall back to main.
-    return verified_base(view)
+    return verified_base(view, repo)
 
 
 def main():
