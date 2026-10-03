@@ -1212,10 +1212,10 @@ Gate 5 names no toolchain. It reads the complete verified task pin's contract
 (`setup`, `check`, `check_env`, `tests`, `test`, `docs`) through the shared
 fail-first engine. Neither the tested branch nor a mutable engine copy can
 change that contract. A scoped config edit cannot alter its own gates.
-The self contract still lives once in the top-level `project:` block; T-170
-will move it to `projects.firstmate-workflow.project` after these readers reach
-`main`. Both shell and Python readers (including session start/status) accept
-either location and refuse a duplicate. Old pins retain their recorded commit
+The self contract lives once at `projects.firstmate-workflow.project` in
+`config.yaml` (T-170). Both shell and Python readers (including session
+start/status) also accept the historical top-level `project:` block and refuse
+a duplicate. Old pins retain their recorded commit
 and location without repinning. External contracts remain approved private
 snapshots.
 Gate 5 asks for no new test only when every changed non-test path matches
@@ -4513,8 +4513,8 @@ from approved private project records. Self retains T-043's full contract:
 `setup`, `check`, `check_env`, `tests`, `test`, `docs`, and future fields. T-050
 ships shell and Python readers for both the top-level `project:` block and
 `projects.firstmate-workflow.project`, refusing duplicate declarations. The
-self block remains at the top level; T-170 moves it once `main` reads both
-locations (captain's card D-firstmate-workflow-T050-3, 2026-10-03). Old pins
+self block now lives in the registry entry (T-170, following captain's card
+D-firstmate-workflow-T050-3, 2026-10-03). Old pins
 re-derive from the location at their recorded commit without repinning. Never
 maintain two conflicting contract copies or let a branch change its own pinned gates.
 
@@ -4593,8 +4593,8 @@ The worker launcher writes pin 1 outside the sandbox before calling an adapter.
 A resumed task with an existing PR and no pin gets `source: first-pin-on-resume`
 from the current accepted base. Self sources record `<commit>:<path>` and
 SHA-256; a new spec absent from that base is explicitly `seeded`. Gate contracts
-always come from accepted engine base, with readers accepting both the current
-top-level `project:` and the self registry entry planned for T-170. External
+always come from accepted engine base, with readers accepting both the historical
+top-level `project:` and the current self registry entry (T-170). External
 spec, design, conventions and contract bytes are private local snapshots; resolving them never requires those
 files to exist on public engine main. Every reader uses `fm_spec_pins.py`, which
 verifies the complete append-only chain, each snapshot hash, identity and

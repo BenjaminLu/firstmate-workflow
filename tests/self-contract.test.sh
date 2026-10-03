@@ -81,10 +81,10 @@ class Contract(unittest.TestCase):
             contract(self.config.read_text(), 'firstmate-workflow')
         for command in ('fm_project check "$2"', 'fm_project_contract firstmate-workflow check "$2"'):
             self.assertNotEqual(0, self.shell(command).returncode)
-    def test_shipped_contract_stays_top_level_until_t170(self):
+    def test_shipped_contract_lives_in_self_registry(self):
         text = (root / 'config.yaml').read_text()
-        self.assertIn('\nproject:', text)
-        self.assertNotIn('\n    project:', text)
+        self.assertNotIn('\nproject:', text)
+        self.assertIn('\n    project:', text)
         self.assertEqual('bin/ci.sh', m.project_contract(root / 'config.yaml')['check'])
     def test_review_binding_uses_verified_snapshot_bytes(self):
         pin = {'snapshots': {name: {'text': text} for name, text in
