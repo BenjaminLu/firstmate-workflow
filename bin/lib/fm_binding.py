@@ -215,7 +215,10 @@ def selected_review(store, root, repo, pr, head):
 
 
 def view_base(repo, pr):
-    view = remote_head(repo, pr)
+    return verified_base(remote_head(repo, pr))
+
+
+def verified_base(view):
     name = view['baseRefName']
     if not name or name.startswith('-'):
         raise ValueError('invalid authoritative base')
@@ -224,10 +227,24 @@ def view_base(repo, pr):
     return name
 
 
+def local_gate_base(root, pr, project_base):
+    # Individual local gates also work before a PR exists, or without an
+    # origin. Full runs and gate 6 keep the strict authoritative binding.
+    try:
+        view = remote_head(repository(root), pr)
+    except ValueError:
+        return project_base
+    if view['baseRefName'] == project_base:
+        return project_base
+    # Once a stacked PR is known, a stale parent must not fall back to main.
+    return verified_base(view)
+
+
 def main():
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument('mode', choices=['base', 'head', 'checks', 'ready', 'candidate', 'external-review'])
+    p.add_argument('mode', choices=['base', 'local-gate-base', 'head', 'checks', 'ready', 'candidate', 'external-review'])
+    p.add_argument('--project-base', default='main')
     p.add_argument('--task', required=True)
     p.add_argument('--pr', required=True)
     p.add_argument('--branch', default='')
@@ -235,6 +252,8 @@ def main():
     p.add_argument('--gate-report', default='')
     args = p.parse_args()
     root = Path(os.environ['FM_TARGET_ROOT'])
+    if args.mode == 'local-gate-base':
+        print(local_gate_base(root, args.pr, args.project_base)); return
     repo = repository(root)
     if args.mode == 'base':
         print(view_base(repo, args.pr)); return

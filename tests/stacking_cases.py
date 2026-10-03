@@ -9,6 +9,33 @@ B = 'b' * 40
 
 
 class Stacking(unittest.TestCase):
+    def test_local_gate_without_origin_uses_project_base(self):
+        with patch.object(binding, 'repository', side_effect=ValueError('no origin')), \
+             patch.object(binding, 'remote_head') as remote:
+            self.assertEqual(binding.local_gate_base('/repo', 9, 'trunk'), 'trunk')
+            remote.assert_not_called()
+
+    def test_local_gate_without_remote_pr_uses_project_base(self):
+        with patch.object(binding, 'repository', return_value='owner/repo'), \
+             patch.object(binding, 'remote_head', side_effect=ValueError('no PR')):
+            self.assertEqual(binding.local_gate_base('/repo', 9, 'main'), 'main')
+
+    def test_local_gate_unstacked_base_needs_no_remote_sha_check(self):
+        with patch.object(binding, 'repository', return_value='owner/repo'), \
+             patch.object(binding, 'remote_head', return_value={'baseRefName': 'main'}), \
+             patch.object(binding, 'git') as git:
+            self.assertEqual(binding.local_gate_base('/repo', 9, 'main'), 'main')
+            git.assert_not_called()
+
+    def test_local_gate_stacked_base_still_refuses_stale_ref(self):
+        with patch.object(binding, 'repository', return_value='owner/repo'), \
+             patch.object(binding, 'remote_head', return_value={
+                 'baseRefName': 'parent', 'baseRefOid': A}), \
+             patch.object(binding, 'git', return_value=B), \
+             patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
+            with self.assertRaisesRegex(ValueError, 'candidate base moved'):
+                binding.local_gate_base('/repo', 9, 'main')
+
     def test_storage_setup_preserves_installed_binding(self):
         import os
         import subprocess
@@ -204,17 +231,9 @@ class Stacking(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    class AssertionResult(unittest.TextTestResult):
-        def addSuccess(self, test):
-            super().addSuccess(test)
-            print('    stacking: ' + test._testMethodName + '    ok', flush=True)
-
-        def addFailure(self, test, err):
-            super().addFailure(test, err)
-            print('    stacking: ' + test._testMethodName + '    FAIL', flush=True)
-
-        def addError(self, test, err):
-            super().addError(test, err)
-            print('    stacking: ' + test._testMethodName + '    FAIL', flush=True)
-
-    unittest.main(testRunner=unittest.TextTestRunner(resultclass=AssertionResult))
+    import sys
+    if sys.argv[1:] == ['--list']:
+        for name in unittest.defaultTestLoader.getTestCaseNames(Stacking):
+            print('Stacking.' + name)
+    else:
+        unittest.main(verbosity=2)

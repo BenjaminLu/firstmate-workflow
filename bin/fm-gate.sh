@@ -153,7 +153,7 @@ cd "$FM_TARGET_ROOT" || { echo "fm-gate: no repo at $FM_TARGET_ROOT" >&2; exit 6
 # refused, never silently replaced by a newer, ungated candidate.
 VERIFIED_HEAD=''; TASK_REF="$BRANCH"
 if [ -n "$PR" ] && [ -n "$ONLY" ] && [ "$ONLY" != 6 ]; then
-  BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 6
+  BASE="$(fm_binding local-gate-base --task "$TASK" --pr "$PR" --project-base "$BASE")" || exit 6
 fi
 if [ -n "$PR" ] && { [ -z "$ONLY" ] || [ "$ONLY" = 6 ]; }; then
   VERIFIED_HEAD="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || exit 6
