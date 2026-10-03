@@ -26,6 +26,24 @@ cd "$REPO" || exit 64
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+# Refresh only in firstmate's session, never when a board launches a round.
+if [ "$MODE" = start ] || [ "$MODE" = status ]; then
+  if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_host.py" "$REPO" "$FM_STATE_DIR"; then
+    echo 'fm-session: host refresh failed; firstmate host is unknown' >&2
+    # This informational collector must not block the session, even when its
+    # file or imports are missing. Replace stale facts without depending on it.
+    host_tmp=''
+    if mkdir -p "$FM_STATE_DIR/session" &&
+       host_tmp="$(mktemp "$FM_STATE_DIR/session/.host-XXXXXXXX")" &&
+       printf '%s\n' '{"harness":null,"cli_version":null,"model":null,"model_source":null}' > "$host_tmp" &&
+       mv -f "$host_tmp" "$FM_STATE_DIR/session/host.json"; then
+      :
+    else
+      [ -z "$host_tmp" ] || rm -f "$host_tmp"
+      echo 'fm-session: could not write the unknown host record' >&2
+    fi
+  fi
+fi
 # The reviewer's engine is the captain's to choose. A project that names none
 # is said out loud here, once per start, rather than reviewed by whatever the
 # top-level vendor happens to be: firstmate asks on the board and the answer

@@ -28,7 +28,8 @@ class Entrypoints(unittest.TestCase):
         # Actual shell parser, storage resolver and option guards.
         for name in ('fm.sh', 'fm-autopilot.sh', 'fm-session.sh', 'fm-config.sh', 'fm-herdr.py', 'fm-emit.sh'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
-        for name in ('fm-stack.sh', 'fm_project_paths.py', 'fm_concurrent.py', 'fm_merge_outcome.py'):
+        for name in ('fm-stack.sh', 'fm_project_paths.py', 'fm_concurrent.py', 'fm_merge_outcome.py',
+                     'fm_host.py', 'fm_hooks.py'):
             shutil.copy2(ROOT/'bin/lib'/name, self.bin/'lib'/name)
         (self.root/'config.yaml').write_text('project:\n  check: "true"\n')
 
@@ -136,7 +137,9 @@ class Entrypoints(unittest.TestCase):
         (self.bin/'fm-autopilot.sh').chmod(0o755)
         (self.bin/'fm-doctor.sh').write_text('#!/bin/sh\nexit 0\n')
         (self.bin/'fm-doctor.sh').chmod(0o755)
-        (self.bin/'lib/fm_hooks.py').write_text('pass\n')
+        hooks = self.bin/'lib/fm_hooks.py'
+        # Disable hook installation only; the host collector imports detect().
+        hooks.write_text(hooks.read_text().replace("if __name__ == '__main__':", "if False:"))
         herdr = self.bin/'fm-herdr.py'
         herdr.write_text(herdr.read_text().replace("if __name__ == '__main__':", "if False:"))
         result = self.run_shell('fm-session.sh', 'start', frozen=True)

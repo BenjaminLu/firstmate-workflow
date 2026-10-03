@@ -1135,23 +1135,91 @@ PY
 # fm_vendor_chain [role] [explicit]
 #   An explicit --vendor is the whole chain: the caller asked for that engine,
 #   not for whatever the config would fall back to.
-fm_vendor_chain() {
-  local role="${1:-}" explicit="${2:-}" head=''
-  if [ -n "$explicit" ]; then printf '%s\n' "$explicit"; return 0; fi
-  head="$(fm_role_vendor "$role")"
-  # one run per vendor: a fallback list may name the head, or itself twice
-  printf '%s\n' "$head"
-  fm_cfg_list fallback | grep -vxF "$head" | awk '!seen[$0]++' || true
+# The recorded host, never the board/launcher's own FM_HARNESS. Selected
+# board-owned session wins, then selected project state. A project without
+# a session shares the engine's record.
+fm_host_harness() {
+  local state="${FM_SESSION_HOST_STATE:-${FM_STATE_DIR:-${FM_ENGINE_ROOT:-${FM_ROOT:-$PWD}}/state}}" record
+  record="$state/session/host.json"
+  if [ ! -f "$record" ]; then
+    record="${FM_ENGINE_ROOT:-${FM_ROOT:-$PWD}}/state/session/host.json"
+  fi
+  jq -r '.harness | select(type == "string")' "$record" 2>/dev/null || true
 }
 
-#   fm_role_vendor [role] [file] -> the vendor a role starts on: its own
-#   `vendor:`, else the top-level one, else mock - the head of its chain
-fm_role_vendor() {
+fm_vendor_rule() {
   local role="${1:-}" f="${2:-${FM_CONFIG:-config.yaml}}" v=''
   [ -n "$role" ] && v="$(fm_cfg_in "$role" vendor "$f")"
   [ -n "$v" ] || v="$(fm_cfg vendor "$f")"
-  [ -n "$v" ] || v=mock
+  printf '%s\n' "${v:-mock}"
+}
+
+fm_vendor_chain() {
+  local role="${1:-}" explicit="${2:-}" head='' rule
+  if [ -n "$explicit" ]; then printf '%s\n' "$explicit"; return 0; fi
+  head="$(fm_role_vendor "$role")"
+  rule="$(fm_vendor_rule "$role")"
+  {
+    printf '%s\n' "$head"
+    if [ "$rule" = opposite-of-host ]; then
+      case "$head" in
+        claude) printf '%s\n' codex ;;
+        codex) printf '%s\n' claude ;;
+        *) printf '%s\n' claude codex ;;
+      esac
+    fi
+    fm_cfg_list fallback || true
+  } | awk 'NF && !seen[$0]++'
+}
+
+# A named vendor retains its existing meaning; the dynamic rule alone reads
+# session state. Unknown/non-main hosts use the configured fallback head.
+fm_role_vendor() {
+  local role="${1:-}" f="${2:-${FM_CONFIG:-config.yaml}}" v host
+  v="$(fm_vendor_rule "$role" "$f")"
+  if [ "$v" = opposite-of-host ]; then
+    host="$(fm_host_harness)"
+    case "$host" in
+      claude) v=codex ;;
+      codex) v=claude ;;
+      *) v="$(fm_cfg_list fallback "$f" | head -1)"; v="${v:-mock}"
+         echo "fm-vendor: opposite-of-host: recorded host ${host:-unknown}; using configured fallback head $v" >&2 ;;
+    esac
+  fi
   printf '%s\n' "$v"
+}
+
+# Retain the original selection reason even after an unavailable vendor causes
+# fallback. vendor_resolution.vendor is the head; identity.vendor is current.
+fm_record_vendor_resolution() {
+  local role="$1" explicit="${2:-}" rule host vendor
+  rule="$(fm_vendor_rule "$role")"; host="$(fm_host_harness)"
+  if [ -n "$explicit" ]; then rule=explicit; vendor="$explicit"
+  else vendor="$(fm_role_vendor "$role")"; fi
+  echo "fm-vendor: host=${host:-unknown} rule=$rule resolved=$vendor" >&2
+  [ -n "${FM_RUN_DIR:-}" ] && [ -f "$FM_RUN_DIR/identity.json" ] || return 0
+  python3 - "$FM_RUN_DIR/identity.json" "$host" "$rule" "$vendor" <<'PYHOST'
+import json, os, sys, tempfile
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data['vendor_resolution'] = dict(host=sys.argv[2] or None, rule=sys.argv[3], vendor=sys.argv[4])
+fd, name = tempfile.mkstemp(dir=path.parent, prefix='.vendor-')
+try:
+    with os.fdopen(fd, 'w') as stream: json.dump(data, stream)
+    os.replace(name, path)
+finally:
+    if os.path.exists(name): os.unlink(name)
+PYHOST
+}
+
+fm_log_vendor_resolution() {
+  [ -f "${FM_RUN_DIR:-}/identity.json" ] || return 0
+  jq -r '.vendor_resolution | select(. != null) |
+    "fm-vendor: host=\(.host // "unknown") rule=\(.rule) resolved=\(.vendor)" +
+    (if .rule == "opposite-of-host" and .host != "claude" and .host != "codex"
+     then " (configured fallback head: unknown or other host)" else "" end)' \
+    "$FM_RUN_DIR/identity.json" >> "$1"
 }
 
 # The model config.yaml names, per vendor (T-146; T-127 named one per role).
@@ -1205,7 +1273,7 @@ fm_record_requested() {
 fm_crew_identity() {
   local run="${1:-${FM_RUN_DIR:-}}" out=''
   [ -n "$run" ] && out="$(jq -c '{name,role,project,task,round,attempt,
-    vendor,model_requested,model,cli_version,model_mismatch}' "$run/identity.json" 2>/dev/null)"
+    vendor,model_requested,model,cli_version,model_mismatch,vendor_resolution}' "$run/identity.json" 2>/dev/null)"
   printf '%s\n' "${out:-null}"
 }
 
@@ -1790,9 +1858,6 @@ fm_binding() {
 fm_pin() { python3 "$_fm_code_dir/lib/fm_spec_pins.py" "$@"; }
 fm_pin_existing() { # task; absent is 3, corrupt is 65 (never a fallback)
   fm_pin resolve --task "$1" --if-present
-}
-fm_prompt_design() { # trusted project design path, never relative to the target
-  python3 "$_fm_code_dir/lib/fm_prompt_context.py" design "$1" "${2:-}" "${TASK:-}"
 }
 fm_prompt_identity() { # role checkout-head merge-base
   local project

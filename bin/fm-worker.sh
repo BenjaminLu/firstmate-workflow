@@ -66,6 +66,7 @@ EMIT="${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh"
 # that vendor are in identity.json from the start, so the board shows them
 # from the round's first event (the model the vendor reports joins them
 # once the round has run; a fallback vendor replaces them as it starts)
+fm_record_vendor_resolution worker "$VENDOR"
 head_vendor="$(fm_vendor_chain worker "$VENDOR" | head -1)"
 fm_record_requested "$head_vendor" "$(fm_model_for worker "$head_vendor" "$FM_CONFIG")"
 # T-116: name, role, project, task, round and attempt ride every crew
@@ -1289,6 +1290,7 @@ rebuild_publishes() {
   [ "$rebuilt" = 1 ] && ! rebuild_unresolved
 }
 log="$FM_RUN_DIR/worker.log"; : > "$log"
+fm_log_vendor_resolution "$log"
 # Close fd 9 and the launch-time task lock in a subshell so adapters cannot
 # hold either. The parent keeps its copies for exclusion; if the published
 # PID is SIGKILL'd, a surviving adapter must not keep the task lock or

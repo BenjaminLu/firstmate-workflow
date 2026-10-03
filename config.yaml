@@ -6,8 +6,8 @@ board:
   port: 4173            # FM_PORT overrides this for a one-off server
 language: en            # en or zh-TW; viewer preferences still win
 
-vendor: codex           # every role uses this agent unless overridden below;
-                        # the captain's choice on 2026-09-29: codex workers
+vendor: opposite-of-host # Claude firstmate -> Codex worker; Codex -> Claude
+                         # named role vendors and --vendor still win
 models:                 # each vendor's own model name (T-146), applied with
   claude: claude-opus-5-5   # the adapter's own flag, never guessed from a run;
   codex:  gpt-6-astra   # a round on any vendor, a fallback's included, gets

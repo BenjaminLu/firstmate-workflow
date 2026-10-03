@@ -103,6 +103,38 @@ These bind every actor, including firstmate itself.
 
 ## 4. Roles
 
+### Firstmate host and worker vendor (T-174)
+
+The shipped worker vendor is `opposite-of-host`: a Claude firstmate starts
+Codex workers, and a Codex firstmate starts Claude workers. The other main
+vendor comes next, followed by the remaining `fallback:` entries in their
+configured order (currently cursor-agent, then gemini). Only an unavailable
+adapter (exit 2, including quota/rate-limit refusal) advances the chain.
+An unknown or other host uses the configured fallback head and logs why.
+A named worker vendor retains its existing chain; explicit `--vendor` selects
+that vendor alone. The reviewer remains explicitly `vendor: claude`.
+
+`fm-session.sh start` and `status` refresh `state/session/host.json` beside
+the other session records. External project records live under
+`FM_HOME/projects/<name>/state/session/host.json`, never in the target repository.
+Board launches use the board's owning session record across projects; other
+launches use their project's record, falling back to the engine session's.
+The collector reuses `fm_hooks.detect()` (`FM_HARNESS` overrides detection),
+records the CLI's own version output, and reads models only from harness-owned
+settings with a `model_source`. Claude settings are read in user, project,
+then local order; Codex reads its own `CODEX_HOME/config.toml` (default
+`~/.codex/config.toml`). These are configured models, not proof of the model
+serving the current turn; an unobservable model stays unknown. Crew model
+settings in `config.yaml` never supply firstmate's model.
+
+The board shows the recorded harness, model (or localized unknown) and CLI
+version through its existing crew fields; a legacy session with no record
+has no host fields. Board-dispatched rounds read the stored host, never the
+board process's harness environment. Each round logs its resolution and keeps
+`vendor_resolution` (host, rule, resolved head) in `identity.json`, alongside
+the current vendor, which can change on fallback.
+
+
 | Role | Shape | Lifetime | Touches git? |
 |---|---|---|---|
 | **captain** (you) | human | — | presses merge only |
@@ -488,13 +520,15 @@ chain appends to one log, a verdict only reads the bytes its own run added.
 `fm_vendor_chain <role>` builds the order and `fm_run_chain` runs it, both in
 `bin/fm-config.sh`, so the worker and the reviewer fall back identically. Each
 role may name its own engine — `reviewer:` and `worker:` blocks in
-`config.yaml` — and whichever it names leads a chain that continues through
-`fallback:`, with no vendor run twice. A reviewer whose engine is down is
+`config.yaml`. Named vendors lead their existing fallback chain. The shipped
+worker rule `opposite-of-host` resolves from the recorded firstmate host and
+puts both main vendors before the remaining fallbacks (§4), with no vendor
+run twice. A reviewer whose engine is down is
 therefore not a reviewer who never ran.
 
 The reviewer's `vendor` and `model` are the captain's choice (T-066); this
-repository names `claude` and `claude-opus-5-5`, and, since 2026-09-29, codex
-and `gpt-6-astra` for the worker (T-146). A project
+repository names `claude` and `claude-opus-5-5` for review. Since T-174 the
+worker uses `opposite-of-host`, with the selected vendor's own model (T-146). A project
 naming neither is reported by `fm-session.sh start` and firstmate asks the
 captain through a choice card; the answer lands as a `config.yaml` pull
 request. **`model` is applied, not only recorded (T-127)**: since T-146 it
@@ -511,7 +545,7 @@ vendor's name and refused (found 2026-09-29, when the captain asked for codex
 workers). So `config.yaml` names each vendor's own model:
 
 ```yaml
-vendor: codex
+vendor: opposite-of-host
 models:
   claude: claude-opus-5-5
   codex:  gpt-6-astra
