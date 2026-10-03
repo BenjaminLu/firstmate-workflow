@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The relocated self contract must serve shell, session and historical pins.
+# Both self contract locations must serve shell, session and historical pins.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
@@ -49,23 +49,28 @@ class Contract(unittest.TestCase):
         env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
         return subprocess.run(['bash', '-c', '. "$1/bin/fm-config.sh"; ' + command,
                                '_', str(root), str(self.config)], env=env, capture_output=True, text=True)
-    def test_both_readers_use_relocated_contract(self):
-        self.assertEqual('make check', m.project_contract(self.config)['check'])
-        for command in ('fm_project check "$2"', 'fm_project_contract firstmate-workflow check "$2"'):
-            result = self.shell(command)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual('make check', result.stdout.strip())
-    def test_session_start_setup_and_status_after_move(self):
-        with patch.object(m, 'record_root', return_value=self.repo):
-            start = m.project_report(self.repo, run_setup=True)
-            self.assertTrue(start['ready'], start)
-            self.assertEqual(0, start['setup']['exit'])
-            self.assertEqual('prepared\n', (self.repo / 'prepared').read_text())
-            (self.repo / 'prepared').unlink()
-            status = m.project_report(self.repo)
-            self.assertTrue(status['ready'], status)
-            self.assertEqual(start['declared'], status['declared'])
-            self.assertFalse((self.repo / 'prepared').exists())
+    def test_both_readers_accept_either_contract_location(self):
+        for config in (NESTED.split('    project:\n')[0] + LEGACY, NESTED):
+            with self.subTest(config=config):
+                self.config.write_text(config)
+                self.assertEqual('make check', m.project_contract(self.config)['check'])
+                for command in ('fm_project check "$2"', 'fm_project_contract firstmate-workflow check "$2"'):
+                    result = self.shell(command)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual('make check', result.stdout.strip())
+    def test_session_start_setup_and_status_at_either_location(self):
+        for config in (NESTED.split('    project:\n')[0] + LEGACY, NESTED):
+            with self.subTest(config=config), patch.object(m, 'record_root', return_value=self.repo):
+                self.config.write_text(config)
+                start = m.project_report(self.repo, run_setup=True)
+                self.assertTrue(start['ready'], start)
+                self.assertEqual(0, start['setup']['exit'])
+                self.assertEqual('prepared\n', (self.repo / 'prepared').read_text())
+                (self.repo / 'prepared').unlink()
+                status = m.project_report(self.repo)
+                self.assertTrue(status['ready'], status)
+                self.assertEqual(start['declared'], status['declared'])
+                self.assertFalse((self.repo / 'prepared').exists())
     def test_old_pin_and_new_pin_have_identical_contracts(self):
         self.assertEqual(contract(LEGACY, 'firstmate-workflow'), contract(NESTED, 'firstmate-workflow'))
     def test_duplicate_refused_by_every_reader(self):
@@ -76,9 +81,10 @@ class Contract(unittest.TestCase):
             contract(self.config.read_text(), 'firstmate-workflow')
         for command in ('fm_project check "$2"', 'fm_project_contract firstmate-workflow check "$2"'):
             self.assertNotEqual(0, self.shell(command).returncode)
-    def test_shipped_contract_is_only_nested(self):
+    def test_shipped_contract_stays_top_level_until_t170(self):
         text = (root / 'config.yaml').read_text()
-        self.assertNotIn('\nproject:', text)
+        self.assertIn('\nproject:', text)
+        self.assertNotIn('\n    project:', text)
         self.assertEqual('bin/ci.sh', m.project_contract(root / 'config.yaml')['check'])
     def test_review_binding_uses_verified_snapshot_bytes(self):
         pin = {'snapshots': {name: {'text': text} for name, text in

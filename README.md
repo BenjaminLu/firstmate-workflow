@@ -195,8 +195,9 @@ billing on purpose.
 
 Firstmate can run a crew on any repository. It knows nothing about that
 repository's toolchain. The self contract is declared once in
-`config.yaml` under `projects.firstmate-workflow.project`. Historical top-level
-`project:` contracts remain readable; declaring both is an error. Session
+`config.yaml` in the top-level `project:` block. Both shell and Python readers
+accept that location or `projects.firstmate-workflow.project`; declaring both
+is an error. T-170 will move the block after these readers reach `main`. Session
 start/status use the same parser. External contracts are approved privately
 under `FM_HOME/projects/<name>/state/config.yaml`, never in the public registry.
 
@@ -205,8 +206,9 @@ pin, including `docs` and `check_env`. It never reads the tested branch's
 contract or the mutable engine config. Old self pins read their recorded
 commit and location without repinning. Allowing a task to edit config does
 not allow that task to change its own gates. The examples below show the
-contract body in the historical/private `project:` form; for the self registry,
-nest that block beneath `projects.firstmate-workflow`.
+contract body in the current top-level/private `project:` form. The supported
+registry form nests that block beneath `projects.firstmate-workflow`; the
+shipped self config stays at the top level until T-170.
 
 | key | required | meaning |
 |---|---|---|
