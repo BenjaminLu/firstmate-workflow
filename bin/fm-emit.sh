@@ -101,7 +101,7 @@ TYPES="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned protocol_violation approved \
 merged closed decision_requested decision_made worker_crashed vendor_unavailable \
 agent_finished crew_status parked unparked spec_pinned spec_repinned agent_lost reopened \
-model_mismatch"
+model_mismatch autopilot_waiting conventions_drift"
 
 # 64 is what the OPTION LOOP exits, and only the option loop: a flag with
 # no value after it, and a flag this script does not know. Everything
@@ -303,6 +303,13 @@ for _ in $(seq 1 600); do
       exit 0
     fi
     printf '%s\n' "$line" >> "$LOG"
+    # Every local writer rings after persistence. A bell is only a hint;
+    # autopilot resumes from its durable complete-line offset.
+    _pilot_lib="$(dirname "${BASH_SOURCE[0]}")/lib/fm_lifeline.py"
+    if [ -r "$_pilot_lib" ]; then
+      python3 "$_pilot_lib" ring "$ROOT" event >/dev/null 2>&1 ||
+        printf 'fm-emit: event persisted but its doorbell could not be rung\n' >&2
+    fi
     if [ "$type" = crew_status ] && [ -n "$stamp" ]; then
       crew_status_stamp_write
     fi

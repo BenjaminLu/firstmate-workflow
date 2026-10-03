@@ -65,4 +65,8 @@ if [ "$MODE" = start ]; then
   "${FM_CODE_ROOT:-$REPO}/bin/fm-doctor.sh" --hooks-only --repo "$REPO" >&2 ||
     echo "fm-session: hook guidance unavailable; run fm doctor --hooks-only" >&2
 fi
+if [ "$MODE" = start ] && [ -x "${FM_CODE_ROOT:-$REPO}/bin/fm-autopilot.sh" ]; then
+  "${FM_CODE_ROOT:-$REPO}/bin/fm-autopilot.sh" ensure --all --repo "$REPO" >&2 ||
+    echo 'fm-session: autopilot unavailable; inspect project state/autopilot/service.log' >&2
+fi
 exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION" "$TIMEOUT"

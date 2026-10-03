@@ -474,10 +474,19 @@ def ring(root, line):
     bell nobody holds any more (a waiter that was killed), unlinked; EAGAIN
     is a pipe already full, a bell already rung. The caller appends to the
     wake queue first: a bell is a hint, the queue is the record."""
+    return ring_state(os.path.join(record_root(root), 'state'), line)
+
+
+def ring_state(state, line):
+    """Ring an already resolved project's state (for registry/policy writers).
+
+    Callers must obtain state through the canonical project resolver. This
+    avoids changing process-global FM_PROJECT while notifying two projects.
+    """
     import glob
     rang = 0
     data = (str(line).replace('\n', ' ') + '\n').encode()
-    for path in sorted(glob.glob(os.path.join(glob.escape(os.path.join(record_root(root), WAKE_DIR)), '*.fifo'))):
+    for path in sorted(glob.glob(os.path.join(glob.escape(os.path.join(state, 'session/wake.d')), '*.fifo'))):
         try:
             fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0))
         except OSError as error:
