@@ -1,7 +1,8 @@
 """Session-owned event supervisor (T-141).
 
-Local state is read at subscription/startup and on pushed doorbells, never on
-a polling timer. GitHub deadlines use conditional requests. Timers also close
+Local event cursors advance at subscription/startup and on pushed doorbells.
+GitHub deadlines use conditional requests; observed PRs bind local evidence
+and authored card details before advancing. Timers also close
 already observed reviewer batches and report overdue judgment; no idle timer
 starts a model. Side effects are write-ahead, at most once until reconciled by
 firstmate; an ambiguous crash is judgment, not permission to replay a write.
@@ -22,6 +23,7 @@ sys.dont_write_bytecode = True
 import fm_lifeline as life
 from fm_conventions import read_policy
 from fm_watch import Locked, read_json, save_json, notify
+from fm_autopilot_loop import MechanicalLoop
 
 BIN = Path(__file__).resolve().parents[1]
 DEFAULTS = dict(watch_seconds=60, debounce_seconds=180, reinspect_seconds=86400,
@@ -32,7 +34,7 @@ DEFAULTS = dict(watch_seconds=60, debounce_seconds=180, reinspect_seconds=86400,
 def context():
     return dict(engine=os.environ['FM_ENGINE_ROOT'], state=os.environ['FM_STATE_DIR'],
                 target=os.environ['FM_TARGET_ROOT'], tasks=os.environ['FM_TASKS_DIR'],
-                project=os.environ.get('FM_PROJECT', ''), repository=os.environ['FM_AUTOPILOT_REPOSITORY'],
+                project=os.environ.get('FM_PROJECT', ''), default_project=os.environ.get('FM_AUTOPILOT_DEFAULT_PROJECT', ''), repository=os.environ['FM_AUTOPILOT_REPOSITORY'],
                 base=os.environ.get('FM_BASE') or 'main', external=os.environ['FM_EXTERNAL'] == '1',
                 evidence_project=os.environ['FM_EVIDENCE_PROJECT'])
 
@@ -41,7 +43,7 @@ def key(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:32]
 
 
-class Pilot:
+class Pilot(MechanicalLoop):
     def __init__(self, ctx, clock=time.time):
         self.ctx = ctx
         self.root = Path(ctx['engine'])
@@ -110,8 +112,8 @@ class Pilot:
     def gh(self, *args):
         return [os.environ.get('FM_GH', 'gh'), *map(str, args)]
 
-    def emit(self, kind, task, en, tw, pr=None):
-        self.command(['bash', str(BIN / 'fm-emit.sh'), '--actor', 'autopilot', '--type', kind,
+    def emit(self, kind, task, en, tw, pr=None, actor='autopilot'):
+        self.command(['bash', str(BIN / 'fm-emit.sh'), '--actor', actor, '--type', kind,
                       *(['--task', task] if task else []), '--en', en, '--tw', tw,
                       *(['--pr', str(pr)] if pr else []),
                       *(['--project', self.ctx['project']] if self.ctx['project'] else [])],
@@ -224,80 +226,8 @@ class Pilot:
         self.save()
 
     def task(self, pr):
-        match = re.match(r'^((?:t|sk)-[0-9]+)(?:-|$)', pr['head']['ref'], re.I)
-        task = match[1].upper() if match else ''
+        task = self.pr_task(pr)
         return task if task and (Path(self.ctx['tasks']) / (task + '.json')).is_file() else ''
-
-    def needs_base_review(self, task, pr, old):
-        # Only the narrowly authorized replacement of a non-carrying APPROVE.
-        # Store verifies signatures; unknown/corrupt evidence queues judgment
-        # through once(), never supplies permission to launch a model.
-        from fm_binding import git, source_binding, change
-        from fm_evidence import Store
-        rows = Store(str(self.state), self.ctx['evidence_project'], task).verdicts()
-        if not rows or rows[-1]['verdict'] != 'APPROVE':
-            return False
-        if not old.get('base_sha'):
-            return False  # pre-upgrade observations cannot prove base-only
-        root = self.ctx['target']
-        old_base = git(root, 'merge-base', old['base_sha'], old['head'])
-        previous = change(root, old['head'], old_base)
-        base = git(root, 'merge-base', pr['base']['sha'], pr['head']['sha'])
-        current = source_binding(task, pr['head']['sha'], base, BIN.parent)
-        if previous['patch'] != current['patch']:
-            # Worker edits belong to fm-run's review loop.
-            return False
-        record = rows[-1]
-        if not record.get('signature'):
-            return True  # gate 7 refuses pre-T-138 unsigned legacy approvals
-        binding = record.get('binding') or {}
-        # A different approved change is not this base-only carry case.
-        if record.get('patch') != current['patch'] or binding.get('patch') != current['patch']:
-            return False
-        return any(current[k] != binding.get(k) for k in
-                   ('spec_sha256', 'contract_sha256', 'conventions_sha256'))
-
-    def launch_review(self, task, pr):
-        # fm-review owns visibility, identity, sandbox and final provenance.
-        # Never invoke an adapter directly from supervision.
-        logfile = open(self.directory / (task + '-review.log'), 'ab')
-        try:
-            child = life.start(self.script('fm-review.sh', '--task', task, '--branch', pr['head']['sha'],
-                                           '--pr', pr['number']), owner=os.getpid(),
-                               stdin=subprocess.DEVNULL, stdout=logfile, stderr=logfile)
-        finally:
-            logfile.close()
-        def completed():
-            result = child.wait()
-            # The launcher emits the canonical final event. If it refuses
-            # before allocating a round, still push an observable failure.
-            if result:
-                try:
-                    self.emit('worker_crashed', task, 'Review launcher failed; inspect its log.',
-                              '審查啟動失敗；請檢查紀錄。')
-                except (RuntimeError, OSError, subprocess.SubprocessError) as error:
-                    print('autopilot: review failure event unavailable: ' + str(error), file=sys.stderr)
-        threading.Thread(target=completed, daemon=True).start()
-
-    def prepare_head(self, pr):
-        """Fetch immutable objects, never reset or move a local task branch."""
-        target = self.ctx['target']
-        repository = self.ctx['repository']
-        self.command(['git', '-C', target, 'fetch', '--no-tags', 'https://github.com/' + repository + '.git',
-                      'refs/pull/' + str(pr['number']) + '/head'])
-        fetched = self.command(['git', '-C', target, 'rev-parse', 'FETCH_HEAD']).strip()
-        if fetched != pr['head']['sha']:
-            raise ValueError('PR head moved while fetching review objects')
-        from urllib.parse import quote
-        base = self.api('branches/' + quote(pr['base']['ref'], safe=''))
-        if base['commit']['sha'] != pr['base']['sha']:
-            raise ValueError('PR base moved while preparing review')
-        self.command(['git', '-C', target, 'fetch', '--no-tags', 'https://github.com/' + repository + '.git',
-                      'refs/heads/' + pr['base']['ref']])
-        current = json.loads(self.command(self.gh('pr', 'view', str(pr['number']), '--repo', repository,
-                                                   '--json', 'headRefOid,baseRefOid,state')))
-        if (current['headRefOid'], current['baseRefOid'], current['state']) != (pr['head']['sha'], pr['base']['sha'], 'OPEN'):
-            raise ValueError('PR changed during review preparation')
 
     def recheck(self, task, pr, reviews):
         names = self.policy.get('reviewers', [])
@@ -336,13 +266,13 @@ class Pilot:
         number, head = str(pr['number']), pr['head']['sha']
         old = self.data['pulls'].get(number)
         if old and old.get('head') and old['head'] != head:
-            if self.policy['review'] in ('fm', 'both'):
-                def review():
-                    self.prepare_head(pr)
-                    if self.needs_base_review(task, pr, old): self.launch_review(task, pr)
-                self.once(['review', number, head], task, review)
             self.recheck(task, pr, reviews)
-        self.data['pulls'][number] = dict(head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
+        try:
+            self.advance(pr, runs, statuses)
+        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+            self.attention('advance-error', task, pr, f'{task}: advancement needs reconciliation: {error}',
+                           f'{task}：機械流程需要 firstmate 核對')
+        self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
         latest = {}
         for row in runs:
             if row.get('head_sha') == head:
@@ -387,7 +317,11 @@ class Pilot:
             self.data['next_poll'] = self.clock() + self.policy['watch_seconds']
             return
         try:
-            pulls = self.pages('pulls?state=open')
+            pulls = self.pages('pulls?state=all')
+            for item in pulls:
+                self.observe_pr(item)
+                if item['state'] == 'closed': self.closed_pull(item)
+            pulls = [p for p in pulls if p['state'] == 'open']
             open_numbers = {str(item['number']) for item in pulls}
             for number, previous in list(self.data['pulls'].items()):
                 if number not in open_numbers and not previous.get('terminal'):
@@ -421,12 +355,9 @@ class Pilot:
 
     def closed_pull(self, pr):
         if pr.get('state') != 'closed': return
+        self.observe_pr(pr)
         task = self.task(pr)
-        if task and pr.get('merged_at'):
-            self.once(['observed-merge', pr['number'], pr['head']['sha']], task,
-                      lambda: self.emit('merged', task, f'GitHub reports #{pr["number"]} merged',
-                                        f'GitHub 回報 #{pr["number"]} 已合併', pr['number']))
-        elif task:
+        if task and not pr.get('merged_at'):
             self.queue('closed-' + str(pr['number']), task,
                        f'PR #{pr["number"]} closed without merging; task needs judgment',
                        f'PR #{pr["number"]} 已關閉但未合併；任務需要判斷')
@@ -458,7 +389,7 @@ class Pilot:
         self.save()
 
     def event(self, event, identity):
-        if event.get('project') not in (None, self.ctx['project']): return
+        if (event.get('project') or self.ctx.get('default_project', self.ctx['project'])) != self.ctx['project']: return
         kind = event.get('type')
         task = event.get('task', '')
         data = event.get('data') or {}
@@ -466,6 +397,8 @@ class Pilot:
         if task and isinstance(pr, int) and pr > 0 and (Path(self.ctx['tasks']) / (task + '.json')).is_file():
             tracked = self.data['pulls'].setdefault(str(pr), dict(task=task))
             if kind == 'merged': tracked['terminal'] = True
+        if kind in ('agent_finished', 'commit_pushed', 'pr_opened', 'approved', 'review_failed'):
+            self.data['next_poll'] = 0
         reasons = dict(worker_crashed='Worker round failed', agent_lost='Round lost',
                        review_failed='Review requires judgment', conventions_drift='Conventions drift',
                        gate_failed='Gate failed')
@@ -474,8 +407,23 @@ class Pilot:
             reason = 'Round failed'
         if kind == 'decision_made' and (data.get('chosen') or data.get('answer')) in ('B','C'):
             reason = 'Captain answered ' + (data.get('chosen') or data.get('answer'))
+        if kind == 'review_failed' and task and not self.busy(task):
+            try: record = self.verdict(task)
+            except (ValueError, OSError): record = {}
+            if record.get('verdict') == 'REJECT':
+                # Poll the authoritative PR before attributing this rejection
+                # to a head. The same head's poll owns its one brief wake.
+                reason = None
+        if kind == 'gate_failed' and data.get('gate') == 7: reason = None
+        # The managed child's receipt carries its actual exit and log line.
+        if kind in ('gate_failed', 'review_failed', 'worker_crashed') and self.busy(task): reason = None
         if reason:
-            self.queue('event-' + identity, task, reason + ': ' + task, '需要 firstmate 判斷：' + task)
+            head = data.get('head') or next((p.get('head') for p in self.data['pulls'].values()
+                if p.get('task') == task), None)
+            episode = str(pr or task) + '-' + str(head) if head else identity
+            said = (event.get('summary') or {}).get('en', '')
+            detail = ' (' + said + ')' if 'log is at' in said or 'no adapter' in said else ''
+            self.queue('event-' + kind + '-' + episode, task, reason + ': ' + task + detail, '需要 firstmate 判斷：' + task + detail)
 
     def read_lines(self, path, cursor, consume):
         try:
@@ -497,6 +445,7 @@ class Pilot:
         self.data[cursor] += end
 
     def local(self):
+        self.consume_jobs()
         self.reload_policy()
         self.read_lines(self.state / 'events.jsonl', 'offset', self.event)
         def wake(item, offset):
@@ -570,6 +519,7 @@ def serve(ctx):
             print('ready', flush=True)
             os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
             pilot.recover()
+            pilot.recover_jobs()
             pushed = True
             while True:
                 if pushed:
