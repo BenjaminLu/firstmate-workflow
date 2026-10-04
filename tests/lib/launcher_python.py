@@ -75,12 +75,24 @@ unknown="unterminated shell word
             "python3 helper.py\npython3 -c 'unfinished\n")))
 
     def test_guard_finds_every_frozen_base_program(self):
-        expected = {'fm-review.sh': [9, 1, 5],
-                    'fm-sandbox.sh': [22] + [780] * 9 + [57, 22, 780]}
         sandbox = SOURCES['fm-sandbox.sh']
         payloads = {name: re.search(r"read[^\n]* " + name
                     + r" <<'PY'\n(.*?)\nPY", sandbox, re.S)[1]
                     for name in ('SB_PY', 'FWD_PY', 'LOOP_PY')}
+        review = SOURCES['fm-review.sh']
+        review_payloads = {marker: re.search(
+            r"<<'" + marker + r"'[^\n]*\n(.*?)\n" + marker + r"\n",
+            review, re.S)[1] for marker in ('PYLIVE', 'PYFINAL')}
+        network = re.search(r"python3 -c '([^']*)'", review)[1]
+        # Keep the call order explicit, but measure the frozen bodies themselves:
+        # extracted modules add wrappers and cannot supply base line counts.
+        expected = {
+            'fm-review.sh': [review_payloads['PYLIVE'], network,
+                             review_payloads['PYFINAL']],
+            'fm-sandbox.sh': [payloads['LOOP_PY']] + [payloads['SB_PY']] * 9
+                            + [payloads['FWD_PY'], payloads['LOOP_PY'],
+                               payloads['SB_PY']],
+        }
         found = list(embedded_programs(sandbox))
         for name, count in (('SB_PY', 10), ('FWD_PY', 1), ('LOOP_PY', 2)):
             with self.subTest(program=name):
@@ -88,7 +100,7 @@ unknown="unterminated shell word
         for name, source in SOURCES.items():
             with self.subTest(script=name):
                 self.assertEqual(SHA256[name], hashlib.sha256(source.encode()).hexdigest())
-                self.assertEqual(expected[name],
+                self.assertEqual([len(p.splitlines()) for p in expected[name]],
                                  [len(p.splitlines()) for p in embedded_programs(source)])
                 self.assertEqual([], list(embedded_programs((ROOT / 'bin' / name).read_text())))
 
