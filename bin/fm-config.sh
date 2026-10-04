@@ -12,6 +12,24 @@
 #   fm_cfg_in reviewer vendor     -> cursor-agent
 #   fm_cfg_list fallback          -> one per line
 
+# Shared shell decision grammar; the board keeps its TypeScript twin.
+# An owned match preserves BASH_REMATCH: project, task key, sequence.
+fm_decision_id() { # <id> [numeric|skill|owned]
+  local numeric='^D-[0123456789]{1,6}$' skill='^D-SK-[0123456789]{3,}$'
+  case "${2:-any}" in
+    numeric) [[ "${1-}" =~ $numeric ]]; return ;;
+    skill) [[ "${1-}" =~ $skill ]]; return ;;
+    any) [[ "${1-}" =~ $numeric || "${1-}" =~ $skill ]] && return 0 ;;
+    owned) ;;
+    *) return 1 ;;
+  esac
+  if [ -z "${FM_OWNED_ID:-}" ]; then
+    # shellcheck source=bin/fm-emit.sh
+    . "$(dirname "${BASH_SOURCE[0]}")/fm-emit.sh" || return 1
+  fi
+  [[ "${1-}" =~ $FM_OWNED_ID ]]
+}
+
 _fm_clean() {   # strip an inline comment, surrounding quotes, and stray space
   sed -e 's/[[:space:]]#.*$//' -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' \
       -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"

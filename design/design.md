@@ -1741,9 +1741,16 @@ merge hands `fm-merge.sh` `--untracked` and no task; it has no task to park,
 drop, dispatch or send back, so any of those fails with that reason. A
 **readiness card** (T-059) names `{"A":"dispatch","C":"park","D":"drop"}`;
 its B, rescope, has no effect and is recorded. A **choice card** has only
-the effects it names. A **skill-update card** (`D-SK-*`, title only) names
-none: a merge one merges on A and holds on B and C like any merge card, and
-a choice one only records. A custom answer never has an effect. An effect that failed stays on the board
+the effects it names. A **skill-update card** (`D-SK-<at least three digits>`) supplies
+bilingual proposal details and A (adopt), B (leave), C (revise) tradeoffs.
+Missing proposal text is explicitly disclosed. Legacy title-only callers
+remain supported. The generated choice card names no automatic effects and
+only records the answer. A skill merge card merges on A and holds on B and C
+like any merge card. Revision names the requested changes and re-raises
+the same decision id through the existing decision lifecycle. Shell consumers
+(`fm-decide.sh`, `fm-ready.sh`, `fm-diagram.sh`) use `fm_decision_id` in
+`fm-config.sh`, which delegates owned ids to `FM_OWNED_ID`; the board retains
+its TypeScript twin. A custom answer never has an effect. An effect that failed stays on the board
 with its reason until what it asked for has happened some other way, and is
 never shown as done.
 
