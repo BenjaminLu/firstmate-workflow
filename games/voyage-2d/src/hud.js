@@ -31,7 +31,8 @@ const T = {
     loading: "Hoisting the sails…", welcome: "Welcome aboard, captain. The crew are at work; a card comes up when they need your call.", playground: "PLAYGROUND · simulated",
     tFight: "fight the kraken", tStop: "stop playing",
     grows: "The ship grows", trims: "The ship trims down",
-    f: { name: "Name", role: "Role", project: "Project", task: "Task", round: "Round", pr: "PR", state: "State", activity: "Activity", rank: "Rank", vendor: "Vendor" },
+    f: { name: "Name", role: "Role", project: "Project", task: "Task", round: "Round", pr: "PR", state: "State", activity: "Activity", rank: "Rank", vendor: "Vendor", llm: "Model" },
+    llmRequested: "(requested)", llmMismatch: "Model mismatch",
     roles: { captain: "Captain", firstmate: "Firstmate", reviewer: "Reviewer", worker: "Worker" },
     act: { lookout: "on lookout", signal: "signalling", point: "pointing the way", log: "writing the log", haul: "hauling lines", capstan: "at the capstan", carry: "carrying", climb: "climbing", hammer: "hammering", saw: "sawing", swab: "swabbing", lean: "at ease", coil: "coiling rope", mend: "mending" },
     styles: { p5: "Crimson", manga: "Manga" },
@@ -53,7 +54,8 @@ const T = {
     loading: "升帆中…", welcome: "歡迎登船，船長。船員已開工；需要你決定時，決策卡會出現。", playground: "遊樂場 · 模擬",
     tFight: "迎戰海怪", tStop: "停止操作",
     grows: "船艦升級", trims: "船艦縮編",
-    f: { name: "名字", role: "職務", project: "專案", task: "任務", round: "審查輪次", pr: "PR", state: "狀態", activity: "動作", rank: "階級", vendor: "模型" },
+    f: { name: "名字", role: "職務", project: "專案", task: "任務", round: "審查輪次", pr: "PR", state: "狀態", activity: "動作", rank: "階級", vendor: "供應商", llm: "模型" },
+    llmRequested: "（已請求）", llmMismatch: "模型不符",
     roles: { captain: "船長", firstmate: "大副", reviewer: "審查員", worker: "水手" },
     act: { lookout: "瞭望", signal: "打旗號", point: "指路", log: "寫航海日誌", haul: "拉纜繩", capstan: "推絞盤", carry: "搬運", climb: "攀爬", hammer: "敲打", saw: "鋸木", swab: "拖甲板", lean: "休息", coil: "盤繩", mend: "補帆" },
     styles: { p5: "緋紅", manga: "漫畫" },
@@ -75,7 +77,8 @@ const T = {
     loading: "升帆中…", welcome: "欢迎登船，船长。船员已开工；需要你决定时，决策卡会出现。", playground: "游乐场 · 模拟",
     tFight: "迎战海怪", tStop: "停止操作",
     grows: "船舰升级", trims: "船舰缩编",
-    f: { name: "名字", role: "职务", project: "项目", task: "任务", round: "审查轮次", pr: "PR", state: "状态", activity: "动作", rank: "阶级", vendor: "模型" },
+    f: { name: "名字", role: "职务", project: "项目", task: "任务", round: "审查轮次", pr: "PR", state: "状态", activity: "动作", rank: "阶级", vendor: "供应商", llm: "模型" },
+    llmRequested: "（已请求）", llmMismatch: "模型不符",
     roles: { captain: "船长", firstmate: "大副", reviewer: "审查员", worker: "水手" },
     act: { lookout: "瞭望", signal: "打旗号", point: "指路", log: "写航海日志", haul: "拉缆绳", capstan: "推绞盘", carry: "搬运", climb: "攀爬", hammer: "敲打", saw: "锯木", swab: "拖甲板", lean: "休息", coil: "盘绳", mend: "补帆" },
     styles: { p5: "绯红", manga: "漫画" },
@@ -424,9 +427,11 @@ export class HUD {
     if (s.mode === "live") {
       const task=s.tasks.find(t=>t.id===c.task);
       const activity=c.activity?.[this.lang === "en" ? "en" : "zh-TW"] || "";
+      const llm=c.llm_mismatch ? this.t.llmMismatch : c.llm
+        ? c.llm + (c.llm_source === "requested" ? ` ${this.t.llmRequested}` : "") : this.t.none;
       return [["name",c.name],["role",this.t.roles[c.role] || c.role],["project",c.project || ""],
         ["task",task?.boardId || ""],["round",task?.round || ""],["pr",task?.pr ? `#${task.pr}` : ""],
-        ["state",this.t.st[c.state] || c.state],["activity",activity],["vendor",c.vendor || ""]];
+        ["state",this.t.st[c.state] || c.state],["activity",activity],["vendor",c.vendor || ""],["llm",llm]];
     }
     const t = this.t, pj = projectOf(c, s), task = pj?.task;
     const pr = !task ? t.none : task.lane === "merged" ? t.prMerged : task.lane === "review" ? (task.approved ? t.prApproved : t.prOpen) : t.none;
@@ -456,7 +461,9 @@ export class HUD {
   hideCrew() { this.crewId = null; $("crewCard").hidden = true; }
   // the roster keeps every field as its own column, grouped by role and state (readable at 24)
   rosterHtml(s) {
-    const t = this.t, keys = ["name", "role", "project", "task", "round", "pr", "state", "activity", "rank", "vendor"];
+    const t = this.t, keys = s.mode === "live"
+      ? ["name", "role", "project", "task", "round", "pr", "state", "activity", "vendor", "llm"]
+      : ["name", "role", "project", "task", "round", "pr", "state", "activity", "rank", "vendor"];
     const row = (c) => `<tr class="st-${c.state}">` + this.crewFields(c, s).map(([k, v, col], i) => `<td class="c-${k}">${i === 0 ? '<span class="dot"></span>' : ""}${col ? `<i style="--pc:${col}"></i>` : ""}${esc(v)}</td>`).join("") + `</tr>`;
     const order = ["working", "walking", "waiting", "blocked", "down", "standby", "idle"];
     const groups = [[t.command, s.crew.filter((c) => c.role === "captain" || c.role === "firstmate")], [t.review, s.crew.filter((c) => c.role === "reviewer")]];

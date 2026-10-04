@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
+export HERDR_ENV=0
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # --- T-040: layout parity data ---------------------------------------------
 # Its own fixture again: the engine badge reads config.yaml, which the other
@@ -60,6 +61,46 @@ printf 'vendor: vendor-delta\n' > "$e/config.yaml"
 se3="$(st)"
 assert_eq "null" "$(jq -r '.engine.reviewer' <<<"$se3")" "no reviewer block, no reviewer vendor"
 assert_eq "false" "$(jq -r '.engine.cross' <<<"$se3")" "and nothing is marked"
+
+# T-192: resolve the rule from the recorded host, without any running crew.
+assert_eq "0" "$(jq '[.crew[] | select(.role != "firstmate")]|length' <<<"$(st)")" "rule fixture has no running crew"
+printf 'vendor: opposite-of-host\nfallback:\n  - vendor-first\n  - vendor-second\n' > "$e/config.yaml"
+mkdir -p "$e/state/session"
+printf '{"harness":"claude"}\n' > "$e/state/session/host.json"
+assert_eq "codex opposite-of-host claude null false" "$(jq -r '.engine|"\(.vendor) \(.rule) \(.host) \(.reviewer) \(.cross)"' <<<"$(st)")" "Claude host resolves to Codex and retains absent reviewer semantics"
+printf '{"harness":"codex"}\n' > "$e/state/session/host.json"
+assert_eq "claude" "$(jq -r '.engine.vendor' <<<"$(st)")" "Codex host resolves to Claude on the next request"
+printf '{"harness":"other-host"}\n' > "$e/state/session/host.json"
+assert_eq "vendor-first other-host" "$(jq -r '.engine|"\(.vendor) \(.host)"' <<<"$(st)")" "unknown host uses the first configured fallback"
+rm "$e/state/session/host.json"
+assert_eq "vendor-first null" "$(jq -r '.engine|"\(.vendor) \(.host)"' <<<"$(st)")" "missing host uses the first configured fallback"
+printf 'vendor: opposite-of-host\n' > "$e/config.yaml"
+assert_eq "mock" "$(jq -r '.engine.vendor' <<<"$(st)")" "missing host and fallback resolve to mock"
+printf '{"harness":"claude"}\n' > "$e/state/session/host.json"
+printf 'vendor: claude\nreviewer:\n  vendor: opposite-of-host\n' > "$e/config.yaml"
+assert_eq "claude codex true null opposite-of-host" "$(jq -r '.engine|"\(.vendor) \(.reviewer) \(.cross) \(.rule) \(.reviewer_rule)"' <<<"$(st)")" "reviewer rule resolves before comparing vendors"
+printf 'vendor: opposite-of-host\nreviewer:\n  vendor: opposite-of-host\n' > "$e/config.yaml"
+assert_eq "codex codex false" "$(jq -r '.engine|"\(.vendor) \(.reviewer) \(.cross)"' <<<"$(st)")" "two rules resolving to the same vendor are not cross-vendor"
+
+# A default external project uses its own session ahead of the engine session.
+rule_home="$(safe_tmpdir)"
+cat > "$e/config.yaml" <<Y
+home: $rule_home
+vendor: opposite-of-host
+default_project: rule-project
+projects:
+  rule-project:
+    github: fixture/rule-project
+Y
+rule_state="$(project_fixture_state "$e" rule-project)"
+mkdir -p "$rule_state/session"
+printf '{"harness":"codex"}\n' > "$rule_state/session/host.json"
+assert_eq "claude codex" "$(jq -r '.engine|"\(.vendor) \(.host)"' <<<"$(st)")" "project host wins over the engine host"
+rm "$rule_state/session/host.json"
+assert_eq "codex claude" "$(jq -r '.engine|"\(.vendor) \(.host)"' <<<"$(st)")" "absent project host falls back to the engine record"
+printf 'vendor: vendor-delta\n' > "$e/config.yaml"
+rm "$e/state/session/host.json"
+safe_rm_rf "$rule_home"
 
 # seven lanes, left to right, in lifecycle order; closed is not a lane
 assert_eq "backlog ready working gate review captain merged" "$(jq -r '.lanes|join(" ")' <<<"$se")" \
