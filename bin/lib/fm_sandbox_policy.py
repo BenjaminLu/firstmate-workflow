@@ -16,6 +16,18 @@ SECRET_SERVICES = ('com.apple.SecurityServer', r'^com\.apple\.securityd', r'^com
                    'com.apple.GSSCred', 'org.h5l.kcm', 'com.apple.CoreAuthentication.daemon')
 
 
+def secret_services_deny():
+    """The same secret-service boundary for round and auth-probe profiles."""
+    return '(deny mach-lookup %s)' % ' '.join(
+        '(global-name "%s")' % n if not n.startswith('^') else '(global-name-regex #"%s")' % n
+        for n in SECRET_SERVICES)
+
+
+def auth_probe_profile():
+    """Constrain cursor status without changing its temporary HOME or login."""
+    print('(version 1)\n(allow default)\n' + secret_services_deny())
+
+
 def load(path):
     try:
         with open(path) as f:
@@ -254,9 +266,7 @@ def darwin(p, roots, reads, own, port, listening):
               '(global-name "com.apple.coreservices.appleevents"))',
               ';; no secret a macOS service hands out: a file rule does not cover a credential',
               ';; served over mach, and gh and git keep their tokens in the keychain',
-              '(deny mach-lookup %s)' % ' '.join(
-                  '(global-name "%s")' % n if not n.startswith('^') else '(global-name-regex #"%s")' % n
-                  for n in SECRET_SERVICES)]
+              secret_services_deny()]
     return '\n'.join(lines) + '\n'
 
 
@@ -710,6 +720,9 @@ def proxy(p, vendor, portfile, blocked, sock):
 
 
 def main():
+    if sys.argv[1:2] == ['auth-probe-profile']:
+        auth_probe_profile()
+        return
     mode, policy_path = sys.argv[1], sys.argv[2]
     p = load(policy_path)
     if mode == 'decide':

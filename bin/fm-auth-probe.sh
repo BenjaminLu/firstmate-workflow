@@ -22,7 +22,7 @@
 # vendor's own config directory pointed where the adapter points it, and a
 # time limit (FM_AUTH_PROBE_TIMEOUT, default 20s). Prints exactly one word
 # on its own line - authenticated, unauthenticated, expired,
-# quota-exhausted, indeterminate, timeout, unavailable - the vendor's CLI
+# quota-exhausted, keychain-blocked, indeterminate, timeout, unavailable - the vendor's CLI
 # version it probed, and a one-line reason in English and Traditional
 # Chinese. It never prints the vendor CLI's own output or a secret.
 #
@@ -132,6 +132,26 @@ case "$vendor" in
   codex)        argv=(codex login status) ;;
   cursor-agent) argv=(cursor-agent status) ;;
 esac
+
+# Resolve these before run_probe scrubs exported FM_* variables. Only the
+# Darwin cursor status check needs the secret-service boundary (T-188).
+probe_os="${FM_SANDBOX_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
+probe_tool="${FM_SANDBOX_TOOL:-sandbox-exec}"
+probe_confined=''
+if [ "$vendor" = cursor-agent ] && [ "$probe_os" = darwin ]; then
+  probe_confined=1
+  if ! probe_profile="$(python3 "$HERE/lib/fm_sandbox_policy.py" auth-probe-profile)"; then
+    print_result keychain-blocked "$version" \
+      "could not confine cursor-agent's keychain access" \
+      "無法限制 cursor-agent 的鑰匙圈存取"
+    exit 0
+  fi
+  # No unconfined fallback: a missing tool or refused profile never starts
+  # cursor. The marker distinguishes wrapper failure from cursor's answer.
+  # shellcheck disable=SC2016  # expanded by the confined shell, not this probe
+  argv=("$probe_tool" -p "$probe_profile" /bin/sh -c
+        'touch "$1"; shift 1; exec "$@"' _ "$work/started" "${argv[@]}")
+fi
 
 # Where the adapter points the vendor's own configuration, so the probe
 # reads the round's login and never the operator's ~/.claude or ~/.codex.
@@ -285,12 +305,18 @@ fi
 status=''
 if [ -n "$probe_timedout" ]; then
   status=timeout
+elif [ -n "$probe_confined" ] && [ ! -e "$work/started" ]; then
+  status=keychain-blocked
 elif [ -n "$claude_json" ]; then
   status="$claude_json"
 elif grep -qiE "$_FM_QUOTA" <<<"$probe_out"; then
   status=quota-exhausted
 elif grep -qiE "$_FM_EXPIRED" <<<"$probe_out"; then
   status=expired
+elif [ "$vendor" = cursor-agent ] && [ "$probe_rc" -eq 0 ] && grep -q 'Logged in' <<<"$probe_out"; then
+  status=authenticated
+elif [ "$vendor" = cursor-agent ] && grep -qi keychain <<<"$probe_out"; then
+  status=keychain-blocked
 elif grep -qiE "$_FM_UNAUTH" <<<"$probe_out"; then
   status=unauthenticated
 elif [ "$probe_rc" -eq 0 ] && [ -n "$probe_out" ]; then
@@ -334,6 +360,16 @@ case "$status" in
     print_result quota-exhausted "$version" \
       "$vendor says its quota is exhausted; check the vendor's own dashboard for when it resets" \
       "$vendor 表示額度已用盡；請至該廠商的後台查看重置時間" ;;
+  keychain-blocked)
+    if [ -n "$probe_confined" ] && [ ! -e "$work/started" ]; then
+      print_result keychain-blocked "$version" \
+        "could not confine cursor-agent's keychain access" \
+        "無法限制 cursor-agent 的鑰匙圈存取"
+    else
+      print_result keychain-blocked "$version" \
+        "cursor-agent needs keychain storage, which crew rounds deny" \
+        "cursor-agent 需要鑰匙圈儲存，而 crew 回合禁止存取鑰匙圈"
+    fi ;;
   timeout)
     print_result timeout "$version" \
       "$vendor's status check did not answer within ${timeout_secs}s, so its login cannot be verified and rounds on it are refused" \
