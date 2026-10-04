@@ -14,14 +14,15 @@ sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 import fm_autopilot as A
+from autopilot_branch_fixture import BranchFixture, response
 
 HEAD = 'a' * 40
 PR = dict(number=12, state='open', head=dict(sha=HEAD, ref='t-001-work'),
           base=dict(ref='main', sha='b' * 40), mergeable=True,
-          mergeable_state='behind', draft=False)
+          mergeable_state='clean', draft=False)
 
 
-class PilotTests(unittest.TestCase):
+class PilotTests(BranchFixture, unittest.TestCase):
     def setUp(self):
         env = patch.dict(os.environ, {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}, clear=True)
         env.start(); self.addCleanup(env.stop)
@@ -39,6 +40,8 @@ class PilotTests(unittest.TestCase):
         (Path(self.context['tasks']) / 'T-001.json').write_text('{"id":"T-001"}')
         self.pilot = A.Pilot(self.context, clock=lambda: 1000)
         self.pilot.command = self.command
+        self.branch_setup()
+        self.pilot.probe = self.probe
         self.pilot.read_head_spec = lambda pr, task: dict(id=task)
         self.pilot.emit = lambda *args, **kwargs: self.calls.append(('emit', args))
         self.pilot.notify = lambda text: self.calls.append(('notify', text))
@@ -46,6 +49,10 @@ class PilotTests(unittest.TestCase):
         self.pilot.advance = lambda *args: None
         self.pilot.prepare_head = lambda *args: None
         self.pilot.launch_review = lambda *args: self.calls.append(('review', args))
+
+    def probe(self, argv):
+        self.calls.append(argv)
+        return self.branch_probe(argv)
 
     def command(self, argv, **kwargs):
         if argv[:2] == ['bash', '-c']:
@@ -55,18 +62,26 @@ class PilotTests(unittest.TestCase):
             return json.dumps(dict(headRefOid=HEAD, mergeable='MERGEABLE', mergeStateStatus='BEHIND'))
         return ''
 
+    def puts(self):
+        return [x for x in self.calls if isinstance(x, list) and x[1:4] == ['api', '-X', 'PUT']]
+
+    def behind(self):
+        return dict(copy.deepcopy(PR), mergeable_state='behind')
+
     def test_only_mergeable_behind_is_updated_and_never_merged(self):
-        self.pilot.pull(PR, [], [], [], [])
-        writes = [x for x in self.calls if isinstance(x, list) and x[1:3] == ['pr', 'update-branch']]
-        self.assertEqual(writes, [['gh', 'pr', 'update-branch', '12', '--repo', 'owner/repo']])
-        self.pilot.pull(PR, [], [], [], [])
-        self.assertEqual(len([x for x in self.calls if isinstance(x, list) and x[1:3] == ['pr', 'update-branch']]), 1)
+        self.pull_at(self.behind())
+        self.assertEqual(self.puts(), [['gh', 'api', '-X', 'PUT',
+            'repos/owner/repo/pulls/12/update-branch', '-f', 'expected_head_sha=' + HEAD, '--include']])
+        self.pull_at(self.behind())
         for mergeable in (False, None):
-            pr = copy.deepcopy(PR); pr['head']['sha'] = ('c' if mergeable is None else 'd') * 40
+            pr = self.behind(); pr['head']['sha'] = ('c' if mergeable is None else 'd') * 40
             pr['mergeable'] = mergeable
-            self.pilot.pull(pr, [], [], [], [])
-        self.assertEqual(len([x for x in self.calls if isinstance(x, list) and x[1:3] == ['pr', 'update-branch']]), 1)
-        self.assertNotIn('merge', [word for x in writes for word in x])
+            self.pull_at(pr)
+        self.pull_at(dict(self.behind(), draft=True))
+        self.pull_at(PR)
+        self.assertEqual(len(self.puts()), 1)
+        self.assertNotIn('merge', [word for x in self.puts() for word in x])
+        self.assertFalse(self.pilot.data['actions'])
 
     # Review eligibility formerly compared base-only patch metadata here.
     # T-175 delegates all eligibility to the real gates; the replacement
@@ -79,7 +94,7 @@ class PilotTests(unittest.TestCase):
         status = [dict(id=2, context='lint', state='error')]
         reviews = [dict(id=3, user={'login':'reviewer'}, state='CHANGES_REQUESTED', commit_id=HEAD, body='fix')]
         comments = [dict(id=4, user={'login':'reviewer'}, body='finding', updated_at='now')]
-        self.pilot.pull(pr, reviews, comments, runs, status)
+        self.pull_at(pr, reviews, comments, runs, status)
         self.pilot.flush()
         wakes = [x for x in self.calls if x[0] == 'wake']
         self.assertEqual(len(wakes), 2, 'CI failures queue immediately')
@@ -89,7 +104,7 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(len(wakes), 3, 'one quiet reviewer closes one batch')
         self.assertIn('CHANGES_REQUESTED', str(wakes[-1]))
         self.assertIn('finding', str(wakes[-1]))
-        self.pilot.pull(pr, reviews, comments, runs, status)
+        self.pull_at(pr, reviews, comments, runs, status)
         self.pilot.flush()
         self.assertEqual(len([x for x in self.calls if x[0] == 'wake']), 3)
 
@@ -101,6 +116,7 @@ class PilotTests(unittest.TestCase):
         self.pilot.flush()
         self.pilot.save()
         restored = A.Pilot(self.context, clock=lambda: 1200)
+        restored.probe = self.probe
         self.assertEqual(len(restored.data['wakes']), 5)
         for i, event in enumerate(events): restored.event(event, str(i))
         self.assertEqual(len(restored.data['wakes']), 5)
@@ -122,13 +138,14 @@ class PilotTests(unittest.TestCase):
         self.assertIn(HEAD, argv)
         self.assertIn('--project', argv)
 
-    def test_failed_operation_is_not_repeated_after_uncertain_crash(self):
-        self.pilot.command = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('network lost'))
-        self.pilot.pull(PR, [], [], [], [])
-        self.pilot.command = self.command
-        self.pilot.pull(PR, [], [], [], [])
-        self.assertFalse(any(isinstance(x,list) for x in self.calls))
-        self.assertTrue(self.pilot.data['wakes'])
+    def test_failed_update_retries_at_one_and_three_then_wakes_once(self):
+        self.put_answer = response('503 Service Unavailable', 'try later')
+        for expected in (1, 2, 2, 3, 3, 3):
+            self.pull_at(self.behind())
+            self.assertEqual(len(self.puts()), expected)
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.assertIn('HTTP/2.0 503 Service Unavailable', str(self.pilot.data['wakes']))
+        self.assertEqual(self.pilot.data['actions'], {})
 
     def test_task_lookup_and_observation_do_not_use_operation_channel(self):
         self.pilot.command = lambda *a, **kw: self.fail('task lookup used operation channel')
@@ -185,10 +202,10 @@ class PilotTests(unittest.TestCase):
         pr = copy.deepcopy(PR); pr['mergeable_state'] = 'clean'
         alice = dict(id=1, user={'login':'alice'}, state='CHANGES_REQUESTED', body='first')
         bob = dict(id=2, user={'login':'bob'}, state='CHANGES_REQUESTED', body='first')
-        self.pilot.pull(pr, [alice, bob], [], [], [])
+        self.pull_at(pr, [alice, bob], [], [], [])
         self.pilot.clock = lambda:1100
         alice['body'] = 'edited finding'
-        self.pilot.pull(pr, [alice, bob], [], [], [])
+        self.pull_at(pr, [alice, bob], [], [], [])
         self.assertEqual(self.pilot.data['batches']['12:alice']['due'], 1280)
         self.assertEqual(self.pilot.data['batches']['12:bob']['due'], 1180)
 
@@ -236,7 +253,7 @@ class PilotTests(unittest.TestCase):
 
     def test_protected_base_never_updated_even_with_task_like_name(self):
         self.pilot.ctx['base'] = PR['head']['ref']
-        self.pilot.pull(PR, [], [], [], [])
+        self.pull_at(PR, [], [], [], [])
         self.assertEqual(self.calls, [])
 
     def test_team_merge_is_observed_once_without_invoking_merge(self):
@@ -267,6 +284,7 @@ class PilotTests(unittest.TestCase):
         ctx = {**self.context, 'state':str(home/'state'), 'tasks':str(home/'tasks'),
                'target':str(home/'repo'), 'project':'other', 'repository':'owner/private', 'external':True}
         pilot = A.Pilot(ctx, clock=lambda:1000)
+        pilot.probe = self.probe
         self.assertEqual(pilot.policy['watch_seconds'], 90)
         pilot.push = lambda *args: None
         pilot.queue('private', 'T-001', 'Private finding', '私有審查意見')
@@ -288,6 +306,226 @@ class PilotTests(unittest.TestCase):
             self.assertTrue(bell.wait(0))
             self.assertTrue(pilot.wait(0), 'policy updates also notify autopilot')
         self.assertFalse((self.state/'session').exists())
+
+    def test_pending_update_waits_twenty_poll_steps(self):
+        self.pull_at(self.behind())
+        first = self.pilot.data['poll_seq']
+        for _ in range(19): self.pull_at(self.behind())
+        self.assertEqual(len(self.puts()), 1)
+        self.assertEqual(self.pilot.data['updates']['12'], dict(head=HEAD, seq=first))
+        self.pull_at(self.behind())
+        self.assertEqual(len(self.puts()), 2)
+        self.assertEqual(self.pilot.data['updates']['12']['seq'], first + 20)
+
+    def test_expected_head_422_is_moved_without_reread_or_retry(self):
+        self.put_answer = response('422 Unprocessable Entity', "Expected Head SHA didn't match current head ref.")
+        self.pull_at(self.behind())
+        self.assertEqual(self.pilot.data['retries'], {})
+        self.assertEqual(self.pilot.data['wakes'], {})
+        self.assertFalse(any(isinstance(c, list) and c[1:3] == ['pr', 'view'] for c in self.calls))
+        self.pull_at(self.behind())
+        self.assertEqual(len(self.puts()), 2)
+
+    def test_other_422_rereads_uncached_head_before_retry(self):
+        self.put_answer = response('422 Unprocessable Entity', 'cannot update')
+        original = self.command
+        for result in ('c' * 40, HEAD, None):
+            with self.subTest(result=result):
+                self.pilot.data['retries'].clear()
+                def reread(argv, **kwargs):
+                    self.assertEqual(argv, ['gh', 'pr', 'view', '12', '--repo',
+                        'owner/repo', '--json', 'headRefOid,mergeable,mergeStateStatus'])
+                    if result is None: raise RuntimeError('offline')
+                    return json.dumps(dict(headRefOid=result))
+                self.pilot.command = reread
+                self.pull_at(self.behind())
+                self.assertEqual(bool(self.pilot.data['retries']), result != 'c' * 40)
+                self.assertEqual(self.pilot.data['wakes'], {})
+        self.pilot.command = original
+
+    def test_poll_sequence_advances_before_policy_and_network_errors(self):
+        self.pilot.policy_error = 'bad policy'
+        self.pilot.poll()
+        self.assertEqual(self.pilot.data['poll_seq'], 1)
+        self.pilot.policy_error = None
+        self.pilot.rows = lambda: (_ for _ in ()).throw(ValueError('offline'))
+        self.pilot.poll()
+        self.assertEqual(self.pilot.data['poll_seq'], 2)
+        self.assertEqual(self.pilot.data['failures'], 1)
+
+    def test_update_failures_are_isolated_per_pr_in_poll(self):
+        first = self.behind()
+        second = self.behind(); second['number'] = 13
+        second['head'] = dict(sha='c' * 40, ref='t-001-second')
+        self.local_refs = {p['head']['ref']: p['head']['sha'] for p in (first, second)}
+        self.pilot.observe_pr = lambda pr: None
+        self.pilot.inspect_policy = lambda: None
+        self.pilot.rows = lambda: []
+        self.pilot.task = lambda pr: 'T-001'
+        def api(endpoint):
+            if endpoint.startswith('pulls?state=open'): return [first, second]
+            if endpoint.startswith('pulls?state=closed'): return []
+            if endpoint == 'pulls/12': return first
+            if endpoint == 'pulls/13': return second
+            if '/reviews?' in endpoint or '/comments?' in endpoint: return []
+            if '/check-runs?' in endpoint: return dict(check_runs=[], total_count=0)
+            if '/status?' in endpoint: return dict(sha=endpoint.split('/')[1], statuses=[], total_count=0)
+            self.fail(endpoint)
+        self.pilot.api = api
+        for answer in (response('403 Forbidden', 'denied'), response('500 Server Error', 'error'),
+                       (1, '', 'transport lost')):
+            with self.subTest(answer=answer):
+                self.calls.clear(); self.pilot.data['retries'].clear(); self.pilot.data['updates'].clear()
+                def probe(argv):
+                    self.calls.append(argv)
+                    if argv[1:4] == ['api', '-X', 'PUT']:
+                        return answer if '/12/' in argv[4] else response()
+                    return self.branch_probe(argv)
+                self.pilot.probe = probe
+                with patch.object(self.pilot, 'network_failure') as failure:
+                    self.pilot.poll()
+                failure.assert_not_called()
+                self.assertEqual(len(self.puts()), 2)
+                self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
+                self.assertEqual(self.pilot.data['updates']['13']['head'], 'c' * 40)
+                self.assertEqual(sum(isinstance(c, list) and '--verify' in c for c in self.calls), 2)
+
+    def seed_branch_state(self):
+        self.pilot.data['pulls']['12'] = dict(task='T-001', head=HEAD)
+        for number in ('12', '13'):
+            self.pilot.data['retries']['sync:' + number + ':' + HEAD] = dict(count=2, due_seq=10)
+            self.pilot.data['retries']['update:' + number + ':' + HEAD] = dict(count=2, due_seq=10)
+            self.pilot.data['holds'][number] = dict(head=HEAD, count=2)
+            self.pilot.data['updates'][number] = dict(head=HEAD, seq=1)
+
+    def test_branch_state_prunes_on_head_change_closed_and_merged_event(self):
+        for transition in ('head', 'closed', 'merged', 'event'):
+            with self.subTest(transition=transition):
+                self.seed_branch_state()
+                pr = copy.deepcopy(PR)
+                if transition == 'head':
+                    pr['head']['sha'] = 'c' * 40
+                    self.pull_at(pr)
+                elif transition == 'event':
+                    self.pilot.event(dict(type='merged', task='T-001', pr=12, project='self'), 'merged')
+                else:
+                    pr.update(state='closed', merged_at='now' if transition == 'merged' else None)
+                    self.pilot.closed_pull(pr)
+                self.assertFalse(any(k.split(':')[1] == '12' for k in self.pilot.data['retries']))
+                self.assertNotIn('12', self.pilot.data['holds'])
+                self.assertNotIn('12', self.pilot.data['updates'])
+                self.assertIn('13', self.pilot.data['holds'])
+                self.assertIn('update:13:' + HEAD, self.pilot.data['retries'])
+
+    def restart_branch_pilot(self):
+        self.pilot.save()
+        self.pilot = A.Pilot(self.context, clock=lambda: 1000)
+        self.pilot.command = self.command
+        self.pilot.probe = self.probe
+        self.pilot.advance = lambda *args: None
+        self.pilot.read_head_spec = lambda pr, task: dict(id=task)
+        self.pilot.push = lambda *args: self.calls.append(('wake', args))
+        self.pilot.emit = lambda *args, **kw: None
+
+    def test_retry_and_hold_survive_restart_and_deduplicate_wakes(self):
+        self.pilot.data['poll_seq'] = 4
+        self.pilot.data['retries']['update:12:' + HEAD] = dict(count=2, due_seq=6)
+        self.pilot.data['holds']['13'] = dict(head=HEAD, count=2)
+        self.restart_branch_pilot()
+        self.put_answer = response('503 Service Unavailable', 'later')
+        self.pull_at(self.behind())
+        self.assertEqual(len(self.puts()), 0)
+        self.pull_at(self.behind())
+        self.assertEqual(len(self.puts()), 1)
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        pr = copy.deepcopy(PR); pr['number'] = 13; pr['head']['ref'] = 't-001-second'
+        self.branch = pr['head']['ref']; self.fetch_head = HEAD
+        self.local_refs[self.branch] = 'd' * 40
+        self.worktree = str(self.root / 'dirty'); self.dirty = True
+        self.pilot.data['poll_seq'] += 1
+        self.pilot.pull(pr, [], [], [], [])
+        self.assertEqual(len(self.pilot.data['wakes']), 2)
+        self.pilot.flush(); self.restart_branch_pilot()
+        self.pilot.data['poll_seq'] += 1
+        self.pilot.pull(pr, [], [], [], [])
+        self.pull_at(self.behind()); self.pilot.flush()
+        self.assertEqual(len(self.pilot.data['wakes']), 2)
+        self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 2)
+
+    def test_update_migration_preserves_advance_and_delivered_files_across_two_startups(self):
+        tokens = [A.key(['update', '12', HEAD]), A.key(['update', '13', HEAD])]
+        for number, token in zip(('12', '13'), tokens):
+            self.pilot.data['actions'][token] = dict(state='started', identity=['update', number, HEAD], task='T-001')
+            self.pilot.queue('action-' + token, 'T-001', 'legacy update', '舊分支更新')
+        delivered = self.state / 'wake-queue'; delivered.mkdir()
+        path = delivered / ('autopilot-' + A.key(['self', 'action-' + tokens[0]]) + '.json')
+        path.write_bytes(b'{"delivered":"unchanged"}\n')
+        self.pilot.data['wakes'][path.stem]['pushed'] = True
+        advance = dict(state='uncertain', identity=['advance', '12', HEAD], task='T-001')
+        self.pilot.data['actions']['advance'] = advance
+        for name in ('poll_seq', 'retries', 'holds', 'updates', 'migrated_t190'):
+            self.pilot.data.pop(name, None)
+        self.restart_branch_pilot()
+        self.pilot.recover(); self.pilot.flush()
+        for name, value in (('poll_seq', 0), ('retries', {}), ('holds', {}), ('updates', {})):
+            self.assertEqual(self.pilot.data[name], value)
+        self.assertTrue(self.pilot.data['migrated_t190'])
+        self.assertEqual(self.pilot.data['actions'], {'advance': advance})
+        self.assertFalse(any(not w['pushed'] for w in self.pilot.data['wakes'].values()))
+        self.assertEqual(path.read_bytes(), b'{"delivered":"unchanged"}\n')
+        first = copy.deepcopy(self.pilot.data)
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        self.assertEqual(self.pilot.data, first)
+        self.assertEqual(path.read_bytes(), b'{"delivered":"unchanged"}\n')
+        self.assertFalse(any(c[0] == 'wake' for c in self.calls))
+
+    def test_probe_returns_nonzero_and_checked_raises_with_argv_and_last_line(self):
+        result = subprocess.CompletedProcess(['git'], 128, 'body', 'noise\nfatal: last line\n\n')
+        with patch.object(A.subprocess, 'run', return_value=result):
+            self.assertEqual(A.Pilot.probe(self.pilot, ['git']), (128, result.stdout, result.stderr))
+        self.pilot.probe = lambda argv: (128, result.stdout, result.stderr)
+        with self.assertRaises(ValueError) as raised:
+            self.pilot.checked(['git', 'bad-arg'])
+        self.assertIn("['git', 'bad-arg']", str(raised.exception))
+        self.assertIn('fatal: last line', str(raised.exception))
+        self.assertNotIn('noise', str(raised.exception))
+        self.pilot.probe = lambda argv: (0, 'stdout', '')
+        self.assertEqual(self.pilot.checked(['git']), 'stdout')
+
+    def test_http_status_controls_outcome_even_with_unusual_exit_code(self):
+        self.put_answer = (1, response()[1], 'unexpected exit')
+        self.pull_at(self.behind())
+        self.assertIn('12', self.pilot.data['updates'])
+        self.assertEqual(self.pilot.data['retries'], {})
+        self.pilot.data['updates'].clear()
+        self.put_answer = (0, response('503 Service Unavailable', 'error')[1], '')
+        self.pull_at(self.behind())
+        self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
+
+    def test_raised_transport_failure_is_reread_and_retried(self):
+        original = self.pilot.probe
+        def probe(argv):
+            if argv[1:4] == ['api', '-X', 'PUT']: raise OSError('transport failed')
+            return original(argv)
+        self.pilot.probe = probe
+        self.pull_at(self.behind())
+        self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
+        self.assertTrue(any(isinstance(c, list) and c[1:3] == ['pr', 'view'] for c in self.calls))
+        self.assertEqual(self.pilot.data['failures'], 0)
+
+    def test_poll_terminal_observation_prunes_branch_state(self):
+        for merged in (None, 'now'):
+            self.seed_branch_state()
+            pr = dict(copy.deepcopy(PR), state='closed', merged_at=merged)
+            self.pilot.rows = lambda: []
+            self.pilot.pages = lambda endpoint: []
+            self.pilot.api = lambda endpoint: [pr]
+            self.pilot.inspect_policy = lambda: None
+            self.pilot.poll()
+            self.assertTrue(self.pilot.data['pulls']['12']['terminal'])
+            self.assertNotIn('12', self.pilot.data['holds'])
+            self.assertNotIn('12', self.pilot.data['updates'])
+            self.assertFalse(any(k.split(':')[1] == '12' for k in self.pilot.data['retries']))
 
 
 if __name__ == '__main__':

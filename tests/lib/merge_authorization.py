@@ -26,13 +26,25 @@ class Authorization(unittest.TestCase):
         self.ctx = dict(engine=str(self.root), state=str(self.state), target=str(self.root),
                         project='self', evidence_project='self', repository='owner/repo',
                         base='main', external=False, tasks=str(self.root / 'tasks'))
+        self.local_refs = {}
         self.restart()
 
     def restart(self):
         self.p = A.Pilot(self.ctx, clock=lambda: self.now)
+        self.p.probe = self.probe
         self.p.push = lambda *a: None
         self.p.notify = lambda *a: None
         self.p.emit = lambda *a, **kw: None
+
+    def probe(self, argv):
+        assert argv[3:6] == ['rev-parse', '--verify', '--quiet'], argv
+        head = self.local_refs.get(argv[6].removeprefix('refs/heads/'))
+        return (0, head + '\n', '') if head else (1, '', '')
+
+    def pull_at(self, pr):
+        self.local_refs[pr['head']['ref']] = pr['head']['sha']
+        self.p.data['poll_seq'] = self.p.data.get('poll_seq', 0) + 1
+        self.p.pull(pr, [], [], [], [])
 
     def record(self, seconds):
         until = datetime.datetime.fromtimestamp(self.now + seconds, datetime.timezone.utc).isoformat()
@@ -93,23 +105,23 @@ class Authorization(unittest.TestCase):
         self.p.once = lambda *args: None
         self.p.verdict = lambda task: dict(verdict='APPROVE', head='a')
         self.p.settled_checks = lambda *args: [('ci', 'check', 1, 'success')]
-        self.p.pull(pr, [], [], [], [])
+        self.pull_at(pr)
         with patch('fm_concurrent.live_rounds', return_value=[]):
             self.assertEqual(M.inventory(self.p)[1], ['T-002 #2'])
             pr['head']['sha'] = 'b'
-            self.p.pull(pr, [], [], [], [])
+            self.pull_at(pr)
             self.assertEqual(M.inventory(self.p)[1], [])
             self.p.verdict = lambda task: dict(verdict='APPROVE', head='b')
             for checks in (None, [('ci', 'check', 2, 'failure')]):
                 self.p.settled_checks = lambda *args: checks
-                self.p.pull(pr, [], [], [], [])
+                self.pull_at(pr)
                 self.assertEqual(M.inventory(self.p)[1], [])
             self.p.settled_checks = lambda *args: [('ci', 'check', 3, 'success')]
-            self.p.pull(pr, [], [], [], [])
+            self.pull_at(pr)
             self.assertEqual(M.inventory(self.p)[1], ['T-002 #2'])
             self.p.busy = lambda task: True
             with patch.object(self.p, 'settled_checks') as settled:
-                self.p.pull(pr, [], [], [], [])
+                self.pull_at(pr)
             settled.assert_not_called()
             self.assertEqual(M.inventory(self.p)[1], [], 'held advancement must not retain stale readiness')
 
@@ -135,6 +147,7 @@ class Authorization(unittest.TestCase):
             'commits/a/status?per_page=100': dict(sha='a', statuses=[]),
             'branches/main/protection/required_status_checks': dict(contexts=['ci']),
         }
+        self.local_refs['task'] = pr['head']['sha']
         calls = []
         def api(endpoint):
             calls.append(endpoint)
