@@ -70,3 +70,16 @@ test('opaque aggregate handoffs never create private review history',()=>{
   s.handoffs=[1,2,3].map(n=>({identity:`external:${n}`,kind:'reject',project:'other',task:'T-1'}));
   source.accept(s); assert.deepEqual(source.view.kraken.arms,[]);
 });
+
+
+test('the request callback is invoked without the BoardSource as its receiver',async()=>{
+  let called=false;
+  const source=new BoardSource({token:()=> 'token',fetch:async function() {
+    assert.equal(this,undefined,'browser fetch must not receive a BoardSource receiver');
+    called=true;
+    return {json:async()=>({ok:true})};
+  }});
+  source.accept(snapshot());
+  assert.deepEqual(await source.command({type:'park',task:'self/T-1'}),{ok:true});
+  assert.equal(called,true);
+});

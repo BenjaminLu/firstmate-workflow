@@ -69,8 +69,9 @@ test('Live commands use only authenticated board writes with the card project',a
       const task=source.view.tasks.find((t:any)=>t.actions.includes('park'));
       if(!card || !task) throw new Error('fixture must provide an answerable card and parkable task');
       const chosen=Object.keys(card.details?.en?.options || {A:{}})[0];
-      await source.command({type:'answer',decision:card.id,chosen});
-      await source.command({type:'park',task:task.key,confirm:true});
+      const answer=await source.command({type:'answer',decision:card.id,chosen});
+      const park=await source.command({type:'park',task:task.key,confirm:true});
+      if(!answer.ok || !park.ok) throw new Error(JSON.stringify({answer,park}));
       source.fighting=true;
       await source.command({type:'drop',task:task.key});
       return {cardProject:card.project,taskProject:task.project};
@@ -83,10 +84,11 @@ test('Live commands use only authenticated board writes with the card project',a
   } finally {await stopBoard(b);}
 });
 
-test('voyage shortcuts preserve board focus and defer to menus and confirmations', async ({page}) => {
+for (const width of [1280,650,390]) test('voyage shortcuts preserve board focus and defer to menus and confirmations'+(width===1280?'':` at ${width}px`), async ({page}) => {
   const b=await startBoard(makeRoot(['working']));
   try {
     await page.goto(b.url+'/?lang=en');
+    await page.setViewportSize({width,height:844});
     const menu=page.locator('.cmenu:not(:disabled)').first();
     await menu.focus();
     const cancelled=await menu.evaluate(el=>!el.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
@@ -94,6 +96,10 @@ test('voyage shortcuts preserve board focus and defer to menus and confirmations
     await expect(menu).toBeFocused();
     await page.keyboard.press('f');
     await expect(page.locator('body')).toHaveClass(/voyage-full/);
+    const stage=page.locator('#voyage-stage'), drawer=page.locator('#voyage-drawer');
+    const stageBox=(await stage.boundingBox())!, drawerBox=(await drawer.boundingBox())!;
+    expect(stageBox.x+stageBox.width<=drawerBox.x+1 || stageBox.y+stageBox.height<=drawerBox.y+1).toBe(true);
+    await page.frameLocator('#voyage-stage').locator('#c').click();
     await menu.click();
     await page.keyboard.press('f');
     await expect(page.locator('[role="menu"]')).toBeVisible();
@@ -106,6 +112,7 @@ test('voyage shortcuts preserve board focus and defer to menus and confirmations
     await page.keyboard.press('f');
     await expect(page.locator('#dropConfirm')).toBeVisible();
     await expect(page.locator('body')).toHaveClass(/voyage-full/);
+    await page.locator('#dropConfirm button').first().click({trial:true});
     await page.keyboard.press('Escape');
     await expect(page.locator('#dropConfirm')).toBeHidden();
     await expect(menu).toBeFocused();
@@ -148,14 +155,20 @@ test('a missing Live build leaves the working board without a game panel', async
   rmSync(join(root,'board/public/voyage2d/index.html'),{force:true});
   const b=await startBoard(root);
   try {
-    const requested:string[]=[];
+    const requested:string[]=[], errors:string[]=[];
     page.on('request',r=>requested.push(r.url()));
+    page.on('pageerror',e=>errors.push(e.message));
     await page.goto(b.url+'/?lang=en');
     await expect(page.locator('.dcard').first()).toBeVisible();
+    await page.locator('.cmenu:not(:disabled)').first().click();
+    await page.locator('[role="menu"] [data-act="drop"]').click();
+    await expect(page.locator('#dropConfirm')).toBeVisible();
+    await page.keyboard.press('Escape');
     await expect(page.locator('#voyage')).toHaveCount(0);
     await page.keyboard.press('f');
     await page.keyboard.press('Escape');await page.keyboard.press('Escape');
     await expect(page.locator('#voyage-stage')).toHaveCount(0);
     expect(requested.some(u=>u.includes('/voyage2d/') || u.endsWith('/game.js'))).toBe(false);
+    expect(errors).toEqual([]);
   } finally {await stopBoard(b);}
 });

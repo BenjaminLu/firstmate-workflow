@@ -7,7 +7,10 @@ const sailor = id => ['sailor-hammer','sailor-bandana','sailor-spyglass'][Array.
 export class BoardSource {
   mode = 'live'; fighting = false; listeners = new Set(); history = new Map(); seen = new Set();
   constructor({token = () => '', fetch: request = globalThis.fetch} = {}) {
-    this.token=token; this.request=request; this.accept({});
+    this.token=token;
+    // Native browser fetch accepts Window (or no receiver), never this source.
+    this.request=(...args)=>request(...args);
+    this.accept({});
   }
   subscribe(fn) { this.listeners.add(fn); fn(this.view,[]); return ()=>this.listeners.delete(fn); }
   accept(s) {

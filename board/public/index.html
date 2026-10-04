@@ -191,9 +191,19 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 #voyage-stage{display:block;width:100%;height:420px;border:0}
 #voyage-drawer[hidden],#voyage-mount[hidden],#voyage-workflow[hidden]{display:none}
 .voyage-full{overflow:hidden}
-.voyage-full #voyage{position:fixed;inset:0;margin:0;z-index:1000;border-radius:0}
-.voyage-full #voyage-stage{height:calc(100dvh - 60px)}
-.voyage-full #voyage-drawer{position:absolute;right:0;top:60px;bottom:0;width:min(640px,65vw);overflow:auto;background:var(--bg);box-shadow:-8px 0 30px #0005}
+.voyage-full #voyage{position:fixed;inset:0;margin:0;z-index:1000;border-radius:0;
+  display:grid;grid-template-columns:minmax(0,1fr) min(640px,50vw);grid-template-rows:auto minmax(0,1fr)}
+.voyage-full #voyage-bar{grid-column:1/-1}
+.voyage-full #voyage-mount{min-width:0;min-height:0}
+.voyage-full #voyage-stage{height:100%}
+.voyage-full #voyage-drawer{min-width:0;min-height:0;overflow:auto;background:var(--bg)}
+.voyage-full #voyage:has(#voyage-drawer[hidden]){grid-template-columns:minmax(0,1fr)}
+/* The drawer is narrower than the viewport: size lanes to their container. */
+.voyage-full #voyage-drawer .lanes{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
+.voyage-full #voyage-drawer .lane:has([role="menu"]){position:relative;z-index:1}
+.voyage-full #voyage-drawer [role="menu"],
+.voyage-full #voyage-drawer [role="dialog"],
+.voyage-full #voyage-drawer [role="alertdialog"]{position:relative;z-index:2}
 .voyage-full #voyage-drawer .counts{flex-wrap:wrap}
 .voyage-hidden #scene,.voyage-hidden #capstage{display:none!important}
 /* Reorder visually: moving an iframe's parent in the DOM reloads its stage. */
@@ -202,7 +212,8 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   body>#voyage{order:1}
   body>#shipregion,body>.lanes-wrap,body>.logwrap{order:2}
   #voyage-stage{height:330px}
-  .voyage-full #voyage-drawer{top:45%;width:100%}
+  .voyage-full #voyage{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,2fr) minmax(0,3fr)}
+  .voyage-full #voyage:has(#voyage-drawer[hidden]){grid-template-rows:auto minmax(0,1fr)}
 }
 </style>
 </head>
@@ -413,7 +424,7 @@ function observe(outcomes) {
   for (const e of outcomes || []) {
     if (seen.has(e.identity)) continue;
     seen.add(e.identity);
-    if (!initialized || VOYAGE.hidden) continue;
+    if (!initialized || window.VOYAGE?.hidden) continue;
     const kind = e.type === 'merged' ? 'merge' : 'order';
     SHIP.enqueue(document.getElementById('scene'), kind, e.identity);
   }
@@ -443,7 +454,7 @@ function render(s) {
   const focusChoice = focus?.dataset?.c;
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
   latest = s;
-  VOYAGE.update(s, t, lang);
+  window.VOYAGE?.update(s, t, lang);
   prUrls = s.pr_urls || null;
   // A refused merge stays up until the same task or pull request is merged
   // afterwards; the server says which refusals have been overtaken.
@@ -737,7 +748,7 @@ function render(s) {
   // before it is shown, so a decision without one leaves no empty frame
   DIAGRAM.mount(deck, lang).catch(() => {});
 
-  const crew = VOYAGE.hidden ? SHIP.crewOf(s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || '')) : SHIP.render(document.getElementById("scene"), s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
+  const crew = window.VOYAGE?.hidden ? SHIP.crewOf(s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || '')) : SHIP.render(document.getElementById("scene"), s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
   SHIP.roster(document.getElementById("roster"), crew, t);
   observe(s.outcomes);
   if (document.getElementById("captain")) SHIP.captain(document.getElementById("captain"), pend.length || (feedback || SHIP.active() ? 1 : 0), t);
@@ -773,7 +784,7 @@ function refusedFor(r) {
     .catch(() => ({ error: String(r.status) }));
 }
 async function answer(id) {
-  if (VOYAGE.fighting || sent.has(id) || readOnly() || !validate(id)) return;
+  if (window.VOYAGE?.fighting || sent.has(id) || readOnly() || !validate(id)) return;
   const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
   refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
@@ -801,7 +812,7 @@ async function answer(id) {
       eventFailed:r.eventRecorded === false};
     const identity = r.decision?.identity || `decision:${id}`;
     if (!r.already && !seen.has(identity)) {
-      seen.add(identity); if (!VOYAGE.hidden) SHIP.enqueue(document.getElementById('scene'), 'order', identity);
+      seen.add(identity); if (!window.VOYAGE?.hidden) SHIP.enqueue(document.getElementById('scene'), 'order', identity);
     }
   }
   render(latest);
@@ -813,7 +824,7 @@ async function answer(id) {
 const taskByKey = k => (latest?.tasks || []).find(x => keyOf(x) === k);
 const actionsOf = k => taskByKey(k)?.actions || [];
 async function act(k, action, extra = {}) {
-  if (VOYAGE.fighting) return;
+  if (window.VOYAGE?.fighting) return;
   menuOpen = null; confirming = null; confirmAction = null; taskFeedback = null;
   const task = taskByKey(k);
   const r = task && !readOnly() ? await fetch('/tasks', {

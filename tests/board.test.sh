@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 export HERDR_ENV=0
@@ -27,7 +29,11 @@ PYTHON
   fi
 }
 trap cleanup EXIT
-mkdir -p "$k/board" "$k/state/pending" "$k/design/tasks"
+mkdir -p "$k/bin" "$k/board" "$k/state/pending" "$k/design/tasks"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$k/bin/"
+project_storage_fixture "$k/bin/"
+cp -R "$ROOT/bin/lib" "$k/bin/"
+cp -R "$ROOT/i18n" "$k/i18n"
 cp "$ROOT/board/server.ts" "$k/board/"
 cp -R "$ROOT/board/public" "$k/board/public"
 # Static serving is independent of the build toolchain; e2e loads the real build.
@@ -49,7 +55,12 @@ for locale in en zh-TW; do
   done
 done
 rm "$k/board/public/voyage2d/index.html"
-plain="$(curl -sf --max-time 15 "$url/")"
+plain_status='server did not start'; plain=''
+if [ -n "$url" ]; then
+  plain_status="$(curl -s --max-time 15 -o "$k/plain.html" -w '%{http_code}' "$url/")"
+  plain="$(cat "$k/plain.html")"
+fi
+assert_eq 200 "$plain_status" "plain board is served successfully without the Live bundle"
 assert_lacks "$plain" 'src="game.js"' "missing Live bundle leaves the plain board"
 assert_contains "$plain" 'id="deckwrap"' "plain board retains pending decisions"
 assert_ok "git -C '$ROOT' check-ignore --no-index -q board/public/voyage2d/index.html" "generated Live bundle is gitignored"
