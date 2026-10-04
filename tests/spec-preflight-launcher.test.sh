@@ -94,7 +94,7 @@ if [ "$vendor" = claude ]; then
   # Exercise the real chain's prepare callback, not a simulated fallback event.
   cp "$repo/bin/adapters/claude.sh" "$repo/bin/adapters/codex.sh"
   printf '#!/usr/bin/env bash\n# fm:review-run\nexit 2\n' > "$repo/bin/adapters/claude.sh"
-  printf 'models:\n  claude: fixture-claude\n  codex: fixture-codex\nreviewer:\n  vendor: claude\nfallback: [codex]\n' > "$repo/config.yaml"
+  printf 'models:\n  claude: fixture-claude\n  codex: fixture-codex\nreviewer:\n  vendor: claude\nfallback:\n  - codex\n' > "$repo/config.yaml"
   # Amend bytes because an earlier SPEC-GAPS correctly forbids their reuse.
   printf '\n' >> "$repo/design/tasks/T-Z.json"
   (cd "$repo" && FM_ROOT="$repo" FM_TEST_FALLBACK=1 bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/fallback" 2>&1

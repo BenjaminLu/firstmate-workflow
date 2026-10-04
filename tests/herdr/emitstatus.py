@@ -22,7 +22,7 @@ class EmitStatus(EmitStatusFixture):
         # (T-146: with vendor and model beside them, null while unrecorded)
         self.assertEqual(dict(name='shira', role='worker', project='alpha', task='T-116', round=3, attempt=2,
                               vendor=None, model_requested=None, model=None, cli_version=None,
-                              model_mismatch=None),
+                              model_mismatch=None, vendor_resolution=None),
                          self.events()[-1]['data']['identity'])
         # a run from before T-116 has no such fields, and none are invented
         old = self.root/'state/runs/worker-mira-t035-r465'; old.mkdir(parents=True)
@@ -50,7 +50,7 @@ class EmitStatus(EmitStatusFixture):
         said = self.events()[-1]['data']['identity']
         self.assertEqual(dict(name='imani', role='worker', project='alpha', task='T-146', round=1, attempt=1,
                               vendor='codex', model_requested='gpt-6-astra', model='gpt-6-astra',
-                              cli_version='codex 1.2.3', model_mismatch=False), said)
+                              cli_version='codex 1.2.3', model_mismatch=False, vendor_resolution=None), said)
 
     def test_bounded_progress_and_refusals(self):
         self.assertEqual(0, m.main(['emit-status','--root',str(self.root),'--actor','worker-h',

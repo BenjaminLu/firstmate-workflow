@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+os.environ['HERDR_ENV'] = '0'
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
@@ -38,7 +39,7 @@ class PreflightLifecycle(unittest.TestCase):
         self.state = self.root / 'state'; self.state.mkdir()
         self.tasks = self.root / 'design/tasks'; self.tasks.mkdir(parents=True)
         (self.tasks / 'T-191.json').write_text(json.dumps(dict(id='T-191',title='fixture',depends_on=[])))
-        (self.root / 'config.yaml').write_text('vendor: mock\nrosters:\n  workers: [aya]\n  reviewers: [nikhil, imani, zain-sp]\n')
+        (self.root / 'config.yaml').write_text('vendor: mock\nrosters:\n  workers: [aya]\n  reviewers: [nikhil, imani, zain]\n')
         os.environ['FM_ROOT'] = str(self.root)
         self.ctx = dict(engine=str(self.root),state=str(self.state),target=str(self.root),
                         project='self',repository='org/repo',base='main',evidence_project='self',
@@ -96,7 +97,12 @@ class PreflightLifecycle(unittest.TestCase):
         self.assertEqual(H.review_round(self.root,'T-191',None), 1)
         self.assertEqual(M.inventory(pilot), ([],[],[]))
         self.assertEqual(Store(self.state,'self','T-191').verdicts(), [])
+        # fm-review.sh --name passes this alias through fm_identity to
+        # H.allocate; aliases need not be letters-only roster entries.
         review, identity = self.allocate(False, 'zain-sp')
+        self.assertEqual(identity['requested_alias'], 'zain-sp')
+        self.assertEqual(identity['actor'], 'reviewer-zain-sp-t191-r1')
+        self.assertNotIn('mode', identity)
         self.assertEqual((identity['round'], identity['attempt']), (1,1))
         ordinary = identity['actor']
         self.emit(ordinary,'review_opened',dict(role='reviewer',identity=identity))
