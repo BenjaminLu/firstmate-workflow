@@ -537,10 +537,29 @@ function botFight() {
 }
 
 // ---------------------------------------------------------------- the frame
-let last = performance.now(), fpsN = 0, fpsT = 0;
+let last = performance.now(), fpsN = 0, fpsT = 0, frameId = null;
 G.fps = 0;
+function scheduleFrame() {
+  if (!document.hidden && frameId === null) frameId = requestAnimationFrame(frame);
+}
+function stopFrame() {
+  if (frameId !== null) cancelAnimationFrame(frameId);
+  frameId = null;
+}
+function resumeFrame() {
+  stopFrame();
+  // Resuming must not advance the simulation by the time spent in another tab.
+  last = performance.now();
+  fpsN = 0; fpsT = 0;
+  scheduleFrame();
+}
+document.addEventListener('visibilitychange', resumeFrame);
+addEventListener('pageshow', resumeFrame);
+addEventListener('pagehide', stopFrame);
 function frame(now) {
-  requestAnimationFrame(frame);
+  frameId = null;
+  if (document.hidden) return;
+  scheduleFrame();
   const dtReal = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (!G.ready) return;
@@ -699,7 +718,7 @@ function placard(ctx) {
 
 addEventListener("resize", resize);
 resize();
-requestAnimationFrame(frame);
+scheduleFrame();
 build().catch((e) => showError("build", e));
 
 // ---------------------------------------------------------------- test hooks

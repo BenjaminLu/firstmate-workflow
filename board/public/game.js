@@ -41,7 +41,28 @@
     const node=document.querySelector(selector), marker=document.createComment('voyage workflow home');
     node.before(marker);return {node,marker};
   });
-  let iframe=null, workflowInDrawer=false;
+  let iframe=null, workflowInDrawer=false, cancelMount=null;
+  function clearMount(){cancelMount?.();cancelMount=null;}
+  function mountLater(){
+    // The board owns startup. Never load the stage before its first completed
+    // render or extend the page's load event with the iframe's own work.
+    if(hidden || !snapshot || iframe || cancelMount || document.readyState!=='complete')return;
+    const mount=()=>{
+      cancelMount=null;
+      if(hidden || iframe)return;
+      stage.hidden=false;iframe=document.createElement('iframe');iframe.id='voyage-stage';iframe.name='voyage-stage';
+      const query=new URLSearchParams({embed:'1',lang});
+      const project=new URLSearchParams(location.search).get('project'); if(project) query.set('project',project);
+      iframe.src='/voyage2d/index.html?'+query;
+      iframe.setAttribute('sandbox','allow-scripts allow-same-origin');
+      iframe.title=label('voyageTitle');stage.append(iframe);
+    };
+    if(window.requestIdleCallback){
+      const id=requestIdleCallback(mount);cancelMount=()=>cancelIdleCallback(id);
+    } else {
+      const id=setTimeout(mount,0);cancelMount=()=>clearTimeout(id);
+    }
+  }
   function labels(){
     toggle.textContent=label(hidden?'voyageShow':full?'voyagePanel':'voyageFull');
     drawerButton.textContent=label('voyageWorkflow');
@@ -58,14 +79,8 @@
       for(const {node,marker} of homes) inDrawer?drawer.append(node):marker.after(node);
       workflowInDrawer=inDrawer;
     }
-    if(hidden){clearDelivery();iframe?.remove();iframe=null;fighting=false;stage.hidden=true;}
-    else if(!iframe){
-      stage.hidden=false;iframe=document.createElement('iframe');iframe.id='voyage-stage';iframe.name='voyage-stage';
-      const query=new URLSearchParams({embed:'1',lang});
-      const project=new URLSearchParams(location.search).get('project'); if(project) query.set('project',project);
-      iframe.src='/voyage2d/index.html?'+query;
-      iframe.setAttribute('sandbox','allow-scripts allow-same-origin');stage.append(iframe);
-    }
+    if(hidden){clearMount();clearDelivery();iframe?.remove();iframe=null;fighting=false;stage.hidden=true;}
+    else mountLater();
     labels();
   }
   function boardControlOpen(){
@@ -87,7 +102,7 @@
   window.VOYAGE={
     token:()=>get(sessionStorage,'board.token',''),
     subscribe(fn){listeners.add(fn);if(snapshot)fn(snapshot);return ()=>listeners.delete(fn);},
-    update(s,t,l){snapshot=s;label=t;lang=l;labels();deliverLater(s);},
+    update(s,t,l){snapshot=s;label=t;lang=l;labels();deliverLater(s);mountLater();},
     key, fight(on){fighting=on;}, get fighting(){return fighting;},get hidden(){return hidden;}
   };
   toggle.onclick=()=>{if(hidden){hidden=false;put(localStorage,'board.voyage.hidden','0');render();}else key('f');};
@@ -100,6 +115,7 @@
     else if(e.key.toLowerCase()==='f'){e.preventDefault();key(e.key);}
   },true);
   addEventListener('storage',e=>{if(e.key==='board.voyage.hidden'){hidden=e.newValue==='1';render();}});
-  addEventListener('pagehide',clearDelivery);
+  addEventListener('load',mountLater,{once:true});
+  addEventListener('pagehide',()=>{clearMount();clearDelivery();});
   render();
 })();

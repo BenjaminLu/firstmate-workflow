@@ -50,6 +50,67 @@ test('Live stage requests only its static bundle and sees the board snapshot',as
   } finally { await stopBoard(b); }
 });
 
+test('voyage waits for the rendered board and idle before creating its stage', async ({page}) => {
+  const b=await startBoard(makeRoot(['working']));
+  try {
+    await page.addInitScript(()=>{
+      if(window!==window.top)return;
+      const callbacks=new Map<number,IdleRequestCallback>();let id=0;
+      window.requestIdleCallback=callback=>{callbacks.set(++id,callback);return id;};
+      window.cancelIdleCallback=id=>{callbacks.delete(id);};
+      (window as any).__flushVoyageIdle=()=>{
+        const batch=[...callbacks.values()];callbacks.clear();
+        for(const callback of batch)callback({didTimeout:false,timeRemaining:()=>50});
+      };
+    });
+    await page.goto(b.url+'/?lang=en');
+    await expect(page.locator('.dcard')).toBeVisible();
+    // With idle work held, even a completed load and board render cannot mount it.
+    await expect(page.locator('#voyage-stage')).toHaveCount(0);
+    await page.evaluate(()=>(window as any).__flushVoyageIdle());
+    await expect(page.locator('#voyage-stage')).toHaveCount(1);
+    await expect.poll(()=>page.frames().find(f=>f.name()==='voyage-stage')?.evaluate(()=> (window as any).__G?.ready)).toBe(true);
+  } finally {await stopBoard(b);}
+});
+
+test('voyage cancels its animation loop while hidden and resumes only one loop', async ({page}) => {
+  const b=await startBoard(makeRoot(['working']));
+  try {
+    await page.addInitScript(()=>{
+      if(window===window.top)return;
+      const request=window.requestAnimationFrame.bind(window);
+      const cancel=window.cancelAnimationFrame.bind(window);
+      const pending=new Set<number>();let ticks=0;
+      window.requestAnimationFrame=callback=>{
+        const id=request(time=>{pending.delete(id);ticks++;callback(time);});
+        pending.add(id);return id;
+      };
+      window.cancelAnimationFrame=id=>{pending.delete(id);cancel(id);};
+      (window as any).__animationProbe={pending,get ticks(){return ticks;}};
+    });
+    await page.goto(b.url+'/?lang=en');
+    await expect.poll(()=>page.frames().find(f=>f.name()==='voyage-stage')?.evaluate(()=> (window as any).__G?.ready)).toBe(true);
+    const frame=page.frames().find(f=>f.name()==='voyage-stage')!;
+    const paused=await frame.evaluate(()=>{
+      Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
+      document.dispatchEvent(new Event('visibilitychange'));
+      const probe=(window as any).__animationProbe;
+      return {pending:probe.pending.size,ticks:probe.ticks};
+    });
+    expect(paused.pending).toBe(0);
+    // Yield across a browser frame; no voyage callback may run during the pause.
+    await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>resolve())));
+    expect(await frame.evaluate(()=>(window as any).__animationProbe.ticks)).toBe(paused.ticks);
+    expect(await frame.evaluate(()=>{
+      Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});
+      document.dispatchEvent(new Event('visibilitychange'));
+      document.dispatchEvent(new Event('visibilitychange'));
+      return (window as any).__animationProbe.pending.size;
+    })).toBe(1);
+    await expect.poll(()=>frame.evaluate(()=>(window as any).__animationProbe.ticks)).toBeGreaterThan(paused.ticks);
+  } finally {await stopBoard(b);}
+});
+
 test('board refresh defers voyage subscribers and retains both animations and stage', async ({page}) => {
   const b=await startBoard(makeRoot(['working']));
   try {
@@ -58,7 +119,9 @@ test('board refresh defers voyage subscribers and retains both animations and st
     const result=await page.evaluate(async()=>{
       const w=window as any;
       const state=await (await fetch('/api/state')).json();
-      const stage=document.querySelector('#voyage-stage');
+      const stage=document.querySelector<HTMLIFrameElement>('#voyage-stage')!;
+      const stageWindow=stage.contentWindow;
+      const stageDocument=stage.contentDocument;
       const scene=document.querySelector('#scene');
       // A real board effect, measured in one turn so elapsed browser transport
       // time cannot masquerade as an animation reset.
@@ -69,19 +132,29 @@ test('board refresh defers voyage subscribers and retains both animations and st
       const off=w.VOYAGE.subscribe((s:any)=>{if(s.refreshProbe)delivered.push(s.refreshProbe);});
       w.render({...state,refreshProbe:1});
       w.render({...state,refreshProbe:2});
-      w.__refreshDelivery={delivered,off};
+      w.__refreshDelivery={delivered,off,stage,stageWindow,stageDocument};
       return {synchronous:delivered.slice(),hasAnimation:!!animation,sameStage:stage===document.querySelector('#voyage-stage'),
+        sameWindow:stageWindow===document.querySelector<HTMLIFrameElement>('#voyage-stage')!.contentWindow,
+        sameDocument:stageDocument===document.querySelector<HTMLIFrameElement>('#voyage-stage')!.contentDocument,
         sameVessel:vessel===document.querySelector('#vessel'),sameAnimation:animation===vessel.getAnimations()[0],
         delay:(vessel as HTMLElement).style.animationDelay};
     });
     expect(result.synchronous).toEqual([]);
     expect(result.sameStage).toBe(true);
+    expect(result.sameWindow).toBe(true);
+    expect(result.sameDocument).toBe(true);
     expect(result.sameVessel).toBe(true);
     expect(result.hasAnimation).toBe(true);
     expect(result.sameAnimation).toBe(true);
     expect(result.delay).toBe('0s');
     await expect.poll(()=>page.evaluate(()=>(window as any).__refreshDelivery.delivered)).toEqual([1,2]);
-    await page.evaluate(()=>(window as any).__refreshDelivery.off());
+    expect(await page.evaluate(()=>{
+      const probe=(window as any).__refreshDelivery;
+      const stage=document.querySelector<HTMLIFrameElement>('#voyage-stage')!;
+      probe.off();
+      return {element:probe.stage===stage,window:probe.stageWindow===stage.contentWindow,
+        document:probe.stageDocument===stage.contentDocument};
+    })).toEqual({element:true,window:true,document:true});
   } finally {await stopBoard(b);}
 });
 

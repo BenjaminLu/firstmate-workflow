@@ -454,7 +454,6 @@ function render(s) {
   const focusChoice = focus?.dataset?.c;
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
   latest = s;
-  window.VOYAGE?.update(s, t, lang);
   prUrls = s.pr_urls || null;
   // A refused merge stays up until the same task or pull request is merged
   // afterwards; the server says which refusals have been overtaken.
@@ -766,6 +765,7 @@ function render(s) {
     return `<li class="${e.evidence_warning ? 'evidence-warning' : ''}"><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
       `<span class="k-${esc(e.type)}">${said(text, e)}</span></li>`;
   }).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
+  window.VOYAGE?.update(s, t, lang);
 }
 
 function validate(id) {
