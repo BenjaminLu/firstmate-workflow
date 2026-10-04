@@ -36,6 +36,24 @@ class MechanicalLoop:
                 rows.append(row)
         return rows
 
+    def landed(self, task, pr):
+        """Local terminal evidence also covers a captain merge still running."""
+        from fm_merge_outcome import merge_outcome
+        number, head = str(pr['number']), pr['head']['sha']
+        if any(row.get('type') == 'merged' and str(row.get('pr')) == number
+               for row in self.rows()):
+            return True
+        for folder in ('pending', 'decisions'):
+            for path in (self.state / folder).glob('*.json'):
+                record = read_json(path)
+                if (record.get('kind') == 'merge' and record.get('task') == task
+                        and str(record.get('pr')) == number
+                        and record.get('expected_head') == head
+                        and record.get('chosen') == 'A'
+                        and merge_outcome(record) in ('running', 'merged')):
+                    return True
+        return False
+
     def pr_task(self, pr):
         # Call the canonical shell grammar, including legacy t004 branches,
         # title fallback and the deliberate exclusion of Revert titles.
@@ -145,6 +163,7 @@ class MechanicalLoop:
         if pr['state'] != 'open' or self.policy_error: return
         task = self.task(pr)
         if not task: return
+        if self.landed(task, pr): return
         if self.busy(task): return
         # Do not gate a branch still being written by its worker.
         from fm_concurrent import live_rounds
@@ -209,15 +228,26 @@ class MechanicalLoop:
         fingerprint = key([pr['number'], head, pr['base']['sha'], checks,
                            bound, details, slot['release']])
         round_number = 1 + sum(r.get('type') == 'review_opened' and r.get('task') == task for r in self.rows())
-        def gate():
+        number = str(pr['number'])
+        if self.data['advanced'].get(number, {}).get('fingerprint') == fingerprint:
+            return
+        token, variant = f'advance:{number}:{head}', fingerprint[:12]
+        if not self.retry_due(token, variant=variant): return
+        try:
             if self.authoritative_head(task, pr) != head:
-                raise ValueError('authoritative head changed; regate before accepting')
+                return  # A raced observation is reconsidered on the next poll.
             base = self.base_tip()
             kind = 'protocol' if round_number >= 3 else 'gate'
             argv = self.script('fm-protocol.sh', 'check', '--task', task, '--pr', pr['number'],
                                '--round', round_number) if kind == 'protocol' else self.gate_command(task, pr)
             self.start_job(kind, task, pr, argv, base=base, round=round_number)
-        self.once(['advance', fingerprint], task, gate)
+        except Exception as error:
+            self.branch_failure('advance', number, head, task, str(error), variant=variant)
+            return
+        # Act, then mark: a crash here may repeat a read-only gate, never lose it.
+        self.data['retries'].pop(token, None)
+        self.data['advanced'][number] = dict(head=head, fingerprint=fingerprint)
+        self.save()
 
     def gate_command(self, task, pr):
         return self.script('fm-gate.sh', '--task', task, '--branch', pr['head']['ref'], '--pr', pr['number'])
@@ -280,6 +310,7 @@ class MechanicalLoop:
     def job_completed(self, result):
         task, pr, code = result['task'], result['pr'], result['code']
         kind, output = result['kind'], result.get('output', '')
+        if kind in ('gate', 'protocol', 'review') and self.landed(task, pr): return
         said = [line for line in output.splitlines() if 'log is at' in line or 'no adapter' in line]
         suffix = ' (' + said[-1] + ')' if said else ''
         if kind == 'protocol':
