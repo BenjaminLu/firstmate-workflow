@@ -1746,8 +1746,8 @@ bilingual proposal details and A (adopt), B (leave), C (revise) tradeoffs.
 Missing proposal text is explicitly disclosed. Legacy title-only callers
 remain supported. The generated choice card names no automatic effects and
 only records the answer. A skill merge card merges on A and holds on B and C
-like any merge card. Revision names the requested changes and re-raises
-the same decision id through the existing decision lifecycle. Shell consumers
+like any merge card. For revision, the captain names what to change; firstmate
+revises the proposal and raises it again for a new decision. Shell consumers
 (`fm-decide.sh`, `fm-ready.sh`, `fm-diagram.sh`) use `fm_decision_id` in
 `bin/fm-emit.sh`, beside `FM_OWNED_ID`, without depending on the optional
 config reader; the board retains

@@ -29,7 +29,9 @@ assert_contains "$(jq -r '.details.en.title' "$card")" worker 'card names the pr
 assert_contains "$(jq -r '.details.en.before' "$card")" 'not provided' 'missing before text is disclosed'
 assert_contains "$(jq -r '.details.en.after' "$card")" 'not provided' 'missing proposed text is disclosed'
 assert_contains "$(jq -r '.details["zh-TW"].after' "$card")" '未提供' 'missing proposed text is disclosed in Traditional Chinese'
-assert_contains "$(jq -r '.details.en.options.C.description' "$card")" 're-raised' 'revise explains the next proposal'
+assert_eq 'Revise: the captain names what to change, and firstmate revises the proposal and raises it again for a new decision.' "$(jq -r '.details.en.options.C.description' "$card")" 'revise names firstmate and a new decision in English'
+assert_eq '修訂：由船長指出要改什麼，firstmate 修訂提案後重新提出，供船長作出新的決策。' "$(jq -r '.details["zh-TW"].options.C.description' "$card")" 'revise names firstmate and a new decision in Traditional Chinese'
+assert_ok "jq -e 'all(.details.en.options.C[],.details[\"zh-TW\"].options.C[]; type == \"string\" and (test(\"same decision id|相同決策編號\"; \"i\") | not))' '$card'" 'revise makes no same-id promise in either language'
 assert_eq '# Worker
 Original instructions.' "$(cat "$d/skills/worker/SKILL.md")" 'proposal does not edit the skill'
 jq '.details' "$card" > "$d/details.json"

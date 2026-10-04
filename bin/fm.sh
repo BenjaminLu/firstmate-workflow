@@ -687,7 +687,7 @@ cmd_selfupdate() {
         options: {
           A: {description: ("Adopt proposal " + $p.id), pros: ("Authorizes work on the recorded reason: " + (if $why|supplied then $why else "reason not provided" end)), cons: "Implementation and review are still required; this card does not change the skill."},
           B: {description: "Leave the skill unchanged.", pros: "Keeps the current instructions without implementation work.", cons: "The proposal is not adopted; its stated concern remains unaddressed by this proposal."},
-          C: {description: "Revise: the captain names what to change and the proposal is re-raised under the same decision id.", pros: "Lets the captain clarify the required change before adoption.", cons: "Requires a revised proposal and another decision before work can proceed."}
+          C: {description: "Revise: the captain names what to change, and firstmate revises the proposal and raises it again for a new decision.", pros: "Lets the captain clarify the required change before adoption.", cons: "Requires a revised proposal and another decision before work can proceed."}
         }
       },
       "zh-TW": {
@@ -699,7 +699,7 @@ cmd_selfupdate() {
         options: {
           A: {description: ("採納提案 " + $p.id), pros: ("授權處理提案記錄的原因：" + (if $why|supplied then $why else "未提供原因" end)), cons: "仍須實作與審查；此卡不會直接修改技能。"},
           B: {description: "保持技能不變。", pros: "保留現有指示，無須進行實作。", cons: "不採納此提案；此提案所述的問題不會因此得到處理。"},
-          C: {description: "修訂：由船長指出要改什麼，修訂後以相同決策編號重新提出。", pros: "讓船長在採納前釐清所需修改。", cons: "需要修訂提案並再次決策，才能開始工作。"}
+          C: {description: "修訂：由船長指出要改什麼，firstmate 修訂提案後重新提出，供船長作出新的決策。", pros: "讓船長在採納前釐清所需修改。", cons: "需要修訂提案並再次決策，才能開始工作。"}
         }
       }
     }
