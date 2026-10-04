@@ -358,7 +358,9 @@ class SingleFlight(Watch):
         self.assertTrue(until(lambda: W.cycle_live(self.root)))
         self.owner.send_signal(signal.SIGKILL); self.owner.wait()
         self.assertEqual(0, hook.wait(timeout=15), 'the hook exits 0 when its owner dies')
-        self.assertEqual('', hook.stderr.read(), 'and wakes nothing')
+        diagnostic = hook.stderr.read()
+        self.assertIn(f'owner {self.owner.pid} is gone', diagnostic)
+        self.assertNotIn('firstmate wake:', diagnostic, 'and wakes nothing')
         self.assertTrue(until(lambda: not W.cycle_live(self.root)), 'the watcher goes with its owner')
         self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok')
         # the next session's arm is the one that is told
@@ -367,6 +369,88 @@ class SingleFlight(Watch):
 
 
 class OwnerDeathBoundaries(Watch):
+    def test_death_after_cycle_lock_before_readiness_preserves_the_next_wake(self):
+        # Stop the cycle synchronously at its first generation write: it has
+        # acquired cycle.lock, exactly what the orphan regression waits for,
+        # but has not reached ready or take(). No scheduler timing involved.
+        import fcntl
+        acquired = []
+        real_flock, real_save = fcntl.flock, W.save
+        class InterruptedCycle(BaseException):
+            pass
+        def flock(fd, flags):
+            result = real_flock(fd, flags)
+            if flags == fcntl.LOCK_EX and os.fstat(fd).st_ino == (W.wdir(self.root) / 'cycle.lock').stat().st_ino:
+                acquired.append(fd)
+            return result
+        def save(path, text):
+            if path.name == 'generation':
+                self.owner.kill()
+                self.owner.wait(timeout=5)
+                raise InterruptedCycle()
+            return real_save(path, text)
+        try:
+            with patch.object(W.life, 'hold', return_value=self.owner.pid), \
+                    patch.object(fcntl, 'flock', flock), patch.object(W, 'save', save):
+                with self.assertRaises(InterruptedCycle):
+                    W.cycle(self.root)
+        finally:
+            # Simulate the kernel releasing descriptors on cycle death.
+            for fd in acquired:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        self.assertEqual(0, W._cursor(self.root),
+                         'the queue baseline must exist before cycle.lock is visible')
+        self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok')
+        after = self.run_(ARM, '--max-wait', '10', owner=self.stand_in())
+        self.assertEqual(0, after.returncode, after.stderr)
+        self.assertEqual('finished: T-1 worker-a-t1-r1 ok', after.stdout.strip(), after.stderr)
+
+    def test_pending_handoff_is_not_lost_when_startup_spends_the_wait_budget(self):
+        import fcntl
+        W.save(W.wdir(self.root) / 'cursor', '0')
+        self.push('slow-start', 'round_end', 'wake after slow startup')
+        handoff = os.open(W.wdir(self.root) / 'handoff-1.lock', os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(handoff, fcntl.LOCK_EX)
+        W.take(self.root, stage=1)
+        stage = W.wdir(self.root) / 'wake/1.staged'
+        real_select = W.select.select
+        def publish(readers, writers, errors, timeout=None):
+            if len(readers) >= 3:
+                # The deadline is already spent, but the live publisher
+                # still owns the wake. Complete the handoff at the wait.
+                os.replace(stage, stage.with_suffix('.json'))
+                return [readers[0]], [], []
+            return real_select(readers, writers, errors, timeout)
+        try:
+            with patch.object(W, 'ensure', return_value=dict(pid=os.getpid())), \
+                    patch.object(W.time, 'monotonic', side_effect=[0, 11]), \
+                    patch.object(W.select, 'select', publish):
+                self.assertEqual(['wake after slow startup'], W.arm(self.root, self.owner.pid, 10),
+                                 'an expired budget cannot discard a pending live handoff')
+        finally:
+            os.close(handoff)
+
+    def test_pre_watch_history_does_not_prevent_an_idle_timeout(self):
+        self.push('history', 'round_end', 'predates the watch')
+        W.take(self.root)  # Establish the intentional first-watch baseline.
+        with patch.object(W, 'ensure', return_value=dict(pid=os.getpid())), \
+                patch.object(W.time, 'monotonic', side_effect=[0, 11]):
+            self.assertEqual([], W.arm(self.root, self.owner.pid, 10),
+                             'historical status items are not pending arm deliveries')
+
+    def test_another_owners_exception_cannot_silently_cancel_a_live_arm(self):
+        stderr = io.StringIO()
+        with patch.object(W, 'ensure', side_effect=W.life.OwnerGone(999999)), \
+                patch.object(W, 'standing_down', return_value=None), \
+                patch.object(W.life, 'session_owner', return_value=self.owner.pid), \
+                contextlib.redirect_stderr(stderr):
+            self.assertEqual(70, W.main(['arm', '--repo', str(self.root)]),
+                             'a live arm must not report successful cancellation')
+        self.assertIn('999999', stderr.getvalue())
+
     def test_owner_death_at_each_park_boundary_leaves_the_wake_unclaimed(self):
         # Inject death synchronously at the boundary, then wait for the real
         # owner to exit. No scheduling delay decides which race is exercised.
@@ -478,7 +562,8 @@ class OwnerDeathBoundaries(Watch):
                     code = W.main(['arm', '--repo', str(place), '--hook', 'claude'])
                 self.assertTrue(killed, 'the selected boundary was reached')
                 self.assertEqual(0, code, 'owner death is a clean hook exit at ' + boundary)
-                self.assertEqual('', stderr.getvalue(), 'an orphan emits no wake or error')
+                self.assertIn(f'owner {owner.pid} is gone', stderr.getvalue())
+                self.assertNotIn('firstmate wake:', stderr.getvalue(), 'an orphan emits no wake')
                 self.assertFalse(W.life.is_acknowledged(place, 'race', 1),
                                  'owner death must not consume the wake at ' + boundary)
                 if boundary != 'wait':

@@ -336,6 +336,18 @@ def cycle(root):
     root = Path(root).resolve()
     owner = life.hold()
     lock = os.open(wdir(root) / 'cycle.lock', os.O_RDWR | os.O_CREAT, 0o644)
+    # Establish the first queue baseline before cycle.lock advertises a
+    # live watcher. Death after acquiring that lock must not let a successor
+    # initialize past wakes pushed in the meantime. Do not take/stage here:
+    # a predecessor may still own the handoff and the generation is unset.
+    try:
+        with Locked(wdir(root) / 'cursor.lock'):
+            if _cursor(root) is None:
+                queue = record_root(root) / life.WAKE_QUEUE
+                save(wdir(root) / 'cursor', str(queue.stat().st_size if queue.exists() else 0))
+    except BaseException:
+        os.close(lock)
+        raise
     # the predecessor hands it over as it closes; this blocks until then
     fcntl.flock(lock, fcntl.LOCK_EX)
     gen_path = wdir(root) / 'generation'
@@ -534,21 +546,45 @@ def pending(root):
         return _claim(root, include_queue=True)
 
 
+def arm_pending(root):
+    """Work this arm may deliver, excluding history before the first watch.
+
+    The board's waiting() includes that history; using it for a deadline
+    would make an otherwise idle arm wait forever on status-only items.
+    """
+    with Locked(wdir(root) / 'cursor.lock'):
+        offset = _cursor(root)
+        items = _queue_from(root, offset)[0] if offset is not None else []
+        for path in (wdir(root) / 'wake').glob('*'):
+            if path.suffix not in ('.json', '.staged'):
+                continue
+            record = read_json(path)
+            if 'items' not in record and record.get('lines'):
+                return True
+            items.extend(record.get('items') or [])
+        return any(not delivered(root, item) for item in items)
+
+
 def arm(root, owner, max_wait=None):
     """Park until a wake is claimed (its lines), the wait ends ([]), or the
     owner exits (None). Blocks on this arm's doorbell, the owner's exit
     and the live cycle's exit together; the kernel reports each."""
     root = Path(root).resolve()
+
+    def cancelled(where):
+        print(f'fm-watch-arm: owner {owner} is gone; cancelled at {where}', file=sys.stderr)
+        return None
+
     try:
         owner_exit = life.ProcessExit(owner)
     except life.OwnerGone:
-        return None
+        return cancelled('owner subscription')
     deadline = None if not max_wait else time.monotonic() + max_wait
     try:
         with life.Doorbell(root) as bell:
             while True:
                 if owner_exit.gone():
-                    return None
+                    return cancelled('arm loop')
                 # Also reconnect before returning an abandoned predecessor's
                 # wake: recovery must not leave the foreground arm blind.
                 info = ensure(root, owner)
@@ -579,11 +615,20 @@ def arm(root, owner, max_wait=None):
                         return lines
                     left = None if deadline is None else deadline - time.monotonic()
                     if left is not None and left <= 0:
-                        return []
+                        if not arm_pending(root):
+                            return []
+                        # Startup/handoff can spend the budget on a loaded
+                        # runner. A pending wake is already a reason to
+                        # return, but its publisher must finish (or exit for
+                        # recovery) first. Keep the kernel subscriptions;
+                        # never turn that wake into an empty timeout.
+                        print(f'fm-watch-arm: owner {owner} is live; wait budget expired '
+                              'with a pending wake; waiting for handoff', file=sys.stderr)
+                        left = None
                     ready, _, _ = select.select([bell.fd, owner_exit.fileno(), cycle_exit.fileno()] +
                                               [p.fileno() for p in publishers], [], [], left)
                     if owner_exit.fileno() in ready and owner_exit.gone():
-                        return None
+                        return cancelled('park wait')
                     if bell.fd in ready:
                         bell.wait(0)
                 finally:
@@ -591,7 +636,12 @@ def arm(root, owner, max_wait=None):
                         publisher.close()
                     cycle_exit.close()
     except life.OwnerGone:
-        return None
+        # Only this arm's kernel subscription can authorize cancellation.
+        # A different generation's owner exception is an error, not an
+        # empty successful delivery for a still-live session.
+        if not owner_exit.gone():
+            raise
+        return cancelled('cycle startup or wake claim')
     finally:
         owner_exit.close()
 
