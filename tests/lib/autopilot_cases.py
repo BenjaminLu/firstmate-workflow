@@ -4,10 +4,12 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
+os.environ['HERDR_ENV'] = '0'
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
@@ -23,6 +25,7 @@ class PilotTests(unittest.TestCase):
     def setUp(self):
         env = patch.dict(os.environ, {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}, clear=True)
         env.start(); self.addCleanup(env.stop)
+        os.environ['HERDR_ENV'] = '0'
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
@@ -36,13 +39,16 @@ class PilotTests(unittest.TestCase):
         (Path(self.context['tasks']) / 'T-001.json').write_text('{"id":"T-001"}')
         self.pilot = A.Pilot(self.context, clock=lambda: 1000)
         self.pilot.command = self.command
-        self.pilot.emit = lambda *args: self.calls.append(('emit', args))
+        self.pilot.emit = lambda *args, **kwargs: self.calls.append(('emit', args))
         self.pilot.notify = lambda text: self.calls.append(('notify', text))
         self.pilot.push = lambda *args: self.calls.append(('wake', args))
+        self.pilot.advance = lambda *args: None
         self.pilot.prepare_head = lambda *args: None
         self.pilot.launch_review = lambda *args: self.calls.append(('review', args))
 
     def command(self, argv, **kwargs):
+        if argv[:2] == ['bash', '-c']:
+            return A.Pilot.command(self.pilot, argv, **kwargs)
         self.calls.append(argv)
         if argv[1:3] == ['pr', 'view']:
             return json.dumps(dict(headRefOid=HEAD, mergeable='MERGEABLE', mergeStateStatus='BEHIND'))
@@ -61,47 +67,10 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(len([x for x in self.calls if isinstance(x, list) and x[1:3] == ['pr', 'update-branch']]), 1)
         self.assertNotIn('merge', [word for x in writes for word in x])
 
-    def review_transition(self, verdict='APPROVE', signed=True, changed=False, drift=None):
-        import fm_binding
-        import fm_evidence
-        binding = dict(patch='patch', files=['code'], spec_sha256='spec',
-                       contract_sha256='contract', conventions_sha256='conventions')
-        record = dict(verdict=verdict, signature='signed' if signed else None,
-                      binding=dict(binding), patch='patch', head=HEAD)
-        if not signed: record.pop('binding')
-        current = dict(binding)
-        if changed: current['patch'] = 'worker-edit'
-        if drift: current[drift] = 'repinned'
-        self.pilot.pull(PR, [], [], [], [])
-        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
-        pr['base']['sha'] = 'e' * 40; pr['mergeable_state'] = 'clean'
-        with patch.object(fm_evidence.Store, 'verdicts', return_value=[record]), \
-             patch.object(fm_binding, 'git', return_value='base'), \
-             patch.object(fm_binding, 'change', return_value=binding), \
-             patch.object(fm_binding, 'source_binding', return_value=current):
-            self.pilot.pull(pr, [], [], [], [])
-        return any(x[0] == 'review' for x in self.calls)
-
-    def test_base_only_unsigned_approval_needs_review(self):
-        self.assertTrue(self.review_transition(signed=False))
-
-    def test_base_only_repinned_spec_needs_review(self):
-        self.assertTrue(self.review_transition(drift='spec_sha256'))
-
-    def test_base_only_repinned_contract_needs_review(self):
-        self.assertTrue(self.review_transition(drift='contract_sha256'))
-
-    def test_base_only_repinned_conventions_needs_review(self):
-        self.assertTrue(self.review_transition(drift='conventions_sha256'))
-
-    def test_worker_edit_does_not_start_duplicate_review(self):
-        self.assertFalse(self.review_transition(changed=True, signed=False))
-
-    def test_standing_reject_does_not_start_review(self):
-        self.assertFalse(self.review_transition(verdict='REJECT', signed=False))
-
-    def test_carried_approval_does_not_start_review(self):
-        self.assertFalse(self.review_transition())
+    # Review eligibility formerly compared base-only patch metadata here.
+    # T-175 delegates all eligibility to the real gates; the replacement
+    # assertions are in autopilot_loop.py (worker head -> gate -> review,
+    # carried approval -> gate -> card, and current-head REJECT -> brief).
 
     def test_failure_and_findings_batch_per_reviewer(self):
         pr = copy.deepcopy(PR); pr['mergeable_state'] = 'clean'
@@ -159,6 +128,37 @@ class PilotTests(unittest.TestCase):
         self.pilot.pull(PR, [], [], [], [])
         self.assertFalse(any(isinstance(x,list) for x in self.calls))
         self.assertTrue(self.pilot.data['wakes'])
+
+    def test_task_lookup_and_observation_do_not_use_operation_channel(self):
+        self.pilot.command = lambda *a, **kw: self.fail('task lookup used operation channel')
+        for number, ref, title, expected in (
+                (21, 't001-legacy', 'Other', 'T-001'),
+                (22, 'unrelated', 'T-001: fallback', 'T-001'),
+                (23, 'sk-123-update', 'Other', 'SK-123'),
+                (24, 'revert-1', 'Revert "T-001: work"', '')):
+            with self.subTest(ref=ref):
+                if expected:
+                    (Path(self.context['tasks']) / (expected + '.json')).write_text('{}')
+                pr = copy.deepcopy(PR)
+                pr.update(number=number, title=title)
+                pr['head']['ref'] = ref
+                self.assertEqual(self.pilot.task(pr), expected)
+                self.pilot.observe_pr(pr)
+                self.assertEqual(self.calls[-1][1][0:2], ('pr_opened', expected))
+
+    def test_migrated_launchers_use_their_own_interpreter(self):
+        endpoints = self.root / 'bin'
+        endpoints.mkdir()
+        for name in ('fm-gate.sh', 'fm-review.sh', 'fm-protocol.sh', 'fm-decide.sh'):
+            with self.subTest(name=name):
+                endpoint = endpoints / name
+                endpoint.write_text('#!' + sys.executable + '\nimport sys\nprint(sys.argv[1])\n')
+                endpoint.chmod(0o755)
+                with patch.object(A, 'BIN', endpoints):
+                    argv = self.pilot.script(name, 'shebang-selected')
+                result = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, 'shebang-selected\n')
 
     def test_retry_backoff_is_bounded_and_resets(self):
         first = self.pilot.network_failure('offline')
@@ -240,6 +240,7 @@ class PilotTests(unittest.TestCase):
 
     def test_team_merge_is_observed_once_without_invoking_merge(self):
         pr = copy.deepcopy(PR); pr.update(state='closed', merged_at='2026-10-03T12:00:00Z')
+        self.pilot.data['pulls']['12'] = {}
         self.pilot.closed_pull(pr)
         self.pilot.closed_pull(pr)
         self.assertEqual(len(self.calls), 1)
@@ -247,8 +248,10 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(self.calls[0][1][0], 'merged')
         self.assertTrue(self.pilot.data['pulls']['12']['terminal'])
         pr['number'] = 13; pr['merged_at'] = None
+        self.pilot.data['pulls']['13'] = {}
         self.pilot.closed_pull(pr)
-        self.assertEqual(len(self.calls), 1, 'closing a PR is not permission to close its task')
+        self.assertEqual(len(self.calls), 2, 'closed PR events are retained as well as merges')
+        self.assertEqual(self.calls[-1][1][0], 'closed')
         self.assertTrue(self.pilot.data['wakes'])
 
     def test_external_policy_and_wakes_stay_in_private_project(self):

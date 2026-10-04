@@ -344,8 +344,8 @@ assert_lacks "$(jq -r '.crew[].id' <<<"$sclosed" | tr '\n' ' ')" "worker-closed"
   "a closed task sends its agent home too, not only a merged one"
 
 # A new event type has readers beyond this one. fm-dispatch keys on
-# dispatched minus merged-or-closed, fm-run on pr_opened and merged,
-# fm-sync-prs on type and pr - none of them has a default branch that
+# dispatched minus merged-or-closed, the autopilot on pr_opened and merged,
+# the autopilot on type and pr - none of them has a default branch that
 # does anything with an unknown type, and this asserts that rather than
 # asserting it in prose: the same log, before and after an
 # agent_finished, has to give the dispatcher the same answer.

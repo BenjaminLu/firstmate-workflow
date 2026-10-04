@@ -48,7 +48,7 @@ has an owner and ends with it. It does not authorize work or invent success when
 Herdr/transport is missing. Declared adapters only: do not claim arbitrary
 engines load AGENTS.md.
 
-Crew rounds run headless: `fm-worker` / `fm-review` / `fm-dispatch` / `fm-run`
+Crew rounds run headless: `fm-worker` / `fm-review` / `fm-dispatch` / `fm-autopilot`
 start each round as a process group fm supervises itself (a session of its
 own, owned by the fm session through `bin/lib/fm_lifeline.py`, output in
 the run's `run.log`, `runner.pid` and `runner.exit` beside it), so no terminal
@@ -496,3 +496,10 @@ destination collisions are refused; reconcile those with firstmate before retryi
 The engine-wide board projects external task IDs, statuses, crew identity and PR
 links. Select a project to read its local descriptions and decision details;
 those records are read in place, not copied into the engine's public tree.
+
+
+The session's autopilot advances open PRs through synchronization, gates,
+review and merge-card readiness for each project. It wakes firstmate for a
+brief, a scope question, a failed gate or launcher, a missing verdict, or
+missing authored card details. Dispatch remains the board's intent action or
+`bin/fm-dispatch.sh`; the autopilot never restarts a worker or merges a PR.

@@ -37,12 +37,23 @@ not that a model follows them. Candidate-specific live acceptance remains requir
   | `board/server.ts` (T-151) | a card is answered; a merge it started settles | `card: D-51 answered A`; `merge: D-51 merged`, `merge: D-51 failed` |
 
   A round's progress (`crew_status`) is never pushed. `bin/fm-decide.sh`
-  records no answer (the board does); it is a waiter, not a writer. No fm
-  script follows a pull request's required check to its end today:
-  `bin/fm-gate.sh` reads it once, and `bin/fm-run.sh` emits no gate event.
-  The `fm-emit.sh` writer is where such a follower's result wakes firstmate
-  (T-141's autopilot, when it lands); until then a finished check wakes
-  nobody by itself, and firstmate reads it at the merge gate as before.
+  records no answer (the board does); it is a waiter, not a writer.
+  The session autopilot observes required-check changes with conditional
+  GitHub polls and advances gates and review itself. Missing or pending
+  required checks hold gates without spending a failure wake. Only settled
+  required-check evidence, a new head-bound verdict, changed authored details,
+  or a released merge slot reconsider the same head/base; timestamps and
+  optional check progress do not. Open PRs are paged, while recent closures
+  use one page of at most 50 results. Only tracked PRs or terminal transitions
+  after the persisted startup boundary are logged; tracked PRs absent from
+  the open list are fetched directly. Each poll shares one event-log snapshot.
+  It queues one judgment
+  wake per head for REJECT, scope questions, failed gates or launchers, missing
+  verdicts and missing authored merge-card details. A missing-details wake
+  names the reserved project/task decision id. Its owned children write
+  completion receipts and ring the service's separate `autopilot.d` channel;
+  the service then queues only the judgment firstmate needs. Neither a wake
+  nor an instruction proves model receipt or compliance.
 - **The watch.** `bin/fm-watch-arm.sh` attaches to the one live watcher
   cycle of the repository, or starts one through the lifeline, owned by the
   harness session (`state/watch/cycle.lock` held by the live cycle; a

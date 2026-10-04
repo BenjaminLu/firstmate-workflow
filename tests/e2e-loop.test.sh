@@ -9,7 +9,7 @@ for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
 export HERDR_ENV=0 FM_TRANSPORT=direct
-# the loop below runs the real fm-gate.sh through fm-run.sh: on a lock of its
+# the loop below runs the real fm-gate.sh through the autopilot: on a lock of its
 # own it neither waits on a real gate run on this machine nor holds one up
 FM_GATE_LOCK="$(mktemp -d)/gate.lock"; export FM_GATE_LOCK
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,175 +21,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
 
-# The production caller in a fixture with all orchestration stubbed. This
-# focused path never invokes git, gh, engines or a live board.
-REGISTRY='default_project: firstmate-workflow
-projects:
-  firstmate-workflow:
-    repo: .
-    github: owner/engine
-    base: main
-    required_check: ci
-'
-caller_fixture() {   # caller_fixture <task branch> <event lines> [registry] -> a fixture root
-  local c; c="$(mktemp -d)"
-  mkdir -p "$c/bin" "$c/state/decision-details"
-  cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
-     "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$c/bin/"
-  project_storage_fixture "$c/bin/"
-  binding_service_fixture "$c"
-  # each stub notes that it ran, so a test can say what a turn touched
-  for script in fm-sync-prs fm-dispatch fm-gate; do
-    printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/calls"\nexit 0\n' "$script" "$c" > "$c/bin/$script.sh"
-    chmod +x "$c/bin/$script.sh"
-  done
-  printf '#!/usr/bin/env bash\nprintf "%s\\n"\n' "$1" > "$c/bin/git"
-  chmod +x "$c/bin/git"
-  # A merge card reads its pull request's branch and title before it exists
-  # (T-119), so the fixture carries a gh that answers as gh does. Every pull
-  # request the log opened is on the task branch, titled "T-xxx: fixture";
-  # `--json a,b` prints exactly those fields, keys sorted, `--jq` filters,
-  # and any other number is GraphQL's error on stderr, exit 1.
-  cat > "$c/bin/gh" <<G
-#!/usr/bin/env bash
-arg() { local w="\$1"; shift; while [ \$# -gt 0 ]; do [ "\$1" = "\$w" ] && { printf '%s' "\${2-}"; return; }; shift; done; }
-[ "\${1-}:\${2-}" = pr:view ] || { echo "gh stub: fm-run's card asks nothing but pr view" >&2; exit 1; }
-jq -e --argjson n "\$3" 'select(.type=="pr_opened" and .pr==\$n)' "$c/state/events.jsonl" >/dev/null 2>&1 || {
-  echo "GraphQL: Could not resolve to a PullRequest with the number of \$3. (repository.pullRequest)" >&2; exit 1; }
-out="\$(jq -cnS --argjson n "\$3" --arg f "\$(arg --json "\$@")" \\
-  '{number:\$n, headRefName:"$1", title:"$(printf '%s' "$1" | sed -E 's/^t-([0-9]+).*/T-\1/'): fixture", state:"OPEN"} as \$d
-   | reduce (\$f|split(","))[] as \$k ({}; .[\$k] = \$d[\$k])')"
-q="\$(arg --jq "\$@")"
-if [ -n "\$q" ]; then jq -r "\$q" <<<"\$out"; else printf '%s\n' "\$out"; fi
-G
-  chmod +x "$c/bin/gh"
-  printf '%s' "${3-$REGISTRY}" > "$c/config.yaml"
-  project_fixture_config "$c"
-  printf '%s\n' "$2" > "$c/state/events.jsonl"
-  printf '%s' "$c"
-}
-caller="$(caller_fixture t-991-fixture '{"type":"pr_opened","task":"T-991","pr":991}')"
-# T-047: the card's id is allocated by fm-decide.sh and names its owner. It
-# is never derived from the task's digits again.
-card=D-firstmate-workflow-T991-1
-missing="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$caller" 2>&1)"
-assert_contains "$missing" 'no captain card created' 'missing authored details reported truthfully'
-assert_contains "$missing" "state/decision-details/$card.json" 'and it names the path for the id it allocated'
-assert_fail "test -f '$caller/state/pending/$card.json'" 'missing input never produces a card'
-assert_fail "test -e '$caller/state/pending/D-991.json' || test -e '$caller/state/decisions/D-991.json'" \
-  'and no D-<task digits> id is derived'
-printf '{}\n' > "$caller/state/decision-details/$card.json"
-invalid="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$caller" 2>&1)"
-assert_contains "$invalid" 'no captain card created' 'invalid authored details reported truthfully'
-assert_contains "$invalid" "$card" 'a later turn keeps the id it allocated rather than taking another'
-assert_fail "test -f '$caller/state/pending/$card.json'" 'invalid input never produces a card'
-jq -n '{en:{title:"Merge fixture cache",explanation:"Cache file reads",before:"Repeated reads",after:"One read",outcome:"Cache decision recorded",options:{A:{description:"Merge cache",pros:"Less IO",cons:"More memory"},B:{description:"Revise cache",pros:"Improve design",cons:"Delay"},C:{description:"Hold cache",pros:"Measure",cons:"No improvement"}}},"zh-TW":{title:"合併快取",explanation:"快取檔案讀取",before:"重複讀取",after:"讀取一次",outcome:"已記錄快取決策",options:{A:{description:"合併快取",pros:"減少讀取",cons:"增加記憶體"},B:{description:"修訂快取",pros:"改善設計",cons:"延後"},C:{description:"保留快取",pros:"測量",cons:"尚未改善"}}}}' > "$caller/state/decision-details/$card.json"
-valid="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$caller" 2>&1)"
-assert_contains "$valid" "asking the captain ($card)" 'valid authored details create an announced card'
-assert_eq '合併快取' "$(jq -r '.details."zh-TW".title' "$caller/state/pending/$card.json")" 'caller preserves authored translation'
-assert_eq 'firstmate-workflow' "$(jq -r .project "$caller/state/pending/$card.json")" 'the card names its project'
-waiting="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$caller" 2>&1)"
-assert_contains "$waiting" 'waiting on the captain' 'a pending card for the task is found under its new id'
-assert_eq '1' "$(find "$caller/state/pending" -name '*.json' | wc -l | tr -d ' ')" 'and no second card is raised'
-DETAILS="$caller/state/decision-details/$card.json"
-
-# The caller fixture exactly as it was before projects existed: no
-# config.yaml at all. It still raises its merge card - under an id owned by
-# the self project, never D-991 - and records no project on it.
-bare="$(caller_fixture t-991-fixture '{"type":"pr_opened","task":"T-991","pr":991}' '')"
-rm -f "$bare/config.yaml"
-cp "$DETAILS" "$bare/state/decision-details/$card.json"
-obare="$(PATH="$bare/bin:$PATH" bash "$bare/bin/fm-run.sh" once --repo "$bare" 2>&1)"
-assert_contains "$obare" "asking the captain ($card)" 'a tree with no registry still raises its merge card'
-assert_eq "false" "$(jq -c 'has("project")' "$bare/state/pending/$card.json")" \
-  'and records no project on it, having no registry to name one from'
-assert_fail "test -e '$bare/state/pending/D-991.json'" 'and derives no D-<task digits> id there either'
-rm -rf "$bare"
-
-# The log is shared by every project, and a pull request number is only a key
-# together with its project. Another project's #7 for its own T-004 is not
-# this run's to gate, to card or to merge.
-REGISTRY2="${REGISTRY}  example-app:
-    github: example-org/example-app
-    base: main
-    required_check: check
-"
-other="$(caller_fixture t-004-engine '{"type":"pr_opened","task":"T-004","pr":7,"project":"example-app"}' "$REGISTRY2")"
-oother="$(PATH="$other/bin:$PATH" bash "$other/bin/fm-run.sh" once --repo "$other" 2>&1)"
-assert_lacks "$(cat "$other/calls" 2>/dev/null)" "fm-gate" "another project's pull request is not gated by this run"
-assert_lacks "$oother" "T-004" "nor mentioned"
-assert_fail "test -d '$other/state/decision-ids/firstmate-workflow/T004'" "and no card id is allocated for it"
-rm -rf "$other"
-# the engine's own #7 (no project: the default's) is still advanced when the
-# other project's #7 for a task of the same name has merged
-both="$(caller_fixture t-004-engine "$(printf '%s\n%s' \
-  '{"type":"pr_opened","task":"T-004","pr":7}' \
-  '{"type":"merged","task":"T-004","pr":7,"project":"example-app"}')" "$REGISTRY2")"
-cp "$DETAILS" "$both/state/decision-details/D-firstmate-workflow-T004-1.json"
-oboth="$(PATH="$both/bin:$PATH" bash "$both/bin/fm-run.sh" once --repo "$both" 2>&1)"
-assert_contains "$(cat "$both/calls")" "fm-gate --project firstmate-workflow --task T-004" "the engine's own #7 is still gated"
-assert_contains "$(cat "$both/calls")" "fm-sync-prs --repo $both --project firstmate-workflow" "run passes its resolved project to sync"
-assert_contains "$oboth" "asking the captain (D-firstmate-workflow-T004-1)" \
-  "and carded, another project's merge notwithstanding"
-assert_eq "7 firstmate-workflow" \
-  "$(jq -r '"\(.pr) \(.project)"' "$both/state/pending/D-firstmate-workflow-T004-1.json")" \
-  "the card is the engine's #7"
-rm -rf "$both"
-# a run for the other project advances that project's #7 and not the engine's
-app="$(caller_fixture t-004-app "$(printf '%s\n%s' \
-  '{"type":"pr_opened","task":"T-004","pr":7}' \
-  '{"type":"pr_opened","task":"T-004","pr":8,"project":"example-app"}')" "$REGISTRY2")"
-app_state="$(project_fixture_state "$app" example-app)"
-mkdir -p "$app_state/decision-details"
-cp "$DETAILS" "$app_state/decision-details/D-example-app-T004-1.json"
-jq -c 'select(.project=="example-app")' "$app/state/events.jsonl" > "$app_state/events.jsonl"
-oapp="$(FM_PROJECT=example-app PATH="$app/bin:$PATH" bash "$app/bin/fm-run.sh" once --repo "$app" 2>&1)"
-assert_contains "$oapp" "asking the captain (D-example-app-T004-1)" "a run for example-app cards its own pull request"
-assert_eq "8 example-app" "$(jq -r '"\(.pr) \(.project)"' "$app_state/pending/D-example-app-T004-1.json")" \
-  "with that project's pull request number"
-assert_lacks "$(cat "$app/calls")" "--pr 7" "and never gates the engine's #7"
-rm -rf "$app"
-
-# An id reserved for the task's merge card and never published is reused by
-# the next turn, the lowest first; a choice id reserved for the same task is
-# not a merge card and is left alone. No fresh id is taken.
-res="$(caller_fixture t-992-fixture '{"type":"pr_opened","task":"T-992","pr":992}')"
-for k in choice merge merge; do
-  PATH="$res/bin:$PATH" bash "$res/bin/fm-decide.sh" --allocate --task T-992 --kind "$k" --repo "$res" >/dev/null 2>&1
-done
-ores="$(PATH="$res/bin:$PATH" bash "$res/bin/fm-run.sh" once --repo "$res" 2>&1)"
-assert_contains "$ores" "state/decision-details/D-firstmate-workflow-T992-2.json" \
-  "the lowest reserved merge id is the one the turn asks details for"
-assert_eq "1 2 3" "$(find "$res/state/decision-ids/firstmate-workflow/T992" -name '*.json' -exec basename {} .json \; | sort -n | tr '\n' ' ' | sed 's/ $//')" \
-  "and no fresh id is allocated"
-rm -rf "$res"
-
-# T-043's hand-raised record sits at D-056, the id T-056's merge card used to
-# be derived as. It is not T-056's and new ids never look at it: T-056 gets
-# its own card, and the old record is not read, moved or overwritten.
-old='{"id":"D-056","task":"T-043","kind":"choice","chosen":"A","ts":"2026-09-01T00:00:00Z"}'
-own="$(caller_fixture t-056-own '{"type":"pr_opened","task":"T-056","pr":56}')"
-mkdir -p "$own/state/decisions" "$own/state/pending"
-printf '%s\n' "$old" > "$own/state/decisions/D-056.json"
-printf '%s\n' "$old" > "$own/state/pending/D-056.json"
-cp "$DETAILS" "$own/state/decision-details/D-056.json"
-keyed() { cksum "$own/state/decisions/D-056.json" "$own/state/pending/D-056.json" \
-  "$own/state/decision-details/D-056.json"; }
-before56="$(keyed)"
-out56="$(PATH="$own/bin:$PATH" bash "$own/bin/fm-run.sh" once --repo "$own" 2>&1)"
-assert_contains "$out56" 'D-firstmate-workflow-T056-1' 'T-056 is allocated its own id beside the old D-056'
-assert_lacks "$out56" 'waiting on the captain' 'the old pending D-056 is not read as T-056 waiting'
-cp "$DETAILS" "$own/state/decision-details/D-firstmate-workflow-T056-1.json"
-out56="$(PATH="$own/bin:$PATH" bash "$own/bin/fm-run.sh" once --repo "$own" 2>&1)"
-assert_contains "$out56" 'asking the captain (D-firstmate-workflow-T056-1)' 'and its merge card is raised there'
-assert_eq 'T-056' "$(jq -r .task "$own/state/pending/D-firstmate-workflow-T056-1.json")" 'for T-056'
-assert_eq "$before56" "$(keyed)" 'and D-056 and everything keyed by it are exactly as they were'
-assert_eq 'D-056.json D-firstmate-workflow-T056-1.json' \
-  "$(find "$own/state/pending" -name '*.json' -exec basename {} \; | sort | tr '\n' ' ' | sed 's/ $//')" \
-  'with nothing moved in or out of the pending cards'
-rm -rf "$own"
-if [ "${FM_CALLER_ONLY:-0}" = 1 ]; then rm -rf "$caller"; finish; exit $?; fi
-
+# Caller card cases moved to tests/lib/autopilot_loop.py and
+# tests/lib/run_project_turns.py; this suite retains the real launcher chain.
+DETAILS="$(mktemp)"
+cat > "$DETAILS" <<'JSON'
+{"en":{"title":"Merge fixture cache","explanation":"Cache file reads","before":"Repeated reads","after":"One read","outcome":"Cache decision recorded","options":{"A":{"description":"Merge cache","pros":"Less IO","cons":"More memory"},"B":{"description":"Revise cache","pros":"Improve design","cons":"Delay"},"C":{"description":"Hold cache","pros":"Measure","cons":"No improvement"}}},"zh-TW":{"title":"合併快取","explanation":"快取檔案讀取","before":"重複讀取","after":"讀取一次","outcome":"已記錄快取決策","options":{"A":{"description":"合併快取","pros":"減少讀取","cons":"增加記憶體"},"B":{"description":"修訂快取","pros":"改善設計","cons":"延後"},"C":{"description":"保留快取","pros":"測量","cons":"尚未改善"}}}}
+JSON
 d="$(mktemp -d)"; bare="$d/remote.git"; r="$d/repo"
 git init -q --bare "$bare"
 git init -q -b main "$r"
@@ -218,7 +55,7 @@ git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u o
 
 export GHSTATE="$d/ghstate"
 GH="$ROOT/tests/gh-stub.sh"
-run() { FM_ROOT="$r" FM_GH="$GH" FM_BASE=main "$@"; }
+run() { FM_ROOT="$r" FM_GH="$GH" FM_BASE=main GH_REPO=fixture/project "$@"; }
 
 # the mock writes a real implementation and a test that depends on it, so the
 # fifth gate has something honest to check
@@ -242,7 +79,7 @@ M
 chmod +x bin/adapters/mock.sh
 
 # --- nothing starts before the captain has seen it ----------------------
-run bin/fm-run.sh once --repo "$r" >/dev/null 2>&1
+run python3 "$ROOT/tests/lib/autopilot_turn.py" "$r" >/dev/null 2>&1
 assert_fail "test -s '$GHSTATE/prs'" "no green light, no pull request"
 
 run bin/fm-emit.sh --actor captain --type greenlit --en go --tw 開工 >/dev/null
@@ -252,8 +89,8 @@ mkdir -p "$r/state/decisions"
 printf '{"id":"D-1000","task":"T-101","kind":"choice","chosen":"A"}\n' > "$r/state/decisions/D-1000.json"
 
 # --- turn one: dispatch, worktree, commit, push, pull request -----------
-out1="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
-assert_contains "$out1" "dispatched: T-101" "turn one dispatches the ready task"
+out1="$(run bin/fm-dispatch.sh --repo "$r" 2>&1)"
+assert_contains "$out1" "T-101" "the explicit dispatcher starts the ready task"
 for _ in $(seq 1 40); do [ -s "$GHSTATE/prs" ] && break; sleep 0.25; done
 assert_ok "test -s '$GHSTATE/prs'" "a pull request exists"
 pr="$(awk -F'\t' 'NR==1{print $1}' "$GHSTATE/prs")"
@@ -262,66 +99,15 @@ assert_contains "$branch" "t-101" "on a branch named after the task"
 assert_ok "git --git-dir='$bare' rev-parse --verify '$branch'" "and it was pushed"
 
 # --- turn two: the gates run, gate 7 sends it to review -----------------
-out2="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+out2="$(run python3 "$ROOT/tests/lib/autopilot_turn.py" "$r" 2>&1)"
 assert_contains "$out2" "sending it to review" "every gate before 7 passes and it goes to review"
 assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
 criteria="$(jq -r 'select(.kind=="verdict") | .text' "$r/state/evidence/self/T-101/"*.json)"
 assert_contains "$criteria" '1. open name the helper' 'the mock reviewer supplies numbered round-one criteria'
 assert_contains "$criteria" 'CRITERIA-COMPLETE:T-101' 'the mock reviewer closes its round-one standing list'
 
-# fm-run must not swallow a review round that produced no verdict. The
-# reviewer is stubbed rather than crashed for real, so the round counter is
-# untouched and the scenario after this point is the one it was before.
-# the stub says where its log is, the way the real fm-review does, so the
-# turn output can be checked against what the child actually reported
-# rather than against a path fm-run reconstructed
-stub_script "$r/bin/fm-review.sh" <<'S'
-#!/usr/bin/env bash
-echo "fm-review: nothing to show; its log is at state/reviews/T-101-r1.7.log" >&2
-exit 3
-S
-outX="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
-assert_contains "$outX" "produced no verdict" "a review round with no verdict is reported, not counted"
-assert_contains "$outX" "T-101-r1.7.log" "and the path it prints is the one the reviewer wrote"
-stub_script "$r/bin/fm-review.sh" <<'S'
-#!/usr/bin/env bash
-echo "fm-review: every reviewer vendor was unavailable; their log is at state/reviews/T-101-r1.9.log" >&2
-exit 2
-S
-outY="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
-assert_contains "$outY" "no reviewer engine was available" "and so is a reviewer with no engine"
-assert_contains "$outY" "T-101-r1.9.log" "which also carries the log the reviewer kept"
-stub_script "$r/bin/fm-review.sh" <<'S'
-#!/usr/bin/env bash
-exit 64
-S
-outZ="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
-assert_contains "$outZ" "review round failed" "and so is a reviewer that failed some other way"
-
-# a dispatched child inherits fm-run's stdin. If that is the caller's open
-# pipe and the child reads it, the turn never ends - which is how the
-# advance loop once ate its own input. The advance loop happens to be fed
-# by a here-string, so the child that proves this has to be one called
-# outside it: the sync at the top of the turn.
-stub_script "$r/bin/fm-sync-prs.sh" <<'S'
-#!/usr/bin/env bash
-cat > /dev/null
-exit 0
-S
-# a fifo held open read-write never reaches EOF and needs no writer
-# process, so a child that reads it blocks for good and the probe leaves
-# nothing running behind it
-mkfifo "$r/openpipe"
-exec 9<> "$r/openpipe"
-( run bin/fm-run.sh once --repo "$r" >/dev/null 2>&1 <&9; touch "$r/turn-done" ) &
-probe=$!
-deadline=$(( $(date +%s) + 30 ))
-while [ ! -f "$r/turn-done" ] && [ "$(date +%s)" -lt "$deadline" ]; do sleep 0.3; done
-assert_ok "test -f '$r/turn-done'" "a turn finishes even when a child would read standard input"
-kill -9 "$probe" 2>/dev/null; wait "$probe" 2>/dev/null
-pkill -f "$r/bin/fm-sync-prs.sh" 2>/dev/null
-exec 9>&-; rm -f "$r/openpipe"
-restore_scripts
+# Exit 2/3/65, child-log quoting and detached stdin are covered by
+# tests/lib/autopilot_loop.py and tests/lib/autopilot_jobs.py.
 
 # a real review body has newlines, quotes and backslashes in it. The stub
 # used to interpolate one into JSON by hand, which put a raw control
@@ -352,9 +138,9 @@ card1="$(run bin/fm-decide.sh --allocate --task T-101 --kind merge --repo "$r" 2
 assert_eq "D-firstmate-workflow-T101-1" "$card1" \
   "firstmate allocates the merge card's id; a tree with no registry is the self project"
 cp "$DETAILS" "$r/state/decision-details/$card1.json"
-rm -rf "$caller"
-out3="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
-assert_contains "$out3" "asking the captain" "every gate green means a decision, not a merge"
+
+run python3 "$ROOT/tests/lib/autopilot_turn.py" "$r"
+assert_ok "test -f '$r/state/pending/$card1.json'" "every gate green means a decision, not a merge"
 pend="$(ls "$r/state/pending" 2>/dev/null | head -1)"
 assert_ok "[ -n \"$pend\" ]" "a decision is pending on disk"
 id="${pend%.json}"
@@ -380,4 +166,5 @@ assert_fail "test -d '$r/state/worktrees/T-101'" "the worktree is cleaned up aft
 
 cd "$ROOT" || exit 1
 rm -rf "$d"
+rm -f "$DETAILS"
 finish
