@@ -31,8 +31,8 @@ class Stacking(unittest.TestCase):
         with patch.object(binding, 'repository', return_value='owner/repo'), \
              patch.object(binding, 'remote_head', return_value={
                  'baseRefName': 'parent', 'baseRefOid': A}), \
-             patch.object(binding, 'command', return_value=b''), \
-             patch.object(binding, 'git', side_effect=[A, B]), \
+             patch.object(binding, 'fetch_ref', return_value=A), \
+             patch.object(binding, 'git', return_value=B), \
              patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
             with self.assertRaisesRegex(ValueError, 'local base is stale; synchronize'):
                 binding.local_gate_base('/repo', 9, 'main')
@@ -64,13 +64,13 @@ class Stacking(unittest.TestCase):
                  'required_checks': ['ci'], 'base': 'main', 'stacking': 'allowed'}) as policy, \
              patch.object(binding, 'remote_head', return_value=view), \
              patch.object(binding, 'git', return_value=A), \
-             patch.object(binding, 'command', return_value=b'') as fetch, \
+             patch.object(binding, 'fetch_ref', return_value=A) as fetch, \
              patch.object(binding, 'github', side_effect=[
                  {'contexts': ['ci'], 'checks': []}, runs, {'sha': B, 'statuses': []}]) as github:
             self.assertEqual(len(binding.required_checks('/repo', 'owner/repo', 2, B)), 1)
             self.assertEqual(policy.call_args.args[2], 'main')
-            fetch.assert_called_once_with(['git', '-C', '/repo', 'fetch', '--no-tags',
-                                          'https://github.com/owner/repo.git', 'refs/heads/t-1-parent'])
+            fetch.assert_called_once_with('/repo', 'https://github.com/owner/repo.git',
+                                          'refs/heads/t-1-parent')
             self.assertEqual(github.call_args_list[0].args, ('owner/repo', 'api',
                 'repos/owner/repo/branches/t-1-parent/protection/required_status_checks'))
 
@@ -82,13 +82,13 @@ class Stacking(unittest.TestCase):
                  'required_checks': ['ci'], 'base': 'main', 'stacking': 'hold'}) as policy, \
              patch.object(binding, 'remote_head', return_value=view), \
              patch.object(binding, 'git', return_value=A), \
-             patch.object(binding, 'command', return_value=b'') as fetch, \
+             patch.object(binding, 'fetch_ref', return_value=A) as fetch, \
              patch.object(binding, 'github') as github:
             with self.assertRaisesRegex(ValueError, 'unknown: stacked PR base requires confirmed stacking policy'):
                 binding.required_checks('/repo', 'owner/repo', 2, B)
             self.assertEqual(policy.call_args.args[2], 'main')
-            fetch.assert_called_once_with(['git', '-C', '/repo', 'fetch', '--no-tags',
-                                          'https://github.com/owner/repo.git', 'refs/heads/t-1-parent'])
+            fetch.assert_called_once_with('/repo', 'https://github.com/owner/repo.git',
+                                          'refs/heads/t-1-parent')
             github.assert_not_called()
 
     def test_open_base_retained(self):
@@ -141,13 +141,13 @@ class Stacking(unittest.TestCase):
         view = {'state': 'OPEN', 'baseRefName': 't-1-parent', 'baseRefOid': A,
                 'headRefOid': B, 'headRefName': 't-2-child'}
         with patch.object(binding, 'remote_head', return_value=view), \
-             patch.object(binding, 'command', return_value=b''), \
+             patch.object(binding, 'fetch_ref', return_value=A), \
              patch.object(binding, 'git', return_value=A), \
              patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
             self.assertEqual(binding.view_base('owner/repo', 2), 't-1-parent')
         with patch.object(binding, 'remote_head', return_value=view), \
-             patch.object(binding, 'command', return_value=b''), \
-             patch.object(binding, 'git', side_effect=[A, B]), \
+             patch.object(binding, 'fetch_ref', return_value=A), \
+             patch.object(binding, 'git', return_value=B), \
              patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
             with self.assertRaises(ValueError):
                 binding.view_base('owner/repo', 2)
@@ -176,22 +176,23 @@ class Stacking(unittest.TestCase):
         base = 'd' * 40
         def git_answer(root, *args):
             if args == ('rev-parse', 'refs/heads/t-2-child'): return B
-            if args == ('rev-parse', 'FETCH_HEAD'):
-                return next(fetches)
             if args == ('merge-base', A, B): return A
             if args == ('rev-parse', 'HEAD'): return new
             return ''
-        fetches = iter([base, A])
         final = dict(child, headRefOid=new, baseRefName='main', baseRefOid=base)
         import tempfile
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(stack, 'remote_head', side_effect=[child, child, final]), \
              patch.object(stack, 'github', side_effect=[parent, {'protected': False}]), \
+             patch.object(stack, 'fetch_ref', side_effect=[base, A]) as fetch, \
              patch.object(stack, 'git', side_effect=git_answer) as git, \
              patch.object(stack, 'command') as command:
             result = stack.restack('/repo', 'owner/repo', 2, 1, B,
                 {'force_with_lease': True, 'base': 'main', 'stacking': 'allowed', 'delete_branch': False}, tmp)
             self.assertEqual(result['head'], new)
+            self.assertEqual([c.args for c in fetch.call_args_list], [
+                ('/repo', 'https://github.com/owner/repo.git', 'refs/heads/main'),
+                ('/repo', 'https://github.com/owner/repo.git', 'refs/pull/1/head')])
             calls = [call.args[1:] for call in git.call_args_list]
             self.assertIn(('-c', 'core.hooksPath=/dev/null', 'rebase', '--onto', base, A), calls)
             self.assertIn(('push', '--force-with-lease=refs/heads/t-2-child:' + B,
@@ -206,10 +207,8 @@ class Stacking(unittest.TestCase):
         import tempfile
         import os
         with tempfile.TemporaryDirectory() as tmp:
-            fetches = iter(['d' * 40, A])
             def answer(root, *args):
                 if args == ('rev-parse', 'refs/heads/t-2-child'): return B
-                if args == ('rev-parse', 'FETCH_HEAD'): return next(fetches)
                 if args == ('merge-base', A, B): return A
                 if args == ('rev-parse', 'HEAD'): return 'c' * 40
                 if args == ('worktree', 'list', '--porcelain'):
@@ -219,6 +218,7 @@ class Stacking(unittest.TestCase):
             with patch.dict(os.environ, {'FM_WORKTREES': tmp}), \
                  patch.object(stack, 'remote_head', return_value=child), \
                  patch.object(stack, 'github', side_effect=[parent, {'protected': False}]), \
+                 patch.object(stack, 'fetch_ref', side_effect=['d' * 40, A]), \
                  patch.object(stack, 'git', side_effect=answer) as git, \
                  patch.object(stack, 'command') as command:
                 with self.assertRaisesRegex(ValueError, 'dirty'):

@@ -42,19 +42,27 @@ import os, sys
 from pathlib import Path
 assert sys.argv[1:3] == ['-C', os.environ['FM_TARGET_ROOT']]
 args = sys.argv[3:]
-if args == ['fetch', '--no-tags', 'https://github.com/owner/project.git',
-            'refs/heads/' + os.environ['BASE_NAME']]:
-    with Path(os.environ['FETCH_LOG']).open('a') as log:
-        log.write('exact repository and base ref fetched\n')
-    if os.environ['FETCH_FAIL'] == '1':
-        sys.exit('live base unavailable')
-    Path(os.environ['FETCH_FILE']).write_text(os.environ['LIVE_BASE'])
-elif args == ['fetch', '--no-tags', 'https://github.com/owner/project.git', 'refs/pull/9/head']:
-    Path(os.environ['FETCH_FILE']).write_text(os.environ['PR_HEAD'])
+if args[:3] == ['fetch', '--no-tags', 'https://github.com/owner/project.git']:
+    source, destination = args[3].split(':')
+    assert destination.startswith('refs/fm/fetch/')
+    fetched = Path(os.environ['FETCH_FILE']) / destination
+    if source == '+refs/heads/' + os.environ['BASE_NAME']:
+        with Path(os.environ['FETCH_LOG']).open('a') as log:
+            log.write('exact repository and base ref fetched\n')
+        if os.environ['FETCH_FAIL'] == '1':
+            sys.exit('live base unavailable')
+        value = os.environ['LIVE_BASE']
+    else:
+        assert source == '+refs/pull/9/head'
+        value = os.environ['PR_HEAD']
+    fetched.parent.mkdir(parents=True, exist_ok=True)
+    fetched.write_text(value)
+elif args[:2] == ['update-ref', '-d']:
+    (Path(os.environ['FETCH_FILE']) / args[2]).unlink(missing_ok=True)
 elif args == ['rev-parse', 'task^{commit}']:
     print(os.environ['PR_HEAD'])
-elif args == ['rev-parse', 'FETCH_HEAD']:
-    print(Path(os.environ['FETCH_FILE']).read_text())
+elif args[0] == 'rev-parse' and args[1].startswith('refs/fm/fetch/'):
+    print((Path(os.environ['FETCH_FILE']) / args[1]).read_text())
 elif args == ['rev-parse', os.environ['BASE_NAME'] + '^{commit}']:
     print(os.environ['LOCAL_BASE'])
 else:
