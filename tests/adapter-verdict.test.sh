@@ -37,7 +37,8 @@ verdict() { # <log contents> <rc> -> the verdict
 assert_eq "2" "$(verdict "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable." 0)" \
   "an auth error on exit 0 is the vendor being unavailable"
 
-# gemini, verbatim: a long stack trace, but the error is the first thing said
+# Gemini error wording in a constructed stack trace with placeholder paths;
+# this is not a verbatim transcript. The error is the first thing said.
 gem="Loaded cached credentials.
 Error authenticating: IneligibleTierError: This client is no longer supported
     at throwIneligibleOrProjectIdError (file:///x/setup.js:192:15)

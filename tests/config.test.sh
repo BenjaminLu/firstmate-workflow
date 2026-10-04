@@ -647,8 +647,9 @@ assert_eq "gemini=kept" "$(cat "$pv/handed")" "without FM_MODEL_ROLE the caller'
 rm -rf "$pv"
 
 # --- the model, read in the shape each vendor records it (T-146) ----------
-# A claude result from --output-format json, as recorded: no "model" field,
-# the models the run used as modelUsage's keys. T-127 read it as "unknown".
+# A constructed claude --output-format json result using the observed shape:
+# no "model" field, and models as modelUsage keys. The text, counts and ids
+# below are test inputs, not a verbatim recording. T-127 read it as "unknown".
 cm="$(mktemp -d)"
 cat > "$cm/log" <<'L'
 {"type":"result","subtype":"success","is_error":false,"duration_ms":81234,"num_turns":12,"result":"Done. The config says \"model\":\"not-this-one\".","session_id":"5d1c","total_cost_usd":1.25,"usage":{"input_tokens":40,"output_tokens":3100},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":900,"outputTokens":40,"costUSD":0.01},"claude-opus-5-5":{"inputTokens":40,"outputTokens":3100,"costUSD":1.24}}}

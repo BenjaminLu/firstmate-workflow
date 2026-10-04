@@ -1,4 +1,4 @@
-"""Recorded REST payloads exercise mechanical transitions, not model output."""
+"""Constructed REST payloads exercise mechanical transitions, not model output."""
 import copy
 import json
 import os
@@ -39,6 +39,7 @@ class PilotTests(unittest.TestCase):
         (Path(self.context['tasks']) / 'T-001.json').write_text('{"id":"T-001"}')
         self.pilot = A.Pilot(self.context, clock=lambda: 1000)
         self.pilot.command = self.command
+        self.pilot.read_head_spec = lambda pr, task: dict(id=task)
         self.pilot.emit = lambda *args, **kwargs: self.calls.append(('emit', args))
         self.pilot.notify = lambda text: self.calls.append(('notify', text))
         self.pilot.push = lambda *args: self.calls.append(('wake', args))

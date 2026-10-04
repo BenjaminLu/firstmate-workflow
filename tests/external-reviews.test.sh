@@ -55,7 +55,7 @@ class ExternalReviews(unittest.TestCase):
         return [json.loads(x) for x in self.log.read_text().splitlines()] if self.log.exists() else []
     def mutations(self): return [x for x in self.calls() if x['method'] in ('POST','PATCH')]
     def test_recorded_bot_reviews_remain_independent(self):
-        # Replay tests/lib/onboarding/reviews.json; bind its recorded review
+        # Replay tests/lib/onboarding/reviews.json; bind its fixture review
         # states to this disposable source fixture rather than the real repo.
         recorded=json.loads((root/'tests/lib/onboarding/reviews.json').read_text())
         self.data['reviews']=[dict(r,commit_id=HEAD,body='',

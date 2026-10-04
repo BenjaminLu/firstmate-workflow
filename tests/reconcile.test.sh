@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reconciling after a crash. Every fixture is a temp directory with a log, a
-# recorded `gh pr list` and some files on disk - no network,
+# constructed `gh pr list` payload and some files on disk - no network,
 # and no assumption about the machine the suite runs on.
 #
 # Several fixtures below exist to make ONE section's repair the input to the
@@ -29,7 +29,7 @@ fixture() {
   printf '%s' "$d"
 }
 
-# a gh that replays one recorded `pr list` payload; one directory per recording
+# a gh that replays one constructed `pr list` payload; one directory per fixture
 rec() { local dir="$1/gh-$2"; mkdir -p "$dir"
   { printf '#!/usr/bin/env bash\ncat <<'\''JSON'\''\n'; cat; printf 'JSON\n'; } > "$dir/gh"
   chmod +x "$dir/gh"; printf '%s' "$dir/gh"; }
