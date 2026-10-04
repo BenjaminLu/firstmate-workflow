@@ -4,6 +4,7 @@ Jobs have durable write-ahead identities. Their lifeline-owned children write
 completion receipts and ring the supervisor; neither jobs nor receipts poll.
 Gate 7, not event text or a cached APPROVE, authorizes a merge card.
 """
+import datetime
 import json
 import os
 from pathlib import Path
@@ -140,9 +141,9 @@ class MechanicalLoop:
 
     def advance(self, pr, runs, statuses):
         from fm_autopilot import key
+        if pr['state'] != 'open' or self.policy_error: return
         task = self.task(pr)
-        if not task or pr['state'] != 'open' or self.policy_error:
-            return
+        if not task: return
         if self.busy(task): return
         # Do not gate a branch still being written by its worker.
         from fm_concurrent import live_rounds
@@ -154,11 +155,33 @@ class MechanicalLoop:
             self.attention('reject', task, pr, f'{task} REJECT: brief needed', f'{task} 審查拒絕：需要 firstmate 撰寫工作簡報')
             return
         from fm_evidence import Store
-        asks = [r for r in Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external']).records()
-                if r.get('kind') == 'ask' and (r.get('head') == head or pr.get('draft'))]
+        records = Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external']).records()
+        asks = []
+        for record in records:
+            # A later authorized brief answers/supersedes earlier questions for
+            # this task, even if the launcher has since advanced its head.
+            if (record.get('kind') == 'brief' and record.get('authorized') is True
+                    and record.get('actor') == 'firstmate'):
+                asks.clear()
+            if record.get('kind') != 'ask' or record.get('head') != head:
+                continue
+            try:
+                written = datetime.datetime.fromisoformat(record['time'].replace('Z', '+00:00'))
+                fresh = written.tzinfo is not None and written.timestamp() > self.data['tracking_started']
+            except (KeyError, AttributeError, ValueError, TypeError):
+                fresh = False
+            if fresh:
+                asks.append(record)
         if asks:
-            self.attention('ask', task, pr, f'{task} SCOPE-BLOCKED/ASK: ' + asks[-1].get('text', ''),
-                           f'{task} 工作範圍或問題需要 firstmate 判斷')
+            ask = asks[-1]
+            legacy = 'autopilot-' + key([self.ctx['project'], f'ask-{pr["number"]}-{head}'])
+            if legacy in self.data['wakes'] and key(ask) in self.data['legacy_ask_records']:
+                return
+            # Dedupe by the question, so another question at the same head can
+            # wake after the first was answered, but a restart cannot replay it.
+            self.queue(f'ask-{pr["number"]}-{key(ask)}', task,
+                       f'{task} SCOPE-BLOCKED/ASK: ' + ask.get('text', ''),
+                       f'{task} 工作範圍或問題需要 firstmate 判斷')
             return
         if pr.get('draft'): return
         # Reconsider only changed evidence: CI completion, a new bound verdict,

@@ -64,10 +64,15 @@ print(json.dumps(answer))
     def pilot(self, project='firstmate-workflow'):
         state = self.engine / 'state' if project == 'firstmate-workflow' else self.home / 'projects' / project / 'state'
         state.mkdir(parents=True, exist_ok=True)
-        return A.Pilot(dict(engine=str(self.engine), state=str(state), target=str(self.engine),
+        pilot = A.Pilot(dict(engine=str(self.engine), state=str(state), target=str(self.engine),
             tasks=str(self.engine / 'tasks'), project=project, evidence_project=project,
             external=False, repository='owner/' + ('engine' if project == 'firstmate-workflow' else 'app'), base='main'),
             clock=lambda: 1700000000)
+        # These event-only fixtures have no committed task spec or authorized pin.
+        def missing_spec(pr, task):
+            raise ValueError('committed task spec unavailable at PR head')
+        pilot.read_head_spec = missing_spec
+        return pilot
 
     def response(self, value, repo='engine'):
         (self.root / (repo + '.json')).write_text(json.dumps(value))

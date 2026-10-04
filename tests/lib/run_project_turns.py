@@ -81,7 +81,6 @@ else:
         return self.home / 'projects' / project / 'state'
 
     def open_pr(self, project, task):
-        (self.state(project).parent / 'tasks' / (task + '.json')).write_text(json.dumps(dict(id=task)))
         details = self.state(project) / 'decision-details'
         details.mkdir(exist_ok=True)
         (details / ('D-' + project + '-' + task.replace('-', '') + '-1.json')).write_text('{"en":{}}')
@@ -97,6 +96,13 @@ else:
         with patch.dict(os.environ, env, clear=True), patch.object(A, 'BIN', self.engine / 'bin'), \
              patch.object(L, 'BIN', self.engine / 'bin'):
             pilot = A.Pilot(ctx)
+            # Like the fixture's binding endpoint, committed head specs are
+            # explicit inputs; no task file in the checkout supplies authority.
+            def head_spec(pr, task):
+                self.assertEqual(pr['head']['sha'], 'fixture-head')
+                self.assertEqual(task, pilot.rows()[-1]['task'])
+                return dict(id=task)
+            pilot.read_head_spec = head_spec
             def api(endpoint):
                 self.assertEqual('branches/main/protection/required_status_checks', endpoint)
                 return dict(contexts=['ci'], checks=[])
