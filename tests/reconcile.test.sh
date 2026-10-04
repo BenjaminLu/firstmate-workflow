@@ -690,7 +690,7 @@ SH
     [ "$timing" != historical ] || echo '{"type":"dispatched","task":"T-011"}' >> "$d/state/events.jsonl"
     startup_failed=0
     ready_or_refused() {
-      [ -f "$d/ready" ] || grep -q '^fm-spec-preflight:' "$d/worker-launch.log" 2>/dev/null
+      [ -f "$d/ready" ] || grep '^fm-spec-preflight:' "$d/worker-launch.log" >/dev/null 2>&1
     }
     for round in 1 2; do
       dead_pid > "$d/state/worktrees/T-011.pid"
