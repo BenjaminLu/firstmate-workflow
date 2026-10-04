@@ -83,3 +83,22 @@ test('the request callback is invoked without the BoardSource as its receiver',a
   assert.deepEqual(await source.command({type:'park',task:'self/T-1'}),{ok:true});
   assert.equal(called,true);
 });
+
+
+test('answerable board cards suppress the Live fight without releasing its grip',()=>{
+  const {source,requests}=make(); const s=snapshot();
+  s.recent=[3,2,1].map(n=>({ts:String(n),actor:'reviewer',project:'self',task:'T-1',type:'review_failed',data:{review_outcome:'rejected'}}));
+  source.accept(s);
+  assert.deepEqual(source.view.kraken.arms,['self/T-1'],'the real rejection streak still grips the ship');
+  assert.equal(source.view.kraken.battle,null,'the board card replaces the fight prompt and stage target');
+  for (const pending of [[], [{...s.pending[0],answerable:false}], [{...s.pending[0],project:'other'}]]) {
+    source.accept({...s,pending});
+    assert.ok(source.view.kraken.battle,'absent, unanswerable and other-project cards do not suppress the fight');
+  }
+  source.accept({...s,pending:[{...s.pending[0],project:undefined,answerable:undefined}]});
+  assert.equal(source.view.kraken.battle,null,'legacy cards use the default project and are answerable unless explicitly refused');
+  source.accept({...s,recent:[{ts:'4',type:'approved',task:'T-1',project:'self'},...s.recent]});
+  assert.deepEqual(source.view.kraken.arms,[]);
+  assert.equal(source.view.kraken.battle,null);
+  assert.equal(requests.length,0,'snapshot reconciliation never writes');
+});

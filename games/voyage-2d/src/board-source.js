@@ -43,6 +43,9 @@ export class BoardSource {
       approved:(rounds.get(key(t))?.approvals || 0)>0,flags:{}}));
     // Reconcile terminal/parked snapshots even when their events fell out of recent.
     const arms=kraken.arms.filter(id=>tasks.some(t=>t.id===id && !['merged','closed','parked'].includes(t.lane)));
+    // The board's answerable card takes precedence over the shared monster's
+    // fight prompt/target. Keep every grip until a real release event arrives.
+    const boardCard=(s.pending || []).some(d=>d.task && d.answerable!==false && arms.includes(taskKey(d,s.default_project)));
     const crew=(s.crew || []).map(c=>({...c,name:c.crew_name || c.id,
       model:c.role==='firstmate'?'firstmate':c.role==='reviewer'?'reviewer-1':sailor(c.id),
       task:c.task?`${c.project || s.default_project || ''}/${c.task}`:null,
@@ -53,7 +56,7 @@ export class BoardSource {
     const milestones=[...new Set(tasks.map(t=>t.milestone).filter(Boolean))].map(id=>({id,tasks:tasks.filter(t=>t.milestone===id).map(t=>t.id)}));
     const decisions=(s.pending || []).map(d=>({...d,task:d.task?`${d.project || s.default_project || ''}/${d.task}`:null,options:[]}));
     this.view={mode:'live',t:prior?.t || 0,tasks,crew,decisions,milestones,projects:s.projects || [],port:0,
-      counts:s.counts || {},kraken:{arms,battle:arms.length?{}:null,fled:false},
+      counts:s.counts || {},kraken:{arms,battle:arms.length && !boardCard?{}:null,fled:false},
       gate:Object.fromEntries(tasks.filter(t=>t.lane==='gate').map(t=>[t.id,'red'])),log:[],stats:{},rituals:{}};
     const events=fresh.filter(e=>mapped[e.type] && e.type!=='merged').map(e=>({...e,type:mapped[e.type],task:e.task?taskKey(e,s.default_project):null,crew:e.actor}));
     for(const e of fresh.filter(e=>e.type==='review_failed')) events.push({type:e.data?.review_outcome==='rejected'?'review_rejected':'gate_failed',task:taskKey(e,s.default_project),crew:e.actor});

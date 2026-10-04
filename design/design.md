@@ -5183,8 +5183,9 @@ from Live operation.
 
 The drawer reuses the board's cards, named effects, task actions, confirmations
 and translated refusals. Its writes remain `POST /decisions` and `POST /tasks`,
-with the tab bearer token, browser Origin and the card's own project. A fight
-blocks workflow writes. The Live-only adapter has the same narrow command seam;
+with the tab bearer token, browser Origin and the card's own project. Fight actions never write; the board
+remains usable during a fight. An answerable board card for a gripped task
+suppresses the shared monster’s fight prompt and target without releasing its arms. The Live-only adapter has the same narrow command seam;
 it never interprets an option letter as an effect. Live bundles have no remote
 fonts or other third-party requests. Playground builds refuse network code.
 

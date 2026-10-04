@@ -1,6 +1,6 @@
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect } from '@playwright/test';
+import { expect, type Request } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeProjects, projectState, details } from './lib/fixture';
 
 test('voyage is one live stage, persists its size, and Esc Esc unloads it', async ({page}) => {
@@ -69,6 +69,11 @@ for (const project of [null, 'beta']) test('Live commands use only authenticated
   const b=await startBoard(root);
   try {
     await page.goto(b.url+'/?lang=en'+(project ? '&project='+project : ''));
+    // Authentication belongs to fixture setup. From this reload through the last
+    // command, page events record every request, including every child frame.
+    const requests:Request[]=[];
+    page.on('request',request=>requests.push(request));
+    await page.reload();
     await expect.poll(()=>page.frames().find(f=>f.name()==='voyage-stage')?.evaluate(()=> (window as any).__G?.ready)).toBe(true);
     const f=page.frames().find(f=>f.name()==='voyage-stage')!;
     const sent:{path:string,headers:Record<string,string>,body:any}[]=[];
@@ -91,8 +96,27 @@ for (const project of [null, 'beta']) test('Live commands use only authenticated
       await source.command({type:'drop',task:task.key});
       return {cardProject:card.project,taskProject:task.project};
     });
+    // Drain requests already scheduled by the completed commands before auditing.
+    await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
+    const reads=new Set(['/', '/ship.css', '/ship.js', '/diagram.js', '/watch.js', '/game.js',
+      '/api/i18n', '/api/session', '/api/state', '/events', '/voyage2d/index.html']);
+    const writes=requests.filter(r=>r.method()==='POST');
+    expect(writes.map(r=>new URL(r.url()).pathname)).toEqual(['/decisions','/tasks']);
+    expect(requests.filter(r=>{
+      const url=new URL(r.url());
+      const readFrame=url.pathname==='/voyage2d/index.html' ? r.frame()===f : r.frame()===page.mainFrame();
+      return url.origin!==b.url || !(r.method()==='GET' && reads.has(url.pathname) && readFrame
+        || r.method()==='POST' && ['/decisions','/tasks'].includes(url.pathname));
+    }).map(r=>r.method()+' '+r.url())).toEqual([]);
+    expect(writes.every(r=>r.frame()===f)).toBe(true);
     expect(sent.map(r=>r.path)).toEqual(['/decisions','/tasks']);
     const token=await page.evaluate(()=>sessionStorage.getItem('board.token'));
+    expect(token).toBeTruthy();
+    for(const request of writes) {
+      const headers=await request.allHeaders();
+      expect(headers.authorization).toBe('Bearer '+token);
+      expect(headers.origin).toBe(b.url);
+    }
     for(const r of sent){expect(r.headers.authorization).toBe('Bearer '+token);expect(r.headers.origin).toBe(b.url);}
     for(const [index,ownProject] of [expected.cardProject,expected.taskProject].entries()) {
       expect(ownProject || null).toBe(project);
@@ -188,5 +212,39 @@ test('a missing Live build leaves the working board without a game panel', async
     await expect(page.locator('#voyage-stage')).toHaveCount(0);
     expect(requested.some(u=>u.includes('/voyage2d/') || u.endsWith('/game.js'))).toBe(false);
     expect(errors).toEqual([]);
+  } finally {await stopBoard(b);}
+});
+
+
+for (const action of ['decision','task']) test(`board ${action} writes remain available during a voyage fight`,async({page})=>{
+  const b=await startBoard(makeRoot(['working']));
+  try {
+    await page.goto(b.url+'/?lang=en');
+    await expect(page.locator('#voyage-stage')).toHaveCount(1);
+    const path=action==='decision'?'/decisions':'/tasks';
+    const sent:Request[]=[];
+    await page.route(b.url+path,async route=>{
+      sent.push(route.request());
+      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(action==='decision'
+        ? {ok:true,decision:{id:route.request().postDataJSON().id},outcome:'recorded'} : {ok:true})});
+    });
+    let selector;
+    if(action==='decision') {
+      await page.locator('.dcard .opt[data-c="B"]').first().click();
+      selector='.dcard .confirm';
+    } else {
+      await page.locator('.cmenu:not(:disabled)').first().click();
+      await page.locator('[role="menu"] [data-act="drop"]').click();
+      selector='#dropConfirm [data-confirm="drop"]';
+    }
+    await expect(page.locator(selector).first()).toBeEnabled();
+    // Set the flag and click in one browser turn: the stage's next frame cannot reset it.
+    await page.evaluate(selector=>{
+      (window as any).VOYAGE.fight(true);
+      (document.querySelector(selector) as HTMLButtonElement).click();
+    },selector);
+    await expect.poll(()=>sent.length).toBe(1);
+    expect(sent[0].method()).toBe('POST');
+    expect(sent[0].postDataJSON()).toMatchObject(action==='decision'?{chosen:'B'}:{action:'drop',confirm:true});
   } finally {await stopBoard(b);}
 });

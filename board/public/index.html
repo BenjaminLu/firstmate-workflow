@@ -784,7 +784,7 @@ function refusedFor(r) {
     .catch(() => ({ error: String(r.status) }));
 }
 async function answer(id) {
-  if (window.VOYAGE?.fighting || sent.has(id) || readOnly() || !validate(id)) return;
+  if (sent.has(id) || readOnly() || !validate(id)) return;
   const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
   refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
@@ -824,7 +824,6 @@ async function answer(id) {
 const taskByKey = k => (latest?.tasks || []).find(x => keyOf(x) === k);
 const actionsOf = k => taskByKey(k)?.actions || [];
 async function act(k, action, extra = {}) {
-  if (window.VOYAGE?.fighting) return;
   menuOpen = null; confirming = null; confirmAction = null; taskFeedback = null;
   const task = taskByKey(k);
   const r = task && !readOnly() ? await fetch('/tasks', {

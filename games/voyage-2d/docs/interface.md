@@ -249,11 +249,15 @@ T-054 and T-067), plus small made-up logs.
   prompt "fight the kraken" and a tap on the monster take up the fight (in the Playground that is
   the sim's kraken card answered with its "Proceed: fight"; letting go stays with the full-screen
   card). The whole fight, its specials, the finisher and the hero ending play in the panel.
-- **Live and a board card for the kraken.** Not built yet: there is no BoardSource, so nothing reads
-  `/api/state` and no board answer reaches the game. When it lands, the fight must start from the
-  board's answer the same way: a `battle_begin` in the derived events, which `main.js` already
-  turns into `battle.play(true)` (the path the Playground's card and the embed's prompt use and
-  test).
+- **Live and a board card for the kraken.** `BoardSource` consumes the host board's
+  snapshots. An answerable pending card for any gripped task (matched by project
+  and task id) suppresses the shared monster's fight prompt and stage target;
+  the arms remain visible. An unanswerable card or another project's same task id
+  does not suppress them. Once the card leaves, the local fight is offered again
+  if the grip remains. The board owns the card and its named effects: an answer
+  never implies `battle_begin` or approval. The captain can still answer board
+  cards and use board task actions while a local fight plays; fight actions
+  themselves never write to the board.
 
 ### 1.5 Projects
 
