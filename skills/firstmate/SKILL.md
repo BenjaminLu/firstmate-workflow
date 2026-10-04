@@ -323,6 +323,19 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   background `fm-session.sh wait` and no `--await` per card for this. A
   pending card counts as work in flight, so the turn-end guard refuses a
   turn end while nothing watches.
+- Record every chat merge authorization the moment the captain gives it:
+  `bin/fm-decide.sh --authorize-merges --until <ISO-8601-with-offset> --quote "<captain's words>" --repo <root>`
+  (include `--project <name>` for that project's window). Inspect it with
+  `bin/fm-decide.sh --authorize-merges --show --repo <root>` and the same project.
+  Firstmate answers merge cards only inside the current recorded window; check
+  its expiry before each answer, and stop when it ends even if a wake is delayed.
+  A replacement supersedes the previous window. This session-state record is
+  evidence and a timer: all merges still require a board card and current-head
+  readiness. It grants no automatic merge path. The autopilot warns once an
+  hour before expiry (immediately for shorter windows), lists pending cards,
+  approved green uncarded PRs and live worker/reviewer rounds, and wakes once
+  at expiry. The lists are observed scheduling evidence, requiring fresh checks
+  before answering a card. Captain answers remain the captain's own decisions.
 - Firstmate must establish current-head gates, CI and reviewer provenance before
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;

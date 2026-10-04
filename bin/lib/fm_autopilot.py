@@ -25,6 +25,7 @@ import fm_lifeline as life
 from fm_conventions import read_policy
 from fm_watch import Locked, read_json, save_json, notify
 from fm_autopilot_loop import MechanicalLoop
+import fm_merge_authorization as merge_authorization
 
 BIN = Path(__file__).resolve().parents[1]
 DEFAULTS = dict(watch_seconds=60, debounce_seconds=180, reinspect_seconds=86400,
@@ -87,6 +88,7 @@ class Pilot(MechanicalLoop):
         self.reload_policy()
         self.push = lambda ident, reason, line, extra: life.push(self.root, ident, reason, line, extra)
         self.notify = notify
+        merge_authorization.refresh(self)
 
     def save(self):
         save_json(self.path, self.data)
@@ -144,6 +146,7 @@ class Pilot(MechanicalLoop):
         return ident
 
     def flush(self):
+        merge_authorization.tick(self)
         now = self.clock()
         for reviewer, batch in list(self.data['batches'].items()):
             if now < batch['due']:
@@ -340,6 +343,15 @@ class Pilot(MechanicalLoop):
             self.attention('advance-error', task, pr, f'{task}: advancement needs reconciliation: {error}',
                            f'{task}：機械流程需要 firstmate 核對')
         self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
+        # Snapshot scheduling evidence for authorization reminders, never gate approval.
+        try:
+            checks = self.settled_checks(pr, runs, statuses)
+            verdict = self.verdict(task)
+            self.data['pulls'][number]['merge_evidence'] = dict(head=head,
+                approved=verdict.get('head') == head and verdict.get('verdict') == 'APPROVE',
+                green=bool(checks) and all(row[-1] in ('success', 'neutral', 'skipped') for row in checks))
+        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError):
+            pass  # Unknown CI must never be listed as green.
         latest = {}
         for row in runs:
             if row.get('head_sha') == head:
@@ -535,6 +547,7 @@ class Pilot(MechanicalLoop):
         self.data[cursor] += end
 
     def local(self):
+        merge_authorization.refresh(self)
         self.consume_jobs()
         self.reload_policy()
         self.read_lines(self.state / 'events.jsonl', 'offset', self.event)
@@ -564,7 +577,7 @@ class Pilot(MechanicalLoop):
                        f'{task} 已就緒：需要 firstmate 判斷並建立就緒決策卡')
 
     def delay(self):
-        deadlines = [self.data['next_poll']]
+        deadlines = [self.data['next_poll']] + merge_authorization.deadline(self)
         deadlines += [b['due'] for b in self.data['batches'].values()]
         deadlines += [w['created'] + max(300, self.policy['debounce_seconds'] * 2)
                       for w in self.data['wakes'].values() if not w['notified']]

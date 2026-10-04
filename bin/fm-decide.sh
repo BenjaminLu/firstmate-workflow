@@ -48,6 +48,31 @@ REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=
 PROJECT=''; ID_PROJECT=''; ID_TASK=''; ID_N=''; GH="${FM_GH:-gh}"
 # the registry library lives beside this script, wherever --repo points
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Separate evidence-only mode: never enters card allocation/request/answer paths.
+for _arg in "$@"; do
+  if [ "$_arg" = --authorize-merges ]; then
+    _auth_args=()
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --authorize-merges) shift ;;
+        --repo|--project|--until|--quote)
+          [ "$#" -ge 2 ] || { echo "fm-decide: $1 needs a value" >&2; exit 64; }
+          case "$1" in
+            --repo) REPO="$2" ;;
+            --project) PROJECT="$2" ;;
+            *) _auth_args+=("$1" "$2") ;;
+          esac
+          shift 2 ;;
+        --show) _auth_args+=("$1"); shift ;;
+        *) echo "fm-decide: invalid authorization argument $1" >&2; exit 64 ;;
+      esac
+    done
+    . "$HERE/fm-config.sh"
+    fm_storage_init "$REPO" "${PROJECT:-${FM_PROJECT:-}}" || exit 65
+    exec python3 "$HERE/lib/fm_merge_authorization.py" --state "$FM_STATE_DIR" "${_auth_args[@]}"
+  fi
+done
+
 # the task-id grammar (T-119), beside this script too
 [ -r "$HERE/fm-emit.sh" ] || { echo "fm-decide: missing $HERE/fm-emit.sh" >&2; exit 70; }
 # shellcheck source=bin/fm-emit.sh
