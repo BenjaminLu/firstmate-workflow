@@ -7,6 +7,28 @@
   let full=get(sessionStorage,'board.voyage.mode','panel')==='full';
   let lastEscape=null, snapshot=null, fighting=false, lang='en', label=k=>k;
   const listeners=new Set();
+  let pending=[], cancelDelivery=null;
+  function clearDelivery(){cancelDelivery?.();cancelDelivery=null;pending=[];}
+  function deliverLater(s){
+    // Replay and ship reconciliation belong to the stage, not the board's
+    // render stack. Retain every snapshot in order (including short-lived
+    // outcomes), and only notify subscribers present when it arrived.
+    if(hidden)return;
+    pending.push({snapshot:s,recipients:[...listeners]});
+    if(cancelDelivery)return;
+    const deliver=()=>{
+      cancelDelivery=null;
+      const batch=pending;pending=[];
+      for(const {snapshot,recipients} of batch)
+        for(const fn of recipients)if(listeners.has(fn))fn(snapshot);
+    };
+    if(window.requestIdleCallback){
+      const id=requestIdleCallback(deliver,{timeout:100});
+      cancelDelivery=()=>cancelIdleCallback(id);
+    } else {
+      const id=setTimeout(deliver,0);cancelDelivery=()=>clearTimeout(id);
+    }
+  }
   const panel=document.createElement('section'); panel.id='voyage';
   const bar=document.createElement('div');bar.id='voyage-bar';
   const toggle=document.createElement('button');toggle.type='button';toggle.id='voyage-toggle';
@@ -36,7 +58,7 @@
       for(const {node,marker} of homes) inDrawer?drawer.append(node):marker.after(node);
       workflowInDrawer=inDrawer;
     }
-    if(hidden){iframe?.remove();iframe=null;fighting=false;stage.hidden=true;}
+    if(hidden){clearDelivery();iframe?.remove();iframe=null;fighting=false;stage.hidden=true;}
     else if(!iframe){
       stage.hidden=false;iframe=document.createElement('iframe');iframe.id='voyage-stage';iframe.name='voyage-stage';
       const query=new URLSearchParams({embed:'1',lang});
@@ -65,7 +87,7 @@
   window.VOYAGE={
     token:()=>get(sessionStorage,'board.token',''),
     subscribe(fn){listeners.add(fn);if(snapshot)fn(snapshot);return ()=>listeners.delete(fn);},
-    update(s,t,l){snapshot=s;label=t;lang=l;labels();for(const fn of listeners)fn(s);},
+    update(s,t,l){snapshot=s;label=t;lang=l;labels();deliverLater(s);},
     key, fight(on){fighting=on;}, get fighting(){return fighting;},get hidden(){return hidden;}
   };
   toggle.onclick=()=>{if(hidden){hidden=false;put(localStorage,'board.voyage.hidden','0');render();}else key('f');};
@@ -78,5 +100,6 @@
     else if(e.key.toLowerCase()==='f'){e.preventDefault();key(e.key);}
   },true);
   addEventListener('storage',e=>{if(e.key==='board.voyage.hidden'){hidden=e.newValue==='1';render();}});
+  addEventListener('pagehide',clearDelivery);
   render();
 })();

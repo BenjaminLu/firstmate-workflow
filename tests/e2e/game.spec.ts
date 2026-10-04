@@ -50,6 +50,41 @@ test('Live stage requests only its static bundle and sees the board snapshot',as
   } finally { await stopBoard(b); }
 });
 
+test('board refresh defers voyage subscribers and retains both animations and stage', async ({page}) => {
+  const b=await startBoard(makeRoot(['working']));
+  try {
+    await page.goto(b.url+'/?lang=en');
+    await expect.poll(()=>page.frames().find(f=>f.name()==='voyage-stage')?.evaluate(()=> (window as any).__G?.ready)).toBe(true);
+    const result=await page.evaluate(async()=>{
+      const w=window as any;
+      const state=await (await fetch('/api/state')).json();
+      const stage=document.querySelector('#voyage-stage');
+      const scene=document.querySelector('#scene');
+      // A real board effect, measured in one turn so elapsed browser transport
+      // time cannot masquerade as an animation reset.
+      w.eval('SHIP').enqueue(scene,'merge','merge:refresh-regression');
+      const vessel=document.querySelector('#vessel')!;
+      const animation=vessel.getAnimations()[0];
+      const delivered:number[]=[];
+      const off=w.VOYAGE.subscribe((s:any)=>{if(s.refreshProbe)delivered.push(s.refreshProbe);});
+      w.render({...state,refreshProbe:1});
+      w.render({...state,refreshProbe:2});
+      w.__refreshDelivery={delivered,off};
+      return {synchronous:delivered.slice(),hasAnimation:!!animation,sameStage:stage===document.querySelector('#voyage-stage'),
+        sameVessel:vessel===document.querySelector('#vessel'),sameAnimation:animation===vessel.getAnimations()[0],
+        delay:(vessel as HTMLElement).style.animationDelay};
+    });
+    expect(result.synchronous).toEqual([]);
+    expect(result.sameStage).toBe(true);
+    expect(result.sameVessel).toBe(true);
+    expect(result.hasAnimation).toBe(true);
+    expect(result.sameAnimation).toBe(true);
+    expect(result.delay).toBe('0s');
+    await expect.poll(()=>page.evaluate(()=>(window as any).__refreshDelivery.delivered)).toEqual([1,2]);
+    await page.evaluate(()=>(window as any).__refreshDelivery.off());
+  } finally {await stopBoard(b);}
+});
+
 for (const project of [null, 'beta']) test('Live commands use only authenticated board writes with the card project'+(project ? ' in a two-project board' : ''),async({page})=>{
   const root=makeRoot(['working']);
   if(project) {
@@ -99,14 +134,22 @@ for (const project of [null, 'beta']) test('Live commands use only authenticated
     // Drain requests already scheduled by the completed commands before auditing.
     await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
     const reads=new Set(['/', '/ship.css', '/ship.js', '/diagram.js', '/watch.js', '/game.js',
-      '/api/i18n', '/api/session', '/api/state', '/events', '/voyage2d/index.html']);
+      '/api/i18n', '/api/session', '/api/state', '/events']);
+    // Only the fixture's own diagrams are expected. HEAD belongs to the board;
+    // GET belongs to its diagram iframe, never to the voyage frame.
+    const diagrams=new Set(['/diagrams/D-1.en.html', ...(project ? ['/diagrams/D-beta-T001-1.en.html'] : [])]);
     const writes=requests.filter(r=>r.method()==='POST');
     expect(writes.map(r=>new URL(r.url()).pathname)).toEqual(['/decisions','/tasks']);
     expect(requests.filter(r=>{
       const url=new URL(r.url());
-      const readFrame=url.pathname==='/voyage2d/index.html' ? r.frame()===f : r.frame()===page.mainFrame();
-      return url.origin!==b.url || !(r.method()==='GET' && reads.has(url.pathname) && readFrame
-        || r.method()==='POST' && ['/decisions','/tasks'].includes(url.pathname));
+      const frame=r.frame(), main=page.mainFrame(), method=r.method();
+      const boardRead=frame===main && (method==='GET' && reads.has(url.pathname)
+        || method==='HEAD' && diagrams.has(url.pathname));
+      const diagramRead=method==='GET' && diagrams.has(url.pathname) && frame!==f
+        && frame.parentFrame()===main;
+      const stageRead=frame===f && method==='GET' && url.pathname==='/voyage2d/index.html';
+      const stageWrite=frame===f && method==='POST' && ['/decisions','/tasks'].includes(url.pathname);
+      return url.origin!==b.url || !(boardRead || diagramRead || stageRead || stageWrite);
     }).map(r=>r.method()+' '+r.url())).toEqual([]);
     expect(writes.every(r=>r.frame()===f)).toBe(true);
     expect(sent.map(r=>r.path)).toEqual(['/decisions','/tasks']);
