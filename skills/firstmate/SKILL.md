@@ -1159,3 +1159,29 @@ an exact-byte preflight, even if the pin predates this rule. There is no automat
 SPEC-OK backfill. A held task can preflight its exported pinned spec without
 repinning it; changed bytes need the normal authorized repin and a new preflight.
 Missing approval exits 65 with the command to run. Do not modify a live launcher.
+
+Design edits go into their numbered home, never onto the end of design.md
+(T-189). Parallel branches that each appended a section to the end of the file
+all conflicted in its final hunk, and every resolved conflict voided an APPROVE.
+Preflight check 5 enforces this in the spec; the CI `hygiene` stage enforces
+it in the file.
+
+- A task that lists design/design.md in its scope names, in its acceptance, the
+  numbered section it edits (§N or §N.M).
+- The edit goes inside that section: amend the text, or add a subsection at the
+  end of that section, nested under its last numbered child if it has numbered
+  children.
+- New material about other repositories goes, as `####`, under the thematically
+  closest numbered `### 15.M`. No new `### 15.11` or later is added at the end
+  of the file, and no unnumbered `###` follows the last `### 15.M`.
+- A task that changes no contract stated in design.md does not list
+  design/design.md.
+- When you brief a rebuild for a branch that appended a tail section to
+  design.md, the brief tells the worker to move that section into its numbered
+  home.
+
+Accepted limit: §15.10 is the last numbered subsection, so two parallel tasks
+that both edit §15.10 itself can still meet at the end of the file. Every other
+home is mid-file. Existing specs that list design/design.md without naming a
+section are checked at their next preflight; a SPEC-OK already recorded for a
+spec's exact current bytes stays valid.

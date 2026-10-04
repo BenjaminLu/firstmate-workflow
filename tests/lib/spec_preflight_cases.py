@@ -114,6 +114,13 @@ class Preflight(unittest.TestCase):
         self.assertNotIn('APPROVE:T-X', context)
         self.assertIn('SPEC-OK:T-X', context)
 
+    def test_prompt_check_five_names_the_design_section(self):
+        # T-189: a design.md edit names its numbered home, never the file's end.
+        body = prompt('T-X', self.spec, 'a' * 40)
+        self.assertIn('5. If the scope lists design/design.md, does the acceptance name the numbered\n'
+                      '   section (§N or §N.M) it edits?', body)
+        self.assertIn('adds a section after the last numbered section, is a\n   spec gap.', body)
+
     def test_vendor_final_and_strict_mode_separation(self):
         final = '1. Covered.\nSPEC-OK:T-X'
         transcript = self.root / 'cli.log'
