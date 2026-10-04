@@ -975,6 +975,18 @@ else
   pass "no bare, template-less mktemp -d or mktemp -t (${#mktempfiles[@]} files)"
 fi
 
+# T-189: parallel branches that each appended an unnumbered ### to the end of
+# design.md all conflicted in its final hunk. In the last `## N.` section every
+# ### must be numbered N.x, so new material goes to a numbered home mid-file.
+# A tree without the design (the suites' fixture trees) skips this silently.
+if [ -f design/design.md ]; then
+  if python3 "$_fm_code_dir/lib/fm_ci_checks.py" design-layout design/design.md; then
+    pass "design layout: the last section of design.md holds only numbered ### headings"
+  else
+    flunk "design layout: an unnumbered ### heading in the last section of design.md (T-189)"
+  fi
+fi
+
 # The guarantee that nothing reads standard input, checked against every
 # script that looks like it starts a child. "Looks like" is the honest word:
 # the test is a grep for command substitution, a call to another fm script,

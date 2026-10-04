@@ -41,6 +41,10 @@ For EVERY acceptance line, report numbered evidence with file:line references:
 4. For a validation rule, lint, gate, schema or stored-record format change,
    does the spec state the migration for records and tasks already in flight,
    and does a test cover it? Missing or untested migration is a spec gap.
+5. If the scope lists design/design.md, does the acceptance name the numbered
+   section (§N or §N.M) it edits? A spec that lists design/design.md without
+   naming one, or that adds a section after the last numbered section, is a
+   spec gap.
 Give a numbered list of findings (or checked evidence when there are no gaps).
 End the final assistant answer with exactly one standalone closing line:
 SPEC-OK:{task}
