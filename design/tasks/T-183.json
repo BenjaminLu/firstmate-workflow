@@ -1,0 +1,20 @@
+{
+  "id": "T-183",
+  "title": "skill-update cards explain themselves, and decision diagrams accept every decision id the board accepts",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm.sh",
+    "bin/fm-diagram.sh",
+    "bin/fm-config.sh",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-183.json"
+  ],
+  "acceptance": [
+    "Why. The captain asked on 2026-10-04 for the small known defects to be fixed (\"小毛病…都修掉\"). Two are in scope here:\n- (a) `fm.sh self-update` raises its skill-update card with a title only (bin/fm.sh around 672: `fm-decide.sh --request D-SK-<n> --kind choice --title \"skill-update: <skill> - <why> (A adopt it, B leave it)\"`), with no details. The captain sees a one-line card with no explanation, no before/after and no option pros and cons. For SK-009, firstmate had to write the details by hand.\n- (b) `bin/fm-diagram.sh --decision D-SK-009` dies with 'not a decision id'. Its local `is_decision_id()` (around line 93) accepts only `D-<digits>` and `FM_OWNED_ID`, not the `D-SK-<n>` ids the board and fm-decide accept (T-119's single id grammar).",
+    "(a) Every skill-update card is requested with authored details in the same en/zh-TW shape firstmate writes: title, explanation, before, after, outcome, and options A (adopt) and B (leave) with pros and cons. The details are built from the proposal itself: the skill, the reason, and the diff summary or proposed text it already records. They are passed with `--details`. If the proposal lacks a field, the card says so plainly; nothing is invented. Re-raising the same SK keeps its id (existing behaviour).",
+    "(b) fm-diagram.sh uses the shared decision-id grammar, the same one fm-decide.sh and the board use. It does not keep a local copy. `--decision D-SK-<n>` renders the three files. Ids the board rejects are still rejected.",
+    "Tests (fail first, stubs answering like the real tools, HERDR_ENV=0 in helpers):\n- a self-update proposal raises a card whose details have every field in both languages\n- fm-diagram renders for D-SK-9 and still refuses a malformed id\nEvidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}
