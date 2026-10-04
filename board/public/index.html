@@ -480,7 +480,7 @@ function render(s) {
     ? live.map(v => `<i aria-hidden="true"></i>${esc(v.vendor)}${v.count > 1 ? ` <b>×${esc(v.count)}</b>` : ""}`).join(" · ")
     : eng ? `<i aria-hidden="true"></i>${esc(eng.vendor)}` +
         (eng.cross ? ` <b>⇄ ${esc(eng.reviewer)}</b>` : "") : "";
-  engine.title = live ? t("engineLive") : eng ? `${t("engine")}${eng.cross ? " · " + t("crossVendor") : ""}` : "";
+  engine.title = live ? t("engineLive") : eng ? `${t("engine")}${eng.cross ? " · " + t("crossVendor") : ""}${eng.rule ? ` · ${eng.rule} (${eng.host ?? "?"} → ${eng.vendor})` : ""}` : "";
   document.getElementById("counts").innerHTML = [
     ["merged", t("merged"), s.counts.merged, ""], ["inflight", t("inflight"), s.counts.inflight, ""],
     ["waiting", t("waitingOnYou"), s.counts.waiting ?? 0, "w"],
