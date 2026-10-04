@@ -614,7 +614,7 @@ manifest_put() {
 # self-update: a proposal, not an edit
 # =========================================================================
 cmd_selfupdate() {
-  local repo="$REPO" skill='' why='' adopt='' dir id spec
+  local repo="$REPO" skill='' why='' adopt='' dir id spec details
   while [ $# -gt 0 ]; do
     case "$1" in
       --skill) need "$@"; skill="${2-}"; shift 2 ;;
@@ -657,6 +657,7 @@ cmd_selfupdate() {
     depends_on: [],
     title: ("skill-update: " + $skill),
     why: $why,
+    skill: $skill,
     scope: [("skills/" + $skill + "/**"), "tests/skills.test.sh"],
     acceptance: [
       ("skills/" + $skill + "/SKILL.md says it, in English, in plain markdown"),
@@ -666,11 +667,49 @@ cmd_selfupdate() {
     ]
   }' > "$dir/$id.json" || die "self-update: could not write the proposal" 70
 
+  # Describe only the recorded proposal. Missing source text is disclosed,
+  # not reconstructed from the current skill or guessed from the reason.
+  details="$dir/$id.details.json"
+  jq '
+    def supplied: type == "string" and test("\\S");
+    . as $p
+    | ($p.skill // "") as $skill
+    | ($p.why // "") as $why
+    | ($p.before // "") as $before
+    | ([$p.proposed_text, $p.diff_summary] | map(select(supplied)) | join("\n")) as $after
+    | {
+      en: {
+        title: ("Skill update: " + (if $skill|supplied then $skill else "skill not provided" end)),
+        explanation: (if $why|supplied then $why else "Reason not provided in the proposal." end),
+        before: (if $before|supplied then $before else "Before text not provided in the proposal." end),
+        after: (if $after|supplied then $after else "Proposed text or diff summary not provided in the proposal." end),
+        outcome: "A authorizes adoption as a task for implementation and review. B leaves the skill unchanged. C requests revision and another decision.",
+        options: {
+          A: {description: ("Adopt proposal " + $p.id), pros: ("Authorizes work on the recorded reason: " + (if $why|supplied then $why else "reason not provided" end)), cons: "Implementation and review are still required; this card does not change the skill."},
+          B: {description: "Leave the skill unchanged.", pros: "Keeps the current instructions without implementation work.", cons: "The proposal is not adopted; its stated concern remains unaddressed by this proposal."},
+          C: {description: "Revise: the captain names what to change, and firstmate revises the proposal and raises it again for a new decision.", pros: "Lets the captain clarify the required change before adoption.", cons: "Requires a revised proposal and another decision before work can proceed."}
+        }
+      },
+      "zh-TW": {
+        title: ("技能更新：" + (if $skill|supplied then $skill else "提案未提供技能名稱" end)),
+        explanation: (if $why|supplied then "提案記錄的原因：" + $why else "提案未提供原因。" end),
+        before: (if $before|supplied then "提案記錄的修改前文字：" + $before else "提案未提供修改前文字。" end),
+        after: (if $after|supplied then "提案記錄的修改內容：" + $after else "提案未提供修改後文字或差異摘要。" end),
+        outcome: "A 授權將提案採納為待實作與審查的任務。B 保持技能不變。C 要求修訂後再次決策。",
+        options: {
+          A: {description: ("採納提案 " + $p.id), pros: ("授權處理提案記錄的原因：" + (if $why|supplied then $why else "未提供原因" end)), cons: "仍須實作與審查；此卡不會直接修改技能。"},
+          B: {description: "保持技能不變。", pros: "保留現有指示，無須進行實作。", cons: "不採納此提案；此提案所述的問題不會因此得到處理。"},
+          C: {description: "修訂：由船長指出要改什麼，firstmate 修訂提案後重新提出，供船長作出新的決策。", pros: "讓船長在採納前釐清所需修改。", cons: "需要修訂提案並再次決策，才能開始工作。"}
+        }
+      }
+    }
+  ' "$dir/$id.json" > "$details" || die "self-update: could not describe the proposal" 70
+
   # the captain sees it as a card, through the same script every other
   # decision goes through. Nothing is dispatched: a greenlit event is the
   # eighth gate and it is not ours to emit.
   "$repo/bin/fm-decide.sh" --request "D-$id" --task "$id" --kind choice --repo "$repo" \
-    --title "skill-update: $skill - $why (A adopt it, B leave it)" >/dev/null </dev/null \
+    --details "$details" >/dev/null </dev/null \
     || die "self-update: could not put $id in front of the captain" 70
 
   spec="$(cat "$dir/$id.json")"
