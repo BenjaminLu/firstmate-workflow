@@ -153,7 +153,7 @@ export class Director {
     const P = (id) => {
       if (!id) return null;
       if (sim.mode === "live" && id === "reviewer-1") {
-        const reviewer=sim.crew.find(c=>c.role === "reviewer" && c.task === e.task);
+        const reviewer=sim.crew.find(c=>c.role === "reviewer" && !c.preflight && c.task === e.task);
         return reviewer ? this.crew(reviewer.id) : null;
       }
       if (sim.mode === "live" && id === "firstmate") {

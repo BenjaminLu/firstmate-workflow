@@ -1699,7 +1699,7 @@ and nothing else. The events that give a lane:
 | `dispatched`, `commit_pushed` | working |
 | `pr_opened`, `gate_passed`, `review_opened`, `approved` | review |
 | `gate_failed`, `review_failed`, `worker_crashed` | gate (blocked) |
-| `agent_lost` | gate (blocked), unless the task was given a lane since the lost actor last spoke |
+| `agent_lost` | gate (blocked), unless the task was given a lane since the lost actor last spoke; a spec preflight loss only removes its crewman |
 | `merged` | merged (final) |
 | `closed` (a drop) | closed (final) |
 | `parked` / `unparked` | the parked group, until unparked / the lane the other events give |
@@ -1738,7 +1738,8 @@ Precedence, highest first:
    Once the card is answered or withdrawn, the park places it.
 5. **Liveness.** A crewman's `agent_lost` (below) blocks its task, with a
    `lost` badge naming the actor, unless the task was given a lane after the
-   crewman last spoke - a redispatch, another round's review.
+   crewman last spoke - a redispatch, another round's review. A spec preflight
+   loss only removes its crewman, with no task lane change or lost badge.
 6. **The log.** Otherwise the lane of the task's last lane-giving event.
 
 **Crew liveness (T-118).** A crewman is aboard only while its run is alive,
@@ -1755,7 +1756,8 @@ the loss once in the log and not the close after it, and blocks the task by
 the rule above. An `agent_finished` arriving after the loss changes nothing:
 the run is already off the deck and the task is where its events put it. A
 loss already written is not written again. A `dispatched` brings the actor
-back aboard, as it always has.
+back aboard, as it always has. A spec preflight's loss only removes the
+crewman: none of that actor's events changes a task's stage or lost-round mark.
 
 **Card effects (T-118).** An answer does what its option says, carried out
 by the one script that owns the effect, and the outcome is recorded on the
@@ -1899,6 +1901,29 @@ SVG** — the hull's viewBox stretches horizontally with beam and not vertically
 which flattened a cutter's ports into slots.
 
 ### The crew
+
+**Spec preflight visibility (T-191).** A preflight boards as a reviewer in
+phase `review`, using neutral `crew_status` events with `mode: spec-preflight`.
+Its first event carries its recorded name, vendor and requested model; each
+vendor attempt refreshes these through the chain's prepare callback. Every
+payload reads the run's identity afresh. The roster, crew detail card and task
+card crew chip show `spec preflight` (`預檢`, derived `预检`) in place of the
+round and attempt; round sorting treats it as no round (-1). Aggregation keeps
+`mode`. The crewman carries its task id as text even when that task has no card.
+
+An actor is a preflight if any event carries that mode, never because its name
+contains `-sp-`. Preflight events create no task card, move no task stage and
+cause no lost-round badge. The board's handoff `peer()` excludes them; voyage
+marks them as preflights and its reviewer lookup excludes them from review
+scrolls and approval rituals while still showing their lookout action.
+
+`agent_finished` removes the crewman on every exit after identity allocation.
+The matching actor/spec-SHA evidence gives `preflight_outcome: spec-ok` or
+`spec-gaps`, both with `result: ok`. Without that receipt, signal exits are
+`interrupted`, exits before the vendor chain starts are `refused`, and other
+exits are `failed`, all with `result: failed`. No `review_opened` is emitted:
+review counters, gate 7 and a task's first real review round remain unchanged.
+The watch counts a live preflight as in-flight crew until its closing event.
 
 Twelve actions, pooled by deck and chosen by a hash of the crew id so they stay
 put: helm, lookout, signal, point and log on the quarterdeck; haul, capstan,
@@ -2627,7 +2652,10 @@ reconcile: for each non-`firstmate` actor whose last event is not
 process receipts (not task-level pidfiles). Actors with no live process receive
 one `agent_lost` (T-118, crew liveness above) and then `agent_finished`, both
 under that exact actor with `data.status: process_gone`, so the
-event-sourced crew list matches process reality. Task-level reconcile alone
+event-sourced crew list matches process reality. For a spec preflight, the
+run's identity.json supplies `mode: spec-preflight` to both `agent_lost` and
+its closing `agent_finished`; its loss pushes no `lost:` wake and rings no
+firstmate doorbell. Task-level reconcile alone
 cannot clear these ghosts. `status` and `start` report the reconcile result as
 `deck_reconcile`. `status` reads the live process receipts and the wake
 queue. `wait`, optionally with `--decision D-id` and `--timeout <seconds>`,
@@ -2759,7 +2787,13 @@ and `fm-review.sh` at a round's end, after its `agent_finished`
 <head> #9`); the deck reconcile for a lost run (`lost: T-134 <actor>`);
 `fm-emit.sh` for a gate result written from outside a round
 (`gate: T-134 failed gate 6 #9`); and the board, as above (`card: D-51
-answered A`, `merge: D-51 failed`). A crew wake carries its `line`, and
+answered A`, `merge: D-51 failed`). A lost spec preflight is the exception:
+the deck reconcile writes `agent_lost` and its closing `agent_finished` with
+`data.mode: spec-preflight`, but pushes no `lost:` wake. The autopilot likewise
+queues no lost/failed-round wake for an actor whose event history carries that
+mode; firstmate reads the preflight's result directly. Sandbox warning status
+events copy mode from identity.json, preserving that classification.
+A crew wake carries its `line`, and
 `status` lists it beside the decisions. A round's progress is never pushed.
 The harness side is `bin/lib/fm_watch.py`. One watcher cycle per repository
 (`bin/fm-watch.sh`, started by `bin/fm-watch-arm.sh` through the lifeline,

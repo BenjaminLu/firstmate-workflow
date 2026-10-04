@@ -47,6 +47,7 @@ export class BoardSource {
     // fight prompt/target. Keep every grip until a real release event arrives.
     const boardCard=(s.pending || []).some(d=>d.task && d.answerable!==false && arms.includes(taskKey(d,s.default_project)));
     const crew=(s.crew || []).map(c=>({...c,name:c.crew_name || c.id,
+      preflight:c.mode==='spec-preflight',
       model:c.role==='firstmate'?'firstmate':c.role==='reviewer'?'reviewer-1':sailor(c.id),
       task:c.task?`${c.project || s.default_project || ''}/${c.task}`:null,
       state:({queued:'idle',unknown:'idle',gate:'blocked',captain:'waiting'})[c.state] || c.state,

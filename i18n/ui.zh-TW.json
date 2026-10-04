@@ -118,6 +118,7 @@
   "crewName": "名字",
   "crewRole": "職務",
   "crewTask": "任務",
+  "specPreflight": "預檢",
   "crewRound": "輪次",
   "crewAttempt": "重試",
   "crewPr": "PR",

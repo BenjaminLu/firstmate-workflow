@@ -157,7 +157,7 @@ const SHIP = (() => {
   function detail(c, T, open) {
     const unknown = esc(T("crewUnknown"));
     const line = (key, label, value) => `<dt>${esc(label)}</dt><dd class="${key}">${value}</dd>`;
-    const round = c.round == null ? unknown
+    const round = c.mode === "spec-preflight" ? esc(T("specPreflight")) : c.round == null ? unknown
       : esc(c.round) + (c.attempt > 1 ? ` <span class="att">${esc(T("crewAttempt"))} ${esc(c.attempt)}</span>` : "");
     return `<div class="crewcard" id="crewcard-${esc(c.id)}" role="dialog" aria-label="${esc(T("crewCard"))}: ${esc(c.name)}"` +
       `${open ? "" : " hidden"}><dl>` +
@@ -230,6 +230,7 @@ const SHIP = (() => {
         // run that recorded none is known by its crew_name, then its id
         name: a.role === "firstmate" ? label.firstmate : a.name || a.crew_name || a.id,
         // the task's review round and the retry within it; null is unknown
+        mode: a.mode,
         round: Number.isInteger(a.round) ? a.round : null,
         attempt: Number.isInteger(a.attempt) ? a.attempt : null,
         // T-127: what the round actually ran on, read from the run itself;
@@ -474,7 +475,7 @@ const SHIP = (() => {
   // rows by project; both choices survive a reload.
   const SORTS = {
     name: (c) => c.name, role: (c) => c.roleLabel, project: (c) => c.project || "",
-    task: (c) => c.task || "", round: (c) => c.round ?? -1, state: (c) => c.state,
+    task: (c) => c.task || "", round: (c) => c.mode === "spec-preflight" ? -1 : c.round ?? -1, state: (c) => c.state,
     vendor: (c) => c.vendor || "", model: (c) => c.model || "",
   };
   function roster(host, crew, T) {
@@ -501,7 +502,7 @@ const SHIP = (() => {
       cell("rm" + (c.model_mismatch ? " warn" : ""), T("crewModel"), c.model_mismatch
         ? esc(T("modelMismatch").replace("{requested}", c.model_requested || unknown).replace("{model}", c.model || unknown))
         : c.model ? esc(c.model) : unknown)) +
-      cell("rd", T("crewRound"), c.round == null ? unknown
+      cell("rd", T("crewRound"), c.mode === "spec-preflight" ? esc(T("specPreflight")) : c.round == null ? unknown
         : esc(c.round) + (c.attempt > 1 ? ` <span class="att">${esc(T("crewAttempt"))} ${esc(c.attempt)}</span>` : "")) +
       `<span class="st" data-label="${esc(T("crewState"))}">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
       `<span class="rpr" data-label="${esc(T("crewPr"))}">${c.pr ? prRef(c.pr, c.pr_url) : ""}</span></div>` +

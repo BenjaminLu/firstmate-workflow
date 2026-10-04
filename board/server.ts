@@ -128,6 +128,7 @@ type Crew = {
   // before them is read from its old actor once, here; its round never is,
   // since that actor's r<n> was a global counter. Unknown is null.
   name?: string | null;
+  mode?: "spec-preflight" | null;
   round?: number | null;
   attempt?: number | null;
   // T-127: what the round actually ran on, read from the run itself - never
@@ -148,7 +149,7 @@ type Crew = {
   progress?: { done: number; total: number } | null;
 };
 // A task card's crew, one chip each: never a string joined from actors.
-type CrewChip = { id: string; name: string; role: Crew["role"]; round: number | null; attempt: number | null };
+type CrewChip = { mode: Crew["mode"]; id: string; name: string; role: Crew["role"]; round: number | null; attempt: number | null };
 // What a run said about itself: the fields fm-worker.sh and fm-review.sh
 // send as data.identity. Anything else is not an identity.
 type Identity = {
@@ -828,8 +829,12 @@ const buildState = (only: string | null) => {
   // stamped by fm-emit.sh. Either way the log's clock, not the board's.
   const reviewFrom = new Map<string, { k: string; ts: number }>();
   const lastReview = new Map<string, { actor: string; seconds: number; outcome: string }>();
+  // Mode belongs to the whole actor history, even after an untagged warning.
+  const preflightActors = new Set(events.filter(e =>
+    (e.data as { mode?: unknown } | undefined)?.mode === "spec-preflight").map(e => String(e.actor ?? "")));
   for (const [index, e] of events.entries()) {
     const actor = String(e.actor ?? "");
+    if (preflightActors.has(actor)) continue;
     const spoke = spokeAt.get(actor) ?? -1;
     spokeAt.set(actor, index);
     if (!e.task) continue;
@@ -885,7 +890,7 @@ const buildState = (only: string | null) => {
   const awaiting = new Set(pend.map((p: Record<string, unknown>) => keyOf(projectOf(p), p.task)));
   const known = new Set(taskIds.map((t) => keyOf(t.project, t.id)));
   for (const e of events) {
-    if (!e.task || known.has(ek(e))) continue;
+    if (preflightActors.has(String(e.actor ?? "")) || !e.task || known.has(ek(e))) continue;
     known.add(ek(e));
     taskIds.push({ project: projectOf(e), id: e.task });
   }
@@ -1099,7 +1104,7 @@ const buildState = (only: string | null) => {
       ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
       : phase);
     const peer = (role: string) => {
-      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && ek(event) === ek(e) && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || (legacyName(id) ? roleOf(id,event) : null)) === role);
+      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && !preflightActors.has(id) && ek(event) === ek(e) && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || (legacyName(id) ? roleOf(id,event) : null)) === role);
       // Several runs on one task are ambiguous; never pick an arbitrary actor.
       return candidates.length === 1 ? candidates[0][0] : undefined;
     };
@@ -1195,6 +1200,7 @@ const buildState = (only: string | null) => {
       // the fields the run sent; for a run that sent none, the name its old
       // actor or its crew_name gives, and a round nobody knows
       name: who?.name ?? (named && named !== actor ? named : null) ?? legacyName(actor),
+      mode: preflightActors.has(actor) ? "spec-preflight" : null,
       round: who?.round ?? null,
       attempt: who?.attempt ?? null,
       // T-127: read from the run itself, never guessed; always unknown for
@@ -1222,7 +1228,7 @@ const buildState = (only: string | null) => {
   for (const t of tasks) {
     t.crew = aboard.filter((c) => c.role !== "firstmate" && c.task === t.id && (c.project ?? "") === (t.project ?? ""))
       .map((c) => ({ id: c.id, name: c.name || c.crew_name || c.id, role: c.role,
-        round: c.round ?? null, attempt: c.attempt ?? null }));
+        mode: c.mode ?? null, round: c.round ?? null, attempt: c.attempt ?? null }));
   }
   // bin/fm-herdr.py's deck reconcile follows each agent_lost with the
   // agent_finished (`data.status: process_gone`) that has always closed a
@@ -1346,7 +1352,7 @@ const buildState = (only: string | null) => {
   if (!only) {
     const keys = new Set(["id", "key", "project", "task", "pr", "pr_url", "type", "ts", "actor",
       "role", "stage", "state", "kind", "chosen", "merge", "merge_unknown", "owner", "task_final", "identity",
-      "confirm", "merged_seq", "crew_name", "name", "round", "attempt", "vendor", "model", "model_source",
+      "confirm", "merged_seq", "crew_name", "name", "mode", "round", "attempt", "vendor", "model", "model_source",
       "model_requested", "cli_version", "model_mismatch", "host_recorded", "progress", "window_expected"]);
     const metadata = (value: Record<string, any>) => {
       const project = projectOf(value), entry = registry().projects.get(project);

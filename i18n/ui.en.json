@@ -118,6 +118,7 @@
   "crewName": "Name",
   "crewRole": "Role",
   "crewTask": "Task",
+  "specPreflight": "spec preflight",
   "crewRound": "Round",
   "crewAttempt": "attempt",
   "crewPr": "Pull request",
