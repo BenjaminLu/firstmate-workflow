@@ -91,13 +91,22 @@ default_project: rule-project
 projects:
   rule-project:
     github: fixture/rule-project
+    base: main
+    required_check: ci
 Y
-rule_state="$(project_fixture_state "$e" rule-project)"
+if ! rule_state="$(project_fixture_state "$e" rule-project)" || [[ -z "$rule_state" ]]; then
+  echo "FAIL: rule-project fixture could not resolve a nonempty project state path" >&2
+  exit 1
+fi
 mkdir -p "$rule_state/session"
 printf '{"harness":"codex"}\n' > "$rule_state/session/host.json"
-assert_eq "claude codex" "$(jq -r '.engine|"\(.vendor) \(.host)"' <<<"$(st)")" "project host wins over the engine host"
+rule_project_state="$(st)"
+assert_eq "rule-project" "$(jq -r '.default_project' <<<"$rule_project_state")" "project host precedence resolves the registered project"
+assert_eq "claude codex" "$(jq -r '.engine|"\(.vendor) \(.host)"' <<<"$rule_project_state")" "project host wins over the engine host"
 rm "$rule_state/session/host.json"
-assert_eq "codex claude" "$(jq -r '.engine|"\(.vendor) \(.host)"' <<<"$(st)")" "absent project host falls back to the engine record"
+rule_project_state="$(st)"
+assert_eq "rule-project" "$(jq -r '.default_project' <<<"$rule_project_state")" "engine host fallback resolves the registered project"
+assert_eq "codex claude" "$(jq -r '.engine|"\(.vendor) \(.host)"' <<<"$rule_project_state")" "absent project host falls back to the engine record"
 printf 'vendor: vendor-delta\n' > "$e/config.yaml"
 rm "$e/state/session/host.json"
 safe_rm_rf "$rule_home"
