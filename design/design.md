@@ -5069,3 +5069,20 @@ child's own retained-log line where available. The supervisor never launches
 a worker; dispatch remains the board's intent action or an explicit command.
 Gates and reviews run as owned children. Completion receipts ring the service;
 an interrupted write is reconciled, never replayed by a restart or idle timer.
+
+### New task discovery and question freshness (T-180)
+
+The autopilot derives a task candidate using the canonical branch/title grammar,
+then validates the matching task spec committed at the observed PR head. A missing
+head object is fetched through a private ref without moving the task branch.
+If that spec cannot resolve the task, the latest authorized pin supplies the
+fallback. The main checkout's task directory is never a prerequisite. Unresolved
+PRs retain their head and reason in supervisor state without repeated wakes;
+later polls may resolve newly available objects or pins. Gates still verify the
+current authoritative head and approved scope independently.
+
+Local ASK and SCOPE-BLOCKED records must match the PR head and be newer than the
+persisted T-172 tracking boundary. Draft status does not relax these conditions.
+A later authorized firstmate brief supersedes earlier questions for that task.
+Each remaining question has its own durable wake identity, allowing a new
+question at the same head without replaying the previous one after restart.

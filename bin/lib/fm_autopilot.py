@@ -34,7 +34,7 @@ DEFAULTS = dict(watch_seconds=60, debounce_seconds=180, reinspect_seconds=86400,
 
 def context():
     return dict(engine=os.environ['FM_ENGINE_ROOT'], state=os.environ['FM_STATE_DIR'],
-                target=os.environ['FM_TARGET_ROOT'], tasks=os.environ['FM_TASKS_DIR'],
+                target=os.environ['FM_TARGET_ROOT'], tasks=os.environ['FM_TASKS_DIR'], design=os.environ.get('FM_DESIGN'),
                 project=os.environ.get('FM_PROJECT', ''), default_project=os.environ.get('FM_AUTOPILOT_DEFAULT_PROJECT', ''), repository=os.environ['FM_AUTOPILOT_REPOSITORY'],
                 base=os.environ.get('FM_BASE') or 'main', external=os.environ['FM_EXTERNAL'] == '1',
                 evidence_project=os.environ['FM_EVIDENCE_PROJECT'])
@@ -232,7 +232,57 @@ class Pilot(MechanicalLoop):
 
     def task(self, pr):
         task = self.pr_task(pr)
-        return task if task and (Path(self.ctx['tasks']) / (task + '.json')).is_file() else ''
+        reason = 'branch/title does not identify a task'
+        if task:
+            try:
+                spec = self.read_head_spec(pr, task)
+                if not isinstance(spec, dict) or spec.get('id') != task:
+                    raise ValueError('committed task spec identity mismatch')
+                return task
+            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+                reason = str(error)
+            try:
+                from fm_spec_pins import Pins
+                env = dict(FM_ENGINE_ROOT=str(self.root), FM_TARGET_ROOT=self.ctx['target'],
+                           FM_STATE_DIR=str(self.state), FM_TASKS_DIR=self.ctx['tasks'],
+                           FM_PROJECT=self.ctx['project'], FM_BASE=self.ctx['base'],
+                           FM_EXTERNAL='1' if self.ctx['external'] else '0',
+                           FM_DESIGN=self.ctx.get('design') or str(self.state.parent / 'design.md' if self.ctx['external']
+                                         else self.root / 'design/design.md'))
+                pin = Pins(env, task).resolve(if_present=True)
+                if pin is not None:
+                    return task
+                reason += '; no authorized pin'
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                reason += '; ' + str(error)
+        # Retain the diagnostic without creating a wake on every poll. Retry
+        # resolution next time: a missing object or pin can become available.
+        record = self.data['pulls'].setdefault(str(pr['number']), {})
+        unresolved = dict(head=pr['head']['sha'], branch=pr['head']['ref'], reason=reason)
+        if any(record.get(k) != v for k, v in unresolved.items()):
+            record.pop('task', None)
+            record.update(unresolved)
+            self.save()
+        return ''
+
+    def read_head_spec(self, pr, task):
+        from fm_binding import sha, fetch_ref
+        head = sha(pr['head']['sha'])
+        prefix = ['git', '-C', self.ctx['target']]
+        # Local reads do not enter the side-effect command channel. Fetch only
+        # when the immutable head object is missing, without moving task refs.
+        available = subprocess.run([*prefix, 'cat-file', '-e', head + '^{commit}'],
+                                   capture_output=True, timeout=120)
+        if available.returncode:
+            fetched = fetch_ref(self.ctx['target'], 'https://github.com/' + self.ctx['repository'] + '.git',
+                                'refs/pull/' + str(pr['number']) + '/head', runner=self.command)
+            if fetched != head:
+                raise ValueError('PR head moved while resolving task')
+        result = subprocess.run([*prefix, 'show', head + ':design/tasks/' + task + '.json'],
+                                capture_output=True, text=True, timeout=120)
+        if result.returncode:
+            raise ValueError('committed task spec unavailable at PR head')
+        return json.loads(result.stdout)
 
     def recheck(self, task, pr, reviews):
         names = self.policy.get('reviewers', [])
@@ -265,9 +315,10 @@ class Pilot(MechanicalLoop):
                                                    '--parent', parent['number'], '--expected-head', pr['head']['sha'])))
 
     def pull(self, pr, reviews, comments, runs, statuses):
-        task = self.task(pr)
-        if not task or pr['state'] != 'open' or self.policy_error or pr['head']['ref'] == self.ctx['base']:
+        if pr['state'] != 'open' or self.policy_error or pr['head']['ref'] == self.ctx['base']:
             return
+        task = self.task(pr)
+        if not task: return
         number, head = str(pr['number']), pr['head']['sha']
         old = self.data['pulls'].get(number)
         if old and old.get('head') and old['head'] != head:
@@ -422,7 +473,7 @@ class Pilot(MechanicalLoop):
         task = event.get('task', '')
         data = event.get('data') or {}
         pr = event.get('pr')
-        if task and isinstance(pr, int) and pr > 0 and (Path(self.ctx['tasks']) / (task + '.json')).is_file():
+        if task and isinstance(pr, int) and pr > 0 and re.fullmatch(r'(?:T|SK)-[0-9]+', task):
             tracked = self.data['pulls'].setdefault(str(pr), dict(task=task))
             if kind == 'merged': tracked['terminal'] = True
         if kind in ('agent_finished', 'commit_pushed', 'pr_opened', 'approved', 'review_failed'):

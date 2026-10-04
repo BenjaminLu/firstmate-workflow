@@ -38,6 +38,7 @@ class LoopTests(unittest.TestCase):
         self.pilot.start_job = lambda kind, task, pr, argv, **extra: self.calls.append((kind, task, pr, argv, extra))
         self.pilot.authoritative_head = lambda task, pr: pr['head']['sha']
         self.pilot.command = self.command
+        self.pilot.read_head_spec = lambda pr, task: dict(id=task)
         self.pilot.emit = lambda *a, **kw: self.calls.append(('emit', a, kw))
         self.pilot.verdict = lambda task: {}
         self.pilot.busy = lambda task: False
@@ -148,6 +149,7 @@ class LoopTests(unittest.TestCase):
         restored.start_job = self.pilot.start_job
         restored.verdict = self.pilot.verdict
         restored.command = self.command
+        restored.read_head_spec = self.pilot.read_head_spec
         restored.authoritative_head = self.pilot.authoritative_head
         restored.busy = lambda task: False
         restored.advance(PR, CHECKS, [])
@@ -209,7 +211,7 @@ class LoopTests(unittest.TestCase):
 
     def test_ask_at_worker_head_holds_gates_and_wakes_once(self):
         import fm_evidence
-        with patch.object(fm_evidence.Store, 'records', return_value=[dict(kind='ask', head=HEAD,
+        with patch.object(fm_evidence.Store, 'records', return_value=[dict(kind='ask', head=HEAD, time='2099-01-01T00:00:00Z',
                 text='SCOPE-BLOCKED:T-001\nNeed another file')]):
             self.pilot.advance(PR, CHECKS, []); self.pilot.advance(PR, CHECKS, [])
         self.assertEqual(len(self.pilot.data['wakes']), 1)
@@ -317,7 +319,7 @@ class LoopTests(unittest.TestCase):
     def test_draft_scope_question_is_not_silently_skipped(self):
         import fm_evidence
         pr = copy.deepcopy(PR); pr['draft'] = True
-        with patch.object(fm_evidence.Store, 'records', return_value=[dict(kind='ask', head='b'*40,
+        with patch.object(fm_evidence.Store, 'records', return_value=[dict(kind='ask', head=HEAD, time='2099-01-01T00:00:00Z',
                 text='ASK-SCOPE:T-001\nNeed approval')]):
             self.pilot.advance(pr, [], [])
         self.assertIn('ASK-SCOPE:T-001', str(self.pilot.data['wakes']))
