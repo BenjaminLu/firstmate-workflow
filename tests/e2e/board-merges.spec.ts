@@ -20,18 +20,35 @@ test('merge identities queue absent tasks, survive refresh and never replay hist
     await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:881');
     await expect(page.locator('#salvo')).toHaveClass(/fire/);
     await page.waitForTimeout(700);
-    const beforeRefresh = await page.locator('#vessel').evaluate(el => {
-      const a=el.getAnimations()[0];
-      return Number(a?.effect?.getComputedTiming().progress);
+    const refresh = await page.evaluate(async () => {
+      const state = await (await fetch('/api/state')).json();
+      // Measure synchronously around render so browser transport time cannot
+      // masquerade as an animation reset or seek.
+      const el = document.querySelector('#vessel')!;
+      const a0 = el.getAnimations()[0] as CSSAnimation | undefined;
+      const hasAnimation = !!a0;
+      const running = a0?.playState === 'running';
+      const name = a0?.animationName;
+      const startBefore = a0?.startTime;
+      const delayBefore = a0?.effect?.getTiming().delay;
+      (window as any).render(state);
+      const a1 = el.getAnimations()[0];
+      return {
+        hasAnimation, running, name,
+        sameVessel: el === document.querySelector('#vessel'),
+        sameAnimation: a1 === a0,
+        startBefore, startAfter: a1?.startTime,
+        delayBefore, delayAfter: a1?.effect?.getTiming().delay,
+      };
     });
-    await page.evaluate(async () => (window as any).render(await (await fetch('/api/state')).json()));
     await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:881');
-    const afterRefresh = await page.locator('#vessel').evaluate(el => {
-      const a=el.getAnimations()[0];
-      return Number(a?.effect?.getComputedTiming().progress);
-    });
-    expect(afterRefresh-beforeRefresh).toBeGreaterThanOrEqual(0);
-    expect(afterRefresh-beforeRefresh).toBeLessThan(.15);
+    expect(refresh.hasAnimation).toBe(true);
+    expect(refresh.running).toBe(true);
+    expect(refresh.name).toBe('heel');
+    expect(refresh.sameVessel).toBe(true);
+    expect(refresh.sameAnimation).toBe(true);
+    expect(refresh.startAfter).toBe(refresh.startBefore);
+    expect(refresh.delayAfter).toBe(refresh.delayBefore);
     expect(await page.locator('#vessel').evaluate(el=>(el as HTMLElement).style.animationDelay)).toBe('0s');
     emit(root,'merged',881);
     await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:882', {timeout:15_000});
