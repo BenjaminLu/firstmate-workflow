@@ -283,9 +283,9 @@ class Pilot:
         """Fetch immutable objects, never reset or move a local task branch."""
         target = self.ctx['target']
         repository = self.ctx['repository']
-        self.command(['git', '-C', target, 'fetch', '--no-tags', 'https://github.com/' + repository + '.git',
-                      'refs/pull/' + str(pr['number']) + '/head'])
-        fetched = self.command(['git', '-C', target, 'rev-parse', 'FETCH_HEAD']).strip()
+        from fm_binding import fetch_ref
+        fetched = fetch_ref(target, 'https://github.com/' + repository + '.git',
+                            'refs/pull/' + str(pr['number']) + '/head', runner=self.command)
         if fetched != pr['head']['sha']:
             raise ValueError('PR head moved while fetching review objects')
         from urllib.parse import quote

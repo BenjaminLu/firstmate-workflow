@@ -358,7 +358,7 @@ raise SystemExit(int(os.environ.get('FM_TEST_EXIT','0')))
         self.executable('git', r'''
 import json,os,pathlib,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
-if a[0]=='-C' and a[2] in ('config','show','merge-base','diff-tree','fetch','rev-parse','branch'): a=a[2:]
+if a[0]=='-C' and a[2] in ('config','show','merge-base','diff-tree','fetch','rev-parse','branch','update-ref'): a=a[2:]
 if a==['config','--get','remote.origin.url']:
  print('https://github.com/fixture/project.git')
 elif a[0]=='show':
@@ -367,11 +367,17 @@ elif a[0]=='show':
  print(p.read_text())
 elif a[0]=='fetch':
  refs={'refs/pull/35/head':'a'*40, 'refs/heads/main':'b'*40}
- if a[-1] not in refs: sys.exit(128)
- (r/'FETCH_HEAD').write_text(refs[a[-1]])
- with (r/'binding-fetches').open('a') as f: f.write(a[-1]+'\n')
-elif a[0]=='rev-parse' and a[-1]=='FETCH_HEAD':
- print((r/'FETCH_HEAD').read_text())
+ source, destination = a[-1].split(':')
+ if not source.startswith('+') or source[1:] not in refs: sys.exit(128)
+ assert destination.startswith('refs/fm/fetch/')
+ fetched = r/destination
+ fetched.parent.mkdir(parents=True, exist_ok=True)
+ fetched.write_text(refs[source[1:]])
+ with (r/'binding-fetches').open('a') as f: f.write(source[1:]+'\n')
+elif a[0]=='rev-parse' and a[-1].startswith('refs/fm/fetch/'):
+ print((r/a[-1]).read_text())
+elif a[:2]==['update-ref','-d']:
+ (r/a[-1]).unlink(missing_ok=True)
 elif a[0]=='rev-parse' and a[-1]=='main^{commit}': print('b'*40)
 elif 'rev-parse' in a and a[-1] in ('HEAD', 'work^{commit}', 't-035-test^{commit}'):
  # A successful head query returns a full object id, never empty stdout.

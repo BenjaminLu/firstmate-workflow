@@ -41,5 +41,39 @@ def compile_modules():
     sys.exit(1 if failed else 0)
 
 
+def private_fetch():
+    """Reject shared fetch pseudo-refs in executable text beneath a root."""
+    from pathlib import Path
+    import shlex
+    import sys
+
+    forbidden = 'FETCH' + '_HEAD'
+    bad = False
+    root = Path(sys.argv[2])
+    for path in sorted((root / 'bin').rglob('*')):
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if b'\0' in data:
+            continue
+        try:
+            text = data.decode('utf-8')
+        except UnicodeDecodeError:
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            if forbidden not in line or line.lstrip().startswith('#'):
+                continue
+            try:
+                active = ' '.join(shlex.split(line, comments=True))
+            except ValueError:
+                # Incomplete quoted snippets are still source, never an exemption.
+                active = line
+            if forbidden in active:
+                print(f'{path.relative_to(root)}:{number}: shared fetch pseudo-ref is forbidden')
+                bad = True
+    sys.exit(1 if bad else 0)
+
+
 if __name__ == "__main__":
-    {"variable-boundary": variable_boundary, "compile": compile_modules}[sys.argv[1]]()
+    {"variable-boundary": variable_boundary, "compile": compile_modules,
+     "private-fetch": private_fetch}[sys.argv[1]]()

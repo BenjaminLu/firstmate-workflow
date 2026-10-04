@@ -568,6 +568,15 @@ else
   pass "state/events.jsonl has a single writer"
 fi
 
+# FETCH_HEAD is repository-global; all fetched evidence must use a private ref.
+# Scan every text file in bin/, including this lint, without filename exemptions.
+if python3 "$_fm_code_dir/lib/fm_ci_checks.py" private-fetch .
+then
+  pass "private fetch refs"
+else
+  flunk "private fetch refs"
+fi
+
 stage "test hygiene"
 # an assertion that greps a source file is satisfied by a comment unless it
 # filters them out. This has been written three times now; the machine checks

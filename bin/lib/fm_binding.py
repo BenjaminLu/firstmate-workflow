@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import uuid
 
 
 def command(argv, cwd=None):
@@ -17,6 +18,19 @@ def command(argv, cwd=None):
 
 def git(root, *args):
     return command(['git', '-C', str(root), *args]).decode().strip()
+
+
+def fetch_ref(root, url, source, *, runner=None):
+    """Read one fetch through a private ref, including when reviews overlap."""
+    run = command if runner is None else runner
+    prefix = ['git', '-C', str(root)]
+    ref = 'refs/fm/fetch/' + str(os.getpid()) + '-' + uuid.uuid4().hex
+    try:
+        run([*prefix, 'fetch', '--no-tags', url, '+' + source + ':' + ref])
+        value = run([*prefix, 'rev-parse', ref])
+        return sha((value.decode() if isinstance(value, bytes) else value).strip())
+    finally:
+        run([*prefix, 'update-ref', '-d', ref])
 
 
 def sha(value):
@@ -102,9 +116,9 @@ def authoritative(root, branch, repository, pr):
     # Fetch the actual PR ref, never a caller-supplied remote/branch expression.
     if not re.fullmatch(r'[1-9][0-9]*', str(pr)):
         raise ValueError('invalid PR number')
-    command(['git', '-C', str(root), 'fetch', '--no-tags',
-             'https://github.com/' + repository + '.git', 'refs/pull/' + str(pr) + '/head'])
-    if git(root, 'rev-parse', 'FETCH_HEAD') != head or git(root, 'rev-parse', branch + '^{commit}') != head:
+    fetched = fetch_ref(root, 'https://github.com/' + repository + '.git',
+                        'refs/pull/' + str(pr) + '/head')
+    if fetched != head or git(root, 'rev-parse', branch + '^{commit}') != head:
         raise ValueError('authoritative PR head differs from fetched head or local task ref; refresh before accepting')
     verified_base(view, repository, root)
     now = remote_head(repository, pr)
@@ -234,9 +248,7 @@ def verified_base(view, repo=None, root=None):
     root = root if root is not None else os.environ['FM_TARGET_ROOT']
     repo = repo or repository(root)
     # The PR's recorded base OID may lag behind its base branch's live tip.
-    command(['git', '-C', str(root), 'fetch', '--no-tags',
-             'https://github.com/' + repo + '.git', 'refs/heads/' + name])
-    live_base = sha(git(root, 'rev-parse', 'FETCH_HEAD'))
+    live_base = fetch_ref(root, 'https://github.com/' + repo + '.git', 'refs/heads/' + name)
     if git(root, 'rev-parse', name + '^{commit}') != live_base:
         raise ValueError('local base is stale; synchronize before accepting')
     return name
