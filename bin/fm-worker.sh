@@ -1077,7 +1077,7 @@ mirror_sync >/dev/null 2>&1 || echo "fm-worker: the first mirror of $tree did no
 pin_warning=''
 if [ -z "$FM_SPEC_PIN_JSON" ]; then
   pin_args=()
-  [ -z "$PR" ] || pin_args+=(--resume)
+  [ -z "$PR" ] || pin_args+=(--resume --spec-worktree "$tree")
   FM_SPEC_PIN_JSON="$(fm_pin create --task "$TASK" ${pin_args[@]+"${pin_args[@]}"})"; pin_rc=$?
   case "$pin_rc" in
     0) spec="$(jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON")"

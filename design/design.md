@@ -4645,9 +4645,33 @@ approval provenance, and re-derives committed self sources. Workers and
 reviewers receive the pinned spec and context; gate 4 also rejects any change
 to the self task entry and any path component beginning `.fm-`.
 
-Initial authority comes from existing records only: the latest captain
-`decision_made` A with a matching project/task choice answer, or, when no
-readiness card exists, the latest project `greenlit` event as a direct order.
+Initial authority comes from dispatch records only (T-171): the captain's
+`decision_made` A for the readiness card named by `state/ready/<task>.json`
+(`fm-ready.sh judged`), including the `ended` card retained after dispatch,
+with a matching project/task choice answer, or a captain `greenlit` event for
+this exact project and task as a direct order. Existing project-wide captain
+greenlights also authorize the first pin unless this task's own readiness
+card exists without a matching A receipt. A readiness A receipt without a
+`decision_made` event permits that legacy greenlight fallback; it does not
+fabricate a decision event. An unrelated choice or scope card never authorizes
+the first pin or masks a direct order. Pin resolution accepts the recorded
+project-wide authority without depending on the mutable readiness record.
+A scope answer recorded after dispatch authority but before pin creation remains
+available to `fm-project.sh repin`; ordering compares authorization times, not
+pin creation time.
+
+On resume, the launcher passes its actual worktree to the pin collector.
+A changed self task file can replace the base snapshot only when an unused
+captain choice A for the same project/task names a commit through the existing
+`fm-decide.sh --expected-head <sha>` field whose task-file bytes exactly match
+the worktree. That choice must postdate dispatch authority. A prose-only card,
+a missing commit, or different bytes leaves the base snapshot in force, so gate
+4 refuses the changed task entry. The first pin keeps dispatch `approval` and
+records the separate `spec_approval`, with `approved-branch` source, commit and
+hash. Resolution rechecks the receipt and committed bytes. That decision is
+consumed as spec authority and cannot authorize a later repin; later approvals
+must postdate it. Design, conventions and contract still come from the accepted
+base. Existing pins are never silently replaced by branch files.
 No authorization or unavailable first-pin sources means no pin is written;
 the worker warns and continues, but gate 4 fails explicitly with `no pin`.
 A first-pin source failure is also retained in the round report. An empty pin
