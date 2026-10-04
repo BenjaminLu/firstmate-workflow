@@ -1259,6 +1259,45 @@ fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 `setup` once in the checkout and reports the contract; `status` only reports it.
 
+### Spec preflight and migration (T-185)
+
+Before every dispatch and repin, firstmate runs
+`bin/fm-review.sh --spec-preflight --task <task> --spec <file>` with the selected
+project. The reviewer gets an independent read-only checkout of the current base
+and the exact proposed bytes, not a worker report or implementation verdict.
+It checks each acceptance line for scope feasibility; every affected caller,
+mirror, fixture and test; existing ids, formats, paths and interfaces; and an
+explicit, tested migration for validation, lint, gate, schema or record changes.
+Check 5 (T-189): when the scope lists design/design.md, the acceptance names the
+numbered section (§N or §N.M) it edits and adds nothing after the last one.
+Its numbered final ends in `SPEC-OK:<task>` or `SPEC-GAPS:<task>`.
+
+The launcher retains signed `spec-preflight` evidence in the same project-local
+store as briefs and verdicts, bound to the spec SHA-256 and observed base. Managed
+Codex retains authenticated final provenance with explicit mode and spec binding;
+other supported vendors remain labelled legacy and use their actual final output.
+Ordinary reviewer completion, approval and authentication rules are unchanged.
+Preflight identities carry `mode: spec-preflight` and use a separate `-sp-`
+actor namespace with their own attempts. They do not advance ordinary review
+rounds or attempts. Older preflight directories remain readable and are excluded
+from ordinary attempt counting without rewriting their identity records.
+No preflight result is gate 7 approval, CI evidence or permission to merge.
+
+Every new worker invocation requires SPEC-OK for its exact pinned bytes. Missing,
+different or changed bytes exit 65 with the preflight command. A read-only
+prospective-pin check runs before freezing the launcher, allocating a crew
+identity, publishing a PID or dispatch event, creating a branch/worktree, or
+arming the EXIT checkpoint. Resumed self tasks read the captain-approved branch
+spec directly from git; legacy unpinned inputs still require their exact bytes.
+SPEC-GAPS requires
+an amended spec, not an override on the same bytes. A repin therefore needs fresh
+preflight when its spec changes. Existing records and pins are not rewritten or
+grandfathered: export their exact spec bytes and preflight them before the next
+worker dispatch. Already running rounds finish with frozen code; no live launcher
+is edited. Tests cover missing and mismatched receipts, exact-byte admission,
+changed pins, existing pins without receipts, and mode-bound final selection.
+Missing or untested migration in a rule-changing diff is a REJECT finding.
+
 ---
 
 ## 7. The standing list
@@ -2231,6 +2270,42 @@ The production board is **rewritten** from the prototype in
 `design/proposals/`, not promoted from it: that prototype was written with no
 tests and no error handling.
 
+### T-125: Live voyage seam
+
+The v2d-15 2.5D stage is a panel above v1's workflow, or the same iframe enlarged
+with the existing workflow DOM in a drawer. F toggles size; Esc returns to the
+panel. Mode uses sessionStorage. A double Esc within 400 ms, including from the
+iframe, removes the iframe entirely. The browser-wide hidden preference uses
+localStorage. No stage animation or audio survives that document's removal.
+
+`BoardSource` consumes the host's existing `/api/state` and `/events` snapshots
+through a same-origin subscription. It does not open a second subscription or
+fetch an unfiltered project. Project keys identify tasks; real crew drive the
+ship. The adapter derives review streaks from allowed event/handoff records;
+opaque external aggregate identities disclose no private review payload. The
+recent-event window may have gaps, so task snapshots reconcile parked/final
+states. Approvals alone unlock Live victory; simulated ticks cannot approve,
+dispatch or merge real work. Playground staging hooks and mini-games are absent
+from Live operation.
+
+The drawer reuses the board's cards, named effects, task actions, confirmations
+and translated refusals. Its writes remain `POST /decisions` and `POST /tasks`,
+with the tab bearer token, browser Origin and the card's own project. Fight actions never write; the board
+remains usable during a fight. An answerable board card for a gripped task
+suppresses the shared monster’s fight prompt and target without releasing its arms. The Live-only adapter has the same narrow command seam;
+it never interprets an option letter as an effect. Live bundles have no remote
+fonts or other third-party requests. Playground builds refuse network code.
+
+`tools/build.py --live` generates the gitignored `board/public/voyage2d/index.html`.
+The existing static-file route serves it. CI builds Live before starting browser
+workers or game tests, then builds Playground and runs the vendored node tests.
+Session startup builds Live before starting the board; failure is reported and
+removes stale output, so the board serves its workflow without loading the game
+controller. E2e fixtures locate the built artifact or build in isolated scratch.
+On screens at most 650px wide the panel follows the decisions and precedes the
+lanes; desktop retains the panel above the decisions. The frozen 3D application stays outside this integration;
+any 3D follow-up requires its own approved scope.
+
 ---
 
 ## 9. Three languages
@@ -2432,6 +2507,10 @@ own slice of one gate run instead of all of it:
   themselves. With neither flag, every stage runs in one process, exactly
   as a plain `bin/ci.sh` always has — nothing above this paragraph describes
   a changed default.
+  `hygiene` includes the design-layout check (T-189): outside fenced code,
+  every `###` heading in the last `## N.` section of design/design.md starts
+  with `N.`, so new material nests under a numbered home instead of landing
+  on the end of the file; a tree without design/design.md skips it silently.
 - `--shard i/n` — inside `--stage bash` only, run the *i*-th of *n* shards of
   `tests/*.test.sh`. Assignment is longest-processing-time bin packing:
   suites are taken slowest-first and each goes to whichever shard is
@@ -4479,6 +4558,25 @@ answer `--version` and their status check by replaying the same
 recordings - claude and codex signed in, cursor-agent as recorded, not
 logged in, so its rounds there are refused like gemini's.
 
+#### T-157: diagnosing collected facts
+
+`fm-doctor.sh --collect --repo <dir>` prints tool observations without
+judging the host. `--facts <file>` judges supplied observations against that
+repository's pins. The file is tab-separated data: tool rows carry name,
+path (empty means missing), numeric version, raw version line and optional
+xcrun-shim path; host rows carry `os` and `sandbox`; probe rows carry vendor,
+status, English explanation and Traditional Chinese explanation. The collector
+does not run login probes in `--collect` mode. Normal doctor runs collect
+tools and obtain login probes before judging each usable vendor. Environment,
+repository hygiene, approved installs and an explicitly requested canary keep
+their existing behavior.
+
+Setup also accepts `--facts` for its detection layer: vendor rows carry name
+and login status, repo rows carry `origin` and `ref`, and gh rows carry
+`present`, `authed` and `permission`. Its recommendation and config writer
+consume those observations. Tests supply facts; the normal commands collect
+them from the host.
+
 ---
 
 ## 14. The task DAG
@@ -4604,6 +4702,53 @@ front-matter keys: `land: card|handoff`, `review: fm|external|both`,
 required checks/statuses and confirmation, merge/deletion/retention policy,
 stacking, task-branch leases, watch cadence/debounce and dated captain intent.
 Chat changes report changed lines; scheduled inspection proposes drift updates.
+
+#### T-139 private onboarding contract
+
+The former §15.8 visibility/protection prerequisite is withdrawn. A private
+repository is accepted; HTTP 404 protection is unknown, never proof of absent
+protection. `fm project add` records a bounded inspection privately, offers at
+most three missing-contract question groups, then writes CONVENTIONS.md only
+with explicit captain-confirmed checks, policy, product intent and commands.
+The public engine registry carries routing only; command configuration is
+`FM_HOME/projects/<name>/state/config.yaml`. Existing explicit-name and self
+routing remain supported.
+
+The conventions front matter uses data-only fields (strings quoted as JSON;
+arrays and objects as JSON; named policy enums may be bare). Mandatory policy
+includes repository/base binding, land, review, post, merge_method,
+delete_branch, required_checks, stacking, force_with_lease, captain, intent,
+product, confirmed_at, confirmed, policy_confirmed and timer values.
+Publication reads the same contract as merge and prompt construction. Missing,
+invalid or unconfirmed policy refuses external publication; self defaults stay
+unchanged. Merge methods and retention follow the contract; land: handoff
+refuses engine merge. No path enables auto-merge or protected-base publication.
+T-143 enables policy-authorized stacking and explicit expected-head restacking
+through the operator helper documented below. Summary/check/threads projections are retained locally
+pending T-140; they never fall back to exposing private acceptance as comments.
+
+Inspection covers the last 30 updated PRs and up to 100 reviews/comments/checks
+or statuses per PR. Counts are taken from PR detail; truncated text/review
+samples are evidence, not exhaustive history. Git log supplies commit examples
+from an existing managed clone or a temporary private history clone. Only
+`fm project sync` creates the managed `repo/`; it also repairs earlier shallow,
+unpopulated inspection clones without resetting an existing checkout. Missing
+merge/deletion/check facts remain unknown until explicitly confirmed. Empty
+local folders have no invented remote, commits,
+PRs or product brief; bootstrap initial-commit permission and remote identity
+are explicit answers, and onboarding creates neither commits nor remotes.
+
+The existing owner-bound watcher schedules daily re-inspection (configurable)
+for every registered external project with confirmed conventions, with a private
+deadline per project. Inspection failures cannot stop engine wake delivery. It
+retains and debounces drift proposals and pushes a bilingual wake to the queue
+served by its owning watcher. It never
+edits confirmed policy automatically. Chat edits report an exact diff and retain
+it privately. Workers and reviewers receive CONVENTIONS.md, and an fm review
+for review: external or both is only a pre-check. The captain's merge double
+check continues to own authenticated review, current-head checks/statuses and
+six-gate evidence.
+
 
 ### 15.3 Private project state and cleanup
 
@@ -4895,6 +5040,33 @@ facts. Never fabricate trust, infer delivery from queue/ack, or claim a held
 watcher starts an idle Codex conversation. Complete authorized actionable work
 before ending for a real dependency/event/operator action.
 
+#### T-052 portable prompt context
+
+External worker and reviewer prompts carry launcher-supplied project/task/base
+and checkout/head identity. Self prompts retain their existing sections apart
+from the T-173 complete-input index replacing inline design excerpts; an unpinned self reviewer keeps its
+existing diff prompt shape around that index.
+Both projects receive the approved immutable pin when present.
+
+T-173 supersedes the bounded design excerpts: complete approved snapshots live
+in the round's sandbox-protected `pinned/` folder. Prompts index their absolute
+paths, hashes and design section anchors instead of embedding or trimming design
+text. Whole conventions and the complete parsed gate contract remain in the
+prompt. Run-mode contract summaries use the pin rather than mutable target
+configuration whenever a pin exists. Existing review total-input bounds still
+refuse an unrepresentable prompt.
+
+The frozen engine supplies roles and context; a target need not contain engine
+files. For self and external reviews with a PR, shared authoritative head/base
+verification refuses a remote update-branch that left the local ref stale before
+preparing review, after the CI wait and before publishing. Legacy self review
+without a PR remains local-only and establishes no remote readiness. The isolated
+checkout must match the named head and merge-base. Gate/candidate binding remains
+the shared T-138 boundary. These structural guarantees do not prove a model
+followed its role or inspected omitted design. Workers leave publication and
+suites to the outside launcher and CI; reviewer context excludes worker reports
+and reasoning.
+
 ### 15.8 Pilot and advanced integration
 
 T-055 requires the actual `/Users/benjamin/Desktop/maker-founder` pilot. Its
@@ -4965,135 +5137,7 @@ live only under `FM_HOME/projects/<name>/state/`. Queues, acknowledgements and
 notifications establish no model delivery: T-164 native loading, exact trust,
 reload and actual receipt remain independently verified requirements.
 
-### 15.9 Dependency order and shared-file coordination
-
-Captain revision, 2026-10-02: “好 T135安排 解耦外部repo convention”, clarified by “不是這個意思 135做完後 review和brief機制要能不依賴外部repo允許我們張貼每一輪工作日誌”. The brief and review loop must work without permission to post round work logs. “現在是第一輪reviewer就要給過關條件” confirms complete pass criteria on every REJECT from round one.
-
-T-135 runs in the first wave beside T-142 with no dependencies. It owns append-only state/evidence/<project>/<task>/ records for brief, pack, worker-report, ask and verdict, carrying project/task/round/actor/kind/head/time and authenticated final-answer provenance for verdicts. The worker reads local briefs and packs; reviewers receive prior rounds and standing lists from round two; gate 7 and fm-protocol.sh read local verdicts with latest-REJECT precedence. Ask only for a missing or unclear list before edits. The project comments/local switch defaults to comments for self compatibility; local mode posts nothing and completes the entire loop. T-138 depends on T-142 and T-135, extends the same records to private FM_HOME storage, adds signing/spec/patch binding and retains atomic merge-head enforcement. T-140 also gains T-135 and adds summary/check/threads projections. No external conventions or advanced stack are prerequisites for T-135. These are adopted implementation requirements, not claims that the readers already ship.
-
-Task JSON files are authoritative. T-142 depends on T-166 (the approved plan's
-original empty dependency is intentionally revised to require consolidation).
-Storage T-142 precedes conventions T-139; T-049 needs both. T-138 follows storage and T-135;
-T-135 is independent and first-wave beside T-142. Shared work requires
-explicit shared-file ownership/immutable run snapshots, never live script edits.
-T-050 needs pins/evidence/conventions; T-051 needs pins/storage/T-163/T-167;
-T-052 needs execution/conventions/briefs; T-053 needs gates/execution/prompts.
-T-055 needs T-052/T-053/T-054/T-137/T-144, without advanced-stack prerequisites.
-T-140 needs evidence/conventions/T-135; T-143 execution/conventions; T-141 needs
-T-138/T-140/T-143/T-144/T-151. See the adoption ledger for deferred work.
-
-### 15.10 Concurrent projects
-
-A single global capacity counts actual live owned rounds, not open PRs or
-historical dispatch events. A short dispatch lock recounts/reserves slots;
-identity locks allocate actors; slow verification happens before locking.
-Recover reservations through owner completion. Same task ID in two projects
-counts twice. No-project dispatch fairly assigns each free slot to eligible
-ready/cleared, greenlit, verified project with fewest live runs, ties by name;
-explicit project dispatch shares the same limit. Do not preempt live work.
-
-Each project has one merge turn: take it when card is requested; release on
-hold/send-back or recorded merged/failed outcome, not just an answer. Verify
-base and authoritative PR head stayed as gated before card/merge. Another
-project's merge turn is independent. Outcome recovery uses actual repository
-facts; stale cards cannot authorize a changed candidate. Board merging must not
-block other projects' cards. T-053/T-054/T-055 prove concurrency, shared task IDs,
-simultaneous cards, isolated answers, cleanup and private state separation.
-
-### T-157: diagnosing collected facts
-
-`fm-doctor.sh --collect --repo <dir>` prints tool observations without
-judging the host. `--facts <file>` judges supplied observations against that
-repository's pins. The file is tab-separated data: tool rows carry name,
-path (empty means missing), numeric version, raw version line and optional
-xcrun-shim path; host rows carry `os` and `sandbox`; probe rows carry vendor,
-status, English explanation and Traditional Chinese explanation. The collector
-does not run login probes in `--collect` mode. Normal doctor runs collect
-tools and obtain login probes before judging each usable vendor. Environment,
-repository hygiene, approved installs and an explicitly requested canary keep
-their existing behavior.
-
-Setup also accepts `--facts` for its detection layer: vendor rows carry name
-and login status, repo rows carry `origin` and `ref`, and gh rows carry
-`present`, `authed` and `permission`. Its recommendation and config writer
-consume those observations. Tests supply facts; the normal commands collect
-them from the host.
-
-### T-139 private onboarding contract
-
-The former §15.8 visibility/protection prerequisite is withdrawn. A private
-repository is accepted; HTTP 404 protection is unknown, never proof of absent
-protection. `fm project add` records a bounded inspection privately, offers at
-most three missing-contract question groups, then writes CONVENTIONS.md only
-with explicit captain-confirmed checks, policy, product intent and commands.
-The public engine registry carries routing only; command configuration is
-`FM_HOME/projects/<name>/state/config.yaml`. Existing explicit-name and self
-routing remain supported.
-
-The conventions front matter uses data-only fields (strings quoted as JSON;
-arrays and objects as JSON; named policy enums may be bare). Mandatory policy
-includes repository/base binding, land, review, post, merge_method,
-delete_branch, required_checks, stacking, force_with_lease, captain, intent,
-product, confirmed_at, confirmed, policy_confirmed and timer values.
-Publication reads the same contract as merge and prompt construction. Missing,
-invalid or unconfirmed policy refuses external publication; self defaults stay
-unchanged. Merge methods and retention follow the contract; land: handoff
-refuses engine merge. No path enables auto-merge or protected-base publication.
-T-143 enables policy-authorized stacking and explicit expected-head restacking
-through the operator helper documented below. Summary/check/threads projections are retained locally
-pending T-140; they never fall back to exposing private acceptance as comments.
-
-Inspection covers the last 30 updated PRs and up to 100 reviews/comments/checks
-or statuses per PR. Counts are taken from PR detail; truncated text/review
-samples are evidence, not exhaustive history. Git log supplies commit examples
-from an existing managed clone or a temporary private history clone. Only
-`fm project sync` creates the managed `repo/`; it also repairs earlier shallow,
-unpopulated inspection clones without resetting an existing checkout. Missing
-merge/deletion/check facts remain unknown until explicitly confirmed. Empty
-local folders have no invented remote, commits,
-PRs or product brief; bootstrap initial-commit permission and remote identity
-are explicit answers, and onboarding creates neither commits nor remotes.
-
-The existing owner-bound watcher schedules daily re-inspection (configurable)
-for every registered external project with confirmed conventions, with a private
-deadline per project. Inspection failures cannot stop engine wake delivery. It
-retains and debounces drift proposals and pushes a bilingual wake to the queue
-served by its owning watcher. It never
-edits confirmed policy automatically. Chat edits report an exact diff and retain
-it privately. Workers and reviewers receive CONVENTIONS.md, and an fm review
-for review: external or both is only a pre-check. The captain's merge double
-check continues to own authenticated review, current-head checks/statuses and
-six-gate evidence.
-
-
-### T-052 portable prompt context
-
-External worker and reviewer prompts carry launcher-supplied project/task/base
-and checkout/head identity. Self prompts retain their existing sections apart
-from the T-173 complete-input index replacing inline design excerpts; an unpinned self reviewer keeps its
-existing diff prompt shape around that index.
-Both projects receive the approved immutable pin when present.
-
-T-173 supersedes the bounded design excerpts: complete approved snapshots live
-in the round's sandbox-protected `pinned/` folder. Prompts index their absolute
-paths, hashes and design section anchors instead of embedding or trimming design
-text. Whole conventions and the complete parsed gate contract remain in the
-prompt. Run-mode contract summaries use the pin rather than mutable target
-configuration whenever a pin exists. Existing review total-input bounds still
-refuse an unrepresentable prompt.
-
-The frozen engine supplies roles and context; a target need not contain engine
-files. For self and external reviews with a PR, shared authoritative head/base
-verification refuses a remote update-branch that left the local ref stale before
-preparing review, after the CI wait and before publishing. Legacy self review
-without a PR remains local-only and establishes no remote readiness. The isolated
-checkout must match the named head and merge-base. Gate/candidate binding remains
-the shared T-138 boundary. These structural guarantees do not prove a model
-followed its role or inspected omitted design. Workers leave publication and
-suites to the outside launcher and CI; reviewer context excludes worker reports
-and reasoning.
-
-### T-143: operating a stack
+#### T-143: operating a stack
 
 A confirmed `stacking: allowed` convention permits one unmerged dependency
 with a unique open, same-repository PR; other dependencies must have merged.
@@ -5134,7 +5178,7 @@ bases, including self-project and forced cleanup paths. T-141 may automate
 these mechanical operations later; it does not supply their authorization.
 
 
-### Autopilot owns PR advancement (T-175)
+#### Autopilot owns PR advancement (T-175)
 
 Each session owns one supervisor per registered project. Conditional GitHub
 polls persist their cache and action identities across restarts. The supervisor
@@ -5159,7 +5203,7 @@ a worker; dispatch remains the board's intent action or an explicit command.
 Gates and reviews run as owned children. Completion receipts ring the service;
 an interrupted write is reconciled, never replayed by a restart or idle timer.
 
-### New task discovery and question freshness (T-180)
+#### New task discovery and question freshness (T-180)
 
 The autopilot derives a task candidate using the canonical branch/title grammar,
 then validates the matching task spec committed at the observed PR head. A missing
@@ -5176,7 +5220,7 @@ A later authorized firstmate brief supersedes earlier questions for that task.
 Each remaining question has its own durable wake identity, allowing a new
 question at the same head without replaying the previous one after restart.
 
-### Recorded chat merge windows (T-182)
+#### Recorded chat merge windows (T-182)
 
 Firstmate immediately records each time-boxed chat authorization using
 `fm-decide.sh --authorize-merges --until <ISO-8601-with-offset> --quote "<words>"`
@@ -5200,75 +5244,37 @@ any merge. Reminder inventory reuses the checks and verdict already read by PR
 advancement and folds local lifecycle events for rounds; it performs no extra
 GitHub requests or process probes. No wake or queue receipt proves delivery to a model.
 
-### T-125: Live voyage seam
+### 15.9 Dependency order and shared-file coordination
 
-The v2d-15 2.5D stage is a panel above v1's workflow, or the same iframe enlarged
-with the existing workflow DOM in a drawer. F toggles size; Esc returns to the
-panel. Mode uses sessionStorage. A double Esc within 400 ms, including from the
-iframe, removes the iframe entirely. The browser-wide hidden preference uses
-localStorage. No stage animation or audio survives that document's removal.
+Captain revision, 2026-10-02: “好 T135安排 解耦外部repo convention”, clarified by “不是這個意思 135做完後 review和brief機制要能不依賴外部repo允許我們張貼每一輪工作日誌”. The brief and review loop must work without permission to post round work logs. “現在是第一輪reviewer就要給過關條件” confirms complete pass criteria on every REJECT from round one.
 
-`BoardSource` consumes the host's existing `/api/state` and `/events` snapshots
-through a same-origin subscription. It does not open a second subscription or
-fetch an unfiltered project. Project keys identify tasks; real crew drive the
-ship. The adapter derives review streaks from allowed event/handoff records;
-opaque external aggregate identities disclose no private review payload. The
-recent-event window may have gaps, so task snapshots reconcile parked/final
-states. Approvals alone unlock Live victory; simulated ticks cannot approve,
-dispatch or merge real work. Playground staging hooks and mini-games are absent
-from Live operation.
+T-135 runs in the first wave beside T-142 with no dependencies. It owns append-only state/evidence/<project>/<task>/ records for brief, pack, worker-report, ask and verdict, carrying project/task/round/actor/kind/head/time and authenticated final-answer provenance for verdicts. The worker reads local briefs and packs; reviewers receive prior rounds and standing lists from round two; gate 7 and fm-protocol.sh read local verdicts with latest-REJECT precedence. Ask only for a missing or unclear list before edits. The project comments/local switch defaults to comments for self compatibility; local mode posts nothing and completes the entire loop. T-138 depends on T-142 and T-135, extends the same records to private FM_HOME storage, adds signing/spec/patch binding and retains atomic merge-head enforcement. T-140 also gains T-135 and adds summary/check/threads projections. No external conventions or advanced stack are prerequisites for T-135. These are adopted implementation requirements, not claims that the readers already ship.
 
-The drawer reuses the board's cards, named effects, task actions, confirmations
-and translated refusals. Its writes remain `POST /decisions` and `POST /tasks`,
-with the tab bearer token, browser Origin and the card's own project. Fight actions never write; the board
-remains usable during a fight. An answerable board card for a gripped task
-suppresses the shared monster’s fight prompt and target without releasing its arms. The Live-only adapter has the same narrow command seam;
-it never interprets an option letter as an effect. Live bundles have no remote
-fonts or other third-party requests. Playground builds refuse network code.
+Task JSON files are authoritative. T-142 depends on T-166 (the approved plan's
+original empty dependency is intentionally revised to require consolidation).
+Storage T-142 precedes conventions T-139; T-049 needs both. T-138 follows storage and T-135;
+T-135 is independent and first-wave beside T-142. Shared work requires
+explicit shared-file ownership/immutable run snapshots, never live script edits.
+T-050 needs pins/evidence/conventions; T-051 needs pins/storage/T-163/T-167;
+T-052 needs execution/conventions/briefs; T-053 needs gates/execution/prompts.
+T-055 needs T-052/T-053/T-054/T-137/T-144, without advanced-stack prerequisites.
+T-140 needs evidence/conventions/T-135; T-143 execution/conventions; T-141 needs
+T-138/T-140/T-143/T-144/T-151. See the adoption ledger for deferred work.
 
-`tools/build.py --live` generates the gitignored `board/public/voyage2d/index.html`.
-The existing static-file route serves it. CI builds Live before starting browser
-workers or game tests, then builds Playground and runs the vendored node tests.
-Session startup builds Live before starting the board; failure is reported and
-removes stale output, so the board serves its workflow without loading the game
-controller. E2e fixtures locate the built artifact or build in isolated scratch.
-On screens at most 650px wide the panel follows the decisions and precedes the
-lanes; desktop retains the panel above the decisions. The frozen 3D application stays outside this integration;
-any 3D follow-up requires its own approved scope.
+### 15.10 Concurrent projects
 
-### Spec preflight and migration (T-185)
+A single global capacity counts actual live owned rounds, not open PRs or
+historical dispatch events. A short dispatch lock recounts/reserves slots;
+identity locks allocate actors; slow verification happens before locking.
+Recover reservations through owner completion. Same task ID in two projects
+counts twice. No-project dispatch fairly assigns each free slot to eligible
+ready/cleared, greenlit, verified project with fewest live runs, ties by name;
+explicit project dispatch shares the same limit. Do not preempt live work.
 
-Before every dispatch and repin, firstmate runs
-`bin/fm-review.sh --spec-preflight --task <task> --spec <file>` with the selected
-project. The reviewer gets an independent read-only checkout of the current base
-and the exact proposed bytes, not a worker report or implementation verdict.
-It checks each acceptance line for scope feasibility; every affected caller,
-mirror, fixture and test; existing ids, formats, paths and interfaces; and an
-explicit, tested migration for validation, lint, gate, schema or record changes.
-Its numbered final ends in `SPEC-OK:<task>` or `SPEC-GAPS:<task>`.
-
-The launcher retains signed `spec-preflight` evidence in the same project-local
-store as briefs and verdicts, bound to the spec SHA-256 and observed base. Managed
-Codex retains authenticated final provenance with explicit mode and spec binding;
-other supported vendors remain labelled legacy and use their actual final output.
-Ordinary reviewer completion, approval and authentication rules are unchanged.
-Preflight identities carry `mode: spec-preflight` and use a separate `-sp-`
-actor namespace with their own attempts. They do not advance ordinary review
-rounds or attempts. Older preflight directories remain readable and are excluded
-from ordinary attempt counting without rewriting their identity records.
-No preflight result is gate 7 approval, CI evidence or permission to merge.
-
-Every new worker invocation requires SPEC-OK for its exact pinned bytes. Missing,
-different or changed bytes exit 65 with the preflight command. A read-only
-prospective-pin check runs before freezing the launcher, allocating a crew
-identity, publishing a PID or dispatch event, creating a branch/worktree, or
-arming the EXIT checkpoint. Resumed self tasks read the captain-approved branch
-spec directly from git; legacy unpinned inputs still require their exact bytes.
-SPEC-GAPS requires
-an amended spec, not an override on the same bytes. A repin therefore needs fresh
-preflight when its spec changes. Existing records and pins are not rewritten or
-grandfathered: export their exact spec bytes and preflight them before the next
-worker dispatch. Already running rounds finish with frozen code; no live launcher
-is edited. Tests cover missing and mismatched receipts, exact-byte admission,
-changed pins, existing pins without receipts, and mode-bound final selection.
-Missing or untested migration in a rule-changing diff is a REJECT finding.
+Each project has one merge turn: take it when card is requested; release on
+hold/send-back or recorded merged/failed outcome, not just an answer. Verify
+base and authoritative PR head stayed as gated before card/merge. Another
+project's merge turn is independent. Outcome recovery uses actual repository
+facts; stale cards cannot authorize a changed candidate. Board merging must not
+block other projects' cards. T-053/T-054/T-055 prove concurrency, shared task IDs,
+simultaneous cards, isolated answers, cleanup and private state separation.

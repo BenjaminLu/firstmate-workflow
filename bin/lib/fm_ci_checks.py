@@ -74,6 +74,63 @@ def private_fetch():
     sys.exit(1 if bad else 0)
 
 
+def design_layout():
+    """Every ### in the last `## N.` section of the design is numbered N.x (T-189).
+
+    An unnumbered ### appended there lands in the same final hunk as every
+    other append, so parallel branches conflict; numbered homes are mid-file.
+    Subsequent numbered ## sections must advance by exactly one; an unnumbered
+    ## after the last numbered section cannot create a new tail home either.
+    Fenced code is skipped the way fm_prompt_context.anchors() skips it.
+    """
+    from pathlib import Path
+    import re
+
+    path = Path(sys.argv[2])
+    if not path.exists():
+        return
+    headings, fence = [], None
+    for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+        marker = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        match = re.match(r'^(#{1,6})\s+(.+)', line)
+        if match and fence is None:
+            headings.append((number, len(match[1]), match[2]))
+    last = None
+    previous = None
+    bad = False
+    for index, (number, level, text) in enumerate(headings):
+        match = re.match(r'^(\d+)\.', text) if level == 2 else None
+        if match:
+            current = int(match[1])
+            if previous is not None and current != previous + 1:
+                print(f'{path}:{number}: ## {text} - after numbered section §{previous}, '
+                      f'a new ## heading must be numbered {previous + 1}.; '
+                      'put new material in its numbered home')
+                bad = True
+            previous = current
+            last = index
+    if last is not None:
+        section = re.match(r'^(\d+)\.', headings[last][2])[1]
+        for number, level, text in headings[last + 1:]:
+            if level == 2:
+                print(f'{path}:{number}: ## {text} - after the last numbered section, §{section}, '
+                      f'a new ## heading must be numbered {int(section) + 1}.; '
+                      'put new material in its numbered home')
+                bad = True
+            if level == 3 and not text.startswith(section + '.'):
+                print(f'{path}:{number}: ### {text} - in the last section, §{section}, a ### '
+                      f'heading starts with "{section}."; put new material in its numbered home')
+                bad = True
+    sys.exit(1 if bad else 0)
+
+
 if __name__ == "__main__":
     {"variable-boundary": variable_boundary, "compile": compile_modules,
-     "private-fetch": private_fetch}[sys.argv[1]]()
+     "private-fetch": private_fetch, "design-layout": design_layout}[sys.argv[1]]()
