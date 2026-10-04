@@ -1,4 +1,4 @@
-"""Recorded REST payloads exercise mechanical transitions, not model output."""
+"""Constructed REST payloads exercise mechanical transitions, not model output."""
 import copy
 import json
 import os

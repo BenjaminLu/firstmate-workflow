@@ -45,12 +45,43 @@ def verdict_marker(text, task):
 
 
 def criteria(text, task):
+    """Read the last numbered block adjacent to the final closing marker.
+
+    A restart at 1 after a blank line or an unindented label starts a new
+    list. Otherwise blank lines, wrapped text and indented paragraphs stay
+    with their item. Adjacent duplicate numbers and non-restart numbering
+    errors reach protocol() unchanged.
+    """
     lines = list(unquoted(text))
     ends = [n for n, line in enumerate(lines) if line.strip() == 'CRITERIA-COMPLETE:' + task]
     if not ends:
         return []
-    return [(int(m[1]), m[2]) for line in lines[:ends[-1]]
-            if (m := re.match(r'^\s*(\d+)[.)]\s+(.+)', line))]
+    items = []
+    blank = False
+    label = False
+    for line in lines[:ends[-1]]:
+        match = re.match(r'^\s*(\d+)[.)]\s+(.+)', line)
+        if match:
+            if int(match[1]) == 1 and (blank or label):
+                items = []
+            items.append((int(match[1]), [match[2]]))
+        elif not line.strip():
+            if items:
+                items[-1][1].append('')
+            blank = True
+            continue
+        elif items:
+            # Markdown headings and thematic breaks cannot be lazy wrapping.
+            boundary = re.match(r'^\s{0,3}(?:#{1,6}\s|(?:[-*_]\s*){3,}$)', line)
+            if boundary or (blank and not line[0].isspace()):
+                items = []
+            else:
+                items[-1][1].append(line)
+        blank = False
+        # A non-item line can label the next list even without blank lines.
+        # Keep it as wrapped text unless the next item restarts at 1.
+        label = not match and not line[0].isspace()
+    return [(number, '\n'.join(body).rstrip()) for number, body in items]
 
 
 def protocol(records, task):
@@ -78,7 +109,7 @@ def protocol(records, task):
             elif not re.match(r'^(?:\*\*)?(done|open)\b', current[n], re.I):
                 errors.append(f'item {n} has no done/open state')
         for n in current.keys() - previous.keys():
-            if previous and not any(label + ':' + task in current[n]
+            if previous and not any(label + ':' + task in current[n].splitlines()[0]
                                     for label in ('REGRESSION', 'NEW-GROUND')):
                 errors.append(f'new item {n} has no REGRESSION or NEW-GROUND label')
         previous.update(current)  # a dropped item remains standing until restored

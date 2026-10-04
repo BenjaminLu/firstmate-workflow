@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Recorded REST boundary: a failed gh api still writes GitHub JSON to stdout."""
+"""REST fixture boundary: a failed gh api still writes GitHub JSON to stdout.
+
+Payloads use placeholder ids, heads and URLs; they are not verbatim captures.
+"""
 import json
 import os
 from pathlib import Path
