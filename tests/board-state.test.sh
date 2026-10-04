@@ -23,7 +23,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 starts_board='bun run .*server\.ts|"run", join\(.*server\.ts'
 sets_config='XDG_CONFIG_HOME["'\'']?[[:space:]]*[=:]'
 starters=''
-for f in $(git -C "$ROOT" ls-files -- 'tests/*.sh' 'tests/*.ts'); do
+for f in $(git -C "$ROOT" ls-files -- 'tests/*.sh' 'tests/*.ts' ':!tests/lib/fixtures/'); do
   # a here-string, not a pipe: under pipefail, grep -q leaving early fails the writer
   grep -qE "$starts_board" <<< "$(code_of "$ROOT/$f")" && starters="$starters $f"
 done

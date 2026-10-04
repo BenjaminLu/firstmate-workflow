@@ -961,7 +961,14 @@ assert_contains "$cisrc" 'suites=(tests/*.test.sh)' "ci.sh runs the bash suites 
 assert_contains "$cisrc" "-name '*.test.ts' -o -name '*.spec.ts'" "ci.sh runs bun on every *.test.ts and *.spec.ts"
 assert_contains "$cisrc" 'bunx playwright test' "ci.sh runs playwright"
 assert_contains "$(code playwright.config.ts)" 'testDir: "tests/e2e"' "playwright runs tests/e2e"
-suites="$(git -C "$ROOT" ls-files -- tests '*.test.ts' '*.spec.ts' 'playwright.config.*' bin/ci.sh | sort -u)"
+# Include suite code and its shell/Python/browser helpers, never fixture data.
+suites="$(git -C "$ROOT" ls-files -- 'tests/*.sh' 'tests/*.py' 'tests/*.ts' \
+  '*.test.ts' '*.spec.ts' 'playwright.config.*' bin/ci.sh ':!tests/lib/fixtures/' | sort -u)"
+# This verbatim review names card-raising scripts, but it is data, not a suite.
+review_fixture=tests/lib/fixtures/t180-round1-standing-list.md
+assert_ok "grep -qE -- '$names' '$ROOT/$review_fixture'" "the review fixture names card-raising scripts"
+assert_eq "" "$(printf '%s\n' "$suites" | grep -F -x "$review_fixture" || true)" \
+  "the card-guard sweep excludes a fixture naming card-raising scripts"
 for f in tests/decide.test.sh tests/lib.sh tests/ship.spec.ts tests/e2e/board-*.spec.ts tests/e2e/lib/*.ts bin/ci.sh; do
   assert_contains " $(printf '%s ' $suites) " " $f " "the suites hold $f"
 done
