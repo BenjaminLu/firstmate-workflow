@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/board.sh"
 export HERDR_ENV=0
 k="$(safe_tmpdir)"
-export XDG_CONFIG_HOME="$k/config"
+XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 keeper=''
 cleanup() {
   if [ -n "$keeper" ]; then
@@ -28,7 +28,7 @@ wait_exits([watch])
 PYTHON
   fi
 }
-trap cleanup EXIT
+trap 'cleanup; safe_rm_rf "$XDG_CONFIG_HOME"' EXIT
 mkdir -p "$k/bin" "$k/board" "$k/state/pending" "$k/design/tasks"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$k/bin/"
 project_storage_fixture "$k/bin/"
@@ -42,6 +42,11 @@ printf '%s\n' '<!doctype html><title>Live fixture</title>' > "$k/board/public/vo
 keeper="$(HERDR_ENV=0 FM_ROOT="$k" FM_PORT=0 bash "$ROOT/bin/lib/fm-lifeline.sh" --owner-pid "$$" --log "$k/board.log" -- bun run "$k/board/server.ts")"
 port="$(board_port "$k/board.log" "$keeper")" || port=''
 status='server did not start'; page=''; url=''
+if [ -z "$port" ]; then
+  diagnostic="$(sed -n '/refused/p' "$k/board.log")"
+  [ -n "$diagnostic" ] || diagnostic="$(cat "$k/board.log")"
+  status="$status: ${diagnostic:-board log is empty}"
+fi
 if [ -n "$port" ]; then
   url="http://127.0.0.1:$port"
   status="$(curl -s --max-time 15 -o "$k/live.html" -w '%{http_code}' "$url/voyage2d/index.html")"
@@ -55,7 +60,7 @@ for locale in en zh-TW; do
   done
 done
 rm "$k/board/public/voyage2d/index.html"
-plain_status='server did not start'; plain=''
+plain_status="$status"; plain=''
 if [ -n "$url" ]; then
   plain_status="$(curl -s --max-time 15 -o "$k/plain.html" -w '%{http_code}' "$url/")"
   plain="$(cat "$k/plain.html")"

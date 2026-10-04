@@ -1,7 +1,7 @@
-import { rmSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect } from '@playwright/test';
-import { test, makeRoot, startBoard, stopBoard } from './lib/fixture';
+import { test, makeRoot, startBoard, stopBoard, writeProjects, projectState, details } from './lib/fixture';
 
 test('voyage is one live stage, persists its size, and Esc Esc unloads it', async ({page}) => {
   const b=await startBoard(makeRoot(['working','review']));
@@ -50,10 +50,20 @@ test('Live stage requests only its static bundle and sees the board snapshot',as
   } finally { await stopBoard(b); }
 });
 
-test('Live commands use only authenticated board writes with the card project',async({page})=>{
-  const b=await startBoard(makeRoot(['working']));
+for (const project of [null, 'beta']) test('Live commands use only authenticated board writes with the card project'+(project ? ' in a two-project board' : ''),async({page})=>{
+  const root=makeRoot(['working']);
+  if(project) {
+    writeProjects(root,[
+      {name:'alpha',github:'example-org/alpha-app'},
+      {name:project,github:'example-org/beta-app',tasks:[{id:'T-001',title:'Beta task',depends_on:[]}]},
+    ]);
+    writeFileSync(join(projectState(root,project),'pending/D-beta-1.json'),JSON.stringify({
+      id:'D-beta-1',project,task:'T-001',kind:'choice',details,
+    }));
+  }
+  const b=await startBoard(root);
   try {
-    await page.goto(b.url+'/?lang=en');
+    await page.goto(b.url+'/?lang=en'+(project ? '&project='+project : ''));
     await expect.poll(()=>page.frames().find(f=>f.name()==='voyage-stage')?.evaluate(()=> (window as any).__G?.ready)).toBe(true);
     const f=page.frames().find(f=>f.name()==='voyage-stage')!;
     const sent:{path:string,headers:Record<string,string>,body:any}[]=[];
@@ -79,8 +89,11 @@ test('Live commands use only authenticated board writes with the card project',a
     expect(sent.map(r=>r.path)).toEqual(['/decisions','/tasks']);
     const token=await page.evaluate(()=>sessionStorage.getItem('board.token'));
     for(const r of sent){expect(r.headers.authorization).toBe('Bearer '+token);expect(r.headers.origin).toBe(b.url);}
-    expect(sent[0].body.project).toBe(expected.cardProject);
-    expect(sent[1].body.project).toBe(expected.taskProject);
+    for(const [index,ownProject] of [expected.cardProject,expected.taskProject].entries()) {
+      expect(ownProject || null).toBe(project);
+      if(ownProject) expect(sent[index].body.project).toBe(ownProject);
+      else expect('project' in sent[index].body).toBe(false);
+    }
   } finally {await stopBoard(b);}
 });
 
