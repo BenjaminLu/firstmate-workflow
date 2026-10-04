@@ -1589,8 +1589,12 @@ percentages. The regions below are that layout.
 
 **Engine badge (V7).** The server reads `config.yaml` on every state request —
 the top-level `vendor`, and `reviewer.vendor` when that block exists — and the
-header shows the top-level vendor, marked `vendor ⇄ reviewer-vendor` when they
-differ. Names are never hard-coded; no file or no top-level vendor is no badge.
+header shows the top-level vendor resolved as the launcher would, marked
+`vendor ⇄ reviewer-vendor` when the resolved names differ. A rule such as
+`opposite-of-host` resolves from the recorded host and appears in the tooltip.
+Crew vendor and model always come from the run's identity, in the board and
+in the voyage. Names are never hard-coded; no file or no top-level vendor is
+no badge.
 
 **Lanes and cards.** The lane order is sent by the server (`lanes`) so the page
 keeps no second copy. A task no event has moved yet is `ready` when every

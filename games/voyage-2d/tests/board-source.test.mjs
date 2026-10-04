@@ -102,3 +102,23 @@ test('answerable board cards suppress the Live fight without releasing its grip'
   assert.equal(source.view.kraken.battle,null);
   assert.equal(requests.length,0,'snapshot reconciliation never writes');
 });
+
+
+test('crew vendor and LLM identity belong to each run, while model stays the sprite key',()=>{
+  const {source}=make(); const s=snapshot();
+  s.engine={vendor:'opposite-of-host'};
+  s.crew=[
+    {...s.crew[0],vendor:'codex',model:'gpt-6-astra',model_source:'requested',model_requested:'gpt-6-astra',model_mismatch:false},
+    {id:'reviewer-shira-t1-r1',role:'reviewer',vendor:'claude',model:'claude-opus-5-5',model_source:'reported',model_requested:'another-model',model_mismatch:true}
+  ];
+  source.accept(s);
+  const rows=source.view.crew.slice(1);
+  assert.deepEqual(rows.map(c=>[c.vendor,c.llm,c.llm_source,c.llm_requested,c.llm_mismatch]),
+    s.crew.map(c=>[c.vendor,c.model,c.model_source,c.model_requested,c.model_mismatch]));
+  const sprite=['sailor-hammer','sailor-bandana','sailor-spyglass'][Array.from(s.crew[0].id).reduce((n,c)=>(n+c.charCodeAt(0))%3,0)];
+  assert.deepEqual(rows.map(c=>c.model),[sprite,'reviewer-1']);
+  assert.ok(rows.every(c=>c.vendor!==s.engine.vendor));
+  source.accept({...s,crew:[{id:'legacy',role:'worker'}]});
+  assert.equal(source.view.crew[1].vendor,undefined,'missing run identity never falls back to config');
+  assert.equal(source.view.crew[1].llm,undefined);
+});

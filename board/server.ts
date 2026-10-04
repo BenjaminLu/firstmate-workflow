@@ -311,12 +311,12 @@ const effectOf = (p: Record<string, any>, chosen: string): Effect | null => {
 
 // The header's engine badge (V7). Read at request time, so an edit to
 // config.yaml shows on the next refresh, and never hard-coded: the names are
-// whatever the file says. Only the two keys the badge needs are read - the
-// top-level vendor and the reviewer block's vendor - and a comment is never
-// a value. Without a successful read or a top-level vendor there is no badge.
-const engine = (): { vendor: string; reviewer: string | null; cross: boolean } | null => {
+// whatever the file says. Read the top-level and reviewer vendors plus the
+// fallback head for host-based rules; comments are never values. Without a
+// successful read or a top-level vendor there is no badge.
+const engine = (): { vendor: string; reviewer: string | null; cross: boolean; rule: string | null; reviewer_rule: string | null; host: string | null } | null => {
   const file = join(ROOT, "config.yaml");
-  let vendor: string | null = null, reviewer: string | null = null, block = "";
+  let vendor: string | null = null, reviewer: string | null = null, fallback: string | null = null, block = "";
   const value = (v: string) => v.trim().replace(/^(["'])(.*)\1$/, "$2") || null;
   for (const raw of readText(file).split("\n")) {
     const line = raw.replace(/(^|\s)#.*$/, "");
@@ -328,9 +328,17 @@ const engine = (): { vendor: string; reviewer: string | null; cross: boolean } |
     }
     const nested = /^\s+vendor:(.*)$/.exec(line);
     if (nested && block === "reviewer") reviewer = value(nested[1]);
+    const item = /^\s*-\s+(.*)$/.exec(line);
+    if (item && block === "fallback" && !fallback) fallback = value(item[1]);
   }
   if (!vendor) return null;
-  return { vendor, reviewer, cross: reviewer !== null && reviewer !== vendor };
+  const host = firstmateHost(process.env.FM_PROJECT || defaultProject()).vendor ?? null;
+  const rule = vendor === "opposite-of-host" ? vendor : null;
+  const reviewer_rule = reviewer === "opposite-of-host" ? reviewer : null;
+  const resolved = host === "claude" ? "codex" : host === "codex" ? "claude" : fallback || "mock";
+  if (rule) vendor = resolved;
+  if (reviewer_rule) reviewer = resolved;
+  return { vendor, reviewer, cross: reviewer !== null && reviewer !== vendor, rule, reviewer_rule, host };
 };
 
 // The projects (design section 15.4, T-054): each registered name with the

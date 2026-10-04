@@ -123,7 +123,8 @@ ship of the line's capacity). The ship's tiers map one to one onto this limit:
 | activity (detail card) | `crew[].activity` `{en, zh-TW}` | Authored text. zh-CN comes from `tw2cn` (§1.8). The simulator's `action` keys (hammer, haul, and so on) only choose the *animation*; derive them from `state` and `role`. |
 | progress | `crew[].progress` `{done,total}` or `null` | Not shown today; it could fill the detail card. |
 | rank, standing, merges, first-pass | **none** | Simulator-only (§3). |
-| vendor | **per crewman: none.** Board-wide: `engine.{vendor, reviewer, cross}` | The detail card's vendor line shows the engine badge, or it is removed. |
+| vendor | `crew[].vendor` | The crewman's own run vendor, never the board-wide engine rule. |
+| llm, llm_source, llm_requested, llm_mismatch | `crew[].model`, `model_source`, `model_requested`, `model_mismatch` | The exact run model and its provenance; requested models are marked, mismatches show a warning, and absent models use the empty-value label. |
 | model (which puppet) | **none** | The game chooses a puppet: robot for `worker-4` today, and live a stable hash of the id picks one of the sailors. The firstmate and reviewer puppets go by `role`. |
 | hand-offs between crewmen | `handoffs[]` `{kind: order, work, approve or reject, from, to, task, project}` | This is exactly what the rituals need: the order bell, the scroll carried to the reviewer, the salute, the rejection. |
 
@@ -374,7 +375,7 @@ goes to the top of the deck. Live is unchanged (§1.4). The hooks tests use (`__
 | The seeded world: task titles (`TITLES`), `rounds` per task, `flags` (ask, decision, red, crash, vendor), timings, the schedule | The log. Nothing is predicted; the game only reacts. |
 | `CREW_FIXTURE` (the fixed seven: captain, firstmate, reviewer-1, workers 1 to 4) and `newHand()` | `crew[]`, plus the captain added by the game. |
 | Ranks, standing, merges, first-pass counts, honours, the service record, promotion events | **None.** Drop them, or compute them later from the log (merges per crew name). |
-| Per-crewman vendor | `engine` (board-wide) only. |
+| Per-crewman vendor and model | Each `crew[]` row supplies `vendor` and `model` (mapped to `llm`); the game's `model` remains the sprite key. |
 | Lanes `issues`; card actions survey and set course; the `course` field | none (§2). |
 | Decision generation (choice, merge, scope and kraken cards with `effect`s) | `pending[]` / `responses[]`. |
 | `tally()` | `counts`. |
@@ -420,8 +421,9 @@ tapping outside also resumes.
   (milestone, issue or chat, round, gate red, kraken, approved, course, worker)
   and, only where the board allows it, Park and Drop (ready and backlog).
 - **Roster**: a table with one column per field (name, role, project, task,
-  round, PR, state, activity, rank, vendor), grouped into Command, Review, and
-  Workers by state. It is readable at 24.
+  round, PR, state, activity, rank, vendor in Playground; name, role, project,
+  task, round, PR, state, activity, vendor, model in Live), grouped into Command,
+  Review, and Workers by state. It is readable at 24.
 - **Chart**: the voyage as ports on a line, the merged share of each leg, the
   ship's position, and the fog of uncharted issues.
 - **Settings**:
@@ -463,8 +465,9 @@ tapping outside also resumes.
   only.
 - The detail card opens on hover, tap or keyboard focus (each crewman is a
   focusable button) and is anchored to the character. It lists name, role,
-  project, task and title, round, PR, state, activity, rank and vendor, one
-  labelled line each. One is open at a time; Esc or a second tap closes it. It
+  project, task and title, round, PR, state, activity, rank and vendor in
+  Playground; Live replaces rank with the run model after vendor, one labelled
+  line each. One is open at a time; Esc or a second tap closes it. It
   is in three languages.
 
 ### 4.5 Rituals (the director)

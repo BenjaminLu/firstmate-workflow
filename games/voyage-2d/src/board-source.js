@@ -52,7 +52,8 @@ export class BoardSource {
       task:c.task?`${c.project || s.default_project || ''}/${c.task}`:null,
       state:({queued:'idle',unknown:'idle',gate:'blocked',captain:'waiting'})[c.state] || c.state,
       action:c.state==='working'?'hammer':c.state==='review'?'lookout':null,
-      vendor:s.engine?.vendor || '',record:[],honours:[]}));
+      vendor:c.vendor,llm:c.model,llm_source:c.model_source,
+      llm_mismatch:c.model_mismatch,llm_requested:c.model_requested,record:[],honours:[]}));
     crew.unshift({id:'captain',role:'captain',name:'Captain',model:'captain',state:'idle',task:null,record:[],honours:[]});
     const milestones=[...new Set(tasks.map(t=>t.milestone).filter(Boolean))].map(id=>({id,tasks:tasks.filter(t=>t.milestone===id).map(t=>t.id)}));
     const decisions=(s.pending || []).map(d=>({...d,task:d.task?`${d.project || s.default_project || ''}/${d.task}`:null,options:[]}));
