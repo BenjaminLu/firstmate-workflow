@@ -281,7 +281,9 @@ assert_eq "" "$(cat "$d2/ghcalls" 2>/dev/null)" "an unavailable vendor opens no 
 # usage error - needs no adapter, which a fixture copying only fm-worker.sh
 # and fm-config.sh (tests/reconcile.test.sh) relies on
 dn="$(safe_tmpdir)"; mkdir -p "$dn/bin"
-cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$dn/bin/"
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
+cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$dn/bin/"; config_modules_fixture "$dn/bin/"
 out="$("$dn/bin/fm-worker.sh" 2>&1)"; rc=$?
 assert_eq "64" "$rc" "a worker with no adapters' library still reaches its own usage check"
 assert_lacks "$out" "adapters/_lib.sh" "and never ends at start for an adapter it has not reached"

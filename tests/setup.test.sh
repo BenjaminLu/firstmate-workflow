@@ -18,7 +18,9 @@ printf 'gh\tpresent\t1\ngh\tauthed\t1\ngh\tpermission\tWRITE\n' > "$facts"
 # a doctor stand-in, so this suite is testing the wizard's own writes, not
 # the real fm-doctor.sh --sandbox it calls last (that is doctor.test.sh's)
 mkdir -p "$d/bin"
-cp "$ROOT/bin/fm-setup.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
+cp "$ROOT/bin/fm-setup.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"; config_modules_fixture "$d/bin/"
 # Port ownership is covered with a real TCP listener in settings.test.sh.
 # Defaults here must not depend on a board on the runner's 4173.
 printf 'import sys\nassert sys.argv[1] == "board-check-port"\n' > "$d/bin/fm-herdr.py"

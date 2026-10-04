@@ -538,32 +538,20 @@ else
   skip "shellcheck not installed"
 fi
 
+stage "Python compilation"
+if python3 "$_fm_code_dir/lib/fm_ci_checks.py" compile "$ci_tmp"; then
+  pass "bin/lib Python modules compile"
+else
+  flunk "bin/lib Python modules compile"
+fi
+
 # Read bytes, not locale-dependent character classes: bash 3.2 can absorb
 # non-ASCII punctuation into an unbraced variable name. Scan text recursively
 # under both trees, including embedded snippets and lint-source files. A NUL
 # anywhere marks binary content (including generated Python bytecode); no
 # extension or cache-directory exclusions may hide real textual snippets.
 stage "non-ASCII variable boundary"
-if python3 - <<'PY_BOUNDARY'
-from pathlib import Path
-import re
-import sys
-
-pattern = re.compile(rb'\$[A-Za-z_][A-Za-z0-9_]*[\x80-\xff]')
-failed = False
-for root in (Path('bin'), Path('tests')):
-    for path in sorted(root.rglob('*')):
-        if not path.is_file():
-            continue
-        content = path.read_bytes()
-        if b'\0' in content:
-            continue
-        for number, line in enumerate(content.split(b'\n'), 1):
-            if pattern.search(line):
-                print(f'{path}:{number}: brace the variable before non-ASCII text')
-                failed = True
-sys.exit(1 if failed else 0)
-PY_BOUNDARY
+if python3 "$_fm_code_dir/lib/fm_ci_checks.py" variable-boundary
 then
   pass "non-ASCII variable boundary"
 else

@@ -24,6 +24,9 @@ class Settings(unittest.TestCase):
         self.repo = Path(tmp.name)
         (self.repo / 'bin').mkdir()
         shutil.copy(root / 'bin/fm-config.sh', self.repo / 'bin')
+        (self.repo / 'bin/lib').mkdir()
+        for name in ('fm_registry.py', 'fm_config_values.py', 'fm_config_tasks.py', 'fm_config_runtime.py'):
+            shutil.copy(root / 'bin/lib' / name, self.repo / 'bin/lib')
         self.env = {k:v for k,v in os.environ.items() if not k.startswith('FM_')}
         env = patch.dict(os.environ, self.env, clear=True); env.start(); self.addCleanup(env.stop)
     def config(self, text):

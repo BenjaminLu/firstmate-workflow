@@ -333,7 +333,9 @@ assert_eq "65" "$(rc_of fm_project_resolve '' "$c")" "nothing named and no defau
 assert_eq "only-one" "$(fm_project_resolve only-one "$c")" "while a named project still resolves"
 
 # a resolver whose parser is missing refuses, rather than dying in a traceback
-mkdir -p "$r/lone/bin" && cp "$ROOT/bin/fm-config.sh" "$r/lone/bin/"
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
+mkdir -p "$r/lone/bin" && cp "$ROOT/bin/fm-config.sh" "$r/lone/bin/"; config_modules_fixture "$r/lone/bin/"
 assert_eq "65" "$(rc_of bash -c '. "$1/lone/bin/fm-config.sh"; fm_project_resolve only-one "$2"' _ "$r" "$c")" \
   "no fm-herdr.py beside fm-config.sh: exit 65"
 assert_contains "$(cat "$r/err")" "fm-herdr.py" "and the message names the missing parser"
