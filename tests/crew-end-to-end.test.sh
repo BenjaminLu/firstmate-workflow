@@ -25,6 +25,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
+# shellcheck source=tests/lib/spec-preflight.sh
+. "$ROOT/tests/lib/spec-preflight.sh"
 
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - crew e2e skipped"; exit 0; }
 
@@ -51,6 +53,8 @@ cp "$ROOT/skills/reviewer/SKILL.md" "$r/skills/reviewer/"
 printf 'vendor: mock\n' > "$r/config.yaml"
 printf '{"id":"T-1","title":"first","activity":{"en":"Build the first fixture","zh-TW":"實作第一個測試任務"},"scope":["src/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-1.json"
 printf '{"id":"T-2","title":"second","scope":["src/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-2.json"
+seed_spec_preflight "$r" T-1
+seed_spec_preflight "$r" T-2
 
 
 mkdir -p "$d/stub"

@@ -95,6 +95,7 @@ for question_seed in seeded committed; do
   dq="$(fixture)"; rq="$dq/repo"; GHq="$(ghstub "$dq")"
   jq -n '{id:"T-Q",title:"question",scope:["src/**","design/tasks/T-Q.json"],acceptance:["needs clarification"]}' \
     > "$rq/design/tasks/T-Q.json"
+  seed_spec_preflight "$rq" T-Q
   if [ "$question_seed" = committed ]; then
     mkdir -p "$rq/state/worktrees"
     git -C "$rq" worktree add -q -b t-q-question "$rq/state/worktrees/T-Q" main
@@ -338,6 +339,8 @@ rm -rf "$d13"
 
 # A failed local store is visible and recoverable, but cannot discard completed work.
 dEvidence="$(fixture)"; rEvidence="$dEvidence/repo"; ghEvidence="$(ghstub "$dEvidence")"
+# Seeding a receipt leaves the writer lock file; replace it with a blocker.
+rm -f "$rEvidence/state/evidence/self/T-Z/.lock"
 mkdir -p "$rEvidence/state/evidence/self/T-Z/.lock"
 cat > "$rEvidence/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash

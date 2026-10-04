@@ -20,6 +20,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/local-verdict.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
+# shellcheck source=tests/lib/spec-preflight.sh
+. "$ROOT/tests/lib/spec-preflight.sh"
 
 # Caller card cases moved to tests/lib/autopilot_loop.py and
 # tests/lib/run_project_turns.py; this suite retains the real launcher chain.
@@ -52,6 +54,7 @@ J
 printf '# design\n## 6. gates\nsix of them\n## 8. board\n' > design/design.md
 echo base > src/thing
 git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
+seed_spec_preflight "$r" T-101
 
 export GHSTATE="$d/ghstate"
 GH="$ROOT/tests/gh-stub.sh"

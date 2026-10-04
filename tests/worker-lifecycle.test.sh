@@ -54,6 +54,7 @@ assert_fail "test -f '$r/state/worktrees/T-Z/.fm-prompt.md'" "the prompt is clea
 dn="$(fixture)"; rn="$dn/repo"; GHn="$(ghstub "$dn")"
 jq -n '{id:"T-N",title:"a new task",scope:["src/**","design/tasks/T-N.json"],acceptance:["it exists"]}' \
   > "$rn/design/tasks/T-N.json"
+seed_spec_preflight "$rn" T-N
 assert_eq "?? design/tasks/T-N.json" "$(git -C "$rn" status --porcelain -- design/tasks)" \
   "the new task's spec is untracked in the dispatching repository"
 outn="$(cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" bin/fm-worker.sh --task T-N --name worker-n 2>&1)"
@@ -67,6 +68,7 @@ assert_contains "$outn" "design/tasks/T-N.json is not on the base; copied into t
 # was and changes nothing else changed nothing
 dn2="$(fixture)"; rn2="$dn2/repo"; GHn2="$(ghstub "$dn2")"
 jq -n '{id:"T-N",title:"a new task",scope:["src/**"],acceptance:["it exists"]}' > "$rn2/design/tasks/T-N.json"
+seed_spec_preflight "$rn2" T-N
 outn2="$(cd "$rn2" && FM_ROOT="$rn2" FM_GH="$GHn2" FM_MOCK_FILE=design/tasks/T-N.json \
   FM_MOCK_BODY="$(cat "$rn2/design/tasks/T-N.json")" bin/fm-worker.sh --task T-N --name worker-n2 2>&1)"
 assert_eq "1" "$?" "a round that only has the copied spec changed nothing"
@@ -96,12 +98,14 @@ for leftover in empty commit dirty spec spec_pr; do
   mkdir -p "$rl/state/worktrees"
   git -C "$rl" worktree add -q -b "$bl" "$tl" main
   jq -n '{id:"T-N",title:"a new task",scope:["src/**"],acceptance:["WIDENED_SPEC"]}' > "$rl/design/tasks/T-N.json"
+  seed_spec_preflight "$rl" T-N
   case "$leftover" in
     commit)
       echo authored > "$tl/earlier.txt"
       mkdir -p "$tl/design/tasks"
       jq '.acceptance=["AUTHORED_SPEC"]' "$rl/design/tasks/T-N.json" > "$tl/design/tasks/T-N.json"
-      git -C "$tl" add earlier.txt design/tasks/T-N.json; git -C "$tl" commit -qm earlier ;;
+      git -C "$tl" add earlier.txt design/tasks/T-N.json; git -C "$tl" commit -qm earlier
+      seed_spec_preflight "$rl" T-N "$tl/design/tasks/T-N.json" ;;
     dirty) echo authored > "$tl/earlier.txt" ;;
     spec|spec_pr)
       mkdir -p "$tl/design/tasks"

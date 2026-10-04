@@ -14,11 +14,14 @@ set -uo pipefail
 for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
+export HERDR_ENV=0 FM_TRANSPORT=direct
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
+# shellcheck source=tests/lib/spec-preflight.sh
+. "$ROOT/tests/lib/spec-preflight.sh"
 
 RC="$ROOT/bin/fm-reconcile.sh"
 
@@ -655,6 +658,10 @@ echo "  real worker preserves no-PR boundaries across repeated offline recovery"
 for terminal in CLOSED MERGED; do
   for timing in historical current new-attempt; do
     d="$(fixture)"; cleanup_stub "$d"
+    # Preserve the production same-PID lock handoff while retaining early
+    # refusal diagnostics, which reconcile normally sends to /dev/null.
+    sed 's|>/dev/null 2>\&1 </dev/null \&|>"$REPO/worker-launch.log" 2>\&1 </dev/null \&|' \
+      "$RC" > "$d/bin/fm-reconcile.sh"
     cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"; project_storage_fixture "$d/bin/"
     cp -R "$ROOT/bin/lib" "$d/bin/"   # the lifeline a round's runner holds (T-151)
     # T-036 checkpoint + guard are launch-adjacent deps when present on the tip.
@@ -662,6 +669,7 @@ for terminal in CLOSED MERGED; do
     [ -f "$ROOT/bin/fm-guard.sh" ] && cp "$ROOT/bin/fm-guard.sh" "$d/bin/"
     mkdir -p "$d/design/tasks" "$d/stub" "$d/state/worktrees/T-011"
     echo '{"id":"T-011","title":"test","scope":[]}' > "$d/design/tasks/T-011.json"
+    seed_spec_preflight "$d" T-011
     cat > "$d/stub/git" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -680,13 +688,23 @@ SH
     [ "$timing" = historical ] || echo '{"type":"dispatched","task":"T-011"}' >> "$d/state/events.jsonl"
     jq -cn --arg type "$type" '{type:$type,pr:10}' >> "$d/state/events.jsonl"
     [ "$timing" != historical ] || echo '{"type":"dispatched","task":"T-011"}' >> "$d/state/events.jsonl"
+    startup_failed=0
+    ready_or_refused() {
+      [ -f "$d/ready" ] || grep -q '^fm-spec-preflight:' "$d/worker-launch.log" 2>/dev/null
+    }
     for round in 1 2; do
       dead_pid > "$d/state/worktrees/T-011.pid"
-      rm -f "$d/ready" "$d/release"
+      rm -f "$d/ready" "$d/release" "$d/worker-launch.log"
       out="$(PATH="$d/stub:$PATH" FM_ROOT="$d" FM_GH="$(rec "$d" offline <<< offline)" "$d/bin/fm-reconcile.sh" 2>&1)"
-      assert_eq 0 "$?" "real offline launch succeeds ($terminal/$timing/$round)"
-      eventually test -f "$d/ready"
+      launch_rc=$?
+      assert_eq 0 "$launch_rc" "real offline launch succeeds ($terminal/$timing/$round)"
+      if [ "$launch_rc" -eq 0 ]; then eventually ready_or_refused; fi
       assert_ok "test -f '$d/ready'" "real worker reaches pre-association crash point"
+      if [ ! -f "$d/ready" ]; then
+        cat "$d/worker-launch.log" 2>/dev/null
+        startup_failed=1
+        break
+      fi
       assert_ok "jq -se 'last(.[]|select(.type==\"dispatched\"))|.data.recovery==true and .pr==null and .data.role==\"worker\"' '$d/state/events.jsonl'" "real no-PR dispatch is recovery"
       PATH="$d/stub:$PATH" FM_ROOT="$d" "$d/bin/fm-worker.sh" --task T-011 > "$d/duplicate" 2>&1
       assert_eq 70 "$?" "inherited lock rejects ordinary overlapping worker"
@@ -703,6 +721,12 @@ SH
       eventually ended
       assert_eq "$round" "$count" "real failed worker records its ending"
     done
+    if [ "$startup_failed" -eq 1 ]; then
+      touch "$d/release"
+      kill_pidfile "$d/state/worktrees/T-011.pid"
+      rm -rf "$d"
+      continue
+    fi
     if [ "$timing" = new-attempt ]; then
       # A genuinely new ordinary run must still move the boundary. A stale
       # ancestor environment is not the same-PID recovery handoff.

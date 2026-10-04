@@ -237,6 +237,8 @@ def darwin(p, roots, reads, own, port, listening):
         lines += ['(allow file-read* %s)' % sub([pinned]),
                   '(deny file-write* %s)' % sub([pinned])]
     git_own = own_git(roots[0]) if roots else None
+    if roots and p.get('review_root_readonly'):
+        lines.append('(deny file-write* (subpath %s))' % sbpl(roots[0]))
     if roots and p.get('review_git_readonly'):
         lines.append('(deny file-write* (subpath %s))' % sbpl(os.path.join(roots[0], '.git')))
     if git_own:
@@ -279,8 +281,8 @@ def linux(p, roots, reads, own, sock):
         state = pinned_state(pinned)
         if any(state == r or state.startswith(r.rstrip('/') + '/') for r in reads):
             a += ['--tmpfs', state]
-    for r in roots:
-        a += ['--bind', r, r]
+    for index, r in enumerate(roots):
+        a += ['--ro-bind' if index == 0 and p.get('review_root_readonly') else '--bind', r, r]
     # the tree's own link to git (T-128), read-only over the read-write bind
     # above: whatever else a round deletes, git run in this tree still works
     git_own = own_git(roots[0]) if roots else None

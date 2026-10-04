@@ -297,3 +297,12 @@ T-135 provenance contract (captain, 2026-10-02): local verdict records carry
 `authenticated` for managed Codex finals or `legacy` for other adapters. Gate 7
 and the protocol reader accept both; legacy remains explicitly labelled and
 cannot claim T-163 authentication. Optional comments never replace local records.
+
+## Rule changes and migration (T-185)
+
+For every diff changing a validation rule, lint, gate, schema or stored-record
+format, check the spec's treatment of existing records and tasks already in
+flight. A missing migration clause or a migration without a test is a REJECT
+finding, tied to acceptance and the standing-list protocol. Check all callers,
+mirrors, fixtures and tests affected by the changed rule. Prior spec preflight is
+proposal evidence, never implementation approval or a substitute for the gates.

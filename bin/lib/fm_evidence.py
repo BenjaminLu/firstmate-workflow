@@ -20,7 +20,7 @@ import sys
 import tempfile
 import uuid
 
-KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict', 'projection'}
+KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict', 'projection', 'spec-preflight'}
 
 
 def unquoted(text):
@@ -134,7 +134,8 @@ class Store:
         self.key_path = self.state / 'evidence-signing.key'
 
     def key(self, create=False):
-        self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if create:
+            self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
         if create and not self.key_path.exists():
             fd, pending = tempfile.mkstemp(prefix='.evidence-key-', dir=self.state)
             try:
@@ -163,6 +164,8 @@ class Store:
                         separators=(',', ':'), ensure_ascii=False).encode(), hashlib.sha256).hexdigest()
 
     def records(self):
+        # Writers publish complete immutable records atomically. Readers need
+        # neither the append lock nor permission to create directories.
         records = []
         for path in sorted(self.directory.glob('[0-9]*.json')):
             record = json.loads(path.read_text())
@@ -176,7 +179,7 @@ class Store:
 
             if record['project'] != self.project or record['task'] != self.task:
                 raise ValueError('record identity does not match its storage location')
-            if record['kind'] == 'verdict':
+            if record['kind'] in ('verdict', 'spec-preflight'):
                 provenance = record.get('provenance', {})
                 level = provenance.get('level')
                 if level not in ('legacy', 'authenticated'):
@@ -187,6 +190,13 @@ class Store:
                         or provenance.get('task') != self.task
                         or provenance.get('role') != 'reviewer'):
                     raise ValueError('local verdict lacks authenticated final-answer provenance')
+            if record['kind'] == 'spec-preflight':
+                from fm_spec_preflight import decision
+                if (not re.fullmatch(r'[0-9a-f]{64}', record.get('spec_sha256', ''))
+                        or decision(record['text'], self.task) != record.get('verdict')
+                        or (record['provenance']['level'] == 'authenticated'
+                            and record['provenance'].get('spec_preflight') != record['spec_sha256'])):
+                    raise ValueError('invalid spec-preflight source binding or final')
             records.append(record)
         return records
 
