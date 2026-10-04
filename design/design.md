@@ -4249,7 +4249,7 @@ group, SIGTERM and then SIGKILL a second later. So nothing the check started
 outlives the probe, even a probe killed with SIGKILL, where no trap runs. A
 probe sent SIGTERM runs its trap once the runner returns, which is at most
 the limit later. It prints exactly one of `authenticated`,
-`unauthenticated`, `expired`, `quota-exhausted`, `indeterminate`, `timeout`
+`unauthenticated`, `expired`, `quota-exhausted`, `keychain-blocked`, `indeterminate`, `timeout`
 or `unavailable` (not installed), the vendor version it probed, and a
 one-line reason in English and Traditional Chinese - never the vendor CLI's
 own output or a secret. claude's status check, verified live, answers with
@@ -4261,6 +4261,35 @@ against the service), not whether the service takes it, which is left to
 the round's own outage signatures. codex's and cursor-agent's plain-text
 answers are read with the same kind of phrase list the adapters use
 (`_FM_SIG`), narrowed to what a status check itself says.
+
+On macOS, only the cursor-agent status check runs through `sandbox-exec`
+(or `FM_SANDBOX_TOOL`), using a minimal allow-default profile with the same
+`SECRET_SERVICES` mach-lookup denial as crew rounds. `FM_SANDBOX_OS` defaults
+to the real platform. Both settings are resolved before the environment is
+emptied; HOME remains the probe's empty temporary home. The confined shell
+writes `$work/started` before executing `cursor-agent status`. A missing tool
+or a wrapper that exits without the marker fails closed as `keychain-blocked`
+("could not confine cursor-agent's keychain access" / "無法限制 cursor-agent 的鑰匙圈存取");
+cursor-agent never runs unconfined as a fallback. A timeout takes precedence,
+even when the wrapper never writes the marker. Linux runs the check unwrapped.
+
+For cursor-agent's own answer, classification checks quota exhaustion, then
+expiry, then exit-0 `Logged in`, then a case-insensitive keychain error, then
+the usual unauthenticated signatures, exit-0 rule and indeterminate fallback.
+A working key wins over a keychain warning; a nonzero exit cannot confirm
+`Logged in`. A keychain error is `keychain-blocked`, with reasons
+"cursor-agent needs keychain storage, which crew rounds deny" and
+"cursor-agent 需要鑰匙圈儲存，而 crew 回合禁止存取鑰匙圈". Other vendors' ordering is unchanged.
+The pre-round cursor model list-check still uses the operator's real HOME.
+
+No keychain or preference is created or changed. The marker lives inside the
+probe's `$work`, removed on EXIT, INT, TERM and HUP. SIGKILL leaves that
+scratch directory for the OS's temporary-directory cleanup, as before; there
+is no sibling-directory sweep or owner file. Historical `vendor_unavailable`
+events stay byte-identical and are never consulted for an auth decision.
+Every `fm_auth_probe` call asks afresh, while `fm_auth_filter_chain` truncates
+its scratch notes file and fills it with only the current call's refusals.
+No stored format or migration is needed (T-188).
 
 gemini is the one vendor whose status is never asked: its docs and every
 transcript this repository carries name no non-interactive status command,
@@ -4279,7 +4308,7 @@ every vendor in their chain that it knows (`fm_vendors`,
 `bin/fm-config.sh`: claude, codex, cursor-agent, gemini) before any of them
 sees a prompt (`fm_auth_filter_chain`, `bin/adapters/_lib.sh`). Every
 answer but `authenticated` (`fm_auth_refuses`) - `unauthenticated`,
-`expired`, `quota-exhausted`, `indeterminate`, `timeout`, `unavailable`, or
+`expired`, `quota-exhausted`, `keychain-blocked`, `indeterminate`, `timeout`, `unavailable`, or
 no answer at all - refuses the vendor for this round, exactly as
 `fm_run_chain` treats an outage: moved past, never started, and put on the
 board as `vendor_unavailable` naming the status and the probe's reason

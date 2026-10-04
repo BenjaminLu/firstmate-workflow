@@ -41,6 +41,12 @@ mkdir -p "$d/keychain"
 } > "$d/security"
 chmod +x "$d/security"
 
+# Explicit pass-through tool: never use the host's sandbox-exec in a fixture.
+# shellcheck source=tests/lib/auth-probe.sh
+. "$ROOT/tests/lib/auth-probe.sh"
+export FM_SANDBOX_TOOL="$d/sandbox-tool"
+auth_probe_sandbox_tool "$FM_SANDBOX_TOOL" "$d"
+
 bin="$d/bin"; mkdir -p "$bin"
 # What a real CLI said is replayed from its recorded transcript
 # (tests/fixtures/auth-status), never words made up here. fake() is for
@@ -135,7 +141,7 @@ fake_checks() {  # fake_checks <vendor> <bash condition> <yes fixture> <no fixtu
   {
     printf '#!/usr/bin/env bash\n'
     printf 'if [ "$1" = --version ]; then exec %q %q --version; fi\n' "$FIX/replay.sh" "$yes"
-    printf 'touch %q\n' "$d/$v-status"
+    printf 'echo status >> %q\n' "$d/$v-status"
     printf 'env > %q\n' "$d/$v-env"
     printf 'if %s; then exec %q %q; fi\n' "$cond" "$FIX/replay.sh" "$yes"
     printf 'exec %q %q\n' "$FIX/replay.sh" "$no"
@@ -153,6 +159,71 @@ out="$(run cursor-agent)"
 assert_eq "authenticated" "$(field "$out" status)" "cursor-agent with the crew key in the keychain only is authenticated"
 assert_contains "$(cat "$d/cursor-agent-env" 2>/dev/null)" "CURSOR_API_KEY=crew-cursor-key" \
   "and the probe hands it the keychain item as CURSOR_API_KEY, as the round gets it"
+
+# Scratch notes are replaced, and the key is checked afresh (T-188).
+t="$d"
+printf 'cursor-agent|unauthenticated|historical refusal|歷史拒絕\n' > "$t/auth-notes"
+before="$(wc -l < "$d/cursor-agent-status" | tr -d ' ')"
+out="$(
+  . "$ROOT/bin/fm-config.sh"
+  . "$ROOT/bin/adapters/_lib.sh"
+  PATH="$bin:$PATH" fm_auth_filter_chain "$ROOT" cursor-agent "$t/auth-notes"
+)"
+assert_eq cursor-agent "$out" "a fresh signed-in check keeps cursor-agent despite stale notes"
+assert_eq "$((before + 1))" "$(wc -l < "$d/cursor-agent-status" | tr -d ' ')" "notes filtering asks status again"
+assert_ok "[ ! -s '$t/auth-notes' ]" "the exact stale notes file is now empty"
+
+# The profile uses the round's complete secret-service deny list.
+services="$(python3 - "$ROOT/bin/lib" <<'SERVICES'
+import sys
+sys.path.insert(0, sys.argv[1])
+from fm_sandbox_policy import SECRET_SERVICES
+print('\n'.join(SECRET_SERVICES))
+SERVICES
+)"
+profile="$(cat "$d/profile" 2>/dev/null)"
+assert_contains "$profile" '(version 1)' "the confinement profile declares its version"
+assert_contains "$profile" '(allow default)' "the probe profile leaves unrelated access alone"
+assert_contains "$profile" '(deny mach-lookup' "the probe denies secret-service lookup"
+while IFS= read -r service; do
+  assert_contains "$profile" "$service" "the profile denies $service"
+done <<< "$services"
+assert_contains "$(cat "$d/sandbox-argv" 2>/dev/null)" '/bin/sh' "the sandbox starts the marker wrapper"
+
+fake cursor-agent 2026.10.01-e373342 'A Keychain cannot be found to store "cursor-user"; not logged in' 1
+out="$(run cursor-agent)"
+assert_eq keychain-blocked "$(field "$out" status)" "a confined keychain failure has its own status"
+assert_eq 'cursor-agent needs keychain storage, which crew rounds deny' "$(field "$out" en)" "keychain refusal explains the crew policy in English"
+assert_eq 'cursor-agent 需要鑰匙圈儲存，而 crew 回合禁止存取鑰匙圈' "$(field "$out" tw)" "keychain refusal explains the crew policy in Traditional Chinese"
+fake cursor-agent 2026.10.01-e373342 $'✓ Logged in\nkeychain warning: not authenticated' 0
+assert_eq authenticated "$(field "$(run cursor-agent)" status)" "a working key wins over a keychain warning"
+for pair in 'quota-exhausted|quota exceeded' 'expired|session expired'; do
+  fake cursor-agent 2026.10.01-e373342 "✓ Logged in; keychain warning; ${pair#*|}" 0
+  assert_eq "${pair%%|*}" "$(field "$(run cursor-agent)" status)" "${pair%%|*} wins over Logged in"
+done
+fake cursor-agent 2026.10.01-e373342 '✓ Logged in' 1
+assert_eq indeterminate "$(field "$(run cursor-agent)" status)" "nonzero Logged in is not authenticated"
+
+fake_checks cursor-agent 'true' cursor-agent-signed-in cursor-agent-signed-out
+out="$(FM_SANDBOX_TOOL="$d/missing-sandbox-tool" run cursor-agent)"
+assert_eq keychain-blocked "$(field "$out" status)" "a missing sandbox tool fails closed"
+assert_eq "could not confine cursor-agent's keychain access" "$(field "$out" en)" "a wrapper failure is distinguished from a vendor keychain error"
+assert_ne '' "$(field "$out" tw)" "wrapper failure also has a Traditional Chinese reason"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "missing confinement never starts cursor status"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$d/refused-tool"
+printf '#!/usr/bin/env bash\nexec sleep 30\n' > "$d/hanging-tool"
+chmod +x "$d/refused-tool" "$d/hanging-tool"
+out="$(FM_SANDBOX_TOOL="$d/refused-tool" run cursor-agent)"
+assert_eq keychain-blocked "$(field "$out" status)" "a refused profile without a started marker fails closed"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "a refused wrapper never starts cursor status"
+out="$(FM_SANDBOX_TOOL="$d/hanging-tool" FM_AUTH_PROBE_TIMEOUT=1 run cursor-agent)"
+assert_eq timeout "$(field "$out" status)" "a wrapper timeout wins over its missing started marker"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "a hanging wrapper never starts cursor status"
+# Linux resolves the crew key from its file tier, without a macOS wrapper.
+crew_cursor
+out="$(FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$d/missing-sandbox-tool" run cursor-agent)"
+assert_eq authenticated "$(field "$out" status)" "Linux checks status without a sandbox tool or started marker"
+assert_ok "[ -s '$d/cursor-agent-status' ]" "Linux actually asks cursor status"
 
 # cursor-agent: the operator's own `agent login` works, but there is no crew
 # key - a round would have no login, so the probe refuses before asking
@@ -290,6 +361,7 @@ assert_contains "$(field "$out" en)" "rounds on it are refused" "and says a roun
 # kernel, not by polling a pid; a survivor shows as the bounded read timing
 # out. $d/started says the check is running before anything is killed.
 hang_check() {
+  local vendor="${1:-claude}"
   rm -f "$d/started" "$d/held" "$d/hang-pids"; mkfifo "$d/started" "$d/held"
   {
     printf '#!/usr/bin/env bash\n'
@@ -299,8 +371,8 @@ hang_check() {
     printf 'echo "$$ $!" > %q\n' "$d/hang-pids"
     printf 'echo started > %q\n' "$d/started"
     printf 'exec sleep 30\n'
-  } > "$bin/claude"
-  chmod +x "$bin/claude"
+  } > "$bin/$vendor"
+  chmod +x "$bin/$vendor"
 }
 check_started=''
 await_check() {  # opens $d/held for reading once the check says it runs
@@ -336,15 +408,27 @@ check_gone
 assert_eq "1" "$gone" "and neither the check nor anything it started outlives the probe"
 end_leftovers
 
-hang_check
+hang_check cursor-agent
+: > "$d/sandbox-argv"
 exec 4<>"$d/started"
-( exec 4>&-; PATH="$bin:$PATH" TMPDIR="$d/probe-tmp" FM_AUTH_PROBE_TIMEOUT=60 exec "$PROBE" claude ) \
+( exec 4>&-; PATH="$bin:$PATH" TMPDIR="$d/probe-tmp" FM_AUTH_PROBE_TIMEOUT=60 exec "$PROBE" cursor-agent ) \
   >/dev/null 2>&1 &
 probe_pid=$!
 await_check
+assert_contains "$(cat "$d/sandbox-argv" 2>/dev/null)" 'cursor-agent' "the SIGKILL case starts cursor through confinement"
+# Capture the wrapper group while the FIFO tells us the cursor stub is alive.
+cursor_pid="$(cut -d ' ' -f 1 "$d/hang-pids" 2>/dev/null)"
+cursor_group="$(ps -o pgid= -p "${cursor_pid:-0}" 2>/dev/null | tr -d ' ')"
+assert_ne '' "$cursor_group" "the confined cursor has an observable process group"
 kill -KILL "$probe_pid"; wait "$probe_pid" 2>/dev/null
 check_gone
 assert_eq "1" "$gone" "a probe killed outright mid-check leaves no process of the check behind"
+# One snapshot after the EOF wake, never a polling loop. Zombies are dead.
+ps -axo pid=,pgid=,stat= > "$d/process-snapshot"
+assert_eq 0 "$?" "the kernel process snapshot is readable"
+survivors="$(awk -v group="$cursor_group" -v stub="$cursor_pid" \
+  '($2 == group || $1 == stub) && $3 !~ /^Z/ {print $1}' "$d/process-snapshot")"
+assert_eq '' "$survivors" "SIGKILL leaves neither a live wrapper-group member nor the cursor stub"
 end_leftovers
 exec 4>&-
 
@@ -393,7 +477,7 @@ assert_lacks "$out" "crew-claude-token" "and neither does the round's login"
 # --- only authenticated is usable: the one rule fm-worker.sh, fm-review.sh
 # and fm doctor apply to the probe's answer (fm_auth_refuses) --------------
 ( . "$ROOT/bin/adapters/_lib.sh"
-  for st in unauthenticated expired quota-exhausted indeterminate timeout unavailable some-new-word ''; do
+  for st in unauthenticated expired keychain-blocked quota-exhausted indeterminate timeout unavailable some-new-word ''; do
     fm_auth_refuses "$st" || echo "admitted:${st:-<empty>}"
   done
   fm_auth_refuses authenticated && echo "refused:authenticated"
