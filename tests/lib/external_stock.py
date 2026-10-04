@@ -87,6 +87,12 @@ with open(sys.argv[4], 'a') as log:
             acceptance=['Private acceptance sentinel'])))
         (home / 'design.md').write_text('Private design sentinel\n')
         state = home / 'state'
+        # Shared helper resolves the external Store layout under private state.
+        # Dependency: tests/lib/spec-preflight.sh
+        run(['bash', '-c',
+             '. "$1/tests/lib/spec-preflight.sh"; ROOT="$1"; '
+             'seed_spec_preflight "$2" T-051 "$3/tasks/T-051.json" app "$3/state"',
+             'seed-preflight', str(root), str(engine), str(home)], env)
         (state / 'events.jsonl').write_text(json.dumps(dict(type='greenlit', actor='captain',
             project='app', ts='2026-10-02T00:00:00Z', data={}))+'\n')
         gh = scratch / 'gh'

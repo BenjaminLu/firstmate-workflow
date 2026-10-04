@@ -5206,3 +5206,40 @@ controller. E2e fixtures locate the built artifact or build in isolated scratch.
 On screens at most 650px wide the panel follows the decisions and precedes the
 lanes; desktop retains the panel above the decisions. The frozen 3D application stays outside this integration;
 any 3D follow-up requires its own approved scope.
+
+### Spec preflight and migration (T-185)
+
+Before every dispatch and repin, firstmate runs
+`bin/fm-review.sh --spec-preflight --task <task> --spec <file>` with the selected
+project. The reviewer gets an independent read-only checkout of the current base
+and the exact proposed bytes, not a worker report or implementation verdict.
+It checks each acceptance line for scope feasibility; every affected caller,
+mirror, fixture and test; existing ids, formats, paths and interfaces; and an
+explicit, tested migration for validation, lint, gate, schema or record changes.
+Its numbered final ends in `SPEC-OK:<task>` or `SPEC-GAPS:<task>`.
+
+The launcher retains signed `spec-preflight` evidence in the same project-local
+store as briefs and verdicts, bound to the spec SHA-256 and observed base. Managed
+Codex retains authenticated final provenance with explicit mode and spec binding;
+other supported vendors remain labelled legacy and use their actual final output.
+Ordinary reviewer completion, approval and authentication rules are unchanged.
+Preflight identities carry `mode: spec-preflight` and use a separate `-sp-`
+actor namespace with their own attempts. They do not advance ordinary review
+rounds or attempts. Older preflight directories remain readable and are excluded
+from ordinary attempt counting without rewriting their identity records.
+No preflight result is gate 7 approval, CI evidence or permission to merge.
+
+Every new worker invocation requires SPEC-OK for its exact pinned bytes. Missing,
+different or changed bytes exit 65 with the preflight command. A read-only
+prospective-pin check runs before freezing the launcher, allocating a crew
+identity, publishing a PID or dispatch event, creating a branch/worktree, or
+arming the EXIT checkpoint. Resumed self tasks read the captain-approved branch
+spec directly from git; legacy unpinned inputs still require their exact bytes.
+SPEC-GAPS requires
+an amended spec, not an override on the same bytes. A repin therefore needs fresh
+preflight when its spec changes. Existing records and pins are not rewritten or
+grandfathered: export their exact spec bytes and preflight them before the next
+worker dispatch. Already running rounds finish with frozen code; no live launcher
+is edited. Tests cover missing and mismatched receipts, exact-byte admission,
+changed pins, existing pins without receipts, and mode-bound final selection.
+Missing or untested migration in a rule-changing diff is a REJECT finding.

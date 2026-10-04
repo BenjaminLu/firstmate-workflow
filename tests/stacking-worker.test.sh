@@ -12,6 +12,7 @@ for scenario in matching stale mismatched; do
   printf '{"id":"T-901","depends_on":[]}\n' > "$r/design/tasks/T-901.json"
   jq '.depends_on=["T-901"]' "$r/design/tasks/T-902.json" > "$d/task"
   mv "$d/task" "$r/design/tasks/T-902.json"
+  seed_spec_preflight "$r" T-902
   cat > "$r/bin/adapters/mock.sh" <<'MOCK'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64

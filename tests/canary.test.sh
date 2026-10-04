@@ -14,6 +14,7 @@ for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
 done
 export HERDR_ENV=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Feature dependencies: bin/fm-canary.sh bin/lib/fm_spec_preflight.py bin/lib/fm_evidence.py
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
@@ -36,6 +37,36 @@ assert_ok "test -f '$results'" "it records one line per fixture and mode"
 
 n="$(jq -c . < "$results" 2>/dev/null | wc -l | tr -d ' ')"
 assert_eq "10" "$n" "five hostile modes, two fixtures - self and external - is ten rounds"
+
+# The scratch stores disappear on return; the canary retains the signed records
+# read back from those stores together with the exact source bytes.
+python3 - "$canary_state/destroy-preflights.jsonl" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+rows = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
+tasks = {'T-DESTROYTREE', 'T-DESTROYGIT', 'T-DESTROYTRUNCATE',
+         'T-DESTROYFILLTMP', 'T-DESTROYEMPTYVAR'}
+assert len(rows) == 10, 'each of the ten worker dispatches needs fixture evidence'
+assert {(r['fixture'], r['record']['task']) for r in rows} == {
+    (fixture, task) for fixture in ('self', 'external') for task in tasks}
+for row in rows:
+    record = row['record']
+    spec = row['spec_text'].encode('utf-8')
+    assert record['spec_sha256'] == hashlib.sha256(spec).hexdigest(), 'exact fixture bytes'
+    assert json.loads(spec)['id'] == record['task']
+    assert record['kind'] == 'spec-preflight' and record['verdict'] == 'SPEC-OK'
+    assert record['provenance']['canary_fixture'] is True, 'explicit fixture provenance'
+    assert record['provenance']['level'] == 'legacy', 'no invented model authentication'
+    assert record['signature'], 'the ordinary evidence writer signs fixture receipts'
+    project = 'self' if row['fixture'] == 'self' else 'destroy-fixture'
+    assert record['project'] == project
+    suffix = '/evidence/' + ('self/' if project == 'self' else '') + record['task']
+    assert row['evidence_directory'].endswith(suffix), 'resolved project evidence layout'
+PY
+assert_eq 0 "$?" "every canary dispatch retains a marked SPEC-OK bound to its exact fixture spec"
 
 not_ok="$(jq -r 'select(.ok != true) | "\(.fixture)/\(.mode): \(.why)"' < "$results" 2>/dev/null)"
 _t "every one of them says ok"

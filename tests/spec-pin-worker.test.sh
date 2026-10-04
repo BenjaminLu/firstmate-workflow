@@ -17,6 +17,7 @@ mkdir -p "$3/src"
 printf 'implemented\n' > "$3/src/feature"
 M
 chmod +x "$repo/bin/adapters/mock.sh"
+seed_spec_preflight "$repo" T-Z "" firstmate-workflow
 (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --project firstmate-workflow) > "$d/out" 2>&1
 assert_eq 0 "$?" 'authorized worker pins before running its adapter'
 assert_ok "test -f '$repo/state/pins/T-Z/1.json'" 'worker stores its first pin outside the worktree'
@@ -90,6 +91,17 @@ mkdir -p "$3/wider"
 printf 'resumed implementation\n' > "$3/wider/feature"
 M
 chmod +x "$repo/bin/adapters/mock.sh"
+# fixture() seeded only main's narrower spec. A refused approved-branch
+# snapshot must not fall back to that otherwise valid legacy receipt.
+(cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --pr 42) > "$d/refused.out" 2>&1
+assert_eq 65 "$?" 'resumed branch requires its own exact-byte preflight'
+assert_eq 0 "$(jq -s '[.[] | select(.type=="dispatched" or .type=="commit_pushed")]|length' "$repo/state/events.jsonl")" 'resumed refusal emits no dispatch or checkpoint'
+assert_ok "test ! -e '$repo/state/worktrees/T-Z.pid'" 'resumed refusal publishes no pid'
+assert_ok "test ! -d '$repo/state/worktrees/T-Z'" 'resumed refusal creates no worktree'
+assert_eq "$head" "$(git -C "$repo" ls-remote --heads origin t-z-resume | awk '{print $1}')" 'resumed refusal leaves remote branch unchanged'
+assert_ok "test ! -e '$d/prompt.md'" 'approved-branch refusal never falls back to the main receipt'
+assert_ok "test ! -e '$repo/state/pins/T-Z/1.json'" 'approved-branch refusal publishes no pin'
+seed_spec_preflight "$repo" T-Z "$d/spec.json"
 (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --pr 42) > "$d/out" 2>&1
 assert_eq 0 "$?" 'resumed PR worker pins after readiness retirement'
 assert_eq approved-branch "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'resumed launcher passes worktree for approved branch scope'
@@ -99,7 +111,8 @@ assert_ok "cmp '$d/spec.json' '$d/adapter-spec.json'" 'resumed adapter receives 
 assert_contains "$(cat "$d/prompt.md")" 'first-pin-on-resume' 'resumed prompt names first-pin provenance'
 rm -rf "$d"
 
-# Authorized legacy sources cannot pin, but still run in both self modes.
+# Authorized legacy sources cannot pin, but exact-byte preflight is still
+# required before the adapter can run in either self mode.
 for missing in contract design; do
   for mode in default explicit; do
     d="$(fixture)"; repo="$d/repo"; GH="$(ghstub "$d")"
@@ -123,7 +136,19 @@ printf 'implemented\n' > "$3/src/feature"
 printf 'Adapter report\n' > "$3/.fm-say.md"
 M
     chmod +x "$repo/bin/adapters/mock.sh"
+    # The default fixture has no default_project; explicit self selects its
+    # named evidence namespace. Seed the namespace this invocation reads.
+    evidence_project=self
+    [ "$mode" != explicit ] || evidence_project=firstmate-workflow
     project_args=(); [ "$mode" != explicit ] || project_args=(--project firstmate-workflow)
+    rm -rf "$repo/state/evidence"
+    (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"}) > "$d/refused.out" 2>&1
+    assert_eq 65 "$?" "legacy missing preflight refuses ($missing, $mode)"
+    assert_eq 0 "$(jq -s '[.[] | select(.type=="dispatched" or .type=="commit_pushed")]|length' "$repo/state/events.jsonl")" 'legacy refusal emits no dispatch or checkpoint'
+    assert_ok "test ! -e '$repo/state/worktrees/T-Z.pid'" 'legacy refusal publishes no pid'
+    assert_ok "test ! -d '$repo/state/worktrees/T-Z'" 'legacy refusal creates no worktree'
+    assert_eq '' "$(git -C "$repo" ls-remote --heads origin 't-z-*')" 'legacy refusal pushes no branch'
+    seed_spec_preflight "$repo" T-Z "" "$evidence_project"
     (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"}) > "$d/out" 2>&1
     assert_eq 0 "$?" "authorized worker survives missing $missing ($mode self)"
     assert_ok "test -s '$d/prompt.md'" 'legacy worker still runs its adapter'

@@ -25,6 +25,10 @@ TASK_DISPATCH_COMMIT = 'f61b71457f18c4aec744ae1b9ff84b1bd5b84728'
 LEGACY_REASON = 'Pre-T-171 cross-task direct-order approval replaced by this task captain choice'
 
 
+class PreflightRefused(ValueError):
+    """Exact selected bytes failed preflight; never try legacy source fallback."""
+
+
 def digest(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
@@ -357,17 +361,24 @@ class Pins:
             raise ValueError('pin authorization mismatch')
         return previous
 
-    def approved_branch_spec(self, worktree, snapshots, dispatch):
+    def approved_branch_spec(self, worktree, snapshots, dispatch, spec_ref=None):
         """Only a captain choice naming the exact proposed commit can widen pin 1.
 
         expected_head is already carried by choice requests and answer receipts.
         Human prose alone cannot establish approval of arbitrary branch bytes.
         """
         snap = snapshots['spec']
-        path = Path(worktree) / snap['path']
-        if not path.is_file() or path.is_symlink():
-            return None
-        text = path.read_bytes().decode('utf-8')
+        if spec_ref:
+            git(self.target, 'rev-parse', '--verify', spec_ref + '^{commit}')
+            try:
+                text = git(self.target, 'show', spec_ref + ':' + snap['path'])
+            except ValueError:
+                return None  # A new task may not exist on the old branch yet.
+        else:
+            path = Path(worktree) / snap['path']
+            if not path.is_file() or path.is_symlink():
+                return None
+            text = path.read_bytes().decode('utf-8')
         if text == snap['text']:
             return None
         for event in reversed(self.events()):
@@ -391,7 +402,32 @@ class Pins:
             return approval
         return None
 
-    def create(self, decision=None, resume=False, spec_worktree=None):
+    def preflight(self, project, spec_ref=None):
+        """Read the prospective spec before dispatch can publish any work.
+
+        Existing pins fail closed. Legacy inputs that cannot produce a pin
+        retain their original file-byte check without granting gate authority.
+        """
+        from fm_evidence import Store
+        from fm_spec_preflight import require_ok
+        pin = self.resolve(if_present=True)
+        if pin:
+            data = pin['snapshots']['spec']['text'].encode('utf-8')
+        else:
+            try:
+                approval = self.approval(None)
+                if approval is None:
+                    raise ValueError('legacy unapproved input')
+                _, _, snapshots, _ = self.collect()
+            except (ValueError, OSError, KeyError, TypeError):
+                data = (self.tasks / (self.task + '.json')).read_bytes()
+            else:
+                if spec_ref and not self.external:
+                    self.approved_branch_spec(None, snapshots, approval, spec_ref)
+                data = snapshots['spec']['text'].encode('utf-8')
+        require_ok(Store(self.state, project, self.task, external=self.external), data)
+
+    def create(self, decision=None, resume=False, spec_worktree=None, require_preflight=None):
         if list(self.directory.glob('*.json')) and not decision:
             return self.resolve()
         approval = self.approval(decision)
@@ -411,6 +447,16 @@ class Pins:
         if decision:
             old = self.resolve(for_repin=True)
             self.check_repin(old, decision, snapshots, approval)
+        if require_preflight:
+            # Check the final selected bytes, including an approved resumed branch,
+            # before publishing the first pin. Existing pins are checked by dispatch.
+            from fm_evidence import Store
+            from fm_spec_preflight import require_ok
+            try:
+                require_ok(Store(self.state, require_preflight, self.task, external=self.external),
+                           snapshots['spec']['text'].encode('utf-8'))
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise PreflightRefused(str(error)) from error
         self.directory.mkdir(parents=True, exist_ok=True)
         lock = self.directory / '.lock'
         if lock.is_symlink():
@@ -489,19 +535,24 @@ class Pins:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['create', 'resolve', 'scope'])
+    parser.add_argument('command', choices=['create', 'resolve', 'scope', 'preflight'])
     parser.add_argument('--task', required=True)
     parser.add_argument('--decision')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--require-preflight', metavar='EVIDENCE_PROJECT')
     parser.add_argument('--spec-worktree')
+    parser.add_argument('--spec-ref')
     parser.add_argument('--if-present', action='store_true')
     parser.add_argument('--head')
     parser.add_argument('--base', default='main')
     args = parser.parse_args()
     try:
         pins = Pins(os.environ, args.task)
+        if args.command == 'preflight':
+            pins.preflight(args.require_preflight, args.spec_ref)
+            return 0
         if args.command == 'create':
-            pin = pins.create(args.decision, args.resume, args.spec_worktree)
+            pin = pins.create(args.decision, args.resume, args.spec_worktree, args.require_preflight)
             if pin is None:
                 print('fm-pin: no dispatch authorization; no pin written', file=sys.stderr)
                 return 3
@@ -513,6 +564,9 @@ def main():
                 return 3
         print(json.dumps(pin))
         return 0
+    except PreflightRefused as error:
+        print('fm-pin: ' + str(error), file=sys.stderr)
+        return 66  # private launcher status, translated to dispatch refusal 65
     except (ValueError, OSError, KeyError, TypeError) as error:
         print('fm-pin: ' + str(error), file=sys.stderr)
         return 65

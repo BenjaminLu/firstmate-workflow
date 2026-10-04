@@ -19,6 +19,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 isolate_tmpdir
 # shellcheck source=tests/lib/path.sh
 . "$ROOT/tests/lib/path.sh"
+# shellcheck source=tests/lib/spec-preflight.sh
+. "$ROOT/tests/lib/spec-preflight.sh"
 suite_original_path="$PATH"
 suite_tools="$(safe_tmpdir)"
 fixture_path "$suite_tools" 'claude codex gemini cursor-agent agent gh herdr tmux cmux security secret-tool osascript xdg-open open' || exit 1
@@ -65,6 +67,7 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   printf '# design\n## 6. gates\nseven of them\n## 8. board\n' > design/design.md
   git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
   ) || return 1
+  seed_spec_preflight "$d/repo" "$task" || return 1
   printf '%s' "$d"
 }
 

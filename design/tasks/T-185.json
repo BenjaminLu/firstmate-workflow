@@ -1,0 +1,27 @@
+{
+  "id": "T-185",
+  "title": "no task is dispatched on an unverified spec: a recorded spec preflight checks every acceptance line against the code and scope, and any rule-changing task must say what happens to work already in flight",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-review.sh",
+    "bin/fm-worker.sh",
+    "bin/fm-herdr.py",
+    "bin/fm-canary.sh",
+    "bin/lib/**",
+    "skills/firstmate/SKILL.md",
+    "skills/reviewer/SKILL.md",
+    "design/design.md",
+    "tests/**",
+    "design/tasks/T-185.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-04 about half of all rejected or blocked rounds came from specs firstmate wrote without checking them against the code:\n- T-183: an id format the shared grammar rejects, a card shape fm-decide.sh refuses, and the grammar put in a file that one path does not load\n- T-125: a vendored dependency left out, and a fixture path that had moved\n- T-171: no migration for pins already written, which froze T-182, T-183 and T-125\nOther changes invalidated work in flight with no plan for it: T-176's new lint hit T-178, and T-171 hit three tasks' pins. The captain asked for the rules themselves to be fixed so this cannot recur (\"不是寫進記憶，是修正規則\").",
+    "Spec preflight. `bin/fm-review.sh --spec-preflight --task <T> --spec <file>` runs one isolated, read-only crew round in the reviewer's sandbox and prompt discipline, on the current base. It checks every acceptance line against the code:\n- (1) it is achievable within the declared scope, naming any file outside the scope that it needs\n- (2) every caller, mirror, fixture and existing test the change touches is listed or covered (the class of bin/fm-*.sh, bin/lib/*, tests/** greps)\n- (3) ids, formats, paths and interfaces the spec names exist and match the code\n- (4) if the task changes a validation rule, lint, gate, schema or stored-record format, the spec states what happens to records and tasks already in flight (migration), and a test covers it\nIt ends with SPEC-OK:<task> or SPEC-GAPS:<task> and a numbered list, and the result is recorded as local evidence bound to the spec's SHA-256 (the same store as briefs and verdicts).",
+    "Enforcement. A task's first worker round refuses to start, exit 65 with the reason, unless a SPEC-OK record exists for exactly the spec bytes being pinned. A later spec change (repin) needs a new SPEC-OK for the new bytes. A SPEC-GAPS result is shown to firstmate, who amends the spec and preflights again. The refusal names the command to run.",
+    "Rules in the skills. skills/firstmate/SKILL.md requires the preflight before every dispatch and every repin, and requires the migration clause for rule-changing tasks. It records that a SPEC-GAPS item cannot be waved through without amending the spec. skills/reviewer/SKILL.md makes a missing or untested migration for a rule-changing diff a REJECT finding.",
+    "Tests (fail first, stubs answering like the real vendors and tools, HERDR_ENV=0 in helpers):\n- a first round without SPEC-OK is refused\n- SPEC-OK for other bytes is refused\n- SPEC-OK for the exact bytes starts the round\n- a repin without a new SPEC-OK is refused\n- the preflight prompt contains the four checks and the closing markers\nEvidence is the required GitHub check and the six gates. Workers do not run the suites.",
+    "Scope widened by captain decision D-firstmate-workflow-T185-2 (A, 2026-10-04): bin/fm-herdr.py carries an explicitly bound spec-preflight mode in the managed invocation, its role context, completion classification (SPEC-OK/SPEC-GAPS) and the authenticated final selector; ordinary reviewer markers and authentication are unchanged.",
+    "Scope widened by captain decision D-firstmate-workflow-T185-3 (A, 2026-10-04): bin/fm-canary.sh records a SPEC-OK, marked as a canary fixture, for the exact bytes of each fixture spec it writes before starting a worker round, so the drill runs under the new refusal without any exemption in fm-worker.sh."
+  ]
+}

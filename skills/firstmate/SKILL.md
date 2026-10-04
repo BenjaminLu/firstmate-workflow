@@ -1135,3 +1135,27 @@ ship; the same keys restore it. Hidden state persists across reloads. These
 controls change presentation only. Keep the selected project and use the
 board's authenticated decision/task controls; game fights never authorize or
 write workflow changes. The standalone Playground uses simulated data only.
+
+## Spec preflight before dispatch and repin (T-185)
+
+Before every dispatch and every repin, obtain a recorded `SPEC-OK:<task>` for
+exactly the spec bytes to be pinned, using
+`bin/fm-review.sh --spec-preflight --task <task> --spec <file>` (and the selected
+`--project`). This is an isolated read-only review on the current base. Inspect
+its numbered findings for every acceptance line: scope feasibility, affected
+callers/mirrors/fixtures/tests, concrete identifiers and interfaces, and migration.
+A `SPEC-GAPS` item cannot be waved through: amend the spec and preflight again.
+Approval for different bytes cannot authorize dispatch, including after a repin.
+
+Every task changing a validation rule, lint, gate, schema or stored-record format
+must state what happens to existing records and tasks already in flight and name
+a test proving that migration. Include affected callers and mirrored fixtures,
+not just the implementation path. Structural checks do not prove that the model
+inspected each acceptance line; firstmate must inspect the recorded evidence.
+
+Migration of preflight itself: existing pins and evidence stay immutable. Already
+running rounds finish on their frozen launchers; their next worker dispatch needs
+an exact-byte preflight, even if the pin predates this rule. There is no automatic
+SPEC-OK backfill. A held task can preflight its exported pinned spec without
+repinning it; changed bytes need the normal authorized repin and a new preflight.
+Missing approval exits 65 with the command to run. Do not modify a live launcher.

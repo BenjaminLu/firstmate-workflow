@@ -512,6 +512,37 @@ destroy_name() {   # destroy_name <mode> -> a --name short enough to fit the act
     fill-tmp) echo worker-dx-fill ;; empty-var) echo worker-dx-evar ;; *) echo worker-dx ;;
   esac
 }
+# These throwaway specs exercise restoration, not a model's judgment. Give each
+# one ordinary signed evidence, explicitly marked as a canary fixture, before
+# dispatch. The worker's exact-byte requirement has no canary exemption.
+destroy_preflight() {   # destroy_preflight <fixture-label> <repo-dir> <task>
+  local label="$1" repo="$2" id="$3" base
+  base="$(git -C "$repo/repo" rev-parse HEAD)" || return 1
+  python3 - "$ROOT/bin/lib" "$label" "$repo" "$id" "$base" <<'PY_PREFLIGHT'
+import json
+import sys
+from pathlib import Path
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from fm_evidence import Store
+from fm_spec_preflight import retain, require_ok
+
+label, directory, task, base = sys.argv[2:]
+root = Path(directory)
+external = label == 'external'
+source = root / ('tasks' if external else 'repo/design/tasks') / (task + '.json')
+state = root / ('state' if external else 'repo/state')
+store = Store(state, 'destroy-fixture' if external else 'self', task, external=external)
+data = source.read_bytes()
+retain(store, data, base, 'canary-fixture', 1,
+       '1. Canary fixture for the hostile restoration drill.\nSPEC-OK:' + task,
+       {'level': 'legacy', 'canary_fixture': True})
+# Read through the dispatch validator before keeping a copy outside scratch.
+record = require_ok(store, data)
+print(json.dumps(dict(fixture=label, spec_text=data.decode('utf-8'),
+                     evidence_directory=str(store.directory), record=record)))
+PY_PREFLIGHT
+}
 destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
   local label="$1" repo="$2" mode="$3" engine="${4:-$2/repo}"
   local id gh tree out rc log worker_args=() project_env=() ok=1 why='' restored_event='' tracked
@@ -532,6 +563,12 @@ destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
   # extension of the round driving the canary.
   local scrub=(env) v
   while IFS= read -r v; do scrub+=(-u "$v"); done < <(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p')
+  if ! destroy_preflight "$label" "$repo" "$id" >> "$destroy_preflights"; then
+    record_destroy "$label" "$mode" "$id" 0 'could not record canary fixture SPEC-OK'
+    echo "fm-canary: could not record fixture preflight for $label/$id" >&2
+    failed=1
+    return 1
+  fi
   out="$(cd "$engine" \
     && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct \
        ${project_env[@]+"${project_env[@]}"} FM_GH="$gh" FM_HOSTILE_MODE="$mode" FM_MIRROR_INTERVAL=1 \
@@ -594,6 +631,7 @@ destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
 }
 if run_section destroy; then
   mkdir -p "$out"
+  destroy_preflights="$out/destroy-preflights.jsonl"
   dwork="$(mktemp -d "${TMPDIR:-/tmp}/fm-canary-destroy.XXXXXX")" || { echo "fm-canary: cannot make a scratch directory for the destroy workload" >&2; exit 70; }
 
   # Fixture 1: the self project's shape (repo: ., worktrees under

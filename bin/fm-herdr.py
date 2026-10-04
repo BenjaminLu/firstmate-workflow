@@ -488,6 +488,7 @@ def allocate_identity(root, role, task, alias, owner_record=None):
         raise ValueError('unsupported role')
     if not re.fullmatch(r'[A-Za-z0-9_-]+', task):
         raise ValueError('invalid task identity')
+    mode = 'spec-preflight' if role == 'reviewer' and os.environ.get('FM_SPEC_PREFLIGHT_MODE') == '1' else 'review'
     root = Path(root).resolve()
     directory = record_root(root) / 'state/runs'
     rosters = crew_rosters(root)
@@ -495,7 +496,7 @@ def allocate_identity(root, role, task, alias, owner_record=None):
     with locked(directory / '.identity.lock'):
         # The actor carries the task's review round, not a global counter
         # (T-116): r465 read as round 465 on a task in its first round.
-        number = review_round(root, task, project)
+        number = 1 if mode == 'spec-preflight' else review_round(root, task, project)
         task_slug = re.sub('[^a-z0-9]', '', task.lower())
         # Long task IDs keep a digest so truncation cannot hide their mapping.
         if len(task_slug) > 9:
@@ -508,19 +509,28 @@ def allocate_identity(root, role, task, alias, owner_record=None):
             except (OSError, ValueError): continue
             name = crew_name(identity)
             if not name: continue
+            identity_mode = identity.get('mode') or ('spec-preflight' if (file.parent / 'spec-preflight').is_dir() else 'review')
+            if (mode == 'review' and identity_mode == 'spec-preflight' and 'mode' not in identity
+                    and identity.get('task') == task and identity.get('role') == role
+                    and identity.get('project') == project and identity.get('round') == number):
+                # Old preflights occupied ordinary actor paths. Keep those
+                # names unavailable so a path collision cannot invent r1b.
+                live.add(name)
             if identity.get('task') == task:
-                if identity.get('role') == role: previous.append((identity.get('created', 0), name))
-                else: other_role.add(name)
+                if identity.get('role') == role and identity_mode == mode: previous.append((identity.get('created', 0), name))
+                elif identity.get('role') != role: other_role.add(name)
                 # a retry of this role, task and round is the next attempt;
                 # a run from before T-116 records no round and is none of them
                 if (identity.get('role') == role and identity.get('round') == number
                         and identity.get('project') == project
+                        and identity_mode == mode
                         and isinstance(identity.get('attempt'), int)):
                     attempt = max(attempt, identity['attempt'] + 1)
             if run_is_live(file.parent): live.add(name)
         last = max(previous)[1] if previous else None
         while True:
-            suffix = f'-{task_slug}-r{number}{attempt_mark(attempt)}'
+            namespace = '-sp' if mode == 'spec-preflight' else ''
+            suffix = f'{namespace}-{task_slug}-r{number}{attempt_mark(attempt)}'
             # Measured against the final suffix: an attempt mark added on
             # retry must not push the actor past 32 characters.
             room = 32 - len(role) - 1 - len(suffix)
@@ -538,6 +548,7 @@ def allocate_identity(root, role, task, alias, owner_record=None):
         record = dict(actor=actor, role=role, task=task, name=name, project=project,
                       round=number, attempt=attempt, one_role=True,
                       requested_alias=alias, run=str(run), created=time.time())
+        if mode == 'spec-preflight': record['mode'] = mode
         save(run / 'identity.json', record)
         # Only the CLI's actual keeper may bind a launcher at allocation.
         # In-process callers reserve an identity, not their parent's lifetime.
@@ -599,7 +610,14 @@ def snapshot(root):
     return dest
 
 
-def role_context(root, role, task, actor, prompt):
+def role_context(root, role, task, actor, prompt, spec_preflight=None):
+    if spec_preflight:
+        if role != 'reviewer' or not re.fullmatch(r'[0-9a-f]{64}', spec_preflight):
+            raise ValueError('invalid spec-preflight role binding')
+        return (f'You are explicitly dispatched reviewer for spec preflight. '
+                f'Canonical crew identity: {actor}. Task: {task}. '
+                f'Spec SHA-256: {spec_preflight}. This explicit role overrides native startup routing.\n\n'
+                + prompt + f'\nEnd with SPEC-OK:{task} or SPEC-GAPS:{task}, after a numbered list.\n')
     skill = (Path(root) / 'skills' / role / 'SKILL.md').read_text()
     return (f'You are explicitly dispatched {role}. Canonical crew identity: {actor}. '
             f'Task: {task}. This explicit role wins over native startup routing.\n\n'
@@ -609,7 +627,12 @@ def role_context(root, role, task, actor, prompt):
                'Process success is not PR acceptance.\n' if role != 'firstmate' else ''))
 
 
-def completion(role, task, final):
+def completion(role, task, final, spec_preflight=None):
+    if spec_preflight:
+        if role != 'reviewer' or not re.fullmatch(r'[0-9a-f]{64}', spec_preflight): return 'unknown'
+        sys.path.insert(0, str(Path(__file__).resolve().parent / 'lib'))
+        from fm_spec_preflight import decision
+        return 'completed' if decision(final, task) else 'unknown'
     lines = final.strip().splitlines()
     markers = [line for line in lines if re.fullmatch(r'(WORKER|REVIEWER)_(COMPLETE|BLOCKED|FAILED|INCOMPLETE):\S+', line)]
     if len(markers) != 1 or not lines or lines[-1] != markers[0]: return 'unknown'
@@ -1404,6 +1427,10 @@ def review_final(run, chain_attempt, env):
         if result.get('final_source') != 'codex-json-completed-turn': return ''
         answer = (attempt / 'final.txt').read_bytes().decode('utf-8')
         if hashlib.sha256(answer.encode()).hexdigest() != result.get('final_sha256'): return ''
+        preflight = env.get('FM_SPEC_PREFLIGHT') or None
+        if result.get('spec_preflight') != preflight or invocation.get('spec_preflight') != preflight: return ''
+        if preflight:
+            return answer if completion('reviewer', env.get('FM_TASK', ''), answer, preflight) == 'completed' else ''
         if completion('reviewer', env.get('FM_TASK', ''), answer) != 'completed': return ''
         if not any(line in ('APPROVE:' + env.get('FM_TASK', ''), 'REJECT:' + env.get('FM_TASK', ''))
                    for line in answer.splitlines()): return ''
@@ -1458,7 +1485,7 @@ def transport(adapter, prompt, tree, log):
     # Vendor fallback keeps the logical actor and verified tab/pane; artifacts differ.
     attempt = Path(tempfile.mkdtemp(prefix=Path(adapter).stem + '-', dir=logical))
     actor = logical.name
-    (attempt / 'prompt.md').write_text(role_context(code, role, task, actor, Path(prompt).read_text()))
+    (attempt / 'prompt.md').write_text(role_context(code, role, task, actor, Path(prompt).read_text(), os.environ.get('FM_SPEC_PREFLIGHT')))
     env = dict(round_environment(os.environ, Path(adapter).stem), FM_ROLE=role, FM_TASK=task,
                FM_ACTOR=actor, FM_FINAL_PATH=str(attempt / 'final.txt'),
                FM_ATTEMPT_DIR=str(attempt), FM_CONTEXT_READY='1')
@@ -1470,6 +1497,10 @@ def transport(adapter, prompt, tree, log):
                    lifetime_tracking=True)
     if Path(adapter).stem == 'codex' and env.get('FM_RUN_REVIEW') == '1':
         payload['review'] = review_context(env)
+    if env.get('FM_SPEC_PREFLIGHT'):
+        if role != 'reviewer' or not re.fullmatch(r'[0-9a-f]{64}', env['FM_SPEC_PREFLIGHT']):
+            raise ValueError('invalid preflight binding')
+        payload['spec_preflight'] = env['FM_SPEC_PREFLIGHT']
     save(attempt / 'invocation.json', payload)
     timeout = float(os.environ.get('FM_HERDR_TIMEOUT', '21600'))
     if not math.isfinite(timeout) or timeout <= 0:
@@ -1795,7 +1826,7 @@ def execute_child(attempt, lifetime_fd):
         final.unlink()  # CLI output files never establish provenance
     if answer is not None:
         final.write_text(answer)
-    status = completion(invocation['role'], invocation['task'], final.read_text()) if final.exists() else 'unknown'
+    status = completion(invocation['role'], invocation['task'], final.read_text(), invocation.get('spec_preflight')) if final.exists() else 'unknown'
     if final.exists():
         with final.open('rb') as source: os.fsync(source.fileno())
     result = dict(actor=invocation['actor'], task=invocation['task'], role=invocation['role'],
@@ -1804,6 +1835,8 @@ def execute_child(attempt, lifetime_fd):
     if vendor == 'codex' and answer is not None:
         result.update(final_source='codex-json-completed-turn',
                       final_sha256=hashlib.sha256(answer.encode()).hexdigest())
+    if 'spec_preflight' in invocation:
+        result['spec_preflight'] = invocation['spec_preflight']
     if 'review' in invocation:
         result['review'] = invocation['review']
     raw = attempt / 'cli-exit-code'

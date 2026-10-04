@@ -51,6 +51,32 @@ if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ];
 fi
 fm_conventions "" >/dev/null || exit 65
 fm_refuse_herdr_bypass fm-worker || exit $?
+# Check the prospective pin before allocating an identity, arming the EXIT
+# checkpoint, publishing liveness, or touching a task branch/worktree. Read
+# an existing PR's branch directly; no worktree or local branch is needed.
+preflight_ref=''
+if [ "$FM_EXTERNAL" = 0 ]; then
+  preflight_slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
+  preflight_ref="$(git for-each-ref --format='%(refname:short)' refs/heads | grep -i "^$preflight_slug-" | head -1)"
+  if [ -z "$preflight_ref" ]; then
+    preflight_ref="$(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep -i "^origin/$preflight_slug-" | head -1)"
+  fi
+fi
+if [ -n "$PR" ] && [ "$FM_EXTERNAL" = 0 ]; then
+  preflight_pr_ref="$(fm_github pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
+  case "$preflight_pr_ref" in
+    ''|null|*[!A-Za-z0-9._/-]*|/*|*/) ;;
+    *) preflight_ref="$preflight_pr_ref"
+       if ! git rev-parse --verify "$preflight_ref^{commit}" >/dev/null 2>&1; then
+         preflight_ref="origin/$preflight_ref"
+       fi ;;
+  esac
+fi
+preflight_source=()
+[ -z "$preflight_ref" ] || preflight_source=(--spec-ref "$preflight_ref")
+fm_pin preflight --task "$TASK" --require-preflight "$(fm_evidence_project)" \
+  ${preflight_source[@]+"${preflight_source[@]}"} || exit 65
+
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 fm_external_prepare || exit 65
 fm_target_validate || exit 65
@@ -1078,12 +1104,13 @@ pin_warning=''
 if [ -z "$FM_SPEC_PIN_JSON" ]; then
   pin_args=()
   [ -z "$PR" ] || pin_args+=(--resume --spec-worktree "$tree")
-  FM_SPEC_PIN_JSON="$(fm_pin create --task "$TASK" ${pin_args[@]+"${pin_args[@]}"})"; pin_rc=$?
+  FM_SPEC_PIN_JSON="$(fm_pin create --task "$TASK" --require-preflight "$(fm_evidence_project)" ${pin_args[@]+"${pin_args[@]}"})"; pin_rc=$?
   case "$pin_rc" in
     0) spec="$(jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON")"
        set_crew_activity "$spec"
        emit --type spec_pinned --en "Approved task snapshot pinned" --tw "已固定核准的任務快照" ;;
     3) echo 'fm-worker: no pin; gate 4 will refuse this round' >&2 ;;
+    66) exit 65 ;; # An exact-snapshot refusal must not fall back to other bytes.
     *) # A failed first creation is not a corrupt existing pin. Recheck in
        # case a concurrent creator published a record while we collected.
        FM_SPEC_PIN_JSON="$(fm_pin_existing "$TASK")"; pin_existing_rc=$?
@@ -1095,6 +1122,18 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
          *) exit "$pin_existing_rc" ;;
        esac ;;
   esac
+fi
+
+# T-185 migration: old pins remain immutable, but every new invocation must
+# have a signed preflight for the exact snapshot. No grandfathered dispatch.
+preflight_args=(require --task "$TASK" --state "$FM_STATE_DIR" --project "$(fm_evidence_project)")
+if [ -n "$FM_SPEC_PIN_JSON" ]; then
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_spec_preflight.py" "${preflight_args[@]}" \
+    --pin-stdin <<<"$FM_SPEC_PIN_JSON" || exit 65
+else
+  # Legacy unpinned rounds must also be checked; this grants no gate authority.
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_spec_preflight.py" "${preflight_args[@]}" \
+    --spec "$FM_TASKS_DIR/$TASK.json" || exit 65
 fi
 
 # --- the prompt: the task, the design that bears on it, and the skill ----

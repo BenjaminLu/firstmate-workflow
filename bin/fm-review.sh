@@ -40,9 +40,12 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
 fm_args=("$@")
 
 REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''; ROUND_GIVEN=''
+SPEC_PREFLIGHT=''; SPEC_FILE=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --spec-preflight) SPEC_PREFLIGHT=1; shift ;;
+    --spec) fm_need "fm-review" "$@"; SPEC_FILE="${2-}"; shift 2 ;;
     --project) fm_need "fm-review" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --task) fm_need "fm-review" "$@"; TASK="${2-}"; shift 2 ;;
     --branch) fm_need "fm-review" "$@"; BRANCH="${2-}"; shift 2 ;;
@@ -54,7 +57,7 @@ while [ $# -gt 0 ]; do
     *) echo "fm-review: unknown argument $1" >&2; exit 64 ;;
   esac
 done
-[ -n "$TASK" ] && [ -n "$BRANCH" ] || {
+[ -n "$TASK" ] && { [ -n "$BRANCH" ] || [ -n "$SPEC_PREFLIGHT" ]; } || {
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
 # How long a round given --pr waits for the head's required checks before it
 # starts the reviewer anyway, and how often it asks GitHub meanwhile (T-153).
@@ -62,6 +65,9 @@ CI_WAIT="${FM_REVIEW_CI_WAIT:-1200}"; CI_POLL="${FM_REVIEW_CI_POLL:-30}"
 case "$CI_WAIT" in ''|*[!0-9]*) echo "fm-review: FM_REVIEW_CI_WAIT must be whole seconds" >&2; exit 64 ;; esac
 case "$CI_POLL" in ''|*[!0-9]*|0) echo "fm-review: FM_REVIEW_CI_POLL must be whole seconds, at least 1" >&2; exit 64 ;; esac
 CI_WAIT=$((10#$CI_WAIT)); CI_POLL=$((10#$CI_POLL))
+if [ -n "$SPEC_FILE" ]; then
+  SPEC_FILE="$(cd -- "$(dirname -- "$SPEC_FILE")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "$SPEC_FILE")")" || exit 64
+fi
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
@@ -78,6 +84,13 @@ fm_external_prepare || exit 65
 fm_target_validate || exit 65
 fm_external_base || exit 65
 BASE="${FM_BASE:-$BASE}"
+# Clear inherited mode bindings; only this explicit flag creates a preflight.
+unset FM_SPEC_PREFLIGHT
+if [ -n "$SPEC_PREFLIGHT" ]; then
+  # shellcheck source=bin/lib/fm-spec-preflight.sh
+  . "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-spec-preflight.sh"
+fi
+[ -z "$SPEC_FILE" ] || { echo 'fm-review: --spec requires --spec-preflight' >&2; exit 64; }
 
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched

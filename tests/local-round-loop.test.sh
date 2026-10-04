@@ -23,6 +23,7 @@ projects:
     tasks: design/tasks
     projection: local
 CONFIG
+seed_spec_preflight "$repo" T-Z "" firstmate-workflow
 cat > "$repo/bin/adapters/mock.sh" <<'ADAPTER'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
