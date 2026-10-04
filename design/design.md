@@ -1270,6 +1270,16 @@ numbered, complete set of changes that would make this head pass, closed by
 what the round-three answer used to be. T-126 took ten rounds, one new finding
 per round from round seven on.
 
+The standing list is the last contiguous numbered block ending at
+`CRITERIA-COMPLETE:<task-id>` (T-181). Earlier numbered summaries, Executed
+sections and unfenced code are not standing items. Use bullets, not numbers,
+for summaries. A list restarting at `1.` after a blank line or an unindented
+non-item label (such as `**Standing list**`, with or without surrounding blank
+lines) starts a new block. Wrapped
+lines, indented continuation paragraphs and blank lines inside an item belong
+to that item. Duplicate or skipped numbers inside the block remain errors;
+an APPROVE need not re-issue the list.
+
 1. The first REJECT creates the standing list. Each later REJECT re-issues it:
    the same numbering, each earlier item marked **done** or **open**, and any
    new item appended with the next number and a label.
@@ -1299,8 +1309,8 @@ per round from round seven on.
    `.fm-say.md`, firstmate's briefs - is skipped, whoever posted it, because
    `fm-autopilot.sh` runs the check with no `FM_REVIEWER_LOGIN`; when that login is
    set it narrows the verdicts read to that author's. It emits a
-   `protocol_violation` event for each. It reads every numbered line before
-   the marker as an item, so a rejecting answer numbers nothing else. It
+   `protocol_violation` event for each. That historical reader collected every
+   numbered line before the marker; T-181 limits it to the final block. It
    cannot determine every semantic violation: it does not check that a
    finding matches the item it cites, does not authenticate the markers, and
    does not prove that a regression or new ground is real. A passing protocol

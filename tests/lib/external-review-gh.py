@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recorded GitHub review/check shapes; refuses unqualified repository calls."""
+"""Constructed GitHub review/check shapes; refuses unqualified repository calls."""
 import json, os, re, sys
 from pathlib import Path
 args=sys.argv[1:]
