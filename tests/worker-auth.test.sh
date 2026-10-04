@@ -3,6 +3,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/worker.sh
 . "$ROOT/tests/lib/worker.sh"
+# shellcheck source=tests/lib/auth-probe.sh
+. "$ROOT/tests/lib/auth-probe.sh"
 # --- a crew round never runs on a login it did not check (T-121) -----------
 # claude's own status check, asked about the crew token a round would get,
 # says it is not signed in; the worker never starts claude's CLI at all - it
@@ -34,6 +36,38 @@ assert_eq "" "$(grep -vxF -e '--version' -e 'auth status' "$d6/claude-calls" 2>/
 assert_contains "$(jq -r 'select(.type=="vendor_unavailable")|.summary.en' "$r6/state/events.jsonl" | tr '\n' ' ')" \
   "claude" "vendor_unavailable names claude"
 assert_contains "$(cat "$d6/err")" "claude:" "and says so on stderr too, before the fallback runs"
+
+# Historical refusals are records, never cached auth decisions (T-188).
+d10="$(fixture)"; r10="$d10/repo"; GH10="$(ghstub "$d10")"
+printf 'vendor: cursor-agent\n' > "$r10/config.yaml"
+mkdir -p "$d10/home/.config/firstmate" "$d10/fakebin"
+printf 'fixture-cursor-key\n' > "$d10/home/.config/firstmate/cursor-api-key"
+chmod 600 "$d10/home/.config/firstmate/cursor-api-key"
+printf '#!/usr/bin/env bash\ntouch %q\nexec "$(dirname "$0")/mock.sh" "$@"\n' "$d10/cursor-ran" > "$r10/bin/adapters/cursor-agent.sh"
+chmod +x "$r10/bin/adapters/cursor-agent.sh"
+cat > "$d10/fakebin/cursor-agent" <<C
+#!/usr/bin/env bash
+[ "\$1" = --version ] && { echo 2026.10.01-e373342; exit 0; }
+[ "\$1" = status ] || exit 64
+printf 'status\n' >> "$d10/cursor-calls"
+[ "\${CURSOR_API_KEY:-}" = fixture-cursor-key ] || exit 1
+printf '✓ Logged in\nkeychain warning: not authenticated\n'
+C
+auth_probe_sandbox_tool "$d10/sandbox-tool" "$d10"
+chmod +x "$d10/fakebin/cursor-agent"
+printf '%s\n' '{"type":"vendor_unavailable","task":"T-Z","data":{"vendor":"cursor-agent","status":"unauthenticated"},"summary":{"en":"cursor-agent: unauthenticated: historical refusal","zh-TW":"cursor-agent：unauthenticated：歷史拒絕"}}' > "$d10/historical-event"
+cat "$d10/historical-event" > "$r10/state/events.jsonl"
+( cd "$r10" && env HOME="$d10/home" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$d10/sandbox-tool" \
+    FM_KEYCHAIN_TOOL="$d10/no-security" FM_SECRET_TOOL="$d10/no-secret-tool" \
+    PATH="$d10/fakebin:$PATH" FM_ROOT="$r10" FM_GH="$GH10" \
+    bin/fm-worker.sh --task T-Z >"$d10/out" 2>"$d10/err" )
+assert_eq "0" "$?" "a historical cursor refusal does not refuse a fresh signed-in round"
+assert_eq status "$(cat "$d10/cursor-calls" 2>/dev/null)" "the worker asks cursor status afresh"
+assert_ok "[ -f '$d10/cursor-ran' ]" "the authenticated cursor adapter runs"
+head -n 1 "$r10/state/events.jsonl" > "$d10/preserved-event"
+assert_ok "cmp -s '$d10/historical-event' '$d10/preserved-event'" "the historical event is preserved byte for byte"
+assert_eq "1" "$(jq -s '[.[] | select(.type=="vendor_unavailable")]|length' "$r10/state/events.jsonl")" "no fresh refusal is appended for the working key"
+rm -rf "$d10"
 
 # When nothing in the chain is authenticated, the round is refused exactly
 # as "every vendor was unavailable" always was - never by starting claude's
