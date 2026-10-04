@@ -1124,3 +1124,14 @@ has no host fields. Board-dispatched rounds read the stored host, never the
 board process's harness environment. Each round logs its resolution and keeps
 `vendor_resolution` (host, rule, resolved head) in `identity.json`, alongside
 the current vendor, which can change on fallback.
+
+### Board voyage controls (T-125)
+
+The board embeds the Live 2.5D voyage above the workflow. F or the full-screen
+control opens the same stage with lane counts, waiting decisions and task
+controls in a workflow drawer; Esc returns to the panel. The mode persists per
+tab. Esc twice within 400 ms unloads the stage, leaving the plain board with no
+ship; the same keys restore it. Hidden state persists across reloads. These
+controls change presentation only. Keep the selected project and use the
+board's authenticated decision/task controls; game fights never authorize or
+write workflow changes. The standalone Playground uses simulated data only.

@@ -184,6 +184,26 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 #watch.off,#watch .gap{color:var(--bad)}
 #watch[hidden]{display:none}
 .evidence-warning{border-left:3px solid var(--brass);background:var(--bg2);padding-left:8px}
+/* T-125: the same stage stays mounted when its size changes. */
+#voyage{margin:12px 20px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg2)}
+#voyage-bar{display:flex;gap:8px;padding:8px}
+#voyage-bar button{font:inherit;min-height:44px;padding:6px 14px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;cursor:pointer}
+#voyage-stage{display:block;width:100%;height:420px;border:0}
+#voyage-drawer[hidden],#voyage-mount[hidden],#voyage-workflow[hidden]{display:none}
+.voyage-full{overflow:hidden}
+.voyage-full #voyage{position:fixed;inset:0;margin:0;z-index:1000;border-radius:0}
+.voyage-full #voyage-stage{height:calc(100dvh - 60px)}
+.voyage-full #voyage-drawer{position:absolute;right:0;top:60px;bottom:0;width:min(640px,65vw);overflow:auto;background:var(--bg);box-shadow:-8px 0 30px #0005}
+.voyage-full #voyage-drawer .counts{flex-wrap:wrap}
+.voyage-hidden #scene,.voyage-hidden #capstage{display:none!important}
+/* Reorder visually: moving an iframe's parent in the DOM reloads its stage. */
+@media(max-width:650px){
+  body{display:flex;flex-direction:column}
+  body>#voyage{order:1}
+  body>#shipregion,body>.lanes-wrap,body>.logwrap{order:2}
+  #voyage-stage{height:330px}
+  .voyage-full #voyage-drawer{top:45%;width:100%}
+}
 </style>
 </head>
 <body>
@@ -233,6 +253,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 <script src="ship.js"></script>
 <script src="diagram.js"></script>
 <script src="watch.js"></script>
+<script src="game.js"></script>
 <script>
 // the lanes come from the server, in lifecycle order; this is only how many
 // merged cards the merged lane shows before pointing at the history
@@ -376,6 +397,7 @@ function feedbackText() {
 }
 function pose() {
   const cap = document.getElementById('captain');
+  if (!cap) return;
   cap.dataset.pose = sent.size || SHIP.active()?.kind === 'order' ? 'order'
     : picks.size ? 'ready' : 'idle';
   // the portrait is the same captain, so it wears the same pose
@@ -391,7 +413,7 @@ function observe(outcomes) {
   for (const e of outcomes || []) {
     if (seen.has(e.identity)) continue;
     seen.add(e.identity);
-    if (!initialized) continue;
+    if (!initialized || VOYAGE.hidden) continue;
     const kind = e.type === 'merged' ? 'merge' : 'order';
     SHIP.enqueue(document.getElementById('scene'), kind, e.identity);
   }
@@ -421,6 +443,7 @@ function render(s) {
   const focusChoice = focus?.dataset?.c;
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
   latest = s;
+  VOYAGE.update(s, t, lang);
   prUrls = s.pr_urls || null;
   // A refused merge stays up until the same task or pull request is merged
   // afterwards; the server says which refusals have been overtaken.
@@ -714,10 +737,10 @@ function render(s) {
   // before it is shown, so a decision without one leaves no empty frame
   DIAGRAM.mount(deck, lang).catch(() => {});
 
-  const crew = SHIP.render(document.getElementById("scene"), s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
+  const crew = VOYAGE.hidden ? SHIP.crewOf(s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || '')) : SHIP.render(document.getElementById("scene"), s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
   SHIP.roster(document.getElementById("roster"), crew, t);
   observe(s.outcomes);
-  SHIP.captain(document.getElementById("captain"), pend.length || (feedback || SHIP.active() ? 1 : 0), t);
+  if (document.getElementById("captain")) SHIP.captain(document.getElementById("captain"), pend.length || (feedback || SHIP.active() ? 1 : 0), t);
   pose(); feedbackText();
   if (focusKey) {
     const replacement = [...deck.querySelectorAll('[data-id]')].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && (focusChoice ? el.dataset.c === focusChoice : !el.dataset.c));
@@ -750,12 +773,12 @@ function refusedFor(r) {
     .catch(() => ({ error: String(r.status) }));
 }
 async function answer(id) {
-  if (sent.has(id) || readOnly() || !validate(id)) return;
+  if (VOYAGE.fighting || sent.has(id) || readOnly() || !validate(id)) return;
   const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
   refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
     method: "POST", headers: credential({ "content-type": "application/json" }),
-    body: JSON.stringify({ id, chosen, ...(chosen === 'custom' ? {text} : {}) }),
+    body: JSON.stringify({ id, chosen, ...(decision?.project ? {project:decision.project} : {}), ...(chosen === 'custom' ? {text} : {}) }),
   }).then(x => x.status === 403 ? refusedFor(x) : x.json()).catch(() => ({ error: t("unreachable") }));
   sent.delete(id);
   if (r.error) {
@@ -778,7 +801,7 @@ async function answer(id) {
       eventFailed:r.eventRecorded === false};
     const identity = r.decision?.identity || `decision:${id}`;
     if (!r.already && !seen.has(identity)) {
-      seen.add(identity); SHIP.enqueue(document.getElementById('scene'), 'order', identity);
+      seen.add(identity); if (!VOYAGE.hidden) SHIP.enqueue(document.getElementById('scene'), 'order', identity);
     }
   }
   render(latest);
@@ -790,6 +813,7 @@ async function answer(id) {
 const taskByKey = k => (latest?.tasks || []).find(x => keyOf(x) === k);
 const actionsOf = k => taskByKey(k)?.actions || [];
 async function act(k, action, extra = {}) {
+  if (VOYAGE.fighting) return;
   menuOpen = null; confirming = null; confirmAction = null; taskFeedback = null;
   const task = taskByKey(k);
   const r = task && !readOnly() ? await fetch('/tasks', {

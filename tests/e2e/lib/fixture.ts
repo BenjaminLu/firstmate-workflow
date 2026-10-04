@@ -3,7 +3,7 @@
 // through the real endpoints. Nothing here calls a model or the network.
 import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, cpSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { test as base, type Page } from "@playwright/test";
@@ -58,11 +58,32 @@ export function writeTasks(root: string, tasks: any[]) {
   for (const t of tasks) writeFileSync(join(dir, `${t.id}.json`), JSON.stringify(t, null, 2) + "\n");
 }
 
+// CI builds before starting Playwright. Direct e2e invocations can locate that
+// output, or build in an isolated copy so parallel workers never share scratch.
+let voyageBundle: string | undefined;
+function liveBundle(): string {
+  if (voyageBundle !== undefined) return voyageBundle;
+  const artifact=join(ROOT,'board/public/voyage2d/index.html');
+  if (existsSync(artifact)) return voyageBundle=readFileSync(artifact,'utf8');
+  const buildRoot=mkdtempSync(join(tmpdir(),'fm-voyage-build-'));
+  try {
+    cpSync(join(ROOT,'games/voyage-2d'),join(buildRoot,'games/voyage-2d'),{
+      recursive:true, filter:source=>!['node_modules','build','__pycache__'].includes(basename(source)),
+    });
+    const result=spawnSync('bash',[join(buildRoot,'games/voyage-2d/tools/prepare-board.sh'),buildRoot],{encoding:'utf8'});
+    if(result.status!==0) throw new Error(`Live bundle build failed: ${result.stderr} ${result.stdout}`);
+    return voyageBundle=readFileSync(join(buildRoot,'board/public/voyage2d/index.html'),'utf8');
+  } finally {rmSync(buildRoot,{recursive:true,force:true});}
+}
+
 export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task" | "one-worker" = "per-task") {
+  const bundle=liveBundle();
   const d = mkdtempSync(join(tmpdir(), "fm-e2e-"));
   mkdirSync(join(d, "state/pending"), { recursive: true });
   mkdirSync(join(d, "design"), { recursive: true });
   cpSync(join(ROOT, "board"), join(d, "board"), { recursive: true });
+  mkdirSync(join(d,"board/public/voyage2d"),{recursive:true});
+  writeFileSync(join(d,"board/public/voyage2d/index.html"),bundle);
   cpSync(join(ROOT, "i18n"), join(d, "i18n"), { recursive: true });
   cpSync(join(ROOT, "design/tasks"), join(d, "design/tasks"), { recursive: true });
   mkdirSync(join(d, 'bin'));

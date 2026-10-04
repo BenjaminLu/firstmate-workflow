@@ -1,0 +1,76 @@
+{
+  "format": "voyage-mod/1",
+  "id": "galleon",
+  "name": { "en": "The Galleon", "zh-TW": "大帆船", "zh-CN": "大帆船" },
+  "version": "1.0.0",
+  "author": "Firstmate Voyage",
+  "description": {
+    "en": "A tall Spanish galleon for every crew size: a three-tier stern castle, four masts, two gun decks, an orlop and a hold.",
+    "zh-TW": "一艘高大的西班牙大帆船，所有人數都用它：三層艉樓、四根桅杆、兩層砲甲板、最下甲板與貨艙。",
+    "zh-CN": "一艘高大的西班牙大帆船，所有人数都用它：三层艉楼、四根桅杆、两层炮甲板、最下甲板与货舱。"
+  },
+  "ships": {
+    "replace": true,
+    "classes": [
+      {
+        "id": "galleon",
+        "cap": 24,
+        "crewScale": 0.84,
+        "name": { "en": "Galleon", "zh-TW": "大帆船", "zh-CN": "大帆船" },
+        "hull": { "stern": -5500, "bow": 5500, "keel": 2320, "waterline": 1150 },
+        "decks": [
+          { "id": "castle", "y": -1440, "x0": -5420, "x1": -4180, "label": { "en": "Stern castle", "zh-TW": "艉樓頂", "zh-CN": "艉楼顶" } },
+          { "id": "poop", "y": -960, "x0": -5440, "x1": -3300 },
+          { "id": "qd", "y": -480, "x0": -5460, "x1": -2200 },
+          { "id": "fore", "y": -480, "x0": 2750, "x1": 5000 },
+          { "id": "main", "y": 0 },
+          { "id": "gun", "y": 480 },
+          { "id": "gun2", "y": 960 },
+          { "id": "orlop", "y": 1440 },
+          { "id": "hold", "y": 1920 }
+        ],
+        "rooms": [
+          { "id": "castle", "kind": "open", "deck": "castle", "label": { "en": "Stern castle · the flags", "zh-TW": "艉樓頂 · 旗幟", "zh-CN": "艉楼顶 · 旗帜" } },
+          { "id": "chart", "kind": "chart", "deck": "poop", "x1": -4180, "fore": "door", "label": { "en": "Chart room", "zh-TW": "海圖室", "zh-CN": "海图室" } },
+          { "id": "poop", "kind": "open", "deck": "poop", "x0": -4180, "label": { "en": "Poop deck", "zh-TW": "艉樓甲板", "zh-CN": "艉楼甲板" } },
+          { "id": "cabin", "kind": "cabin", "deck": "qd", "x1": -3300, "fore": "door", "label": { "en": "Captain's cabin", "zh-TW": "船長室", "zh-CN": "船长室" } },
+          { "id": "helm", "kind": "helm", "deck": "qd", "x0": -3300, "label": { "en": "Helm", "zh-TW": "舵輪", "zh-CN": "舵轮" } },
+          { "id": "officers", "kind": "quarters", "deck": "main", "x1": -4000, "fore": "door", "label": { "en": "Officers' berths", "zh-TW": "軍官艙", "zh-CN": "军官舱" } },
+          { "id": "steerage", "kind": "workshop", "deck": "main", "x0": -4000, "x1": -2200, "fore": "door", "label": { "en": "Steerage · workshop", "zh-TW": "舵艙 · 工作間", "zh-CN": "舵舱 · 工作间" } },
+          { "id": "waist", "kind": "waist", "deck": "main", "x0": -2200, "x1": 2750, "aft": "open", "fore": "open", "label": { "en": "Waist · workbenches", "zh-TW": "中甲板 · 工作台", "zh-CN": "中甲板 · 工作台" } },
+          { "id": "galley", "kind": "galley", "deck": "main", "x0": 2750, "aft": "door", "label": { "en": "Galley", "zh-TW": "廚房", "zh-CN": "厨房" } },
+          { "id": "forecastle", "kind": "forecastle", "deck": "fore", "label": { "en": "Bow lookout", "zh-TW": "船首瞭望", "zh-CN": "船首瞭望" } },
+          { "id": "gundeck", "kind": "gundeck", "deck": "gun", "label": { "en": "Upper gun deck · the gates", "zh-TW": "上層砲甲板 · 關卡", "zh-CN": "上层炮甲板 · 关卡" } },
+          { "id": "gundeck2", "kind": "gundeck", "deck": "gun2", "x1": 1500, "fore": "door", "label": { "en": "Lower gun deck · the gates", "zh-TW": "下層砲甲板 · 關卡", "zh-CN": "下层炮甲板 · 关卡" } },
+          { "id": "bosun", "kind": "workshop", "deck": "gun2", "x0": 1500, "aft": "door", "label": { "en": "Bosun's store", "zh-TW": "水手長倉庫", "zh-CN": "水手长仓库" } },
+          { "id": "quarters", "kind": "quarters", "deck": "orlop", "x1": 1000, "fore": "door", "label": { "en": "Crew quarters", "zh-TW": "船員艙", "zh-CN": "船员舱" } },
+          { "id": "mess", "kind": "galley", "deck": "orlop", "x0": 1000, "aft": "door", "label": { "en": "Mess", "zh-TW": "餐廳", "zh-CN": "餐厅" } },
+          { "id": "hold", "kind": "cargo", "deck": "hold", "label": { "en": "Hold · the backlog", "zh-TW": "貨艙 · 待辦", "zh-CN": "货舱 · 待办" } }
+        ],
+        "links": [
+          { "kind": "stairs", "from": "castle", "to": "poop", "x": -4180, "dir": 1 },
+          { "kind": "stairs", "from": "poop", "to": "qd", "x": -3300, "dir": 1 },
+          { "kind": "stairs", "from": "qd", "to": "main", "x": -2200, "dir": 1 },
+          { "kind": "stairs", "from": "fore", "to": "main", "x": 2750, "dir": -1 },
+          { "kind": "stairs", "from": "main", "to": "gun", "x": -1100, "dir": 1 },
+          { "kind": "ladder", "from": "main", "to": "gun", "x": 2300, "dir": -1 },
+          { "kind": "stairs", "from": "gun", "to": "gun2", "x": 300, "dir": 1 },
+          { "kind": "ladder", "from": "gun", "to": "gun2", "x": -3000, "dir": 1 },
+          { "kind": "stairs", "from": "gun2", "to": "orlop", "x": -700, "dir": 1 },
+          { "kind": "ladder", "from": "gun2", "to": "orlop", "x": 3900, "dir": -1 },
+          { "kind": "ladder", "from": "orlop", "to": "hold", "x": 1500, "dir": 1 },
+          { "kind": "ladder", "from": "orlop", "to": "hold", "x": -2800, "dir": 1 }
+        ],
+        "masts": [
+          { "x": -3900, "height": 3600, "nest": true },
+          { "x": -1500, "height": 4800, "nest": true },
+          { "x": 600, "height": 6600, "nest": true },
+          { "x": 3500, "height": 5400, "nest": true }
+        ],
+        "props": [
+          { "kind": "lantern", "deck": "castle", "x": -4800 }
+        ]
+      }
+    ]
+  }
+}

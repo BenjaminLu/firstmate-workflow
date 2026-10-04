@@ -1,0 +1,20 @@
+// node tools/when.mjs "<query>" <out.png> "<js predicate>" [w h] : screenshot the first frame the predicate holds
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { chromium, devices } = require("playwright");
+const [q, out, pred, w = 1440, h = 900] = process.argv.slice(2);
+const b = await chromium.launch({ args: ["--use-angle=metal", "--enable-gpu"] });
+const dev = process.env.DEVICE;
+const ctx = await b.newContext(dev ? { ...devices[dev] } : { viewport: { width: +w, height: +h } });
+const p = await ctx.newPage();
+const errs = [];
+p.on("pageerror", (e) => errs.push(e.message));
+await p.goto(`http://127.0.0.1:8791/game2d.html?${q}`);
+await p.waitForFunction(() => window.__G?.ready);
+if (process.env.PRE) await p.evaluate(process.env.PRE);
+await p.waitForFunction(new Function("return (" + pred + ")"), null, { timeout: 60000, polling: 16 });
+await p.evaluate(() => (window.__G.paused = true));
+await p.waitForTimeout(80);
+await p.screenshot({ path: out });
+console.log(JSON.stringify({ out, errs }));
+await b.close();

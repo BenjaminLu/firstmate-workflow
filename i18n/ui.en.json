@@ -181,5 +181,10 @@
   "lastReview": "last review {time} · {outcome}",
   "lastReviewApproved": "approved",
   "lastReviewRejected": "changes requested",
-  "lastReviewOther": "no verdict"
+  "lastReviewOther": "no verdict",
+  "voyageTitle": "Live voyage",
+  "voyageShow": "Show voyage",
+  "voyagePanel": "Return to panel · Esc",
+  "voyageFull": "Full-screen voyage · F",
+  "voyageWorkflow": "Workflow"
 }

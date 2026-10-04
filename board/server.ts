@@ -1962,6 +1962,8 @@ const serveFile = (name: string) => {
     : name.endsWith(".js") ? "text/javascript" : "text/html; charset=utf-8";
   const body = name === "index.html"
     ? readFileSync(real, "utf8").replace('data-default-language="en"', `data-default-language="${DEFAULT_LANGUAGE}"`)
+      .replace('<script src="game.js"></script>', existsSync(join(PUBLIC, 'voyage2d/index.html'))
+        ? '<script src="game.js"></script>' : '')
     : readFileSync(real);
   return new Response(body, { headers: { "content-type": type } });
 };

@@ -372,6 +372,18 @@ ci_blind_note() {
   note "leak check: macOS hides the environment of /bin binaries; matched by fixture root as well - the required check (Linux) is authoritative"
 }
 
+# Build before any browser worker copies the board and before the node tests.
+# A shard running only e2e needs this too; generated output is never committed.
+if { want_stage bun || want_stage e2e; } && [ -d games/voyage-2d ]; then
+  stage "voyage Live bundle"
+  if out=$(bash games/voyage-2d/tools/prepare-board.sh "$PWD" 2>&1); then
+    pass "voyage Live bundle built"
+  else
+    flunk "voyage Live bundle"; printf '%s\n' "$out"
+    exit 1
+  fi
+fi
+
 # end-to-end: decided now, run in the background, reported in its place
 e2e_state=run
 if [ ! -d tests/e2e ]; then e2e_state=no-suite
@@ -1197,6 +1209,22 @@ fi
 fi # want_stage bash
 
 if want_stage bun; then
+stage "voyage Playground and node tests"
+if [ -d games/voyage-2d ]; then
+  if out=$(python3 games/voyage-2d/tools/build.py --output build/playground.html 2>&1); then
+    pass "voyage Playground has no network code"
+    if out=$(cd games/voyage-2d && VOYAGE_PLAYGROUND=build/playground.html FIRSTMATE_CI_SCOPE="$ci_scope.voyage" node --test tests/*.test.mjs 2>&1); then
+      pass "voyage node tests"
+      printf '%s\n' "$out" # preserve Node TAP skip reasons in CI
+    else
+      flunk "voyage node tests"; printf '%s\n' "$out"
+    fi
+    ci_contain "$ci_scope.voyage" "$ci_tmp/voyage.leak"
+    ci_contained "voyage node tests" "$ci_tmp/voyage.leak"
+  else
+    flunk "voyage Playground build"; printf '%s\n' "$out"
+  fi
+fi
 stage "bun tests"
 # tests/e2e belongs to playwright, which owns its own runner; bun picking
 # those files up runs them without a browser and calls the result an error

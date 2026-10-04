@@ -181,5 +181,10 @@
   "lastReview": "上一輪審查 {time} · {outcome}",
   "lastReviewApproved": "通過",
   "lastReviewRejected": "要求修改",
-  "lastReviewOther": "沒有結論"
+  "lastReviewOther": "沒有結論",
+  "voyageTitle": "即時航程",
+  "voyageShow": "顯示航程",
+  "voyagePanel": "返回面板 · Esc",
+  "voyageFull": "全螢幕航程 · F",
+  "voyageWorkflow": "工作流程"
 }

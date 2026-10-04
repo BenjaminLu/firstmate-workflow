@@ -504,8 +504,21 @@ done
 # when they were written; this suite has to spell the pattern out.
 allowed='^design/design\.md:[0-9]+:.*keeps seven slots'      # the card's gate list: one slot per number 1-7
 allowed="$allowed"'|^tests/lib/worker(-rebuild)?\.sh:[0-9]+:.*seven of them'  # shared fixture design.md, moved with its tests
-sweep="$(cd "$ROOT" && git grep -niE "$count" -- . ':!design/tasks/' ':!design/proposals/' ':!tests/gate.test.sh' 2>&1 \
-  | grep -vE "$allowed")"
+sweep_gates() {
+  (cd "$1" && git grep -niE "$count" -- . ':!design/tasks/' ':!design/proposals/' ':!tests/gate.test.sh' ':!games/voyage-2d/' 2>&1 \
+    | grep -vE "$allowed")
+}
+# A vendor exclusion must not exempt the engine's own prose.
+sweep_root="$(mktemp -d)"
+git -C "$sweep_root" init -q
+mkdir -p "$sweep_root/games/voyage-2d" "$sweep_root/skills/example"
+printf '%s\n' 'The seven gates' > "$sweep_root/games/voyage-2d/README.md"
+printf '%s\n' 'The seven gates' > "$sweep_root/skills/example/SKILL.md"
+git -C "$sweep_root" add .
+sweep_fixture="$(sweep_gates "$sweep_root")"
+assert_contains "$sweep_fixture" 'skills/example/SKILL.md:1:' 'gate sweep still detects engine prose'
+assert_lacks "$sweep_fixture" 'games/voyage-2d/' 'gate sweep excludes vendored game prose'
+sweep="$(sweep_gates "$ROOT")"
 assert_eq "" "$sweep" "no file in the repository still counts seven gates, or runs gate 3"
 
 # --- a merge card's gate list has one shape everywhere (T-114) ------------
