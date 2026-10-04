@@ -61,6 +61,17 @@ class Pilot(MechanicalLoop):
             self.data.setdefault(name, default)
         # Existing installations establish the remote boundary on upgrade.
         self.data.setdefault('tracking_started', self.clock())
+        if 'legacy_ask_records' not in self.data:
+            from fm_evidence import Store
+            # Legacy wake keys are hashed, so retain the existing ASK identities
+            # for their tasks once, before polling. At use time the legacy key
+            # must also match the PR and head. Do not extend this snapshot on
+            # restart: later questions at the same head need their own wake.
+            tasks = {wake.get('task') for wake in self.data['wakes'].values() if wake.get('task')}
+            self.data['legacy_ask_records'] = sorted({key(record) for task in tasks
+                for record in Store(str(self.state), ctx['evidence_project'], task,
+                                    external=ctx['external']).records()
+                if record.get('kind') == 'ask'})
         if first_start:
             # Snapshot both durable inputs before any poll or policy side effect.
             # Existing recovery state, including zero cursors, remains authoritative.

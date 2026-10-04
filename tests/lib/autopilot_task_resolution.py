@@ -140,12 +140,42 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
         self.record('ask', 1003); self.draft(); self.draft()
         self.assertEqual(len(self.pilot.data['wakes']), 2, 'distinct unanswered ASK needs its own wake')
 
+    def test_upgrade_preserves_legacy_ask_delivery_without_hiding_future_asks(self):
+        self.record('ask', 1001)
+        self.record('ask', 1002)
+        legacy = self.pilot.queue(f'ask-168-{HEAD}', 'T-179', 'Already delivered', '已送出')
+        self.pilot.data['wakes'][legacy]['pushed'] = True
+        # Model saved state from before per-record ASK deduplication shipped.
+        self.pilot.data.pop('legacy_ask_records', None)
+        self.pilot.save()
+        self.pilot = self.start(1100)
+        with patch.object(self.pilot, 'queue', wraps=self.pilot.queue) as queue:
+            self.draft(); self.draft()
+            queue.assert_not_called()
+        self.assertEqual(set(self.pilot.data['wakes']), {legacy})
+        self.pilot = self.start(1200)
+        self.draft()
+        self.assertEqual(set(self.pilot.data['wakes']), {legacy})
+        self.record('ask', 1201)
+        self.draft(); self.draft()
+        self.assertEqual(len(self.pilot.data['wakes']), 2, 'a later ASK at the same head still wakes')
+
     def test_answered_ask_and_wrong_head_never_wake(self):
         self.record('ask', 1001)
         self.record('brief', 1002, head=BASE, authorized=True)
         self.record('ask', 1003, head=BASE)
         self.draft()
         self.assertEqual(self.pilot.data['wakes'], {})
+
+    def test_legacy_ask_delivery_is_bound_to_pr_and_head(self):
+        self.record('ask', 1001)
+        self.pilot.queue(f'ask-169-{HEAD}', 'T-179', 'Other PR', '其他 PR')
+        self.pilot.queue(f'ask-168-{BASE}', 'T-179', 'Other head', '其他版本')
+        self.pilot.data.pop('legacy_ask_records', None)
+        self.pilot.save()
+        self.pilot = self.start(1100)
+        self.draft(); self.draft()
+        self.assertEqual(len(self.pilot.data['wakes']), 3, 'other PR/head wakes cannot suppress this ASK')
 
     def test_unresolvable_reason_persisted_once_and_retried(self):
         (self.root / 'head-spec').write_text('{"id":"T-999"}')

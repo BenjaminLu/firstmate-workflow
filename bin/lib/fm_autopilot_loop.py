@@ -174,6 +174,9 @@ class MechanicalLoop:
                 asks.append(record)
         if asks:
             ask = asks[-1]
+            legacy = 'autopilot-' + key([self.ctx['project'], f'ask-{pr["number"]}-{head}'])
+            if legacy in self.data['wakes'] and key(ask) in self.data['legacy_ask_records']:
+                return
             # Dedupe by the question, so another question at the same head can
             # wake after the first was answered, but a restart cannot replay it.
             self.queue(f'ask-{pr["number"]}-{key(ask)}', task,
