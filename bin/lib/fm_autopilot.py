@@ -62,7 +62,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
         if not isinstance(self.data, dict): raise ValueError('invalid autopilot recovery state')
         for name, default in dict(offset=0, wake_offset=0, actions={}, seen={}, batches={},
                                   wakes={}, pulls={}, cache={}, failures=0, next_poll=0,
-                                  poll_seq=0, retries={}, holds={}, updates={}).items():
+                                  poll_seq=0, retries={}, holds={}, updates={}, advanced={}).items():
             self.data.setdefault(name, default)
         if not self.data.get('migrated_t190'):
             for token, action in list(self.data['actions'].items()):
@@ -73,6 +73,15 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     if not self.data['wakes'].get(wake, {}).get('pushed'):
                         self.data['wakes'].pop(wake, None)
             self.data['migrated_t190'] = True
+        if not self.data.get('migrated_t193'):
+            for token, action in list(self.data['actions'].items()):
+                identity = action.get('identity') or []
+                if identity and identity[0] == 'advance':
+                    del self.data['actions'][token]
+                    wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
+                    if not self.data['wakes'].get(wake, {}).get('pushed'):
+                        self.data['wakes'].pop(wake, None)
+            self.data['migrated_t193'] = True
         # Existing installations establish the remote boundary on upgrade.
         self.data.setdefault('tracking_started', self.clock())
         if 'legacy_ask_records' not in self.data:

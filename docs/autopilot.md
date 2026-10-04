@@ -48,10 +48,22 @@ records live in the corresponding `state/wake-queue/`, then enter T-137's
 B/C answers, convention changes and ambiguous mechanical outcomes carry reason
 lines. Overdue items produce bilingual board events and desktop notifications.
 Branch update steps no longer write reconciliation records: they are re-decided
-from observed GitHub state. Other actions interrupted after their write-ahead
-record remain held for reconciliation. The one-time upgrade removes legacy
-update actions and undelivered update wakes; delivered wake files and parked
-advance actions remain unchanged. The service's log names failures before startup.
+from observed GitHub state. Gate advancement is also re-decided from its observed
+fingerprint without a write-ahead record, marking the PR's head and fingerprint
+only after the gate job starts. Identical evidence holds across restarts;
+changed evidence gates again. An authoritative head race is re-read on the next
+poll without a wake or retry. Gate-step failures retry at poll offsets 0, 1 and 3,
+then wake once with the error. A changed fingerprint starts a fresh retry series
+with its own wake. The remaining write-ahead classes are re-check, restack,
+review launch and PR events; interrupted actions remain held for reconciliation.
+The one-time `migrated_t190` upgrade removes legacy update actions and their
+undelivered wakes. Delivered wake files remain unchanged, and legacy advance
+actions with their undelivered wakes are removed by `migrated_t193`. Eligible
+open PRs gate once more after upgrade; busy jobs and merge-card deduplication
+still apply, and job recovery is unchanged. A gate, protocol or review result
+for a PR that has merged, or that has a captain merge chosen A at that head
+which is running or merged, is dropped without a wake; such a PR is not gated.
+The service's log names failures before startup.
 
 Native source loading, enablement, exact-definition trust, reload and model
 receipt remain separate T-164 facts. A FIFO notification, queued record,
