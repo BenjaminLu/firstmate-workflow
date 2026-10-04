@@ -57,8 +57,13 @@ for (const project of [null, 'beta']) test('Live commands use only authenticated
       {name:'alpha',github:'example-org/alpha-app'},
       {name:project,github:'example-org/beta-app',tasks:[{id:'T-001',title:'Beta task',depends_on:[]}]},
     ]);
-    writeFileSync(join(projectState(root,project),'pending/D-beta-1.json'),JSON.stringify({
-      id:'D-beta-1',project,task:'T-001',kind:'choice',details,
+    const state=projectState(root,project);
+    writeFileSync(join(state,'events.jsonl'),JSON.stringify({
+      ts:'2026-09-21T09:01:00Z',actor:'worker-beta',project,task:'T-001',type:'dispatched',
+      summary:{en:'Beta task','zh-TW':'Beta task'},
+    })+'\n');
+    writeFileSync(join(state,'pending/D-beta-T001-1.json'),JSON.stringify({
+      id:'D-beta-T001-1',project,task:'T-001',kind:'choice',details,
     }));
   }
   const b=await startBoard(root);
