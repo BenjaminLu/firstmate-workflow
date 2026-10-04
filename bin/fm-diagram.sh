@@ -80,7 +80,7 @@ ROOT="$(cd "$ROOT" && pwd)"
 # no notion of a line: it is handed the whole value, and a newline is not in
 # [0-9] nor in [A-Za-z0-9._-].
 #
-# Decision ids use the shared shell grammar in fm-config.sh.
+# Decision ids use the shared shell grammar in fm-emit.sh.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -r "$HERE/fm-emit.sh" ] || die "missing $HERE/fm-emit.sh" 70
 # shellcheck source=bin/fm-emit.sh

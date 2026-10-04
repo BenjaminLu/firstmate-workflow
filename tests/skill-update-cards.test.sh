@@ -45,8 +45,25 @@ HERDR_ENV=0 FM_ROOT="$d" bash "$d/bin/fm-decide.sh" --request D-SK-011 --task SK
 assert_eq 64 "$?" 'SK details require complete localized tradeoffs'
 request D-SK-012 SK-999 >/dev/null 2>&1
 assert_eq 64 "$?" 'SK details must name the matching task'
+# Card creation and rendering must not depend on the optional config reader.
+saved_details="$d/details.json"
+d="$(fixture no-reader)"
+cp "$saved_details" "$d/details.json"
+rm "$d/bin/fm-config.sh"
+for pair in 'D-44 T-44' 'D-SK-009 SK-009'; do
+  read -r id task <<<"$pair"
+  request "$id" "$task" > "$d/request" 2>&1
+  assert_eq 0 "$?" "request $id works without the config reader"
+  assert_ok "test -s '$d/state/pending/$id.json'" "request $id persists without the config reader"
+  for lang in en zh-TW zh-CN; do
+    assert_ok "test -s '$d/board/public/diagrams/$id.$lang.html'" "$id renders $lang without the config reader"
+  done
+done
+HERDR_ENV=0 FM_ROOT="$d" bash "$d/bin/fm-ready.sh" judged --task SK-009 --decision D-SK-009 >/dev/null 2>&1
+assert_eq 0 "$?" 'ready validates skill decisions without the config reader'
+d="$(fixture grammar)"
 # The shared grammar and all three consumers agree at the input boundary.
-. "$ROOT/bin/fm-config.sh"
+. "$ROOT/bin/fm-emit.sh"
 for id in D-1 D-123456 D-SK-009 D-SK-1234 D-firstmate-workflow-SK009-1; do
   fm_decision_id "$id"
   assert_eq 0 "$?" "shared grammar accepts $id"
@@ -71,7 +88,15 @@ done
 # Replace the shared predicate in a disposable fixture: every consumer must
 # obey it, rather than merely happen to agree on the examples above.
 d="$(fixture shared)"
-printf '\nfm_decision_id() { return 1; }\n' >> "$d/bin/fm-config.sh"
+# Put the override before fm-emit's source-only return.
+python3 - "$d/bin/fm-emit.sh" <<'PYGRAMMAR'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace(
+    '# sourced for the grammar alone: stop here',
+    'fm_decision_id() { return 1; }\n# sourced for the grammar alone: stop here'))
+PYGRAMMAR
 HERDR_ENV=0 FM_ROOT="$d" bash "$d/bin/fm-ready.sh" judged --task SK-009 --decision D-SK-009 >/dev/null 2>&1
 assert_eq 64 "$?" 'ready uses the shared predicate'
 HERDR_ENV=0 FM_ROOT="$d" bash "$d/bin/fm-decide.sh" --await D-SK-009 --timeout 1 >/dev/null 2>&1

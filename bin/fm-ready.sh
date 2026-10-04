@@ -42,6 +42,10 @@ set -uo pipefail
 # a child that reads it blocks the caller waiting for a human who is not
 # there.
 exec < /dev/null
+_grammar_lib="$(dirname "${BASH_SOURCE[0]}")/fm-emit.sh"
+[ -r "$_grammar_lib" ] || { echo "fm-ready: missing $_grammar_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-emit.sh
+. "$_grammar_lib"
 _storage_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 if [ -r "$_storage_lib" ]; then
   # shellcheck source=bin/fm-config.sh

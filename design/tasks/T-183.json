@@ -7,6 +7,7 @@
     "bin/fm.sh",
     "bin/fm-diagram.sh",
     "bin/fm-config.sh",
+    "bin/fm-emit.sh",
     "bin/fm-ready.sh",
     "bin/fm-decide.sh",
     "tests/**",
@@ -19,6 +20,7 @@
     "(b) fm-diagram.sh uses the shared decision-id grammar, the same one fm-decide.sh and the board use. It does not keep a local copy. `--decision D-SK-<n>` renders the three files. Ids the board rejects are still rejected.",
     "Tests (fail first, stubs answering like the real tools, HERDR_ENV=0 in helpers):\n- a self-update proposal raises a card whose details have every field in both languages\n- fm-diagram renders for D-SK-009 and still refuses D-SK-9 and other malformed ids\nEvidence is the required GitHub check and the six gates. Workers do not run the suites.",
     "Spec amended by captain decision D-firstmate-workflow-T183-1 (A, 2026-10-04): the shared id grammar needs at least three digits after D-SK-, and fm-decide.sh requires options A, B and C in card details.",
-    "Scope widened by captain decision D-firstmate-workflow-T183-2 (A, 2026-10-04): bin/fm-decide.sh accepts --details for D-SK-<n> with the same validation as other cards, and the decision-id grammar lives in one shared place that fm-decide.sh, fm-ready.sh and fm-diagram.sh all use."
+    "Scope widened by captain decision D-firstmate-workflow-T183-2 (A, 2026-10-04): bin/fm-decide.sh accepts --details for D-SK-<n> with the same validation as other cards, and the decision-id grammar lives in one shared place that fm-decide.sh, fm-ready.sh and fm-diagram.sh all use.",
+    "Scope widened by captain decision D-firstmate-workflow-T183-3 (A, 2026-10-04): the whole decision-id grammar (old numeric, owned, D-SK-<3+ digits>) lives in bin/fm-emit.sh next to FM_OWNED_ID, which fm-decide.sh and fm-diagram.sh already source unconditionally; fm-decide.sh keeps working when fm-config.sh is absent; fm-config.sh keeps no copy."
   ]
 }

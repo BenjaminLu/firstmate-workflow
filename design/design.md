@@ -1749,7 +1749,8 @@ only records the answer. A skill merge card merges on A and holds on B and C
 like any merge card. Revision names the requested changes and re-raises
 the same decision id through the existing decision lifecycle. Shell consumers
 (`fm-decide.sh`, `fm-ready.sh`, `fm-diagram.sh`) use `fm_decision_id` in
-`fm-config.sh`, which delegates owned ids to `FM_OWNED_ID`; the board retains
+`bin/fm-emit.sh`, beside `FM_OWNED_ID`, without depending on the optional
+config reader; the board retains
 its TypeScript twin. A custom answer never has an effect. An effect that failed stays on the board
 with its reason until what it asked for has happened some other way, and is
 never shown as done.
