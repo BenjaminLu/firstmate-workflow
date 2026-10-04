@@ -42,6 +42,10 @@ set -uo pipefail
 # a child that reads it blocks the caller waiting for a human who is not
 # there.
 exec < /dev/null
+_grammar_lib="$(dirname "${BASH_SOURCE[0]}")/fm-emit.sh"
+[ -r "$_grammar_lib" ] || { echo "fm-ready: missing $_grammar_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-emit.sh
+. "$_grammar_lib"
 _storage_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 if [ -r "$_storage_lib" ]; then
   # shellcheck source=bin/fm-config.sh
@@ -56,13 +60,6 @@ die() { printf 'fm-ready: %s\n' "$1" >&2; exit 1; }
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
 # left does not shift, and the loop spins.
 need() { [ "$#" -ge 2 ] || { echo "fm-ready: $1 needs a value" >&2; exit 64; }; }
-# A card's id is bin/fm-decide.sh's (T-047): D-<project>-<task>-<n> from
-# --allocate, or a pre-registry D-<digits>. Spelled out letter by letter as
-# fm-decide spells it, because a bracket range follows the locale's collation.
-LOW=abcdefghijklmnopqrstuvwxyz; UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ; DIG=0123456789
-CARD_ID="^D-(([${LOW}${DIG}-]{1,24})-(T[${UP}${LOW}${DIG}]{1,32})-([123456789][${DIG}]{0,5})|[${DIG}]{1,6})$"
-SKILL_CARD="^D-SK-[${DIG}]{3,}$"
-
 # The subcommand is read in the same loop as the flags, as fm-session.sh does,
 # so a flag with no value is refused by its own guard wherever it comes.
 MODE=''; TASK=''; DECISION=''
@@ -86,7 +83,7 @@ else
   # any task id (T-004, SK-001), as long as it names a file here:
   # no slash, no leading dot
   [[ "$TASK" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ ]] || usage "judged needs --task <id>, e.g. T-004"
-  [[ "$DECISION" =~ $CARD_ID ]] || usage "judged needs --decision D-<project>-<task>-<n> or D-<n>"
+  fm_decision_id "$DECISION" || usage "judged needs --decision D-<project>-<task>-<n>, D-SK-<at least three digits> or D-<n>"
 fi
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
@@ -173,10 +170,10 @@ rows="$(awk -F'\t' -v OFS='\t' '$2 == "ready" { print $1, $3, $4 }' <<< "$all_ro
 # state/decisions/<D-n>.json, and the card was a choice about this task. An A
 # on another task's card, or on a merge card, says nothing about this one.
 answered_a() {
-  if [[ "$1" =~ ^D-.*-T[^-]+-[0-9]+$ ]] && [ -n "$READY_PROJECT" ]; then
-    [[ "$1" == "D-$READY_PROJECT-T"* ]] || return 1
+  if fm_decision_id "$1" owned && [ -n "$READY_PROJECT" ]; then
+    [ "${BASH_REMATCH[1]}" = "$READY_PROJECT" ] || return 1
   fi
-  { [[ "$1" =~ $CARD_ID ]] || [[ "$1" =~ $SKILL_CARD ]]; } && [ -f "$FM_STATE_DIR/decisions/$1.json" ] \
+  fm_decision_id "$1" && [ -f "$FM_STATE_DIR/decisions/$1.json" ] \
     && jq -e --arg t "$2" --arg project "$READY_PROJECT" '.chosen == "A" and .task == $t and ((.kind // "choice") == "choice") and ((.project // $project) == $project)' \
          "$FM_STATE_DIR/decisions/$1.json" >/dev/null 2>&1
 }
@@ -270,8 +267,8 @@ if [ "$MODE" != judged ]; then
   exit 0
 fi
 
-if [ -n "$READY_PROJECT" ] && [[ "$DECISION" =~ ^D-.*-T[^-]+-[0-9]+$ ]]; then
-  [[ "$DECISION" == "D-$READY_PROJECT-T${TASK#T-}-"* ]] || die "decision belongs to another project or task"
+if [ -n "$READY_PROJECT" ] && fm_decision_id "$DECISION" owned; then
+  [ "${BASH_REMATCH[1]}" = "$READY_PROJECT" ] && [ "${BASH_REMATCH[2]}" = "${TASK/-/}" ] || die "decision belongs to another project or task"
 fi
 
 # judged: only a task that is ready now can have been judged as ready

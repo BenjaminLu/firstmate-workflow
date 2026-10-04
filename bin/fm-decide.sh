@@ -97,16 +97,8 @@ done
   echo "usage: fm-decide.sh --allocate --task <id> [--project <name>] | --request <id> --task <id> [--kind merge] | --request <D-digits> --kind merge-untracked --pr <n> | --await <id>" >&2; exit 64; }
 cd "$REPO" || { echo "fm-decide: no repo at $REPO" >&2; exit 64; }
 
-# The id grammar, spelled out digit by digit rather than as ranges: a
-# bracket range follows the locale's collation. An owned id, D-<project>-
-# <key>-<n>, is the shared grammar's FM_OWNED_ID (bin/fm-emit.sh): its task
-# part is a task's key, fm_task_key's (T047, SK001, or a fixture's TA).
-DIG=0123456789
-OWNED_ID="$FM_OWNED_ID"
-OLD_ID="^D-[${DIG}]{1,6}$"
-SKILL_ID="^D-SK-[${DIG}]{3,}$"
 owned() {       # owned <id>: sets ID_PROJECT ID_TASK ID_N when <id> is D-<project>-<task>-<n>
-  [[ "$1" =~ $OWNED_ID ]] || return 1
+  fm_decision_id "$1" owned || return 1
   ID_PROJECT="${BASH_REMATCH[1]}"; ID_TASK="${BASH_REMATCH[2]}"; ID_N="${BASH_REMATCH[3]}"
 }
 task_key() {    # task_key <task> -> T047 for T-047, SK001 for SK-001; 64 for a task no id can hold
@@ -139,7 +131,7 @@ resolve_project() {  # PROJECT <- the registry name: --project, FM_PROJECT, defa
 # Await accepts every id shape there is: numeric, skill-update and owned.
 # Request validation is path-specific below.
 if [ "$MODE" = await ]; then
-  [[ "$ID" =~ $OLD_ID || "$ID" =~ $SKILL_ID ]] || owned "$ID" \
+  fm_decision_id "$ID" \
     || { echo 'fm-decide: bad decision id' >&2; exit 64; }
 fi
 
@@ -338,13 +330,17 @@ pr_agrees() {   # pr_agrees: returns when --pr is --task's pull request (none fo
 
 if [ "$MODE" = request ]; then
   case "$KIND" in choice|merge|merge-untracked) ;; *) echo 'fm-decide: bad kind' >&2; exit 64 ;; esac
+  fm_decision_id "$ID" || { echo 'fm-decide: bad decision id' >&2; exit 64; }
+  if fm_decision_id "$ID" skill; then
+    [ "$TASK" = "${ID#D-}" ] || { echo 'fm-decide: bad task' >&2; exit 64; }
+  fi
   # An untracked merge card belongs to no task: it names none, and so takes
   # the only id no task owns, a hand-raised D-<digits>.
   if [ "$KIND" = merge-untracked ]; then
     [ -z "$TASK" ] || {
       echo "fm-decide: an untracked merge card belongs to no task; drop --task $TASK, or raise --kind merge for it" >&2
       exit 64; }
-    [[ "$ID" =~ $OLD_ID ]] || {
+    fm_decision_id "$ID" numeric || {
       echo 'fm-decide: an untracked merge card takes a hand-raised D-<digits> id' >&2; exit 64; }
   fi
   # An owned id is published only by the task and project it names, and only
@@ -364,12 +360,12 @@ if [ "$MODE" = request ]; then
   }
 
   if [ -n "$DETAILS" ]; then
-    # Strict authored path: numeric or owned D-*, task T-*, complete en/zh-TW
+    # Strict authored path: every accepted decision id, complete en/zh-TW
     # details. Never generate tradeoffs or translations from a title. Exactly one
     # details object. Reject the same prohibited control set the board uses
     # for custom text (C0 except tab/LF/CR, DEL, C1, lone surrogates) before
     # any pending write, so U+007F never reaches persistence.
-    [[ "$ID" =~ $OLD_ID ]] || [ -n "$ID_PROJECT" ] || { echo 'fm-decide: bad decision id' >&2; exit 64; }
+    fm_decision_id "$ID" || { echo 'fm-decide: bad decision id' >&2; exit 64; }
     # a task id, or the T-<...> a card has always taken; an untracked merge
     # card has none, checked above
     [ "$KIND" = merge-untracked ] || [[ "$TASK" =~ ^T-[A-Za-z0-9._-]{1,32}$ ]] || fm_task_is "$TASK" \
@@ -434,11 +430,11 @@ if [ "$MODE" = request ]; then
     exit 0
   fi
 
-  # Legacy title-only path for skill-update callers (bin/fm.sh self-update):
+  # Legacy title-only path for older skill-update callers:
   # accept D-SK-* with matching SK-* task, persist the given title, invent
   # neither details nor a translation. Numeric title-only requests still fail.
-  if [[ "$ID" =~ ^D-(SK-[0-9]{3,})$ ]]; then
-    skill="${BASH_REMATCH[1]}"
+  if fm_decision_id "$ID" skill; then
+    skill="${ID#D-}"
     [ "$TASK" = "$skill" ] || { echo 'fm-decide: bad task' >&2; exit 64; }
     # Title must be real text; never treat an empty --title as authored details.
     jq -e -n --arg t "$TITLE" '
@@ -460,7 +456,7 @@ if [ "$MODE" = request ]; then
       '{id:$id,task:$task,kind:$kind,title:$title,expected_head:$expected_head,binding:$binding}
        + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
     (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || exit 65
-    # No diagram for legacy skill ids: the generator only accepts numeric D-*.
+    # Legacy cards have no authored details to draw.
     # Do not invent details; the board discloses missing authored content.
     emit --type decision_requested --task "$TASK" ${PR:+--pr "$PR"} \
          --en "$TITLE" --tw "$TITLE"
@@ -469,7 +465,7 @@ if [ "$MODE" = request ]; then
     exit 0
   fi
 
-  [[ "$ID" =~ $OLD_ID ]] || [ -n "$ID_PROJECT" ] || { echo 'fm-decide: bad decision id' >&2; exit 64; }
+  fm_decision_id "$ID" || { echo 'fm-decide: bad decision id' >&2; exit 64; }
   echo 'fm-decide: --details requires complete authored en and zh-TW title, explanation, before, after, outcome and A/B/C description/pros/cons' >&2
   exit 64
 fi

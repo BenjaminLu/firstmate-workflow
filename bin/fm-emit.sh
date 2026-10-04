@@ -83,6 +83,20 @@ fm_task_of_key() {      # fm_task_of_key <key> -> the task it holds, or 1
 # read owned ids through this and nothing else.
 # shellcheck disable=SC2034 # read by the scripts that source this block
 FM_OWNED_ID="^D-([${FM_TASK_LOW}${FM_TASK_DIG}-]{1,24})-(${FM_TASK_KEY})-([123456789][${FM_TASK_DIG}]{0,5})$"
+# Shared shell decision grammar; the board keeps its TypeScript twin.
+# An owned match preserves BASH_REMATCH: project, task key, sequence.
+fm_decision_id() { # <id> [numeric|skill|owned]
+  local numeric='^D-[0123456789]{1,6}$' skill='^D-SK-[0123456789]{3,}$'
+  case "${2:-any}" in
+    numeric) [[ "${1-}" =~ $numeric ]]; return ;;
+    skill) [[ "${1-}" =~ $skill ]]; return ;;
+    any) [[ "${1-}" =~ $numeric || "${1-}" =~ $skill ]] && return 0 ;;
+    owned) ;;
+    *) return 1 ;;
+  esac
+  [[ "${1-}" =~ $FM_OWNED_ID ]]
+}
+
 # sourced for the grammar alone: stop here
 (return 0 2>/dev/null) && return 0
 

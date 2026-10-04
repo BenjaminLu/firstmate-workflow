@@ -80,25 +80,11 @@ ROOT="$(cd "$ROOT" && pwd)"
 # no notion of a line: it is handed the whole value, and a newline is not in
 # [0-9] nor in [A-Za-z0-9._-].
 #
-# Two shapes (design section 15.4): the old D-<digits>, and D-<project>-
-# <task>-<n>, whose task part is a task's key: T047, SK001, or a fixture's
-# TA. The second is the shared task grammar's FM_OWNED_ID (bin/fm-emit.sh,
-# T-119), not a copy of it here, so an SK task's merge card is drawn like a
-# T task's. A bash =~ match is also whole-string: without REG_NEWLINE, ^ and
-# $ anchor the value and not a line, and no class in it holds a newline.
+# Decision ids use the shared shell grammar in fm-emit.sh.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -r "$HERE/fm-emit.sh" ] || die "missing $HERE/fm-emit.sh" 70
 # shellcheck source=bin/fm-emit.sh
 . "$HERE/fm-emit.sh"
-is_decision_id() {
-  local rest
-  case "$1" in D-*) rest="${1#D-}" ;; *) return 1 ;; esac
-  case "$rest" in
-    ''|*[!0-9]*) ;;
-    *) [ "${#rest}" -le 6 ]; return ;;
-  esac
-  [[ "$1" =~ $FM_OWNED_ID ]]
-}
 # a task, or a fixture's T-<name>: an SK task's authored drawing is found
 # under its own id, as a T task's is
 is_task_stem() {
@@ -116,7 +102,7 @@ is_task_stem() {
 # invisible for seventeen of the eighteen event types and visible for one.
 # It is the caller's mistake either way, and the routine path is the one
 # where nothing downstream would ever have noticed.
-[ -z "$ID" ] || is_decision_id "$ID" || die "not a decision id: $ID"
+[ -z "$ID" ] || fm_decision_id "$ID" || die "not a decision id: $ID"
 
 OUT="$ROOT/board/public/diagrams"
 SRC="$ROOT/design/diagrams"

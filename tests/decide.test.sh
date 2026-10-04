@@ -81,8 +81,8 @@ assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task 
 assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002" \
   "legacy without --title fails"
 assert_fail "test -f '$dleg/state/pending/D-SK-002.json'" "legacy without title creates no card"
-assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002 --details '$d/details.json'" \
-  "skill-update ids cannot take the strict --details path"
+assert_ok "HERDR_ENV=0 FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002 --details '$d/details.json'" \
+  "skill-update ids take the strict --details path"
 # a legacy D-SK merge card's pull request must be its task's too (T-119)
 pr_is "$dleg" 94 'sk-001-skill-update-firstmate' 'SK-001: skill-update: firstmate'
 FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-003 --task SK-003 --kind merge --pr 94 \
