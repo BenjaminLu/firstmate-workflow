@@ -51,7 +51,7 @@ test('T-118: an answered card leaves the captain lane, and a park chosen on a ca
     await expect(inLane('review','T-031')).toHaveCount(1);
     await expect(inLane('captain','T-031')).toHaveCount(0);
     expect(existsSync(b.recorder)).toBe(false);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 // A stand-in for a round's own script: a bash that waits on a sleep. On
@@ -81,7 +81,7 @@ for (const hasPr of [false, true]) {
         await box.locator(action === 'park' ? '[data-cancel="park"]' : '[data-cancel-drop="T-051"]').click();
         await expect(box).toBeHidden();
       }
-    } finally { stopBoard(b); }
+    } finally { await stopBoard(b); }
   });
 }
 
@@ -129,7 +129,7 @@ test('T-118: a task parked while its card is pending stays in the captain lane, 
     await expect(captain).toHaveCount(0);
     await page.locator('#parked > summary').click();
     await expect(page.locator('#parked [data-task="T-060"]')).toHaveCount(1);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('T-118: an effect that failed is listed with its reason on the page until it is overtaken', async ({page}) => {
@@ -159,7 +159,7 @@ test('T-118: an effect that failed is listed with its reason on the page until i
     // dispatched some other way after the answer: the failure is overtaken
     emitFixture(root,'worker-70','T-070','dispatched','On it','接下',{role:'worker'});
     await expect(listed).toHaveCount(0);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('T-118: a closed task is reopened from the history menu, behind a confirm step with a reason', async ({page}) => {
@@ -198,7 +198,7 @@ test('T-118: a closed task is reopened from the history menu, behind a confirm s
     await expect(inHistory).toHaveCount(0);
     expect(t118Events(root).pop()).toMatchObject({type:'reopened',actor:'captain',task:'T-080',
       data:{reason:'dropped by mistake',from:'closed'}});
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('T-118: reopening moves a merged card out of merged, and a card under a final task is shown', async ({page}) => {
@@ -251,5 +251,5 @@ test('T-118: reopening moves a merged card out of merged, and a card under a fin
     await page.locator('#card-D-1119 .opt[data-c="A"]').click();
     await page.locator('#card-D-1119 .confirm').click();
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '').toContain('--pr 97 --task T-117');
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });

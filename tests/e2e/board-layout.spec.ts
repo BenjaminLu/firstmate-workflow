@@ -156,7 +156,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     await expect(page.locator('[data-task="T-QUEUE"] .dep')).toHaveCount(0);
     const readyNow = await page.locator('[data-lane="ready"] .card').count();
     await expect(page.locator('[data-count="ready"] b')).toHaveText(String(readyNow));
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 // T-058: park, unpark and drop, each by the card's menu and by drag and drop

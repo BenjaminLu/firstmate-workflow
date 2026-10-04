@@ -288,21 +288,29 @@ def cycle_live(root):
 def start_cycle(root, owner):
     """Start a cycle owned by `owner` through the lifeline and wait until it
     holds the watch. The caller holds arm.lock, so no one else starts one."""
-    argv = ['bash', str(BIN / 'fm-watch.sh'), str(root)]
-    log = open(wdir(root) / 'cycle.log', 'ab')
+    # Keep the owner subscription across the startup handshake: a cycle
+    # losing its lifeline before writing ready is cancellation, not bad I/O.
+    owner_exit = life.ProcessExit(owner)
     try:
-        child = life.start(argv, owner=owner, direct=True, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=log)
+        argv = ['bash', str(BIN / 'fm-watch.sh'), str(root)]
+        log = open(wdir(root) / 'cycle.log', 'ab')
+        try:
+            child = life.start(argv, owner=owner, direct=True, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=log)
+        finally:
+            log.close()
+        # the cycle is reaped when it ends, so a long-lived arm keeps no zombie
+        threading.Thread(target=child.wait, daemon=True).start()
+        ready, _, _ = select.select([child.stdout], [], [], 30)
+        said = child.stdout.readline() if ready else b''
+        child.stdout.close()
+        if not said.startswith(b'ready '):
+            if owner_exit.gone():
+                raise life.OwnerGone(owner)
+            raise RuntimeError('the watcher did not take the watch; see state/watch/cycle.log')
+        return int(said.split()[1])
     finally:
-        log.close()
-    # the cycle is reaped when it ends, so a long-lived arm keeps no zombie
-    threading.Thread(target=child.wait, daemon=True).start()
-    ready, _, _ = select.select([child.stdout], [], [], 30)
-    said = child.stdout.readline() if ready else b''
-    child.stdout.close()
-    if not said.startswith(b'ready '):
-        raise RuntimeError('the watcher did not take the watch; see state/watch/cycle.log')
-    return int(said.split()[1])
+        owner_exit.close()
 
 
 def ensure(root, owner):
@@ -407,9 +415,9 @@ def cycle(root):
 
 # --- The arm ------------------------------------------------------------------
 
-def claim(root):
+def claim(root, owner_exit=None):
     with Locked(wdir(root) / 'cursor.lock'):
-        return _claim(root)
+        return _claim(root, owner_exit=owner_exit)
 
 
 def _recover_stages(root, base):
@@ -437,12 +445,17 @@ def _recover_stages(root, base):
             os.close(fd)
 
 
-def _claim(root, include_queue=False):
+def _claim(root, include_queue=False, owner_exit=None):
     """Return published or abandoned wakes once under cursor.lock.
 
     Keep each durable record until its acknowledgements succeed. A process
     interrupted before acknowledgement leaves it reachable to the next arm.
     """
+    def check_owner():
+        if owner_exit is not None and owner_exit.gone():
+            raise life.OwnerGone(owner_exit.pid)
+
+    check_owner()
     base = wdir(root) / 'wake'
     if not base.is_dir() and not include_queue:
         return []
@@ -488,7 +501,11 @@ def _claim(root, include_queue=False):
                     lines.append(wake_line(item))
                     if re.fullmatch(r'[A-Za-z0-9_-]+', str(item.get('id', ''))):
                         selected.append(item)
-    life.acknowledge_batch(root, selected)
+    check_owner()
+    if owner_exit is None:
+        life.acknowledge_batch(root, selected)
+    else:
+        life.acknowledge_batch(root, selected, before_commit=check_owner)
     # Once committed, optional bookkeeping must not turn a returned batch
     # into an exception. Old cursor/handoff records are safe to revisit.
     try:
@@ -530,10 +547,12 @@ def arm(root, owner, max_wait=None):
     try:
         with life.Doorbell(root) as bell:
             while True:
+                if owner_exit.gone():
+                    return None
                 # Also reconnect before returning an abandoned predecessor's
                 # wake: recovery must not leave the foreground arm blind.
                 info = ensure(root, owner)
-                lines = claim(root)
+                lines = claim(root, owner_exit=owner_exit)
                 if lines:
                     return lines
                 try:
@@ -555,7 +574,7 @@ def arm(root, owner, max_wait=None):
                                 pass   # claim below checks the generation lock
                     # Subscribe before checking again so an exit cannot fall
                     # between recovery inspection and the blocking wait.
-                    lines = claim(root)
+                    lines = claim(root, owner_exit=owner_exit)
                     if lines:
                         return lines
                     left = None if deadline is None else deadline - time.monotonic()
@@ -571,6 +590,8 @@ def arm(root, owner, max_wait=None):
                     for publisher in publishers:
                         publisher.close()
                     cycle_exit.close()
+    except life.OwnerGone:
+        return None
     finally:
         owner_exit.close()
 

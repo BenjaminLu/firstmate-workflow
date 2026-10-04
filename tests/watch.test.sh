@@ -33,6 +33,10 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+import contextlib
+import io
+from types import SimpleNamespace
 
 sys.dont_write_bytecode = True
 root = Path(sys.argv[1])
@@ -98,7 +102,7 @@ class Watch(unittest.TestCase):
 
     def env(self, owner=None, **extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
-        env.update(FM_SESSION_PID=str(owner if isinstance(owner, int) else (owner or self.owner).pid),
+        env.update(HERDR_ENV='0', FM_SESSION_PID=str(owner if isinstance(owner, int) else (owner or self.owner).pid),
                    FM_LIFELINE_GRACE='1')
         env.update(extra)
         return env
@@ -360,6 +364,160 @@ class SingleFlight(Watch):
         # the next session's arm is the one that is told
         after = self.run_(ARM, '--max-wait', '10', owner=self.stand_in())
         self.assertEqual('finished: T-1 worker-a-t1-r1 ok', after.stdout.strip(), 'nothing took the wake meanwhile')
+
+
+class OwnerDeathBoundaries(Watch):
+    def test_owner_death_at_each_park_boundary_leaves_the_wake_unclaimed(self):
+        # Inject death synchronously at the boundary, then wait for the real
+        # owner to exit. No scheduling delay decides which race is exercised.
+        for boundary in ('doorbell', 'ensure', 'start', 'readiness', 'claim-lock',
+                         'read-wake', 'ack-lock', 'ack-write', 'wait'):
+            with self.subTest(boundary=boundary):
+                owner = self.stand_in()
+                place = self.root / boundary
+                W.save(W.wdir(place) / 'cursor', '0')
+                item = dict(id='race', woken=1, line='race wake')
+                wake = W.wdir(place) / 'wake'
+                wake.mkdir()
+                W.save_json(wake / '1.json', dict(gen=1, items=[item]))
+                killed = False
+
+                def die():
+                    nonlocal killed
+                    if not killed:
+                        killed = True
+                        owner.kill()
+                        owner.wait(timeout=5)
+
+                original_lock = W.Locked.__enter__
+                original_read = W.read_json
+                original_ack_write = W.life._write_ack
+                import fcntl
+                flock = fcntl.flock
+
+                def lock(obj):
+                    result = original_lock(obj)
+                    if boundary == 'claim-lock' and obj.path.name == 'cursor.lock':
+                        die()
+                    return result
+
+                def read(path):
+                    result = original_read(path)
+                    if boundary == 'read-wake' and path == wake / '1.json':
+                        die()
+                    return result
+
+                in_ack = False
+                original_ack = W.life.acknowledge_batch
+                def acknowledge(*args, **kwargs):
+                    nonlocal in_ack
+                    in_ack = True
+                    try:
+                        return original_ack(*args, **kwargs)
+                    finally:
+                        in_ack = False
+
+                def ack_lock(fd, flags):
+                    result = flock(fd, flags)
+                    if boundary == 'ack-lock' and in_ack:
+                        die()
+                    return result
+
+                def ack_write(path, value):
+                    original_ack_write(path, value)
+                    if boundary == 'ack-write' and str(path).endswith('/race.json'):
+                        die()
+
+                real_start = W.life.start
+                def start(*args, **kwargs):
+                    die()
+                    if boundary == 'start':
+                        # Exercise the real pre-spawn owner subscription.
+                        return real_start(*args, **kwargs)
+                    # A cycle whose lifeline closed before it could write
+                    # ready: the actual start_cycle reads EOF from this pipe.
+                    read_fd, write_fd = os.pipe()
+                    os.close(write_fd)
+                    return SimpleNamespace(stdout=os.fdopen(read_fd, 'rb'), wait=lambda: 0)
+
+                def ensure(*_):
+                    if boundary in ('start', 'readiness'):
+                        W.start_cycle(place, owner.pid)
+                    if boundary == 'ensure':
+                        die()
+                    return dict(pid=os.getpid())
+
+                bell = W.life.Doorbell
+                def doorbell(*args):
+                    result = bell(*args)
+                    if boundary == 'doorbell':
+                        die()
+                    return result
+
+                real_select = W.select.select
+                def wait(readers, writers, errors, timeout=None):
+                    if boundary == 'wait' and len(readers) >= 3:
+                        die()
+                    return real_select(readers, writers, errors, timeout)
+
+                if boundary == 'wait':
+                    (wake / '1.json').unlink()
+                stderr = io.StringIO()
+                with contextlib.ExitStack() as patches:
+                    for obj, name, replacement in (
+                        (W, 'ensure', ensure), (W, 'read_json', read),
+                        (W.life, 'start', start),
+                        (W.Locked, '__enter__', lock), (W.life, 'Doorbell', doorbell),
+                        (W.life, '_write_ack', ack_write), (fcntl, 'flock', ack_lock),
+                        (W.life, 'acknowledge_batch', acknowledge),
+                        (W.select, 'select', wait), (W, 'payload', lambda: {}),
+                        (W, 'standing_down', lambda *_: None),
+                        (W.life, 'session_owner', lambda: owner.pid)):
+                        patches.enter_context(patch.object(obj, name, replacement))
+                    patches.enter_context(contextlib.redirect_stderr(stderr))
+                    code = W.main(['arm', '--repo', str(place), '--hook', 'claude'])
+                self.assertTrue(killed, 'the selected boundary was reached')
+                self.assertEqual(0, code, 'owner death is a clean hook exit at ' + boundary)
+                self.assertEqual('', stderr.getvalue(), 'an orphan emits no wake or error')
+                self.assertFalse(W.life.is_acknowledged(place, 'race', 1),
+                                 'owner death must not consume the wake at ' + boundary)
+                if boundary != 'wait':
+                    self.assertEqual(['race wake'], W.claim(place), 'the next owner can claim it')
+
+    def test_a_reported_owner_exit_stays_gone(self):
+        watch = W.life.ProcessExit(self.owner.pid)
+        try:
+            self.owner.kill()
+            self.owner.wait(timeout=5)
+            ready, _, _ = W.select.select([watch.fileno()], [], [], 5)
+            self.assertTrue(ready)
+            self.assertTrue(watch.gone())
+            self.assertTrue(watch.gone(), 'macOS NOTE_EXIT must remain true after its one-shot event')
+        finally:
+            watch.close()
+
+    def test_an_unrelated_io_failure_is_not_hidden_by_owner_death(self):
+        def failed_io(*_):
+            self.owner.kill()
+            self.owner.wait(timeout=5)
+            raise OSError('unrelated disk failure')
+        stderr = io.StringIO()
+        with patch.object(W, 'ensure', side_effect=failed_io), \
+                patch.object(W, 'standing_down', return_value=None), \
+                patch.object(W, 'payload', return_value={}), \
+                patch.object(W.life, 'session_owner', return_value=self.owner.pid), \
+                contextlib.redirect_stderr(stderr):
+            self.assertEqual(70, W.main(['arm', '--repo', str(self.root), '--hook', 'claude']))
+        self.assertIn('unrelated disk failure', stderr.getvalue())
+
+    def test_live_owner_io_and_startup_errors_remain_errors(self):
+        for error in (OSError('disk failure'), RuntimeError('watcher startup failure')):
+            with self.subTest(error=error), patch.object(W, 'ensure', side_effect=error), \
+                    patch.object(W, 'standing_down', return_value=None), \
+                    patch.object(W, 'payload', return_value={}), \
+                    patch.object(W.life, 'session_owner', return_value=self.owner.pid), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(70, W.main(['arm', '--repo', str(self.root), '--hook', 'claude']))
 
 
 class Harnesses(Watch):

@@ -27,6 +27,11 @@ in its group is ended the same way and the keeper exits with the
 program's status. The keeper's pid stands for the program: it lives
 exactly as long.
 
+An optional FM_LIFELINE_SCOPE directory lets a fixture drain every keeper,
+including detached descendants, with close_scope(directory). Scoped keepers
+register before detaching, serialize child creation against scope closure,
+and confirm every group member's exit before recording successful drainage.
+
   from bin/lib/fm_lifeline import start, fork, session_owner
   start(argv, owner=None)        this process owns it, by a pipe
   start(argv, owner=<pid>)       that pid owns it, by kqueue/pidfd
@@ -126,6 +131,7 @@ class ProcessExit:
         self.pid = int(pid)
         self._kq = None
         self._fd = None
+        self._gone = False
         if hasattr(select, 'kqueue'):
             self._kq = select.kqueue()
             event = select.kevent(self.pid, filter=select.KQ_FILTER_PROC,
@@ -153,10 +159,13 @@ class ProcessExit:
 
     def gone(self):
         """True once the kernel has reported the exit; never blocks."""
-        if self._kq is not None:
-            return bool(self._kq.control(None, 1, 0))
-        ready, _, _ = select.select([self._fd], [], [], 0)
-        return bool(ready)
+        if not self._gone:
+            if self._kq is not None:
+                self._gone = bool(self._kq.control(None, 1, 0))
+            else:
+                ready, _, _ = select.select([self._fd], [], [], 0)
+                self._gone = bool(ready)
+        return self._gone
 
 
 def _is_launcher(command):
@@ -658,7 +667,7 @@ def _write_ack(path, record):
     os.replace(temp, path)
 
 
-def acknowledge_batch(root, items):
+def acknowledge_batch(root, items, *, before_commit=None):
     """Commit watermarks together, with a durable undo journal.
 
     All writers use .ack.lock. Readers see pre-batch values while the journal
@@ -667,6 +676,8 @@ def acknowledge_batch(root, items):
     with the board. As with any claim API, death after commit but before the
     caller receives the return value requires a harness delivery receipt to
     resolve; this transaction protects interruption during acknowledgement.
+    An optional before_commit callback may cancel after acquiring the lock
+    or before removing the undo journal; cancellation restores the old batch.
     """
     import fcntl
     import json
@@ -693,6 +704,8 @@ def acknowledge_batch(root, items):
                 else:
                     _write_ack(path, record)
             os.unlink(transaction)
+        if before_commit is not None:
+            before_commit()
         before, after = {}, {}
         for item in items:
             ident = str(item['id'])
@@ -708,6 +721,24 @@ def acknowledge_batch(root, items):
             _write_ack(transaction, before)
             for ident, record in after.items():
                 _write_ack(os.path.join(directory, ident + '.json'), record)
+            if before_commit is not None:
+                try:
+                    before_commit()
+                except BaseException:
+                    # The durable journal remains authoritative until commit.
+                    # Restore now as well, so a cancelled claimant leaves no
+                    # acknowledgement even to readers outside this module.
+                    for ident, record in before.items():
+                        path = os.path.join(directory, ident + '.json')
+                        if record is None:
+                            try:
+                                os.unlink(path)
+                            except FileNotFoundError:
+                                pass
+                        else:
+                            _write_ack(path, record)
+                    os.unlink(transaction)
+                    raise
             os.unlink(transaction)
         return {ident: after.get(ident) or record for ident, record in before.items()}
     finally:
@@ -762,12 +793,87 @@ def _group_alive(pgid):
     return _signal_group(pgid, 0)
 
 
+def group_exits(pgid):
+    """Subscribe to the current members before ending a process group.
+
+    Used only for teardown, never to poll an owner's liveness. The group's
+    SIGKILL ends every member; the descriptors let us wait for exit, including
+    grandchildren which this process cannot reap with waitpid.
+    """
+    pids = (int(p) for p in os.listdir('/proc') if p.isdigit()) if sys.platform != 'darwin' else (
+        pid for pid, _, _ in _darwin_processes())
+    watches = []
+    for pid in pids:
+        try:
+            if os.getpgid(pid) == pgid:
+                watches.append(ProcessExit(pid))
+        except (ProcessLookupError, OwnerGone):
+            pass
+    return watches
+
+
+def wait_exits(watches, timeout=15):
+    """Drain kernel exit notifications within one deadline; close every fd."""
+    deadline = time.monotonic() + timeout
+    try:
+        pending = [watch for watch in watches if not watch.gone()]
+        while pending:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise RuntimeError('process teardown did not finish before its deadline')
+            ready, _, _ = select.select([w.fileno() for w in pending], [], [], left)
+            pending = [w for w in pending if w.fileno() not in ready or not w.gone()]
+    finally:
+        for watch in watches:
+            watch.close()
+
+
+def close_scope(directory):
+    """Close an opt-in keeper scope to new launches and stop its keepers.
+
+    Registration and child creation share the scope lock with closure. A
+    keeper arriving after closure cannot start a new writer. Each PID record
+    stays kernel-locked for its keeper's lifetime, so stale records are safe.
+    """
+    import fcntl
+    from pathlib import Path
+    base = Path(directory)
+    base.mkdir(parents=True, exist_ok=True)
+    watches = []
+    with open(base / 'launch.lock', 'a+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        (base / 'closed').touch()
+        for path in base.glob('*.keeper'):
+            with path.open('rb') as record:
+                try:
+                    fcntl.flock(record, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    continue
+                except BlockingIOError:
+                    pass
+                pid = int(path.stem)
+                try:
+                    watches.append(ProcessExit(pid))
+                    os.kill(pid, signal.SIGTERM)
+                    os.kill(pid, signal.SIGCONT)
+                except (ProcessLookupError, OwnerGone):
+                    pass
+    wait_exits(watches)
+    # An exited keeper is not proof of successful drainage if its cleanup
+    # raised. Preserve the fixture tree on that failure instead of removing
+    # it underneath a process whose exit has not been established.
+    for path in base.glob('*.keeper'):
+        if path.read_bytes() != b'drained\n':
+            raise RuntimeError(f'keeper did not drain its process group: {path.stem}')
+
+
 def keep(fd, pid, name, argv):
     """The keeper: run argv for exactly as long as the owner lives."""
-    try:
-        os.setsid()
-    except OSError:
-        pass
+    scope = os.environ.get('FM_LIFELINE_SCOPE')
+    if not scope:
+        try:
+            os.setsid()
+        except OSError:
+            pass
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     if fd is not None:
         os.set_blocking(fd, False)
@@ -791,11 +897,32 @@ def keep(fd, pid, name, argv):
     if pid is not None:
         env['FM_SESSION_PID'] = str(pid)
     kwargs = dict(process_group=0) if sys.version_info >= (3, 11) else dict(preexec_fn=os.setpgrp)
+    launch_lock = record = None
     try:
+        if scope:
+            import fcntl
+            os.makedirs(scope, exist_ok=True)
+            launch_lock = open(os.path.join(scope, 'launch.lock'), 'a+b')
+            fcntl.flock(launch_lock, fcntl.LOCK_EX)
+            if os.path.exists(os.path.join(scope, 'closed')):
+                return 0
+            record = open(os.path.join(scope, f'{os.getpid()}.keeper'), 'a+b')
+            fcntl.flock(record, fcntl.LOCK_EX)
+            record.seek(0)
+            record.truncate()
+            # Register before leaving the board's group: even a keeper
+            # interrupted during startup is either in that group or tracked.
+            try:
+                os.setsid()
+            except OSError:
+                pass
         child = subprocess.Popen(argv, env=env, close_fds=True, **kwargs)
     except OSError as error:
         print(f'fm-lifeline: cannot start {argv[0]}: {error}', file=sys.stderr)
         return 127
+    finally:
+        if launch_lock is not None:
+            launch_lock.close()
     why = None
     while why is None:
         try:
@@ -834,9 +961,18 @@ def keep(fd, pid, name, argv):
                 pass
         except (BlockingIOError, InterruptedError):
             pass
+    exits = group_exits(child.pid) if scope else []
     if child.poll() is None or _group_alive(child.pid):
         _signal_group(child.pid, signal.SIGKILL)
+    if scope:
+        # Capture any member forked between subscription and the group
+        # signal. This is a second snapshot, not a liveness polling loop.
+        exits.extend(group_exits(child.pid))
     code = child.wait()
+    wait_exits(exits)
+    if record is not None:
+        record.write(b'drained\n')
+        record.close()
     if why == 'owner':
         print(f'fm-lifeline: the owner of {name or argv[0]} is gone; stopped it', file=sys.stderr)
     return code if code >= 0 else 128 - code

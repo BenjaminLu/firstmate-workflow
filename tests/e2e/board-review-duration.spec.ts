@@ -23,6 +23,6 @@ test('T-145: a task\'s card shows how long its last review round took and how it
     await expect(line).toHaveText(TW.lastReview.replace('{time}', '17:00').replace('{outcome}', TW.lastReviewApproved));
     // a task no review round has finished on shows none
     await expect(page.locator('#lanes .card:not([data-task="T-034"]) .lastrev')).toHaveCount(0);
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
