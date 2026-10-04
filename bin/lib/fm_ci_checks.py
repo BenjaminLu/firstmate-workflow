@@ -79,7 +79,8 @@ def design_layout():
 
     An unnumbered ### appended there lands in the same final hunk as every
     other append, so parallel branches conflict; numbered homes are mid-file.
-    An unnumbered ## after that section cannot create a new tail home either.
+    Subsequent numbered ## sections must advance by exactly one; an unnumbered
+    ## after the last numbered section cannot create a new tail home either.
     Fenced code is skipped the way fm_prompt_context.anchors() skips it.
     """
     from pathlib import Path
@@ -102,10 +103,19 @@ def design_layout():
         if match and fence is None:
             headings.append((number, len(match[1]), match[2]))
     last = None
-    for index, (_, level, text) in enumerate(headings):
-        if level == 2 and re.match(r'^\d+\.', text):
-            last = index
+    previous = None
     bad = False
+    for index, (number, level, text) in enumerate(headings):
+        match = re.match(r'^(\d+)\.', text) if level == 2 else None
+        if match:
+            current = int(match[1])
+            if previous is not None and current != previous + 1:
+                print(f'{path}:{number}: ## {text} - after numbered section §{previous}, '
+                      f'a new ## heading must be numbered {previous + 1}.; '
+                      'put new material in its numbered home')
+                bad = True
+            previous = current
+            last = index
     if last is not None:
         section = re.match(r'^(\d+)\.', headings[last][2])[1]
         for number, level, text in headings[last + 1:]:

@@ -40,6 +40,13 @@ printf '%b\n## T-200 Appended contract\n\nmore\n' "$base" > "$d/top-level.md"
 out="$(layout "$d/top-level.md")"
 assert_eq 1 "$?" "an unnumbered ## after the last numbered section is refused"
 assert_contains "$out" "top-level.md:19: ## T-200 Appended contract" "with its line and heading"
+for section in 3 99 2; do
+  printf '%b\n## %s. Appended contract\n' "$base" "$section" > "$d/numbered-$section.md"
+  out="$(layout "$d/numbered-$section.md")"
+  assert_eq 1 "$?" "a duplicate, skipped or decreasing ## number ($section after 3) is refused"
+  assert_contains "$out" "numbered-$section.md:19: ## $section. Appended contract" "with its line and heading"
+  assert_contains "$out" "must be numbered 4." "and the required next number"
+done
 printf '%b\n## 4. Next\n\n### 4.1 Home\n' "$base" > "$d/next.md"
 out="$(layout "$d/next.md")"
 assert_eq 0 "$?" "a next numbered ## section is allowed"
@@ -69,14 +76,21 @@ out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
 assert_lacks "$out" "design layout" "a tree without design/design.md skips the check silently"
 mkdir -p "$q/design"; cp "$d/planted.md" "$q/design/design.md"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
-assert_contains "$out" "x design layout: an unnumbered ### heading in the last section of design.md" \
+assert_contains "$out" "x design layout: invalid ## section numbering or ### heading in the last section of design.md" \
   "a planted unnumbered ### at the end turns the hygiene stage red"
 assert_contains "$out" "design/design.md:19: ### Appended at the end (T-999)" "and the stage names it"
 cp "$d/top-level.md" "$q/design/design.md"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
 assert_eq 1 "$?" "a planted ## T-200 turns the hygiene stage red"
-assert_contains "$out" "x design layout" "the design layout guard rejects the appended ##"
+assert_contains "$out" "x design layout: invalid ## section numbering or ### heading in the last section of design.md" \
+  "the hygiene failure message covers appended ## headings"
 assert_contains "$out" "design/design.md:19: ## T-200 Appended contract" "and the stage names the appended ##"
+for section in 3 99 2; do
+  cp "$d/numbered-$section.md" "$q/design/design.md"
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
+  assert_eq 1 "$?" "an invalid appended ## number ($section after 3) turns hygiene red"
+  assert_contains "$out" "x design layout" "the layout guard rejects invalid ## numbering"
+done
 cp "$ROOT/design/design.md" "$q/design/design.md"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
 assert_contains "$out" "+ design layout" "the moved design.md is green in the hygiene stage"
