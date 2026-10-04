@@ -5216,13 +5216,23 @@ firstmate's recommendation and evidence (§6); landing remains the captain's
 card or the team's handoff, never an autopilot merge.
 
 Branch updates are re-decided from GitHub state, without a write-ahead action
-record. Other mechanical effects retain their write-ahead records under
-`state/autopilot/`: completion marks them done; interruption or an ambiguous
-result queues reconciliation rather than replaying the action. The one-time
-`migrated_t190` upgrade removes legacy update actions and their undelivered
-action wakes before recovery, without rewriting delivered wake files or
-requeueing anything. Parked advance actions remain for firstmate reconciliation;
-their stored identities cannot establish why they failed. CI
+record. Gate advancement is also re-decided from its observed fingerprint:
+`advanced` stores each PR's head and fingerprint only after the gate job starts.
+An unchanged fingerprint holds across restarts; changed CI, bound verdict,
+authored details or merge-slot release reconsiders the head. An authoritative
+head race is re-read on the next poll, without a wake or retry. Gate-step
+failures retry at poll offsets 0, 1 and 3, then wake once with the error;
+a changed fingerprint starts a fresh retry series and wake identity.
+The remaining write-ahead classes are re-check, restack, review launch and PR
+events under `state/autopilot/`: completion marks them done; interruption or an
+ambiguous result queues reconciliation rather than replaying the action.
+The one-time `migrated_t190` upgrade removes legacy update actions and their
+undelivered action wakes before recovery. `migrated_t193` similarly drops legacy
+advance actions in every state and their undelivered wakes, without rewriting
+delivered wake files or requeueing anything. Because legacy fingerprints cannot
+identify a PR, the new advance map starts empty: eligible open PRs gate once
+more after upgrade, subject to busy jobs and existing merge-card deduplication.
+Jobs and their recovery remain unchanged. CI
 failures, findings, failed/lost rounds, B/C answers, readiness and conventions
 drift persist reason lines under `state/wake-queue/` and enter the T-137 bridge.
 `autopilot_waiting` reports overdue judgment bilingually to the board and desktop;
@@ -5292,7 +5302,11 @@ has its own lock, PR-number namespace, events, evidence and decision ids.
 Missing details queues one wake naming `D-<project>-<task-key>-<n>`. REJECT
 queues a brief request. Scope questions, failed gates, protocol violations,
 launcher exits 2/3/65, and a review without a verdict queue judgment with the
-child's own retained-log line where available. The supervisor never launches
+child's own retained-log line where available. A gate, protocol or review result
+for a PR that has merged, or that has a captain merge chosen A at that head
+which is running or merged, is dropped without a wake; such a PR is not gated.
+A PR closed without merging is not covered, and its results still report.
+The supervisor never launches
 a worker; dispatch remains the board's intent action or an explicit command.
 Gates and reviews run as owned children. Completion receipts ring the service;
 an interrupted write is reconciled, never replayed by a restart or idle timer.

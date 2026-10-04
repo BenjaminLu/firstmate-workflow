@@ -452,7 +452,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(len(self.pilot.data['wakes']), 2)
         self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 2)
 
-    def test_update_migration_preserves_advance_and_delivered_files_across_two_startups(self):
+    def test_update_migration_preserves_delivered_files_across_two_startups(self):
         tokens = [A.key(['update', '12', HEAD]), A.key(['update', '13', HEAD])]
         for number, token in zip(('12', '13'), tokens):
             self.pilot.data['actions'][token] = dict(state='started', identity=['update', number, HEAD], task='T-001')
@@ -463,14 +463,14 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.pilot.data['wakes'][path.stem]['pushed'] = True
         advance = dict(state='uncertain', identity=['advance', '12', HEAD], task='T-001')
         self.pilot.data['actions']['advance'] = advance
-        for name in ('poll_seq', 'retries', 'holds', 'updates', 'migrated_t190'):
+        for name in ('poll_seq', 'retries', 'holds', 'updates', 'migrated_t190', 'migrated_t193'):
             self.pilot.data.pop(name, None)
         self.restart_branch_pilot()
         self.pilot.recover(); self.pilot.flush()
         for name, value in (('poll_seq', 0), ('retries', {}), ('holds', {}), ('updates', {})):
             self.assertEqual(self.pilot.data[name], value)
         self.assertTrue(self.pilot.data['migrated_t190'])
-        self.assertEqual(self.pilot.data['actions'], {'advance': advance})
+        self.assertEqual(self.pilot.data['actions'], {})
         self.assertFalse(any(not w['pushed'] for w in self.pilot.data['wakes'].values()))
         self.assertEqual(path.read_bytes(), b'{"delivered":"unchanged"}\n')
         first = copy.deepcopy(self.pilot.data)
@@ -478,6 +478,39 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.pilot.data, first)
         self.assertEqual(path.read_bytes(), b'{"delivered":"unchanged"}\n')
         self.assertFalse(any(c[0] == 'wake' for c in self.calls))
+
+    def test_advance_migration_removes_all_states_before_recovery_once(self):
+        tokens = []
+        for status in ('started', 'done', 'uncertain'):
+            token = A.key(['advance', status]); tokens.append(token)
+            self.pilot.data['actions'][token] = dict(state=status,
+                identity=['advance', status], task='T-001')
+            self.pilot.queue('action-' + token, 'T-001', 'legacy advance', '舊關卡推進')
+        delivered = self.state / 'wake-queue'; delivered.mkdir()
+        path = delivered / ('autopilot-' + A.key(['self', 'action-' + tokens[0]]) + '.json')
+        payload = b'{"delivered":"unchanged"}\n'; path.write_bytes(payload)
+        self.pilot.data['wakes'][path.stem]['pushed'] = True
+        self.pilot.data['actions']['restack'] = dict(state='started', identity=['restack', 12], task='T-001')
+        self.pilot.data.pop('migrated_t193', None)
+        self.pilot.data.pop('advanced', None)
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        self.assertEqual(set(self.pilot.data['actions']), {'restack'})
+        self.assertEqual(self.pilot.data['actions']['restack']['state'], 'uncertain')
+        self.assertEqual(self.pilot.data['advanced'], {})
+        self.assertTrue(self.pilot.data['migrated_t193'])
+        for token in tokens[1:]:
+            ident = 'autopilot-' + A.key(['self', 'action-' + token])
+            self.assertNotIn(ident, self.pilot.data['wakes'])
+            self.assertFalse((delivered / (ident + '.json')).exists())
+        restack = 'autopilot-' + A.key(['self', 'action-restack'])
+        self.assertEqual(set(self.pilot.data['wakes']), {path.stem, restack})
+        self.assertIn('Autopilot stopped during an action', self.pilot.data['wakes'][restack]['line'])
+        self.assertEqual(path.read_bytes(), payload)
+        first = copy.deepcopy(self.pilot.data)
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        self.assertEqual(self.pilot.data, first)
+        self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 1)
 
     def test_probe_returns_nonzero_and_checked_raises_with_argv_and_last_line(self):
         result = subprocess.CompletedProcess(['git'], 128, 'body', 'noise\nfatal: last line\n\n')

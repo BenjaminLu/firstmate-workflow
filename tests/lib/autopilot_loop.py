@@ -162,6 +162,8 @@ class LoopTests(BranchFixture, unittest.TestCase):
         restored.busy = lambda task: False
         restored.advance(PR, CHECKS, [])
         self.assertEqual(sum(c[0] == 'gate' for c in self.calls), 1)
+        self.assertEqual(restored.data['actions'], {})
+        self.assertEqual(restored.data['advanced']['12']['head'], HEAD)
 
     def test_terminal_and_open_events_are_once_and_keep_task_grammar(self):
         for ref, title, task in [('sk-001-update','other','SK-001'), ('unrelated','T-116: title','T-116'),
@@ -471,17 +473,19 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(len(self.git_calls('update-ref')), 3)
         self.assertEqual(self.gates(), [])
 
-    def test_nonancestor_keeps_stale_binding_park_and_wake(self):
+    def test_nonancestor_retries_stale_binding_then_wakes(self):
         self.lagging(); self.ancestor = 1
         def stale(*args):
             raise ValueError('authoritative PR head differs from fetched head or local task ref; refresh before accepting')
         self.pilot.authoritative_head = stale
-        self.sync_poll()
+        for count in (1, 2, 2, 3, 3):
+            self.sync_poll()
+            self.assertEqual(self.pilot.data['retries']['advance:12:' + HEAD]['count'], count)
         self.assertEqual(self.local_refs[self.branch], 'd' * 40)
         self.assertEqual(self.gates(), [])
-        self.assertTrue(any(a['state'] == 'uncertain' for a in self.pilot.data['actions'].values()))
+        self.assertEqual(self.pilot.data['actions'], {})
         self.assertEqual(len(self.pilot.data['wakes']), 1)
-        self.assertEqual(self.pilot.data['retries'], {})
+        self.assertIn('authoritative PR head differs', str(self.pilot.data['wakes']))
 
     def test_moved_during_fetch_never_moves_or_creates(self):
         for missing in (False, True):
@@ -518,19 +522,17 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.local_refs[self.branch], HEAD)
         self.assertEqual(len(self.gates()), 1)
 
-    def test_parked_advance_survives_migration_and_sync(self):
-        self.pilot.advance(PR, CHECKS, [])
-        token, action = next(iter(self.pilot.data['actions'].items()))
-        action['state'] = 'uncertain'
-        self.pilot.data.pop('migrated_t190', None); self.pilot.save()
+    def test_parked_advance_migrates_and_equal_ref_gates_once(self):
+        self.pilot.data['actions']['old'] = dict(state='uncertain',
+            identity=['advance', 'opaque-fingerprint'], task='T-001')
+        self.pilot.data.pop('migrated_t193', None); self.pilot.save()
         restored = A.Pilot(self.ctx)
-        restored.probe = self.probe
-        self.assertEqual(restored.data['actions'][token], action)
+        self.assertEqual(restored.data['actions'], {})
         self.pilot.data = restored.data
-        self.calls.clear(); self.lagging(); self.sync_poll()
-        self.assertEqual(self.local_refs[self.branch], HEAD)
-        self.assertEqual(self.gates(), [])
-        self.assertEqual(self.pilot.data['actions'][token], action)
+        self.local_refs[PR['head']['ref']] = HEAD
+        self.sync_poll(); self.sync_poll()
+        self.assertEqual(len(self.gates()), 1)
+        self.assertEqual(self.pilot.data['actions'], {})
         self.assertEqual(self.pilot.data['wakes'], {})
 
     def test_each_sync_command_error_defers_advance_and_retries(self):
@@ -554,5 +556,145 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.gates(), [])
         self.assertEqual(self.pilot.data['wakes'], {})
 
+
+    def test_advance_marks_only_after_launch_and_dedupes_without_ledger(self):
+        launch = self.pilot.start_job
+        def start(*args, **kwargs):
+            self.assertEqual(self.pilot.data['advanced'], {})
+            launch(*args, **kwargs)
+        self.pilot.start_job = start
+        self.pilot.advance(PR, CHECKS, [])
+        self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(len(self.gates()), 1)
+        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertEqual(self.pilot.data['advanced']['12']['head'], HEAD)
+
+    def test_authoritative_head_race_is_silent_and_next_observation_gates(self):
+        self.pilot.authoritative_head = lambda *a: 'c' * 40
+        self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(self.gates(), [])
+        for name in ('advanced', 'retries', 'wakes', 'actions'):
+            self.assertEqual(self.pilot.data[name], {})
+        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
+        self.pilot.advance(pr, [dict(CHECKS[0], head_sha='c' * 40)], [])
+        self.assertEqual(len(self.gates()), 1)
+
+    def test_gate_step_exceptions_retry_at_zero_one_three(self):
+        self.local_refs[PR['head']['ref']] = HEAD
+        for method in ('authoritative_head', 'base_tip', 'start_job'):
+            with self.subTest(method=method):
+                self.pilot.data['retries'].clear(); self.pilot.data['wakes'].clear()
+                with patch.object(self.pilot, method, side_effect=RuntimeError(method + ' failed')) as fail:
+                    for seq, count in enumerate((1, 2, 2, 3, 3)):
+                        self.pilot.data['poll_seq'] = seq
+                        self.pilot.pull(PR, [], [], CHECKS, [])
+                        record = self.pilot.data['retries']['advance:12:' + HEAD]
+                        self.assertEqual(record['count'], count)
+                        self.assertEqual(fail.call_count, count)
+                        self.assertEqual(len(self.pilot.data['wakes']), int(count == 3))
+                self.assertIn(method + ' failed', str(self.pilot.data['wakes']))
+                self.assertNotIn('advancement needs reconciliation', str(self.pilot.data['wakes']))
+                self.assertEqual(self.pilot.data['advanced'], {})
+                self.assertEqual(self.pilot.data['actions'], {})
+        self.assertEqual(self.gates(), [])
+
+    def test_success_clears_advance_retry(self):
+        with patch.object(self.pilot, 'base_tip', side_effect=OSError('base unavailable')):
+            self.pilot.advance(PR, CHECKS, [])
+        self.pilot.data['poll_seq'] += 1
+        self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(len(self.gates()), 1)
+        self.assertEqual(self.pilot.data['retries'], {})
+
+    def test_fingerprint_resets_count_and_wake_after_exhaustion(self):
+        variants = []
+        with patch.object(self.pilot, 'authoritative_head', side_effect=ValueError('binding refused')):
+            for series, conclusion in enumerate(('success', 'failure')):
+                for offset, count in enumerate((1, 2, 2, 3, 3)):
+                    self.pilot.data['poll_seq'] = series * 5 + offset
+                    self.pilot.advance(PR, [dict(CHECKS[0], conclusion=conclusion)], [])
+                    record = self.pilot.data['retries']['advance:12:' + HEAD]
+                    self.assertEqual(record['count'], count)
+                    self.assertEqual(len(self.pilot.data['wakes']), series + int(count == 3))
+                variants.append(record['variant'])
+        self.assertNotEqual(*variants)
+        for variant in variants:
+            ident = 'autopilot-' + A.key(['alpha', f'advance-12-{HEAD}-{variant}'])
+            self.assertIn(ident, self.pilot.data['wakes'])
+        self.assertEqual(self.pilot.data['actions'], {})
+
+    def test_fingerprint_change_while_counting_is_due_immediately(self):
+        with patch.object(self.pilot, 'base_tip', side_effect=ValueError('base refused')):
+            self.pilot.advance(PR, CHECKS, [])
+            old = dict(self.pilot.data['retries']['advance:12:' + HEAD])
+            self.pilot.advance(PR, [dict(CHECKS[0], conclusion='failure')], [])
+            new = self.pilot.data['retries']['advance:12:' + HEAD]
+        self.assertEqual(new['count'], 1)
+        self.assertNotEqual(old['variant'], new['variant'])
+
+    def test_advance_records_and_retries_prune_on_new_head_and_terminal(self):
+        self.pilot.advance(PR, CHECKS, [])
+        token = 'advance:12:' + HEAD
+        self.pilot.data['retries'][token] = dict(count=2, due_seq=3)
+        self.pilot.prune_branches('12', 'c' * 40)
+        self.assertEqual(self.pilot.data['advanced'], {})
+        self.assertNotIn(token, self.pilot.data['retries'])
+        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
+        for _ in range(2): self.pilot.advance(pr, [dict(CHECKS[0], head_sha='c' * 40)], [])
+        self.assertEqual(len(self.gates()), 2)
+        self.pilot.prune_branches('12')
+        self.assertEqual(self.pilot.data['advanced'], {})
+
+    def assert_landed_silent(self):
+        self.details()
+        before = copy.deepcopy(self.pilot.data)
+        self.pilot.advance(PR, CHECKS, [])
+        for kind, codes in (('gate', (0, 6, 7)), ('protocol', (0, 1)), ('review', (0, 3))):
+            for code in codes:
+                self.pilot.job_completed(dict(kind=kind, task='T-001', pr=PR,
+                    code=code, base=BASE, round=3, output=''))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.pilot.data, before)
+        self.assertFalse((self.state / 'decision-ids').exists())
+
+    def test_merged_event_suppresses_advancement_and_all_late_results(self):
+        (self.state / 'events.jsonl').write_text(json.dumps(
+            dict(type='merged', project='alpha', pr=12)) + '\n')
+        self.assert_landed_silent()
+        pr = dict(PR, number='12')
+        self.assertTrue(self.pilot.landed('T-001', pr))
+
+    def test_matching_captain_merge_suppresses_all_late_results(self):
+        for folder in ('pending', 'decisions'):
+            directory = self.state / folder; directory.mkdir(exist_ok=True)
+            path = directory / 'D-alpha-T001-1.json'
+            for outcome in ('running', 'merged'):
+                with self.subTest(folder=folder, outcome=outcome):
+                    path.write_text(json.dumps(dict(kind='merge', task='T-001', pr='12',
+                        expected_head=HEAD, chosen='A', merge=outcome)))
+                    self.assert_landed_silent()
+            path.unlink()
+
+    def test_nonlanded_decisions_keep_gate_failure_reporting(self):
+        directory = self.state / 'decisions'; directory.mkdir()
+        record = dict(kind='merge', task='T-001', pr=12, expected_head=HEAD, chosen='A', merge='running')
+        for change in (dict(merge='failed'), dict(chosen='B'), dict(chosen='C'),
+                       dict(expected_head='d' * 40), dict(pr=13), dict(task='T-002'), dict(kind='choice')):
+            with self.subTest(change=change):
+                (directory / 'D-alpha-T001-1.json').write_text(json.dumps(dict(record, **change)))
+                self.pilot.data['wakes'].clear()
+                self.assertFalse(self.pilot.landed('T-001', PR))
+                self.gate_result(6)
+                self.assertIn('stopped at gate 6', str(self.pilot.data['wakes']))
+
+    def test_closed_and_foreign_merged_events_still_gate_and_report(self):
+        (self.state / 'events.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in (
+            dict(type='closed', project='alpha', pr=12),
+            dict(type='merged', project='beta', pr=12),
+            dict(type='merged', project='alpha', pr=13))))
+        self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(len(self.gates()), 1)
+        self.gate_result(6)
+        self.assertIn('stopped at gate 6', str(self.pilot.data['wakes']))
 
 if __name__ == '__main__': unittest.main()

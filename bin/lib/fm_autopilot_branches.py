@@ -16,7 +16,7 @@ class BranchUpdates:
             kind, pr, sha = token.split(':', 2)
             if pr == number and (head is None or sha != head):
                 del self.data['retries'][token]
-        for name in ('holds', 'updates'):
+        for name in ('holds', 'updates', 'advanced'):
             item = self.data[name].get(number)
             if item and (head is None or item['head'] != head):
                 del self.data[name][number]
@@ -26,16 +26,24 @@ class BranchUpdates:
         return any(r.get('task') == task for r in
                    live_rounds([dict(state=str(self.state), name=self.ctx['project'])]))
 
-    def retry_due(self, token):
+    def retry_due(self, token, *, variant=''):
         record = self.data['retries'].get(token, {})
+        if variant and record.get('variant') != variant:
+            return True
         return record.get('count', 0) < 3 and record.get('due_seq', 0) <= self.data['poll_seq']
 
-    def branch_failure(self, kind, number, head, task, error):
+    def branch_failure(self, kind, number, head, task, error, *, variant=''):
         token = f'{kind}:{number}:{head}'
-        count = self.data['retries'].get(token, {}).get('count', 0) + 1
+        record = self.data['retries'].get(token, {})
+        if variant and record.get('variant') != variant:
+            record = {}
+        count = record.get('count', 0) + 1
         self.data['retries'][token] = dict(count=count, due_seq=self.data['poll_seq'] + count)
+        if variant:
+            self.data['retries'][token]['variant'] = variant
         if count == 3:
-            self.queue(f'{kind}-{number}-{head}', task,
+            identity = f'{kind}-{number}-{head}' + (f'-{variant}' if variant else '')
+            self.queue(identity, task,
                        f'{task} #{number} {kind} failed after 3 attempts: {error}',
                        f'{task} #{number} {kind} 已失敗 3 次：{error}')
         self.save()
