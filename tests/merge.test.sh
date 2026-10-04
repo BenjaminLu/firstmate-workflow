@@ -328,7 +328,7 @@ rm -rf "$d"
 # under set -u such a summary kills the script after GitHub has merged. The
 # runner's bash 5 does not, so the rule is checked on the text itself.
 assert_eq "" "$(perl -ne 'print "$ARGV:$.\n" if /\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/; close ARGV if eof' \
-  "$ROOT/bin/fm-merge.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-sync-prs.sh")" \
+  "$ROOT/bin/fm-merge.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-emit.sh")" \
   "no bare \$name runs into a non-ASCII character in the T-119 scripts"
 d="$(fixture OPEN t-009-board)"
 FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --pr 9 --task T-009 --untracked >/dev/null 2>&1

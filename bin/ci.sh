@@ -269,7 +269,7 @@ cd "$ROOT" || exit 2
 shopt -s nullglob
 # nothing here may read stdin. With nullglob an empty file list turns a grep
 # into one that reads standard input, and the whole gate stops dead waiting
-# for a human who is not there - the same way fm-run's advance loop once ate
+# for a human who is not there - an advance loop once ate
 # its own input.
 exec < /dev/null
 

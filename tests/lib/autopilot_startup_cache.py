@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+os.environ['HERDR_ENV'] = '0'
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))

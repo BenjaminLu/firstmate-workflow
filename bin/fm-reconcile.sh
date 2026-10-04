@@ -345,7 +345,7 @@ awk -F'\t' '$1 != "" { printf "  %-8s %-18s %s%s\n", $1, $2, ($3 == "" ? "" : "#
 # --- 2. the pull requests GitHub is holding -------------------------------
 # A branch is named after its task, and the branch is the only place that id
 # survives when the event which should have carried one did not. The same
-# convention bin/fm-sync-prs.sh reads; the two are not shared because the
+# convention bin/fm-autopilot.sh reads; the two are not shared because the
 # only place to put a shared copy is bin/fm-config.sh, outside this scope.
 task_of() { printf '%s' "$1" | sed -n 's/^\([tT]-\{0,1\}[0-9]\{3\}\).*/\1/p' | tr 'a-z' 'A-Z' \
             | sed 's/^T\([0-9]\)/T-\1/'; }

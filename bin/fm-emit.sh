@@ -21,7 +21,7 @@
 
 # --- The task-id grammar (T-119) --------------------------------------------
 # Which ids are tasks, and which task a branch or a pull request title names,
-# written once. fm-decide.sh, fm-merge.sh and fm-sync-prs.sh source this file
+# written once. fm-decide.sh, fm-merge.sh and the autopilot source this file
 # for it (sourced, it runs nothing past this block), and board/server.ts
 # carries the TypeScript twin between its `task grammar` markers, which
 # tests/board.test.sh runs against these functions over one table.

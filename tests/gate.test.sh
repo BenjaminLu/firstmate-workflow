@@ -442,7 +442,7 @@ for tmp in "$(mktemp -d)" "$(mktemp -d)"; do
   assert_contains "$out" "holds /tmp/fm-gate.lock;" "and it is /tmp/fm-gate.lock, whatever TMPDIR is"
 done
 
-# Every suite that runs the real gate - itself, or through a copied fm-run.sh
+# Every suite that runs the real gate - itself, or through a copied fm-autopilot.sh
 # or a copy of every bin/fm-*.sh - sets a lock of its own. On the machine's
 # lock it would wait on real gate runs and hold them up, and inside one it is
 # refused. A line that only reads the script (sed, grep, cat) does not run it.

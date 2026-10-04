@@ -1115,7 +1115,7 @@ verdict="$(attempt_output)"
 # The chain says which of the two this was, and both callers read the same
 # answer: rc 2 with nothing said is a vendor that was not there, and only
 # that earns a 2. An engine that ran and said something unsigned is a
-# failed round - exit 2 there would have fm-run retry the same input every
+# failed round - callers must distinguish outages instead of retrying each
 # turn, for ever. An outage is never retried below: a vendor that is not
 # there will not be there a moment later either, so this exits the round
 # straight away, same as ever.

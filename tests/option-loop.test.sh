@@ -40,6 +40,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Scripts and distinct value-taking flag names. fm repeats --repo in three
 # subcommands; its nine option cases are exercised separately below.
+# T-175 retired fm-run (library guard) and fm-sync-prs (local guard),
+# removing six flag cases. fm_autopilot.py takes no flags; its shell wrapper
+# still owns the two value-taking flags pinned below.
 PINNED="fm 7
 fm-autopilot 2
 fm-checkpoint 6
@@ -60,10 +63,8 @@ fm-ready 4
 fm-reconcile 4
 fm-restack 5
 fm-review 8
-fm-run 3
 fm-session 4
 fm-setup 3
-fm-sync-prs 3
 fm-worker 6"
 
 # perl's alarm rather than timeout(1), which macOS does not ship. Both the
@@ -151,7 +152,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "125" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "119" "$total" "all 119 pinned flag cases, including the nine fm option cases, were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.
@@ -239,7 +240,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "16" "$sourced" "sixteen scripts take their guard from the library"
+assert_eq "15" "$sourced" "fifteen scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately
@@ -251,7 +252,7 @@ while IFS= read -r f; do
   grep -qE '^need\(\) \{' <<< "$(fm_strip_comments "$f")" || continue
   local_copies=$((local_copies + 1))
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "9" "$local_copies" "nine scripts carry a local copy of the guard"
+assert_eq "8" "$local_copies" "eight scripts carry a local copy of the guard"
 assert_eq "$(printf '%s\n' "$PINNED" | awk 'NF {n++} END {print n+0}')" \
   "$((sourced + local_copies))" \
   "and every script with an option loop does one or the other, and not both"
