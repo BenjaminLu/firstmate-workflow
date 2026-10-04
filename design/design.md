@@ -1272,8 +1272,10 @@ per round from round seven on.
 
 The standing list is the last contiguous numbered block ending at
 `CRITERIA-COMPLETE:<task-id>` (T-181). Earlier numbered summaries, Executed
-sections and unfenced code are not standing items. Use bullets for summaries
-and a heading or separate prose paragraph before the standing list. Wrapped
+sections and unfenced code are not standing items. Use bullets, not numbers,
+for summaries. A list restarting at `1.` after a blank line or an unindented
+non-item label (such as `**Standing list**`, with or without surrounding blank
+lines) starts a new block. Wrapped
 lines, indented continuation paragraphs and blank lines inside an item belong
 to that item. Duplicate or skipped numbers inside the block remain errors;
 an APPROVE need not re-issue the list.

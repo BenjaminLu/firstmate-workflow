@@ -12,6 +12,8 @@ from fm_binding import source_binding
 
 TASK = 'T-180'
 FIXTURE = code / 'tests/lib/fixtures/t180-round1-standing-list.md'
+# Verbatim reviewer-nils-t180-r1 evidence-record.json .text, supplied in the
+# approved T-181 round-2 brief; retain the final blank line and no header.
 review = FIXTURE.read_text()
 
 
@@ -42,8 +44,22 @@ class StandingList(unittest.TestCase):
                 self.assertEqual([1, 2], [n for n, _ in criteria(
                     prefix + closed('1. open: first\n2. open: second'), TASK)])
 
+    def test_restarted_list_after_blank_or_label_ignores_summary(self):
+        for separator in ('\n\n', '\n**Standing list**\n',
+                          '\n\n**Standing list**\n', '\n**Standing list**\n\n',
+                          '\n\n**Standing list**\n\n', '\nStanding list:\n',
+                          '\nStanding list\n'):
+            with self.subTest(separator=separator):
+                text = closed('1. summary a\n2. summary b' + separator +
+                              '1. open: x\n2. open: y')
+                self.assertEqual([1, 2], [n for n, _ in criteria(text, TASK)])
+                self.assertEqual([], protocol([rejection(text),
+                    dict(kind='verdict', verdict='APPROVE', text='APPROVE:T-180')], TASK))
+
     def test_duplicate_and_skipped_numbers_remain_errors(self):
         for block in ('1. first\n1. duplicate', '1. first\n3. skipped',
+                      '1. first\n2. second\n\n2. duplicate',
+                      '1. first\n\n3. skipped',
                       '1. first\n2. second\n1. duplicate\n2. duplicate'):
             with self.subTest(block=block):
                 self.assertIn('standing list numbering is not consecutive and unique',

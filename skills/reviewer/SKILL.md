@@ -199,8 +199,9 @@ Nothing else can be added: an unlabelled new objection, or an old complaint
 you left off the list, is a protocol violation. The latest list is the standing one: it never drops an open item, and an item leaves only by being marked done.
 Findings in a later round cite its item numbers. The standing list is the last
 contiguous numbered block before `CRITERIA-COMPLETE:<task-id>`. Use bullets,
-not numbers, for any summary above it, and separate that summary from the
-standing list with a heading or a separate prose paragraph. Wrapped lines,
+not numbers, for any summary above it. A list restarting at `1.` after a blank
+line or an unindented non-item label (such as `**Standing list**`, with or
+without surrounding blank lines) starts a new block. Wrapped lines,
 indented continuation paragraphs and blank lines inside an item belong to
 that item. An APPROVE does not need to re-issue the list.
 `bin/fm-protocol.sh` reads only that final block. The script does not detect every

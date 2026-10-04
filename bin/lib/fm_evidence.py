@@ -47,10 +47,10 @@ def verdict_marker(text, task):
 def criteria(text, task):
     """Read the last numbered block adjacent to the final closing marker.
 
-    Blank lines separate item paragraphs, not lists. An unindented paragraph
-    after a blank line ends the block; adjacent wrapped lines and indented
-    continuation paragraphs remain part of the item. Numbering never defines
-    a boundary: duplicate or skipped numbers must reach protocol() unchanged.
+    A restart at 1 after a blank line or an unindented label starts a new
+    list. Otherwise blank lines, wrapped text and indented paragraphs stay
+    with their item. Adjacent duplicate numbers and non-restart numbering
+    errors reach protocol() unchanged.
     """
     lines = list(unquoted(text))
     ends = [n for n, line in enumerate(lines) if line.strip() == 'CRITERIA-COMPLETE:' + task]
@@ -58,9 +58,12 @@ def criteria(text, task):
         return []
     items = []
     blank = False
+    label = False
     for line in lines[:ends[-1]]:
         match = re.match(r'^\s*(\d+)[.)]\s+(.+)', line)
         if match:
+            if int(match[1]) == 1 and (blank or label):
+                items = []
             items.append((int(match[1]), [match[2]]))
         elif not line.strip():
             if items:
@@ -75,6 +78,9 @@ def criteria(text, task):
             else:
                 items[-1][1].append(line)
         blank = False
+        # A non-item line can label the next list even without blank lines.
+        # Keep it as wrapped text unless the next item restarts at 1.
+        label = not match and not line[0].isspace()
     return [(number, '\n'.join(body).rstrip()) for number, body in items]
 
 
