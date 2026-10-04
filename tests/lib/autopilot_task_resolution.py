@@ -47,6 +47,8 @@ elif args[2] == 'fetch':
     (root / 'missing-object').unlink(missing_ok=True)
 elif args[2] == 'update-ref':
     assert args[3] == '-d' and args[4].startswith('refs/fm/fetch/'), args
+elif args[2:5] == ['rev-parse', '--verify', '--quiet']:
+    print('a'*40)
 elif args[2] == 'rev-parse':
     print(('c' if (root / 'moved-head').exists() else 'a')*40 if args[3].startswith('refs/fm/fetch/') else 'b'*40)
 else: raise AssertionError(args)

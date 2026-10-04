@@ -4,8 +4,10 @@ Local event cursors advance at subscription/startup and on pushed doorbells.
 GitHub deadlines use conditional requests; observed PRs bind local evidence
 and authored card details before advancing. Timers also close
 already observed reviewer batches and report overdue judgment; no idle timer
-starts a model. Side effects are write-ahead, at most once until reconciled by
-firstmate; an ambiguous crash is judgment, not permission to replay a write.
+starts a model. Branch updates re-decide GitHub state with REST compare-and-swap;
+local task refs fast-forward before advance when no round/job or dirty worktree
+holds them. Other side effects remain write-ahead until firstmate reconciles
+an ambiguous crash.
 """
 import datetime
 import fcntl
@@ -25,6 +27,7 @@ import fm_lifeline as life
 from fm_conventions import read_policy
 from fm_watch import Locked, read_json, save_json, notify
 from fm_autopilot_loop import MechanicalLoop
+from fm_autopilot_branches import BranchUpdates
 import fm_merge_authorization as merge_authorization
 
 BIN = Path(__file__).resolve().parents[1]
@@ -45,7 +48,7 @@ def key(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:32]
 
 
-class Pilot(MechanicalLoop):
+class Pilot(BranchUpdates, MechanicalLoop):
     def __init__(self, ctx, clock=time.time):
         self.ctx = ctx
         self.root = Path(ctx['engine'])
@@ -58,8 +61,18 @@ class Pilot(MechanicalLoop):
         self.data = {} if first_start else json.loads(self.path.read_text())
         if not isinstance(self.data, dict): raise ValueError('invalid autopilot recovery state')
         for name, default in dict(offset=0, wake_offset=0, actions={}, seen={}, batches={},
-                                  wakes={}, pulls={}, cache={}, failures=0, next_poll=0).items():
+                                  wakes={}, pulls={}, cache={}, failures=0, next_poll=0,
+                                  poll_seq=0, retries={}, holds={}, updates={}).items():
             self.data.setdefault(name, default)
+        if not self.data.get('migrated_t190'):
+            for token, action in list(self.data['actions'].items()):
+                identity = action.get('identity') or []
+                if identity and identity[0] == 'update':
+                    del self.data['actions'][token]
+                    wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
+                    if not self.data['wakes'].get(wake, {}).get('pushed'):
+                        self.data['wakes'].pop(wake, None)
+            self.data['migrated_t190'] = True
         # Existing installations establish the remote boundary on upgrade.
         self.data.setdefault('tracking_started', self.clock())
         if 'legacy_ask_records' not in self.data:
@@ -110,6 +123,17 @@ class Pilot(MechanicalLoop):
             self.policy_error = str(error)
             self.queue('conventions-invalid-' + key(str(error)), '',
                        'Conventions unavailable: ' + str(error), '專案慣例無法驗證；需要判斷')
+
+    def probe(self, argv):
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, text=True,
+                                capture_output=True, timeout=120)
+        return result.returncode, result.stdout, result.stderr
+
+    def checked(self, argv):
+        rc, stdout, stderr = self.probe(argv)
+        if rc:
+            raise self.probe_error(argv, stderr)
+        return stdout
 
     def command(self, argv, *, allow_not_modified=False, **kwargs):
         result = subprocess.run(argv, stdin=subprocess.DEVNULL, text=True,
@@ -331,15 +355,17 @@ class Pilot(MechanicalLoop):
     def pull(self, pr, reviews, comments, runs, statuses):
         if pr['state'] != 'open' or self.policy_error or pr['head']['ref'] == self.ctx['base']:
             return
+        number, head = str(pr['number']), pr['head']['sha']
+        self.prune_branches(number, head)
         task = self.task(pr)
         if not task: return
-        number, head = str(pr['number']), pr['head']['sha']
         old = self.data['pulls'].get(number)
         if old and old.get('head') and old['head'] != head:
             self.recheck(task, pr, reviews)
         self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
         try:
-            self.advance(pr, runs, statuses)
+            if self.sync_branch(pr, task):
+                self.advance(pr, runs, statuses)
         except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
             self.attention('advance-error', task, pr, f'{task}: advancement needs reconciliation: {error}',
                            f'{task}：機械流程需要 firstmate 核對')
@@ -373,16 +399,16 @@ class Pilot(MechanicalLoop):
                 batch['due'] = self.clock() + self.policy['debounce_seconds']
         # REST mergeable=True is gh's MERGEABLE; unknown/null never authorizes.
         if pr.get('mergeable') is True and pr.get('mergeable_state') == 'behind' and not pr.get('draft'):
-            def update():
-                current = json.loads(self.command(self.gh('pr', 'view', number, '--repo', self.ctx['repository'],
-                                                          '--json', 'headRefOid,mergeable,mergeStateStatus')))
-                if current != dict(headRefOid=head, mergeable='MERGEABLE', mergeStateStatus='BEHIND'):
-                    raise ValueError('branch update head or mergeability changed; reassess')
-                self.command(self.gh('pr', 'update-branch', number, '--repo', self.ctx['repository']))
-            self.once(['update', number, head], task, update)
+            try:
+                self.update_branch(pr, task)
+            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+                token = f'update:{number}:{head}'
+                if self.retry_due(token):
+                    self.branch_failure('update', number, head, task, str(error))
         self.save()
 
     def poll(self):
+        self.data['poll_seq'] += 1
         if self.policy_error:
             self.data['next_poll'] = self.clock() + self.policy['watch_seconds']
             return
@@ -455,6 +481,7 @@ class Pilot(MechanicalLoop):
                        f'PR #{pr["number"]} closed without merging; task needs judgment',
                        f'PR #{pr["number"]} 已關閉但未合併；任務需要判斷')
         self.data['pulls'].setdefault(str(pr['number']), {})['terminal'] = True
+        self.prune_branches(str(pr['number']))
         self.save()
 
     def inspect_policy(self):
@@ -489,7 +516,9 @@ class Pilot(MechanicalLoop):
         pr = event.get('pr')
         if task and isinstance(pr, int) and pr > 0 and re.fullmatch(r'(?:T|SK)-[0-9]+', task):
             tracked = self.data['pulls'].setdefault(str(pr), dict(task=task))
-            if kind == 'merged': tracked['terminal'] = True
+            if kind == 'merged':
+                tracked['terminal'] = True
+                self.prune_branches(str(pr))
         if kind in ('agent_finished', 'commit_pushed', 'pr_opened', 'approved', 'review_failed'):
             self.data['next_poll'] = 0
         reasons = dict(worker_crashed='Worker round failed', agent_lost='Round lost',
