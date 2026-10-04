@@ -197,9 +197,14 @@ A new item is admissible only with one of two labels, on the item's own line:
 
 Nothing else can be added: an unlabelled new objection, or an old complaint
 you left off the list, is a protocol violation. The latest list is the standing one: it never drops an open item, and an item leaves only by being marked done.
-Findings in a later round cite its item numbers. Number nothing else in a
-rejecting answer: `bin/fm-protocol.sh` reads every line that starts with a
-number before the marker as an item. The script does not detect every
+Findings in a later round cite its item numbers. The standing list is the last
+contiguous numbered block before `CRITERIA-COMPLETE:<task-id>`. Use bullets,
+not numbers, for any summary above it. A list restarting at `1.` after a blank
+line or an unindented non-item label (such as `**Standing list**`, with or
+without surrounding blank lines) starts a new block. Wrapped lines,
+indented continuation paragraphs and blank lines inside an item belong to
+that item. An APPROVE does not need to re-issue the list.
+`bin/fm-protocol.sh` reads only that final block. The script does not detect every
 violation; report them to [firstmate](../firstmate/SKILL.md) for the board.
 Write the first list as if it is your one chance to be exhaustive, because it
 is: T-126 took ten rounds, one new finding per round from round seven on.

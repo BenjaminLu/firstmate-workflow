@@ -44,7 +44,7 @@ test("the captain merges from the board", async ({ page }) => {
   await expect.poll(() => existsSync(join(b.root, "state/pending/D-1.json")),
     { timeout: 15_000 }).toBe(false);
   expect(JSON.parse(readFileSync(decision, "utf8")).chosen).toBe("A");
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 test("custom selection is local, literal and never merges", async ({ page }) => {
@@ -90,7 +90,7 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
     await expect(page.locator('#orderFeedback script')).toHaveCount(0);
     await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:15_000});
     await expect(page.locator('.scene #captain .r-cap')).toBeVisible();
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 test('all authored fields switch locale, diagrams differ and input stays text', async ({page}) => {
@@ -133,7 +133,7 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
     await page.locator('[data-l="en"]').click();
     await expect(page.locator('#orderFeedback')).toContainText(second.en.outcome);
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 // T-047: a card whose id names its owner is listed, drawn and answered, and
@@ -157,7 +157,7 @@ test('a card whose id names its project and task renders, draws and is answered'
     await card.locator('.confirm').click();
     await expect.poll(() => existsSync(join(root,`state/decisions/${id}.json`))).toBe(true);
     expect(JSON.parse(readFileSync(join(root,`state/decisions/${id}.json`),'utf8')).chosen).toBe('B');
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 // T-112: fm.sh self-update raises D-SK-<n>. The captain's A on it is recorded
@@ -246,6 +246,6 @@ test('a skill-update card is answered, and a refused answer shows the server err
     await expect.poll(() => existsSync(join(root,'state/decisions/D-SK-001.json'))).toBe(true);
     expect(JSON.parse(readFileSync(join(root,'state/decisions/D-SK-001.json'),'utf8'))).toMatchObject({chosen:'A',task:'SK-001',kind:'choice'});
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 

@@ -44,7 +44,7 @@ test('merge identities queue absent tasks, survive refresh and never replay hist
     await page.reload();
     await expect(page.locator('.dcard')).toBeVisible();
     await expect(page.locator('#salvo')).not.toHaveClass(/fire/);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('failed merge persists failure without salute or automatic retry', async ({page}) => {
@@ -67,7 +67,7 @@ test('failed merge persists failure without salute or automatic retry', async ({
     await page.reload();
     await expect(page.locator('#orderFeedback')).toContainText(EN.mergeRefused);
     await expect(page.locator('#salvo')).not.toHaveClass(/fire/);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('a refused merge names its decision and task, and clears once that task merges', async ({page}) => {
@@ -97,7 +97,7 @@ test('a refused merge names its decision and task, and clears once that task mer
     await expect(page.locator('.scene .pivot').first()).toBeVisible();
     await expect(page.locator('#orderFeedback')).not.toContainText(EN.mergeRefused);
     await expect(page.locator('#deckwrap')).toBeHidden();
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('a second merge in the same project is refused while one runs, and its card stays', async ({page}) => {
@@ -133,7 +133,7 @@ test('a second merge in the same project is refused while one runs, and its card
     await expect(page.locator('#merging-D-1')).toHaveCount(0, {timeout:15_000});
     await card.locator('.confirm').click();
     await expect.poll(calls, {timeout:15_000}).toContain('--pr 98');
-  } finally { rmSync(hold, {force:true}); stopBoard(b); }
+  } finally { rmSync(hold, {force:true}); await stopBoard(b); }
 });
 
 test('external outcomes override stale success and clear only their settled draft', async ({page}) => {
@@ -162,7 +162,7 @@ test('external outcomes override stale success and clear only their settled draf
     await page.request.post(`${b.url}/decisions`,{data:{id:'D-3',chosen:'custom',text:'keep this unrelated draft'},headers:scriptHeaders(b)});
     await expect(page.locator('.dcard')).toHaveCount(0);
     await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:15_000});
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('network refusal keeps selection and accessible failure; reduced motion still acknowledges', async ({page}) => {
@@ -182,6 +182,6 @@ test('network refusal keeps selection and accessible failure; reduced motion sti
     expect(await page.locator('#captain .tool').evaluate(el=>getComputedStyle(el).height)).toBe('52px');
     await expect(page.locator('#ahoy')).toBeVisible();
     await expect(page.locator('.scene .fig.cheer')).toHaveCount(0);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 

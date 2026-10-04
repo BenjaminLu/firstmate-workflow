@@ -55,7 +55,7 @@ test('retained actor activity is localized, run-specific and never guessed from 
     await expect(page.locator('[data-crew="worker-rowan"]')).toHaveCount(0);
     await expect(page.locator('.roster .nm').filter({hasText:/^Rowan$/})).toHaveCount(1);
     expect((await (await fetch(b.url+'/api/state')).json()).crew.filter((c:any)=>c.role==='firstmate')).toHaveLength(1);
-  }finally{stopBoard(b);}
+  }finally{await stopBoard(b);}
 });
 
 test('real directed handoffs travel, react once and retain pointer ownership through refresh', async ({page})=>{
@@ -131,7 +131,7 @@ test('real directed handoffs travel, react once and retain pointer ownership thr
     await expect(page.locator('.handoff.static[data-kind="reject"]')).toContainText(TW.roleWorker);
     await expect(page.locator('.handoffs')).not.toContainText(TW.handoffUnavailable);
     await expect(page.locator('[data-crew="worker-real"]')).toHaveCount(0);
-  }finally{stopBoard(b);}
+  }finally{await stopBoard(b);}
 });
 
 test('T-145: a verdict from a reviewer who has just left the deck is shown quietly, and an actor the board cannot place is said once', async ({page})=>{
@@ -212,6 +212,6 @@ test('T-145: a verdict from a reviewer who has just left the deck is shown quiet
     await expect(odd.nth(1)).not.toHaveAttribute('data-unknown',/./);
     await expect(page.locator('.handoff[data-unknown]')).toHaveCount(1);
     await expect(page.locator('.handoff[data-unknown]')).toContainText(EN.handoffUnavailable);
-  }finally{stopBoard(b);}
+  }finally{await stopBoard(b);}
 });
 

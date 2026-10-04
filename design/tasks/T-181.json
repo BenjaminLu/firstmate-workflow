@@ -1,0 +1,19 @@
+{
+  "id": "T-181",
+  "title": "the standing-list check reads only the list the reviewer closed with CRITERIA-COMPLETE, so a summary list above it no longer blocks gate 7 for good",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_evidence.py",
+    "skills/reviewer/SKILL.md",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-181.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-04, T-180's PR #169 had a bound APPROVE twice (reviewer rounds 2 and 3, head 25125e7), green CI and gates 1-6, yet gate 7 refused it with 'fm-evidence: standing list numbering is not consecutive and unique'. Round 1's REJECT put a numbered summary of its findings (1, 2) above its numbered standing list (1, 2) and closed both with CRITERIA-COMPLETE. `criteria()` (bin/lib/fm_evidence.py:47-53) collects every numbered line before the marker, giving [1, 2, 1, 2]. `protocol()` (:55-80) resets its errors only on a REJECT or a verdict carrying items. An APPROVE carries no list, as the reviewer skill allows, so the round-1 error stands forever and no later review can clear it. T-175's REJECT had the same two-list shape and was saved only because a later REJECT re-issued the list.",
+    "The check reads the standing list as the last contiguous numbered block that ends at CRITERIA-COMPLETE:<task>. Continuation lines, wrapped text and blank lines inside an item belong to that item. Numbered lines further up, such as a summary, an Executed section or code outside fences, are ignored. Every rule stays as it is: consecutive and unique numbering, items carried over with a done/open state, new items labelled. An APPROVE does not need to re-issue the list.",
+    "skills/reviewer/SKILL.md says the standing list is the last numbered block before CRITERIA-COMPLETE, and that any summary above it should use bullets, not numbers.",
+    "Tests (fail first):\n- a REJECT with a numbered summary above its standing list passes the check, and a later APPROVE gives a green gate 7\n- a genuinely duplicated or skipped number inside the standing block is still refused\n- the T-180 round-1 text, saved as a fixture, gives [1, 2]\nEvidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

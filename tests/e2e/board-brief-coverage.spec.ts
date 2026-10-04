@@ -20,5 +20,5 @@ test('brief gaps, deferrals and waivers display authored bilingual warnings', as
       await expect(warnings).toHaveCount(3);
       for (const c of cases) await expect(warnings.filter({hasText:lang === 'en' ? c.en : c.tw})).toHaveCount(1);
     }
-  } finally { stopBoard(board); }
+  } finally { await stopBoard(board); }
 });

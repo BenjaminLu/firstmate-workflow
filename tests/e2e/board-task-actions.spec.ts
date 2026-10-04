@@ -146,7 +146,7 @@ test('the captain parks, unparks and drops a card by menu and by drag, and confi
     // no browser dialog at any point, and the board never edits the plan
     expect(dialogs).toEqual([]);
     expect(JSON.stringify(readTasks(root))).toBe(plan);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 // T-069: every #n the board shows links to that pull request on the

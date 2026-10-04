@@ -95,7 +95,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await expect(page.locator('[data-bubble="worker-b"]')).toHaveCount(0);
     await expect(page.locator('[data-bubble="worker-a"]')).toHaveCount(1);
     await expect(page.locator('#pcount')).toHaveText('1');
-  } finally { rmSync(hold, {force:true}); stopBoard(b); }
+  } finally { rmSync(hold, {force:true}); await stopBoard(b); }
 });
 
 // T-054: a project with nothing on the board but its task list - no crew, no
@@ -115,7 +115,7 @@ test('a project on the board only through its lane cards still gets its chip', a
     await expect(card('beta')).toHaveCount(1);
     await expect(card('beta').locator('.pchip')).toHaveText('beta');
     await expect(card('alpha').locator('.pchip')).toHaveText('alpha');
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 // T-054: park, unpark and drop are addressed by the card's key, its project
@@ -188,7 +188,7 @@ test('two projects with the same task id: menu, drop confirmation and drag act o
     expect(last).toMatchObject({type:'parked',task:'T-002'});
     expect(last).not.toHaveProperty('project');
     expect(dialogs).toEqual([]);
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 // T-054: with only the default project in the log the board renders as it
@@ -241,7 +241,7 @@ test('a board of one project shows no project chip anywhere, and says a merge ou
     // and not one chip on any of it
     await expect(page.locator('.pchip')).toHaveCount(0);
     await page.locator('[data-cancel-drop="T-2"]').click();
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 // T-054: one merge at a time within a project. A second answered while the
