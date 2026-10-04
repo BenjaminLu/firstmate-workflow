@@ -146,7 +146,7 @@ class Pilot(MechanicalLoop):
         return ident
 
     def flush(self):
-        merge_authorization.tick(self)
+        merge_authorization.tick(self, key)
         now = self.clock()
         for reviewer, batch in list(self.data['batches'].items()):
             if now < batch['due']:
@@ -337,21 +337,12 @@ class Pilot(MechanicalLoop):
         old = self.data['pulls'].get(number)
         if old and old.get('head') and old['head'] != head:
             self.recheck(task, pr, reviews)
+        self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
         try:
             self.advance(pr, runs, statuses)
         except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
             self.attention('advance-error', task, pr, f'{task}: advancement needs reconciliation: {error}',
                            f'{task}：機械流程需要 firstmate 核對')
-        self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
-        # Snapshot scheduling evidence for authorization reminders, never gate approval.
-        try:
-            checks = self.settled_checks(pr, runs, statuses)
-            verdict = self.verdict(task)
-            self.data['pulls'][number]['merge_evidence'] = dict(head=head,
-                approved=verdict.get('head') == head and verdict.get('verdict') == 'APPROVE',
-                green=bool(checks) and all(row[-1] in ('success', 'neutral', 'skipped') for row in checks))
-        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError):
-            pass  # Unknown CI must never be listed as green.
         latest = {}
         for row in runs:
             if row.get('head_sha') == head:
@@ -577,7 +568,7 @@ class Pilot(MechanicalLoop):
                        f'{task} 已就緒：需要 firstmate 判斷並建立就緒決策卡')
 
     def delay(self):
-        deadlines = [self.data['next_poll']] + merge_authorization.deadline(self)
+        deadlines = [self.data['next_poll']] + merge_authorization.deadline(self, key)
         deadlines += [b['due'] for b in self.data['batches'].values()]
         deadlines += [w['created'] + max(300, self.policy['debounce_seconds'] * 2)
                       for w in self.data['wakes'].values() if not w['notified']]

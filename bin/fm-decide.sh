@@ -48,6 +48,9 @@ REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=
 PROJECT=''; ID_PROJECT=''; ID_TASK=''; ID_N=''; GH="${FM_GH:-gh}"
 # the registry library lives beside this script, wherever --repo points
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# See fm_need in bin/fm-config.sh: shifting two with one argument does not
+# shift, so a value-taking branch must check before shifting both arguments.
+need() { [ "$#" -ge 2 ] || { echo "fm-decide: $1 needs a value" >&2; exit 64; }; }
 # Separate evidence-only mode: never enters card allocation/request/answer paths.
 for _arg in "$@"; do
   if [ "$_arg" = --authorize-merges ]; then
@@ -55,14 +58,9 @@ for _arg in "$@"; do
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --authorize-merges) shift ;;
-        --repo|--project|--until|--quote)
-          [ "$#" -ge 2 ] || { echo "fm-decide: $1 needs a value" >&2; exit 64; }
-          case "$1" in
-            --repo) REPO="$2" ;;
-            --project) PROJECT="$2" ;;
-            *) _auth_args+=("$1" "$2") ;;
-          esac
-          shift 2 ;;
+        --repo) need "$@"; REPO="$2"; shift 2 ;;
+        --project) need "$@"; PROJECT="$2"; shift 2 ;;
+        --until|--quote) need "$@"; _auth_args+=("$1" "$2"); shift 2 ;;
         --show) _auth_args+=("$1"); shift ;;
         *) echo "fm-decide: invalid authorization argument $1" >&2; exit 64 ;;
       esac
@@ -77,11 +75,7 @@ done
 [ -r "$HERE/fm-emit.sh" ] || { echo "fm-decide: missing $HERE/fm-emit.sh" >&2; exit 70; }
 # shellcheck source=bin/fm-emit.sh
 . "$HERE/fm-emit.sh"
-# see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
-# left does not shift, and the loop spins. This file deliberately depends
-# on nothing, so it carries the two lines rather than the explanation.
 EXPECTED_HEAD=''
-need() { [ "$#" -ge 2 ] || { echo "fm-decide: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --request) need "$@"; MODE=request; ID="${2-}"; shift 2 ;;

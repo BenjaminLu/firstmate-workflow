@@ -41,8 +41,7 @@ class Authorization(unittest.TestCase):
         return item
 
     def tick(self):
-        with patch('fm_concurrent.live_rounds', return_value=[dict(task='T-003', role='reviewer')]):
-            self.p.flush()
+        self.p.flush()
         return [w['line'] for w in self.p.data['wakes'].values()]
 
     def test_boundaries_restart_and_replacement(self):
@@ -50,6 +49,8 @@ class Authorization(unittest.TestCase):
         self.assertEqual(record['recorded_at'], self.now)
         self.assertEqual(self.tick(), [])
         self.now += 60
+        (self.state / 'events.jsonl').write_text(json.dumps(dict(
+            type='review_opened', actor='reviewer-fixture', task='T-003')) + '\n')
         pending = self.state / 'pending'; pending.mkdir()
         (pending / 'D-one.json').write_text(json.dumps(dict(kind='merge', id='D-one', task='T-001', pr=1)))
         self.p.data['pulls'] = {'1': dict(task='T-001', head='a', merge_evidence=dict(head='a', approved=True, green=True)),
@@ -89,7 +90,7 @@ class Authorization(unittest.TestCase):
         pr = dict(number=2, state='open', head=dict(sha='a', ref='task'),
                   base=dict(ref='main', sha='base'))
         self.p.task = lambda pr: 'T-002'
-        self.p.advance = lambda *args: None
+        self.p.once = lambda *args: None
         self.p.verdict = lambda task: dict(verdict='APPROVE', head='a')
         self.p.settled_checks = lambda *args: [('ci', 'check', 1, 'success')]
         self.p.pull(pr, [], [], [], [])
@@ -103,15 +104,72 @@ class Authorization(unittest.TestCase):
                 self.p.settled_checks = lambda *args: checks
                 self.p.pull(pr, [], [], [], [])
                 self.assertEqual(M.inventory(self.p)[1], [])
+            self.p.settled_checks = lambda *args: [('ci', 'check', 3, 'success')]
+            self.p.pull(pr, [], [], [], [])
+            self.assertEqual(M.inventory(self.p)[1], ['T-002 #2'])
+            self.p.busy = lambda task: True
+            with patch.object(self.p, 'settled_checks') as settled:
+                self.p.pull(pr, [], [], [], [])
+            settled.assert_not_called()
+            self.assertEqual(M.inventory(self.p)[1], [], 'held advancement must not retain stale readiness')
 
     def test_start_after_expiry_only_ends_and_does_not_spin(self):
         self.record(60)
         self.now += 120
         self.restart()
         self.assertEqual(self.tick(), ['merge authorization ended'])
-        self.assertEqual(M.deadline(self.p), [])
+        self.assertEqual(M.deadline(self.p, A.key), [])
         self.restart()
         self.assertEqual(self.tick(), ['merge authorization ended'])
+
+    def test_poll_without_window_adds_no_reminder_calls(self):
+        pr = dict(number=2, state='open', head=dict(sha='a', ref='task'),
+                  base=dict(ref='main', sha='base'), mergeable_state='clean')
+        responses = {
+            'pulls?state=open&per_page=100&page=1': [pr],
+            'pulls?state=closed&sort=updated&direction=desc&per_page=50': [],
+            'pulls/2': pr,
+            'pulls/2/reviews?per_page=100&page=1': [],
+            'pulls/2/comments?per_page=100&page=1': [],
+            'commits/a/check-runs?per_page=100': dict(check_runs=[]),
+            'commits/a/status?per_page=100': dict(sha='a', statuses=[]),
+            'branches/main/protection/required_status_checks': dict(contexts=['ci']),
+        }
+        calls = []
+        def api(endpoint):
+            calls.append(endpoint)
+            return responses[endpoint]
+        self.p.api = api
+        self.p.task = lambda pr: 'T-002'
+        self.p.observe_pr = lambda pr: None
+        self.p.inspect_policy = lambda: None
+        with patch.object(self.p, 'verdict', return_value={}) as verdict:
+            self.p.poll()
+        self.assertEqual(calls, list(responses), 'reminders must not add API calls to a poll')
+        self.assertEqual(verdict.call_count, 1, 'reuse the advancement verdict')
+        self.assertEqual(self.p.data['failures'], 0)
+        self.assertEqual(self.p.data['wakes'], {})
+
+    def test_timer_inventory_uses_recorded_rounds_without_subprocesses(self):
+        self.record(60)
+        run = self.state / 'runs/legacy'; run.mkdir(parents=True)
+        (run / 'identity.json').write_text(json.dumps(dict(task='T-003', role='worker')))
+        (run / 'process.json').write_text(json.dumps(dict(pid=123456789, token='fixture')))
+        events = [dict(type=kind, actor=actor, task=task) for kind, actor, task in (
+            ('dispatched', 'worker-live', 'T-003'),
+            ('review_opened', 'reviewer-ended', 'T-004'),
+            ('agent_finished', 'reviewer-ended', 'T-004'),
+            ('dispatched', 'worker-lost', 'T-005'),
+            ('agent_lost', 'worker-lost', 'T-005'))]
+        (self.state / 'events.jsonl').write_text(''.join(json.dumps(e) + '\n' for e in events))
+        with patch('subprocess.run', side_effect=AssertionError('timer started a subprocess')):
+            M.refresh(self.p)
+            M.deadline(self.p, A.key)
+            M.tick(self.p, A.key)
+        line = next(iter(self.p.data['wakes'].values()))['line']
+        self.assertIn('in-flight rounds: T-003 (worker)', line)
+        self.assertNotIn('T-004', line)
+        self.assertNotIn('T-005', line)
 
     def test_cli_record_show_and_no_card(self):
         env = {k:v for k,v in os.environ.items() if not k.startswith('FM_')}
@@ -121,6 +179,10 @@ class Authorization(unittest.TestCase):
                                    '--repo', str(self.root), *args], env=env, text=True, capture_output=True)
         empty = cli('--show'); self.assertEqual(empty.returncode, 0, empty.stderr)
         self.assertEqual(empty.stdout.strip(), 'none')
+        for option in ('--repo', '--project', '--until', '--quote'):
+            missing = cli(option)
+            self.assertEqual(missing.returncode, 64, missing.stderr)
+            self.assertIn(option + ' needs a value', missing.stderr)
         result = cli('--until', '2099-01-01T08:00:00+08:00', '--quote', 'captain words')
         self.assertEqual(result.returncode, 0, result.stderr)
         shown = cli('--show'); self.assertEqual(shown.returncode, 0, shown.stderr)

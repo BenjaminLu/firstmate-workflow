@@ -141,6 +141,7 @@ class MechanicalLoop:
 
     def advance(self, pr, runs, statuses):
         from fm_autopilot import key
+        self.data['pulls'].get(str(pr['number']), {}).pop('merge_evidence', None)
         if pr['state'] != 'open' or self.policy_error: return
         task = self.task(pr)
         if not task: return
@@ -188,6 +189,10 @@ class MechanicalLoop:
         # new authored details or release of a project's merge slot. A timer
         # seeing identical inputs never launches another gate or model.
         checks = self.settled_checks(pr, runs, statuses)
+        # Reuse scheduling evidence already read here; reminders never fetch CI.
+        self.data['pulls'].setdefault(str(pr['number']), dict(task=task, head=head))['merge_evidence'] = dict(
+            head=head, approved=verdict.get('head') == head and verdict.get('verdict') == 'APPROVE',
+            green=bool(checks) and all(row[-1] in ('success', 'neutral', 'skipped') for row in checks))
         if checks is None: return
         details = {p.name: json.loads(p.read_text()) for p in (self.state / 'decision-details').glob(
             'D-' + (self.ctx['project'] or 'firstmate-workflow') + '-' + task.replace('-', '') + '-*.json')}

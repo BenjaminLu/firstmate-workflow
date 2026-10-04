@@ -5112,9 +5112,11 @@ The supervisor subscribes to the writer's existing local doorbell, caches the
 window on startup and pushed notifications, and includes its deadlines alongside
 GitHub backoff. It queues one bilingual reminder at expiry minus 60 minutes
 (or immediately within that hour), listing pending merge cards, observed bound
-APPROVE/green-CI PRs without cards, and live worker/reviewer rounds. At expiry it
+APPROVE/green-CI PRs without cards, and recorded in-flight worker/reviewer rounds. At expiry it
 queues one ended notice. Persisted wake identities include the unique window id,
 so T-172 restart recovery repeats neither notice and replacement resets both.
 A service starting after expiry sends only the ended notice. Cached PR evidence
 is informational; authoritative readiness and board authorization still govern
-any merge. No wake or queue receipt proves delivery to a model.
+any merge. Reminder inventory reuses the checks and verdict already read by PR
+advancement and folds local lifecycle events for rounds; it performs no extra
+GitHub requests or process probes. No wake or queue receipt proves delivery to a model.

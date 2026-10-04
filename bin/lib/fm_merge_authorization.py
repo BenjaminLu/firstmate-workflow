@@ -34,7 +34,6 @@ def record(state, until, quote, clock=time.time):
 
 
 def inventory(pilot):
-    from fm_concurrent import live_rounds
     cards = []
     carded = set()
     for path in sorted((pilot.state / 'pending').glob('*.json')):
@@ -51,7 +50,18 @@ def inventory(pilot):
                 and evidence.get('approved') and evidence.get('green')):
             ready.append(f"{pr['task']} #{number}")
     rounds = []
-    for row in live_rounds([dict(state=str(pilot.state), name=pilot.ctx['project'])]):
+    # Use lifecycle facts already recorded locally. Liveness probing can spawn
+    # ps; the reminder must never introduce subprocess or network work.
+    active = {}
+    for row in pilot.rows():
+        actor = row.get('actor')
+        kind = row.get('type')
+        if kind in ('dispatched', 'review_opened'):
+            active[actor] = dict(task=row.get('task', ''),
+                                 role='reviewer' if kind == 'review_opened' else 'worker')
+        elif kind in ('agent_finished', 'agent_lost', 'worker_crashed', 'review_failed'):
+            active.pop(actor, None)
+    for row in active.values():
         task = row.get('task', '')
         numbers = [n for n, p in pilot.data['pulls'].items() if p.get('task') == task and not p.get('terminal')]
         rounds.append(f"{task}" + ''.join(' #' + n for n in sorted(numbers)) + f" ({row.get('role', 'worker')})")
@@ -63,10 +73,9 @@ def refresh(pilot):
     pilot.authorization = read(pilot.state)
 
 
-def deadline(pilot):
+def deadline(pilot, key):
     item = getattr(pilot, 'authorization', {})
     if not item: return []
-    from fm_autopilot import key
     for phase, due in [('warning', item['expires_at'] - 3600), ('expired', item['expires_at'])]:
         if phase == 'warning' and pilot.clock() >= item['expires_at']: continue
         ident = 'autopilot-' + key([pilot.ctx['project'], 'merge-authorization-' + item['id'] + '-' + phase])
@@ -74,10 +83,10 @@ def deadline(pilot):
     return []
 
 
-def tick(pilot):
+def tick(pilot, key):
     item = getattr(pilot, 'authorization', {})
     if not item: return
-    due = deadline(pilot)
+    due = deadline(pilot, key)
     if not due or pilot.clock() < due[0]: return
     now = pilot.clock()
     identity = 'merge-authorization-' + item['id']
