@@ -1,0 +1,32 @@
+{
+  "id": "T-175",
+  "title": "the autopilot owns the whole mechanical loop - sync, gates, review, merge-card readiness - and fm-run.sh and fm-sync-prs.sh are retired",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_autopilot.py",
+    "bin/lib/**",
+    "bin/fm-autopilot.sh",
+    "bin/fm-run.sh",
+    "bin/fm-sync-prs.sh",
+    "bin/fm-emit.sh",
+    "bin/fm-reconcile.sh",
+    "bin/fm-session.sh",
+    "bin/fm-herdr.py",
+    "bin/fm-review.sh",
+    "bin/ci.sh",
+    "README.md",
+    "design/design.md",
+    "docs/**",
+    "skills/firstmate/SKILL.md",
+    "tests/**",
+    "design/tasks/T-175.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-03 the captain asked which scripts are redundant from first principles and ordered the refactor ('照你的意思全面重構，確保所有功能正常'). The mechanical loop lives in three places. bin/fm-run.sh's turn() does four things: (1) fm-sync-prs.sh; (2) fm-dispatch.sh; (3) for each open PR, the fm-protocol check from round 3, then fm-gate.sh; (4) on exit 7 it runs fm-review.sh, and on exit 0 it requests the merge card from firstmate-authored details. bin/lib/fm_autopilot.py (T-141) is the resident service fm-session starts. It polls GitHub (conditional requests, T-172) and does update-branch, but it launches a review only for a base-only carry, and says 'Worker edits belong to fm-run's review loop'. No resident service runs fm-run.sh, so that night firstmate ran every review launch, gate run and card request by hand for T-170, T-173 and T-174. fm-sync-prs.sh duplicates the autopilot's PR polling.",
+    "One owner. The autopilot performs every step of fm-run.sh's turn, driven by the events and polls it already reads, with no idle model timer.\n- PR events reach the log: pr_opened, merged and closed, as fm-sync-prs.sh emits them today, with the same event fields and SK/T task grammar (T-119).\n- When a worker round finishes with a new head on an open PR, it runs fm-gate.sh. Exit 7 (every gate before 7 green) launches fm-review.sh for the next round. From round 3 the fm-protocol check runs first, as fm-run does.\n- On a bound APPROVE with green CI, gates are rerun. On exit 0 it requests the merge card when firstmate-authored details exist at state/decision-details/<id>.json, using the same id reuse and expected-head binding as fm-run's request_merge_card. Otherwise it queues one wake for firstmate: 'T ready: merge card details needed', naming the reserved id.\n- It wakes firstmate, once per head, for: REJECT (brief needed), SCOPE-BLOCKED/ASK, a gate failure other than 7, a review with no verdict, and exit 2/3/65 from a launcher, quoting the child's own log line as fm-run does.\n- It never relaunches a worker. A worker round still needs firstmate's brief.\n- Dispatch stays where it is: the board's intent card, and fm-dispatch.sh by hand.",
+    "Retire. Delete bin/fm-run.sh and bin/fm-sync-prs.sh. Port every behaviour their suites assert to autopilot tests, then delete or rewrite those suites; no assertion is dropped without a port:\n- tests/e2e-loop.test.sh\n- tests/sync-prs.test.sh\n- tests/lib/run_project_turns.py\n- the fm-run cases in tests/gate.test.sh, tests/decide.test.sh, tests/merge.test.sh, tests/option-loop.test.sh and tests/board-state.test.sh\n- tests/herdr/credentials.py and tests/herdr/handoff.py\nThe PR description carries a table: old script and behaviour, new home, and test.\nRemove or repoint every other reference: bin/ci.sh (test list around line 941; comment at 272), bin/fm-emit.sh:24, bin/fm-reconcile.sh:348, bin/fm-review.sh:1118, bin/fm-herdr.py, design.md, docs/verification/supervision.md, README, and skills/firstmate/SKILL.md (lines 139, 226, 288 and others).\nThe firstmate skill says the autopilot advances PRs, and lists what firstmate is woken for.",
+    "Multi-project. Every step keeps T-053's project rules: events carry their project, a PR number is a key only together with its project, cards are named D-<project>-<task>-<n>, and each registered project is advanced from its own log and repository.",
+    "Tests (fail first, gh/git stubs answering like the real tools, HERDR_ENV=0 in helpers):\n- a worker head change runs gates, then a review\n- a bound APPROVE with green CI and existing details raises the card at the gated head\n- without details, exactly one wake names the id\n- REJECT wakes firstmate once per head and starts no worker\n- a stale head never raises a card\n- merged and closed PRs appear in the log once\n- two projects stay apart\n- a restart replays nothing (T-172)\nEvidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

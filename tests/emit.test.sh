@@ -225,15 +225,15 @@ rm -rf "$c"
 # any other event: in the same log, only the gate runner's result wakes.
 g="$(mktemp -d)"
 wq="$g/state/session/wake.jsonl"
-FM_ROOT="$g" "$EMIT" --actor fm-run --type gate_failed --task T-137 --pr 117 --data '{"gate":6}' >/dev/null 2>&1
+FM_ROOT="$g" "$EMIT" --actor autopilot --type gate_failed --task T-137 --pr 117 --data '{"gate":6}' >/dev/null 2>&1
 assert_eq "gate gate: T-137 failed gate 6 #117" "$(jq -r '"\(.reason) \(.line)"' "$wq" 2>/dev/null)" \
   "a gate result wakes firstmate with its line"
-FM_ROOT="$g" "$EMIT" --actor fm-run --type gate_passed --task T-137 --pr 117 >/dev/null 2>&1
+FM_ROOT="$g" "$EMIT" --actor autopilot --type gate_passed --task T-137 --pr 117 >/dev/null 2>&1
 assert_eq "gate: T-137 passed #117" "$(jq -r .line "$wq" 2>/dev/null | tail -1)" "and a pass does too"
 FM_ROOT="$g" "$EMIT" --actor worker-ayo-t137-r4 --type gate_failed --task T-137 >/dev/null 2>&1
 FM_ROOT="$g" "$EMIT" --actor worker-ayo-t137-r4 --type crew_status --task T-137 \
   --data '{"progress":{"done":1,"total":2}}' --en "half" --tw "一半" >/dev/null 2>&1
-FM_ROOT="$g" "$EMIT" --actor fm-run --type dispatched --task T-137 >/dev/null 2>&1
+FM_ROOT="$g" "$EMIT" --actor autopilot --type dispatched --task T-137 >/dev/null 2>&1
 assert_eq "5" "$(grep -c . "$g/state/events.jsonl")" "every one of the five events is written"
 assert_eq "2" "$(grep -c . "$wq" 2>/dev/null || echo 0)" \
   "and only the gate runner's two results woke firstmate: not a round's gate, its progress, or a dispatch"

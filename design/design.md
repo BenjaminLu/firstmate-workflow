@@ -154,7 +154,7 @@ role and authoritative relevant design context in the prompt.
 The startup contract specifies state inspection, board opening, visible managed
 panes, retained authorization and explicit remediation coordination. It documents
 current script gaps rather than promising unmerged reconciliation or runtime
-transport. `fm-run.sh` reports failed gates; firstmate must coordinate subsequent
+transport. `fm-autopilot.sh` reports failed gates; firstmate must coordinate subsequent
 worker attempts. Static instruction validation does not prove agent behavior.
 Neither lavish nor no-mistakes is a prerequisite; do not add their startup or
 verification hooks. Use repository checks and actual GitHub CI evidence.
@@ -279,7 +279,7 @@ and the merge writes `merged` with no task and `data.untracked: true`, which
 moves no task's card; `fm-emit.sh` refuses a `merged` event that says
 `untracked` and names a task. The pairing holds in this direction too: a
 task's own pull request merged as untracked would write no task, and that
-task's card would never move (`fm-sync-prs.sh` sees the merge as already
+task's card would never move (`fm-autopilot.sh` sees the merge as already
 recorded). So `fm-decide.sh --kind merge-untracked` reads the pull request
 the same way and refuses, before any card exists, one whose branch or title
 names a task, pointing at that task's `--kind merge` card; and
@@ -294,7 +294,7 @@ with the server's reason) otherwise.
 
 **One task-id grammar (T-119).** Which ids are tasks, and which task a branch
 or title names, is written once, in `bin/fm-emit.sh`, which every script
-already depends on; `fm-decide.sh`, `fm-merge.sh` and `fm-sync-prs.sh` source
+already depends on; `fm-decide.sh` and `fm-merge.sh` source
 it (sourced, `fm-emit.sh` runs nothing past the grammar), and
 `board/server.ts` carries its TypeScript twin between `// --- task grammar
 (T-119) ---` markers, which `tests/board.test.sh` lifts out and runs against
@@ -312,7 +312,7 @@ grammar: a value it reads a task out of without its being that task id - a
 branch name such as `t-117-…`, a title such as `T-117: …` - is refused,
 naming the task it holds. Any other name passes, because the suites write
 `merged` for fixture tasks named `A`, `C` and `D`; `fm-merge.sh`, the one
-writer of `merged` outside the suites and `fm-sync-prs.sh`, already refuses
+writer of `merged` outside the suites and `fm-autopilot.sh`, already refuses
 a task that is not the pull request's. It checks no other event's task.
 One copy of the old reading is left, outside T-119's scope, and is **open**:
 `bin/fm-reconcile.sh`'s `task_of` still has the old `sed` (no `sk-…`
@@ -322,7 +322,7 @@ branch; `t-1170-…` read as T-117) and its `is_task_id` takes only
 So a skill update merges through the board like any task: an approved,
 green SK-* task gets an owned merge card, `D-<project>-SK<n>-<m>` from
 `fm-decide.sh --allocate --task SK-<n> --kind merge`; A runs `fm-merge.sh`,
-which writes `merged` for SK-<n>; and `fm-sync-prs.sh` reads `sk-<n>-…`
+which writes `merged` for SK-<n>; and `fm-autopilot.sh` reads `sk-<n>-…`
 branches like any other. Its card is drawn and embedded like a T task's:
 `fm-diagram.sh` reads owned ids through the grammar's `FM_OWNED_ID`, and the
 page's `diagram.js` through `taskGrammar()`, the board's twin, which the
@@ -355,7 +355,7 @@ Trusted repository diagram fragments are assets, never fields in this input.
 
 A new card's id names its owner, `D-<project>-<task>-<n>`, and is allocated by
 `fm-decide.sh --allocate` before the card is requested (section 15.4).
-`fm-run.sh` consumes `state/decision-details/<id>.json` after gates pass,
+`fm-autopilot.sh` consumes `state/decision-details/<id>.json` after gates pass,
 under the id it allocated for the task's merge card and names when details are
 missing; a later turn reuses that id rather than taking another. Missing or
 invalid authored input is reported as no card created. Only a successful
@@ -461,7 +461,7 @@ attempts event emission and cleanup; it does not read approval decisions or
 run the gates. The board
 route does not rerun gates either. Firstmate must verify current-head gates, CI,
 reviewer provenance and board approval, and coordinate fresh verification when
-the head changes so a stale card is not treated as ready. `fm-run.sh` requests
+the head changes so a stale card is not treated as ready. `fm-autopilot.sh` requests
 cards after gate success; it neither awaits decisions nor performs merges.
 
 ### 5.2a Worktrees, and the one root they live under
@@ -1127,7 +1127,7 @@ machine (1565 seconds on T-104; again on T-068, T-086, T-112 and T-054). The
 remaining gates keep their numbers and their meaning, so gate 5 is still the
 fail-first gate, gate 6 CI and gate 7 the approval; nothing exits 3, and
 `fm-gate.sh --only 3` is a usage error (exit 64), not a green gate. The board,
-the review prompt's gate section and `fm-run.sh` read the same six numbers.
+the review prompt's gate section and `fm-autopilot.sh` read the same six numbers.
 A merge card's `gates` list keeps seven slots and the board reads it by gate
 number (`gates[n-1]`), so slot 3 is carried but never shown, and a producer
 that still sends one value per number 1-7 lines up with the checklist.
@@ -1179,7 +1179,7 @@ running unlocked, so every suite that runs the real gate sets its own
 `FM_GATE_LOCK`, and `tests/gate.test.sh` checks that each one does.
 
 Require all six gates and current-head review evidence before treating a merge
-card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
+card as ready. `fm-autopilot.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
 Historical transport until T-135 lands: Gate 7 reads the verdict comments (the reviewer's only, when
 `FM_REVIEWER_LOGIN` is set) and takes the latest; a later rejection supersedes
@@ -1190,19 +1190,19 @@ verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
 
 **Round order and the merge double check (captain, 2026-09-25).** A review
-round starts as soon as the worker hands back, through `fm-review.sh`. Given
+round starts through `fm-review.sh` after the worker hands back and the
+autopilot observes gates 1, 2, 4, 5 and 6 green. Given
 `--pr`, the round itself waits for the head's required checks, bounded, before
 it starts the reviewer, so the reviewer is handed their results (T-153; §7);
-nobody else holds a round for CI. Green CI and the gates are not a review
+the launcher retains this wait for explicitly requested rounds too. Green CI and the gates are not a review
 criterion in either mode. A merge card needs two independent checks on the same current
 head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
 reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
 CI, and green gates are not an approval. A head that changes after either
-check restarts both, with the one exception below. `fm-run.sh`'s loop still
-sends a task to review only once every gate before 7 is green; until it
-follows this order, firstmate starts the round itself when the worker hands
-back.
+check requires fresh gates, with the approval carry rule below. The autopilot
+sends a task to review once every gate before 7 is green. Firstmate writes
+the brief for any subsequent worker round.
 
 **The approval binds to the change; CI and the gates bind to the head
 (T-113, captain, 2026-09-26).** Strict branch protection moves every open
@@ -1297,7 +1297,7 @@ per round from round seven on.
    `APPROVE:`, `REGRESSION:` or `NEW-GROUND:` with the task id. Only a verdict
    is policed: every other comment after the list - the worker's notes, its
    `.fm-say.md`, firstmate's briefs - is skipped, whoever posted it, because
-   `fm-run.sh` runs the check with no `FM_REVIEWER_LOGIN`; when that login is
+   `fm-autopilot.sh` runs the check with no `FM_REVIEWER_LOGIN`; when that login is
    set it narrows the verdicts read to that author's. It emits a
    `protocol_violation` event for each. It reads every numbered line before
    the marker as an item, so a rejecting answer numbers nothing else. It
@@ -1508,12 +1508,9 @@ A change heavy enough that one shard's doubled load, spread over the pool,
 outweighs the heaviest bash shard is predicted over it. The shard then says
 `predicted OVER it` in its log rather than hiding it.
 
-The gate half is not closed yet. Nothing writes that gate summary:
-`fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
-T-088's scope. Until a writer tees that stdout to
-`state/gates/<task-id>-<sha>.txt`, every diff-mode prompt reports the head's
-gate results as unknown, and firstmate reads the gates from `fm-gate.sh`
-itself for the merge double check. The path
+The autopilot retains child output in durable job receipts, and `fm-gate.sh`
+writes its own head-bound report under `state/gates/<task-id>-<sha>.txt`.
+A missing report remains unknown; a receipt alone never proves green gates. The path
 and the `  + gate N: …` / `  x gate N: …` lines of `fm-gate.sh`'s own `say()`
 are the contract that writer must follow.
 
@@ -1765,11 +1762,11 @@ the worktree, and neither records a crash nor revives the task until an
 `unparked`. A task the captain reopened, with a reason, is not over: a dead
 worker on it is a crash and is revived, on the pull request the task opened
 itself. A `reopened` that is not the captain's, or has no reason, changes
-nothing. `bin/fm-run.sh`, `bin/fm-dispatch.sh` and `bin/fm-ready.sh` keep
+nothing. `bin/fm-autopilot.sh`, `bin/fm-dispatch.sh` and `bin/fm-ready.sh` keep
 their own readings and are not changed by this task.
 
 **The one-time card repair (T-118).** There is no standing sweep: the rules
-above make the old inconsistencies impossible, and `fm-sync-prs.sh` already
+above make the old inconsistencies impossible, and `fm-autopilot.sh` already
 brings GitHub's state in. What the old board left in the log is repaired once,
 by `bin/fm-reconcile.sh --repair-cards`, a dry run unless given `--apply`,
 which writes only through `bin/fm-emit.sh`. It reads the log and the records
@@ -2705,7 +2702,7 @@ background process on purpose stops it or ends its owner. The ops-side sweep
 firstmate runs is a fuse that should reap zero; anything it reaps is a bug
 to be found by this rule.
 
-The normal `fm-run`, `fm-dispatch`, `fm-worker` and `fm-review` entrypoints freeze
+The normal `fm-autopilot`, `fm-dispatch`, `fm-worker` and `fm-review` entrypoints freeze
 `bin/` and `skills/` from the entrypoint's own code tree into a private per-launch
 snapshot with a hash manifest before doing work. Invoking a checkout script against
 a sparse `--repo` fixture snapshots the checkout, not the fixture. Nested launches
@@ -2736,11 +2733,9 @@ the task's review round (T-116)**, the round the pull request's review is on,
 so `r3` reads as round three: `fm-review.sh --round <n>` names it (as
 `FM_ROUND`), and otherwise it is one past the `review_opened` events the log
 holds for the task in the run's project. A worker's first run is round 1, and
-the review that follows is round 1 too. `fm-run.sh` counts rounds differently:
-its loop counts every `review_opened` for the task id across all projects and
-passes that as `--round`. With the same task id in two projects the counts
-differ, so a reviewer `fm-run.sh` starts can carry a higher round than the
-worker it reviews.
+the review that follows is round 1 too. The autopilot counts only the
+project's `review_opened` events for that task and passes the next `--round`
+explicitly. The same task id in another project never increments it.
 Before T-116 the `r<n>` was a global run counter (`state/runs/counter.json`,
 472 on 2026-09-26), which read as round 465 on a task in its first round; the
 counter no longer appears in any actor. A second run of the same role, task,
@@ -3118,7 +3113,7 @@ tradeoffs and authored English/Traditional Chinese summaries with derived
 Simplified Chinese. The current generic generator does not establish that content
 quality. Board diagrams, locale and effects changes are separately T-034 and are
 not shipped by this task. Firstmate's decision instructions must integrate the
-final T-034 `fm-decide.sh`/`fm-run.sh` contract after firstmate identifies that
+final T-034 `fm-decide.sh`/`fm-autopilot.sh` contract after firstmate identifies that
 version: authored `--details`, exact field types/bounds, honest refusal handling,
 custom captain choices and full dynamic locale content. A title-only request is
 not an acceptable substitute for that integration; source verification remains
@@ -3147,7 +3142,7 @@ global skills.
 - `fm-reconcile.sh` walks `state/worktrees/` and `gh pr list` looking for
   orphans, tests worker liveness by pid file, and marks the dead
   `worker_crashed` for redispatch.
-- `bin/fm-sync-prs.sh` polls GitHub and writes pull request events back into
+- `bin/fm-autopilot.sh` polls GitHub and writes pull request events back into
   the same log. **A merge the captain performs on GitHub must be noticed by the
   system itself**, not reported to it by a person.
 - An adapter exiting `2` moves to the next vendor in `config.yaml` and emits
@@ -4861,11 +4856,11 @@ cadence and bounded network backoff. Per-reviewer quiet periods batch findings;
 no idle timer invokes a model.
 
 Mechanical branch updates recheck MERGEABLE, BEHIND and the expected head;
-restacking follows confirmed policy and expected-head lease checks. A base-only
-head update starts a local review only when its patch is unchanged, the latest
-verdict is APPROVE, and gate 7 cannot carry it because it is unsigned legacy
-or its spec, contract or conventions binding changed. It never starts a round
-for worker edits, over a standing REJECT, or when approval carries. Returning
+restacking follows confirmed policy and expected-head lease checks. Every new
+worker or base-update head runs gates. Gate 7 decides whether an approval
+carries, whether changed pinned inputs require review, or whether a new worker
+change needs a verdict. A current-head REJECT wakes firstmate for a brief and
+never relaunches a worker. Returning
 reviewers can receive policy-permitted re-check requests. Readiness holds for
 firstmate's recommendation and evidence (§6); landing remains the captain's
 card or the team's handoff, never an autopilot merge.
@@ -5048,3 +5043,29 @@ confirmed deletion policy permits expected-head parent deletion; unknown
 protection defers cleanup. Merge and cleanup independently retain all open PR
 bases, including self-project and forced cleanup paths. T-141 may automate
 these mechanical operations later; it does not supply their authorization.
+
+
+### Autopilot owns PR advancement (T-175)
+
+Each session owns one supervisor per registered project. Conditional GitHub
+polls persist their cache and action identities across restarts. The supervisor
+writes `pr_opened`, `merged` and `closed` through `fm-emit.sh` as actor `github`,
+using the canonical branch/title task grammar and project-local deduplication.
+An event without a project belongs to the default project's log.
+
+A new worker head runs the standing-list protocol from round three, then the
+six gates. Gate exit 7 launches the next review round through the frozen
+launcher. Updated CI or a bound local APPROVE triggers fresh gates. Exit 0
+enters the project's merge lock, verifies the captured base and authoritative
+head, reuses the lowest unused merge reservation, and requests a card only
+from firstmate-authored details. Pending or answered cards remain authoritative;
+legacy numeric ids are never mistaken for a task's reservation. Another project
+has its own lock, PR-number namespace, events, evidence and decision ids.
+
+Missing details queues one wake naming `D-<project>-<task-key>-<n>`. REJECT
+queues a brief request. Scope questions, failed gates, protocol violations,
+launcher exits 2/3/65, and a review without a verdict queue judgment with the
+child's own retained-log line where available. The supervisor never launches
+a worker; dispatch remains the board's intent action or an explicit command.
+Gates and reviews run as owned children. Completion receipts ring the service;
+an interrupted write is reconciled, never replayed by a restart or idle timer.

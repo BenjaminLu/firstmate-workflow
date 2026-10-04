@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Per-call fetch refs survive another review's fetch in the same repository.
 set -euo pipefail
+export HERDR_ENV=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
 from pathlib import Path
