@@ -64,7 +64,7 @@ test('Ahoy speech cues stay off while merge cannon, dedupe and mute remain', asy
     expect((await page.evaluate(()=>(window as any).sounds)).spoken).toEqual([]);
     expect(external).toEqual([]);
     await page.reload(); await expect(page.locator('#muteBtn')).toHaveAttribute('aria-pressed','true');
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('audio unavailability never adds fallback noise or hides visible acknowledgement', async ({page}) => {
@@ -78,7 +78,7 @@ test('audio unavailability never adds fallback noise or hides visible acknowledg
     await expect(page.locator('#orderFeedback')).not.toContainText('Local speech unavailable');
     expect((await page.evaluate(()=>(window as any).sounds)).spoken).toEqual([]);
     expect((await page.evaluate(()=>(window as any).sounds)).tones).toEqual([]);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('Ahoy override never touches an unrelated browser speech queue', async ({page}) => {
@@ -94,6 +94,6 @@ test('Ahoy override never touches an unrelated browser speech queue', async ({pa
     await page.locator('#muteBtn').click();
     const sounds = await page.evaluate(()=>(window as any).sounds);
     expect(sounds.spoken).toEqual([]);expect(sounds.cancel).toBe(0);expect(sounds.pause).toBe(0);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 

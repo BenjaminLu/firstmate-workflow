@@ -44,7 +44,7 @@ test('the one-time address signs one tab in once, keeps no code and sets no cook
     await other.locator("#live").waitFor({ state: "attached" });
     expect(await other.evaluate(() => sessionStorage.getItem('board.token'))).toBeNull();
     await expect(other.locator('#readOnly')).toBeVisible();
-  } finally { await context.close(); await other.context().close(); stopBoard(b); }
+  } finally { await context.close(); await other.context().close(); await stopBoard(b); }
 });
 
 test('a tab without the credential says it is read-only, in both languages, and writes nothing', async ({browser}) => {
@@ -91,7 +91,7 @@ test('a tab without the credential says it is read-only, in both languages, and 
     await expect(page.locator('#readOnlyWhy')).toHaveText(TW.readOnly);
     await expect(page.locator('#card-D-1 .confirm')).toHaveAttribute('title', TW.readOnlyTip);
     await expect(page.locator('#relogin')).toHaveText(TW.reloginButton);
-  } finally { await context.close(); stopBoard(b); }
+  } finally { await context.close(); await stopBoard(b); }
 });
 
 test('T-145: the sign-in page takes the board\'s own address before it trades the code, so a reload never sends it again', async ({browser}) => {
@@ -123,7 +123,7 @@ test('T-145: the sign-in page takes the board\'s own address before it trades th
     await page.reload();
     await expect(page.locator('#readOnly')).toBeHidden();
     expect(posts).toHaveLength(1);
-  } finally { await context.close(); stopBoard(b); }
+  } finally { await context.close(); await stopBoard(b); }
 });
 
 test('T-145: a tab opened as localhost says so, and links to the board at 127.0.0.1', async ({browser}) => {
@@ -143,7 +143,7 @@ test('T-145: a tab opened as localhost says so, and links to the board at 127.0.
     await page.goto(`http://localhost:${port}/?lang=zh-TW`);
     await expect(page.locator('#readOnlyWhy')).toHaveText(TW.readOnlyLocalhost);
     await expect(page.locator('#readOnlyHere')).toHaveText(TW.readOnlyOpenHere);
-  } finally { await context.close(); stopBoard(b); }
+  } finally { await context.close(); await stopBoard(b); }
 });
 
 test('T-145: the banner\'s button asks the board for a sign-in, sends no credential, and says what the board did', async ({browser}) => {
@@ -175,7 +175,7 @@ test('T-145: the banner\'s button asks the board for a sign-in, sends no credent
       headers: { 'content-type': 'application/json' }, body: '{}' }); return [r.status, (await r.json()).code]; });
     expect(again).toEqual([429, 'reloginTooSoon']);
     expect(readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(1);
-  } finally { await context.close(); stopBoard(b); }
+  } finally { await context.close(); await stopBoard(b); }
 });
 
 test('a server on another loopback port receives nothing from the captain\'s signed-in tab, and its page cannot answer a card', async ({page}) => {
@@ -224,7 +224,7 @@ test('a server on another loopback port receives nothing from the captain\'s sig
       await page.locator('#card-D-1 .confirm').click();
       await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder, 'utf8') : '').toContain('--pr 99');
     } finally { elsewhere.close(); }
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 // --- T-118: every card sits where its task really is -------------------------

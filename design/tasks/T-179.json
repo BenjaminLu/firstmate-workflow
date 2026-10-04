@@ -1,0 +1,22 @@
+{
+  "id": "T-179",
+  "title": "the two flaky tests stop flaking: e2e board teardown waits for the board before removing its tree, and an orphaned watch hook exits cleanly whatever moment its owner dies",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "tests/e2e/lib/fixture.ts",
+    "tests/e2e/**",
+    "tests/watch.test.sh",
+    "tests/lib/**",
+    "bin/lib/fm_watch.py",
+    "bin/lib/fm_lifeline.py",
+    "design/design.md",
+    "design/tasks/T-179.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-03/04 two flaky failures each forced a CI rerun with a PR comment:\n- ENOTEMPTY happened four times: runs 37164211036 and 37113656500 on main, 37124622661 on t-172, 37164910104 on #165 and 37167297546 on #166. `stopBoard` in tests/e2e/lib/fixture.ts sends `proc.kill(9)` and then immediately `rmSync(root, {recursive, force})`, while the board and the processes it started are still writing under the root, e.g. `/tmp/fm-e2e-…/bin`. The rmdir then fails with 'ENOTEMPTY: directory not empty' in whichever spec happens to tear down, such as board-audio and board-auth.\n- The watch failure was run 37135757466 on #164: tests/watch.test.sh `test_an_owner_that_dies_takes_its_park_with_it_and_steals_nothing` got exit 70 where 0 was expected ('the hook exits 0 when its owner dies'). In bin/lib/fm_watch.py, `main()` turns any RuntimeError/OSError into exit 70 (around line 926). A hook whose owner dies at an unlucky moment therefore reports an error, which a harness shows the captain as a failed hook.\nThe captain asked for these to be fixed (\"ok 排進去\"). Note that the old memory pointing flaky tests at T-157 is stale: T-157 merged as #127 and was a different suite cleanup.",
+    "E2E teardown. `stopBoard`, and the failure path of the board start above it, kill the board's whole process group, not only the direct child, and wait for every process in it to exit before removing anything. Removal then uses `rmSync(..., {recursive: true, force: true, maxRetries, retryDelay})` as a last line of defence, never as the fix. If the board starts processes outside its group, the fixture tracks and reaps them. No test changes what it asserts.",
+    "Orphaned hook. Find the exact race by reading fm_watch.py's park/cycle path between the owner's death and the hook noticing it (the owner check, the lifeline, the wake-queue read). Every point where an owner can vanish is a clean exit 0 with no wake taken, never 70. Genuine I/O failures unrelated to the owner's death still return 70.",
+    "Proof. Each fix has a test that forces the race deterministically, without a sleep-and-hope:\n- for e2e, a board child that keeps writing during teardown\n- for watch, the owner killed at each step of the park path, using a hook or a stand-in that pauses at that step\nThe test must fail on base and pass on head. Repeating the original watch test and one e2e spec 20 times in CI is not required. Evidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

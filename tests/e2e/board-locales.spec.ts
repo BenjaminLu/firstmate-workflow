@@ -100,7 +100,7 @@ test("a failed-gate badge numbers only a gate that exists: 3 is retired, 4 is ke
     await page.goto(`${b.url}/?lang=en`);
     await expect(page.locator(`[data-task="${three.id}"] .badge`)).toHaveText(EN.gateFailed);
     await expect(page.locator(`[data-task="${four.id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}', '4'));
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 
@@ -132,7 +132,7 @@ for (const language of ['en', 'zh-TW']) {
       await page.reload();
       await expect(page.locator('html')).toHaveAttribute('lang', other);
       await expect(page.locator('.dcard').first()).toContainText(details[other].title);
-    } finally { stopBoard(b); }
+    } finally { await stopBoard(b); }
   });
 }
 test('FM_PORT overrides a configured board port', async ({page}) => {
@@ -142,7 +142,7 @@ test('FM_PORT overrides a configured board port', async ({page}) => {
   try {
     await page.goto(b.url);
     await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 test('a fixture without the config reader still honours FM_PORT and defaults to English', async ({page}) => {
@@ -154,5 +154,5 @@ test('a fixture without the config reader still honours FM_PORT and defaults to 
     await page.goto(b.url);
     await expect(page.locator('html')).toHaveAttribute('lang', 'en');
     await expect(page.locator('.dcard').first()).toContainText(details.en.title);
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });

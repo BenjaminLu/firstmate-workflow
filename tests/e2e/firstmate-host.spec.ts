@@ -30,7 +30,7 @@ for (const lang of ['en', 'zh-TW']) {
       await expect(row.locator('.rv')).toHaveCount(0);
       await expect(row.locator('.rm')).toHaveCount(0);
       await expect(card.locator('.ccli')).toHaveCount(0);
-    } finally { stopBoard(b); }
+    } finally { await stopBoard(b); }
   });
 }
 
@@ -58,5 +58,5 @@ test('a board dispatch resolves against the recorded host', async ({ page }) => 
     await expect.poll(() => existsSync(join(root, 'selected-chain'))
       ? readFileSync(join(root, 'selected-chain'), 'utf8').trim() : '')
       .toBe('codex\nclaude\ncursor-agent\ngemini');
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });

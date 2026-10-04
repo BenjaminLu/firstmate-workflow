@@ -193,10 +193,24 @@ export async function startBoard(root: string, env: Record<string, string> = {},
   // T-151: no session is passed on, so the board owns what it starts and a
   // board stopped below takes its merges with it, never the operator's session
   const { FM_SESSION_PID: _session, FM_PORT: _port, ...inherited } = process.env;
-  const proc: ChildProcess = spawn("bun", ["run", join(root, "board/server.ts")], {
+  // The controller launches through the lifeline (separate process groups)
+  // and drains the board's opt-in keeper scope before it exits.
+  const proc: ChildProcess = spawn("python3", [join(ROOT, 'bin/lib/fm_lifeline.py'),
+    'keep', '--pid', String(process.pid), '--', 'python3',
+    join(ROOT, 'tests/lib/e2e_board_process.py'), root, config, join(ROOT, 'bin/lib')], {
     env: { ...inherited, ...env, FM_ROOT: root, ...(configuredPort ? {} : { FM_PORT: String(port) }), XDG_CONFIG_HOME: config },
-    stdio: "ignore",
+    stdio: ["pipe", "ignore", "pipe"],
   });
+  let processError = '';
+  proc.stderr?.on('data', (data) => { processError += data.toString(); });
+  const completion = new Promise<void>((resolve, reject) => {
+    proc.once('error', reject);
+    proc.once('close', (code, signal) => code === 0 ? resolve()
+      : reject(new Error(`board controller exited ${code ?? signal}: ${processError}`)));
+  });
+  // A failed spawn must not become an unhandled rejection during readiness.
+  completion.catch(() => {});
+  completions.set(proc, completion);
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -210,18 +224,22 @@ export async function startBoard(root: string, env: Record<string, string> = {},
     catch { /* not up yet */ }
     await new Promise((r) => setTimeout(r, 120));
   }
-  proc.kill(9);
-  rmSync(root, { recursive: true, force: true });   // not only on the happy path
-  rmSync(config, { recursive: true, force: true });
+  await stopBoard({ proc, root, config });
   throw new Error("the board did not come up");
 }
 
-export function stopBoard(b: { proc: ChildProcess; root: string; url?: string; config?: string }) {
-  b.proc.kill(9);
+const completions = new WeakMap<ChildProcess, Promise<void>>();
+const removal = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
+
+export async function stopBoard(b: { proc: ChildProcess; root: string; url?: string; config?: string }) {
+  const completion = completions.get(b.proc);
+  if (!completion) throw new Error('board has no owned process controller');
+  b.proc.stdin?.end();
+  await completion;
   const homeFile = join(b.root, '.fixture-fm-home');
-  if (existsSync(homeFile)) rmSync(readFileSync(homeFile, 'utf8'), {recursive:true, force:true});
-  rmSync(b.root, { recursive: true, force: true });
-  if (b.config) rmSync(b.config, { recursive: true, force: true });
+  if (existsSync(homeFile)) rmSync(readFileSync(homeFile, 'utf8'), removal);
+  rmSync(b.root, removal);
+  if (b.config) rmSync(b.config, removal);
   if (b.url) sessions.delete(b.url);
 }
 
