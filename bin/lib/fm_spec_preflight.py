@@ -85,6 +85,18 @@ def retain(store, data, base, actor, round_number, answer, provenance):
                         spec_sha256=sha, verdict=verdict, provenance=provenance)
 
 
+def outcome(store, actor, sha, exit_code, started):
+    """A retained verdict wins over transport status; never reuse another run."""
+    matches = [r for r in store.records() if r['kind'] == 'spec-preflight'
+               and r.get('actor') == actor and r.get('spec_sha256') == sha
+               and r.get('verdict') in ('SPEC-OK', 'SPEC-GAPS')]
+    if matches:
+        return matches[-1]['verdict'].lower()
+    if exit_code in (129, 130, 143):
+        return 'interrupted'
+    return 'failed' if started else 'refused'
+
+
 def selected(code, run, attempt, vendor):
     path = Path(code) / 'bin/fm-herdr.py'
     module_spec = importlib.util.spec_from_file_location('managed', path)
@@ -113,11 +125,18 @@ def selected(code, run, attempt, vendor):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command', choices=['prompt', 'require', 'retain'])
+    p.add_argument('command', choices=['prompt', 'require', 'retain', 'outcome'])
     for name in ('task', 'state', 'project', 'spec', 'base', 'code', 'run', 'attempt', 'vendor'):
         p.add_argument('--' + name, default='')
+    p.add_argument('--actor', default='')
+    p.add_argument('--sha', default='')
+    p.add_argument('--exit-code', type=int, default=0)
+    p.add_argument('--started', type=int, choices=(0, 1), default=0)
     p.add_argument('--pin-stdin', action='store_true')
     a = p.parse_args()
+    if a.command == 'outcome':
+        print(outcome(Store(a.state, a.project, a.task), a.actor, a.sha, a.exit_code, a.started))
+        return
     data = (json.load(sys.stdin)['snapshots']['spec']['text'].encode() if a.pin_stdin
             else Path(a.spec).read_bytes())
     if a.command == 'prompt':

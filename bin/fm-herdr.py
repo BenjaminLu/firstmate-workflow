@@ -1943,9 +1943,16 @@ def retire_dead_crew(root):
         if not task:
             continue
         pr = ['--pr', str(event['pr'])] if isinstance(event.get('pr'), int) else []
+        try: identity = read(record_root(root) / 'state/runs' / actor / 'identity.json')
+        except (OSError, ValueError): identity = {}
+        preflight = identity.get('mode') == 'spec-preflight'
+        data = {'role': role, 'status': 'process_gone'}
+        if preflight:
+            data.update(mode='spec-preflight', crew_name=actor,
+                        identity=crew_identity(record_root(root) / 'state/runs' / actor))
         if event.get('type') != 'agent_lost':
             cmd = ['bash', str(emit), '--actor', str(actor), '--type', 'agent_lost', '--task', str(task),
-                   '--data', json.dumps({'role': role, 'status': 'process_gone'}), *pr,
+                   '--data', json.dumps(data), *pr,
                    '--en', f'{actor} was lost on {task}: its process is gone and it never said it finished',
                    '--tw', f'{actor} 在 {task} 上失聯：行程已不在，也從未回報完成']
             result = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
@@ -1954,10 +1961,10 @@ def retire_dead_crew(root):
             lost.append(actor)
             # the loss wakes firstmate (T-137), pushed by whoever wrote it
             try:
-                lifeline().push(root, actor, 'lost', f'lost: {task} {actor}', dict(task=task, actor=actor))
+                if not preflight: lifeline().push(root, actor, 'lost', f'lost: {task} {actor}', dict(task=task, actor=actor))
             except (OSError, ValueError) as error:
                 print(f'fm-herdr: the wake for {actor} was not pushed: {error}', file=sys.stderr)
-        data = json.dumps({'role': role, 'status': 'process_gone'})
+        data = json.dumps(data)
         cmd = ['bash', str(emit), '--actor', str(actor), '--type', 'agent_finished',
                '--task', str(task), '--data', data, *pr,
                '--en', f'deck reconcile: {actor} has no live process',
@@ -2425,7 +2432,7 @@ def launch(script, root, args):
 # crew_status a Herdr round emitted carried no vendor or model, and the board,
 # reading a crewman from its latest event, showed them as unknown.
 IDENTITY_FIELDS = ('name', 'role', 'project', 'task', 'round', 'attempt',
-                   'vendor', 'model_requested', 'model', 'cli_version', 'model_mismatch')
+                   'vendor', 'model_requested', 'model', 'cli_version', 'model_mismatch', 'vendor_resolution')
 
 
 def crew_identity(run):
@@ -2453,6 +2460,9 @@ def emit_status(root, actor, task, en, tw, role='worker', crew_name=None,
     }
     fields = crew_identity(record_root(root) / 'state/runs' / actor)
     if fields: data['identity'] = fields
+    try: identity = read(record_root(root) / 'state/runs' / actor / 'identity.json')
+    except (OSError, ValueError): identity = {}
+    if identity.get('mode'): data['mode'] = identity['mode']
     if done is not None and total is not None:
         done_n, total_n = int(done), int(total)
         if total_n <= 0 or done_n < 0 or done_n > total_n:

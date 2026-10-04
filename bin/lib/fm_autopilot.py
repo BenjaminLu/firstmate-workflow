@@ -510,6 +510,14 @@ class Pilot(MechanicalLoop):
         if kind == 'gate_failed' and data.get('gate') == 7: reason = None
         # The managed child's receipt carries its actual exit and log line.
         if kind in ('gate_failed', 'review_failed', 'worker_crashed') and self.busy(task): reason = None
+        # Any tagged event establishes the actor's mode, including after a
+        # restart whose cursor is already past the start event. Alias spelling
+        # is not a mode: an ordinary reviewer may be named zain-sp.
+        if kind in ('agent_lost', 'agent_finished'):
+            preflights = {row.get('actor') for row in self.rows()
+                          if (row.get('data') or {}).get('mode') == 'spec-preflight'}
+            if event.get('actor') in preflights or data.get('mode') == 'spec-preflight':
+                reason = None
         if reason:
             head = data.get('head') or next((p.get('head') for p in self.data['pulls'].values()
                 if p.get('task') == task), None)

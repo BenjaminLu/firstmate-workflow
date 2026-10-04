@@ -311,8 +311,9 @@ const chip = p => p ? `<span class="project pchip" data-chip="${esc(p)}" style="
 const crewChip = c => `<span class="cchip r-${esc(c.role)}" data-crew-chip="${esc(c.id)}">` +
   `<b class="cn">${esc(c.name)}</b>` +
   `<span class="cr">${esc(c.role === 'reviewer' ? t("roleReviewer") : c.role === 'worker' ? t("roleWorker") : t("crewUnknown"))}</span>` +
-  `<span class="cd">${esc(t("crewRound"))} ${c.round == null ? esc(t("crewUnknown")) : esc(c.round)}` +
-  `${c.attempt > 1 ? ` · ${esc(t("crewAttempt"))} ${esc(c.attempt)}` : ''}</span></span>`;
+  `<span class="cd">${c.mode === 'spec-preflight' ? esc(t("specPreflight")) :
+    `${esc(t("crewRound"))} ${c.round == null ? esc(t("crewUnknown")) : esc(c.round)}` +
+    (c.attempt > 1 ? ` · ${esc(t("crewAttempt"))} ${esc(c.attempt)}` : '')}</span></span>`;
 // text someone wrote, escaped, with every #n in it linked to the pull request
 // of the project the text belongs to
 const said = (s, owner) => SHIP.linkPrs(esc(s),
