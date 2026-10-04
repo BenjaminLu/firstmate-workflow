@@ -306,7 +306,7 @@ vendor_install() {  # vendor_install <vendor> -> its own install line
 
 # The oldest version of each vendor CLI known to have the status check
 # fm-auth-probe.sh runs: the version its recorded transcript came from
-# (tests/fixtures/auth-status, 2026-09-29; tests/doctor.test.sh keeps the
+# (tests/fixtures/auth-status, 2026-09-29 and Cursor 2026-10-05; tests/doctor.test.sh keeps the
 # two equal). The vendors' changelogs could not be read where these were
 # recorded, so the first version that had each command is not known, and
 # the floor may be later than it has to be; a recording from an older
@@ -315,7 +315,7 @@ vendor_min() {
   case "$1" in
     claude)       echo 2.1.284 ;;
     codex)        echo 0.155.1 ;;
-    cursor-agent) echo 2026.09.23 ;;
+    cursor-agent) echo 2026.10.01 ;;
   esac
 }
 

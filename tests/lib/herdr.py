@@ -30,8 +30,8 @@ WAIT = 120
 # round's login before a round (T-121), and a fake vendor CLI answers it,
 # and --version, exactly as the real one did in its recorded transcript
 # (tests/fixtures/auth-status) before the fake's own round behaviour runs.
-# claude and codex answer signed in; cursor-agent has no recorded signed-in
-# answer, so it answers as recorded - not logged in - and its rounds are
+# claude and codex answer signed in; cursor-agent replays the 2026-10-05
+# model-list answer without a key (Authentication required), so its rounds are
 # refused, as gemini's are (no documented status command at all).
 _fixtures = root / 'tests/fixtures/auth-status'
 def _status_prelude(argv, fixture):
@@ -42,7 +42,7 @@ def _status_prelude(argv, fixture):
             % (str(_fixtures / 'replay.sh'), str(_fixtures / (fixture + '.txt')), argv))
 STATUS_PRELUDE = {'claude': _status_prelude(['auth', 'status'], 'claude-signed-in'),
                   'codex': _status_prelude(['login', 'status'], 'codex-signed-in'),
-                  'cursor-agent': _status_prelude(['status'], 'cursor-agent-signed-out')}
+                  'cursor-agent': _status_prelude(['--list-models'], 'cursor-agent-signed-out')}
 
 def eventually(predicate, seconds=WAIT):
     end = time.monotonic() + seconds

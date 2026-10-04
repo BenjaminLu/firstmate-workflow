@@ -100,6 +100,16 @@ case "$vendor" in
           login_fix_tw="；請在回合外啟動一次 gemini 並登入" ;;
 esac
 if [ "$login_rc" -eq 77 ]; then
+  if [ "$vendor" = cursor-agent ] && [[ "$why" = 'no '* ]]; then
+    # Only all-sources-missing starts with "no "; unreadable/unsafe stores
+    # retain the policy's actionable refusal. Its hint follows the semicolon.
+    hint="${why#*;}"
+    [ "$hint" != "$why" ] || hint=''
+    print_result unauthenticated "$version" \
+      "no crew Cursor API key is stored; cursor-agent's own sign-in (agent login) lives in the macOS keychain, which crew rounds cannot read${hint:+;$hint}" \
+      "尚未保存 crew 的 Cursor API key；cursor-agent 自己的登入（agent login）存在 macOS 鑰匙圈，crew 回合無法讀取${hint:+;$hint}"
+    exit 0
+  fi
   case "$why" in
     *'has expired'*)
       print_result expired "$version" \
@@ -130,11 +140,11 @@ fi
 case "$vendor" in
   claude)       argv=(claude auth status) ;;
   codex)        argv=(codex login status) ;;
-  cursor-agent) argv=(cursor-agent status) ;;
+  cursor-agent) argv=(cursor-agent --list-models) ;;
 esac
 
 # Resolve these before run_probe scrubs exported FM_* variables. Only the
-# Darwin cursor status check needs the secret-service boundary (T-188).
+# Darwin cursor check needs the secret-service boundary (T-188).
 probe_os="${FM_SANDBOX_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
 probe_tool="${FM_SANDBOX_TOOL:-sandbox-exec}"
 probe_confined=''
@@ -286,8 +296,8 @@ _FM_UNAUTH='not authenticated|not logged in|no credentials|please run [a-z0-9 ._
 # credential is there (a CLAUDE_CODE_OAUTH_TOKEN reads loggedIn:true
 # without being checked against the service), not whether the service takes
 # it; that part is left to the round's own outage signatures. codex and
-# cursor-agent, verified the same way, answer in plain text ("Not logged
-# in"), which the shared signatures below already catch.
+# cursor-agent answer in plain text; Cursor's model list verifies the key,
+# while its status command reports only the operator's keychain session.
 claude_json=''
 if [ "$vendor" = claude ] && [ -z "$probe_timedout" ]; then
   claude_json="$(python3 -c '
@@ -303,6 +313,7 @@ elif v is False: print("unauthenticated")
 fi
 
 status=''
+cursor_key_rejected=''
 if [ -n "$probe_timedout" ]; then
   status=timeout
 elif [ -n "$probe_confined" ] && [ ! -e "$work/started" ]; then
@@ -313,13 +324,16 @@ elif grep -qiE "$_FM_QUOTA" <<<"$probe_out"; then
   status=quota-exhausted
 elif grep -qiE "$_FM_EXPIRED" <<<"$probe_out"; then
   status=expired
-elif [ "$vendor" = cursor-agent ] && [ "$probe_rc" -eq 0 ] && grep -q 'Logged in' <<<"$probe_out"; then
+elif [ "$vendor" = cursor-agent ] && [ "$probe_rc" -eq 0 ] && grep -qxF 'Available models' <<<"$probe_out"; then
   status=authenticated
-elif [ "$vendor" = cursor-agent ] && grep -qi keychain <<<"$probe_out"; then
+elif [ "$vendor" = cursor-agent ] && grep -qF 'The provided API key is invalid' <<<"$probe_out"; then
+  status=unauthenticated
+  cursor_key_rejected=1
+elif [ "$vendor" = cursor-agent ] && [ "$probe_rc" -ne 0 ] && grep -qi keychain <<<"$probe_out"; then
   status=keychain-blocked
 elif grep -qiE "$_FM_UNAUTH" <<<"$probe_out"; then
   status=unauthenticated
-elif [ "$probe_rc" -eq 0 ] && [ -n "$probe_out" ]; then
+elif [ "$vendor" != cursor-agent ] && [ "$probe_rc" -eq 0 ] && [ -n "$probe_out" ]; then
   status=authenticated
 else
   # exit 0 with nothing to show, or a nonzero exit with no signature this
@@ -337,18 +351,34 @@ case "$vendor" in
   codex)
     fix_en="run \`codex login\` outside a round"
     fix_tw="請在回合外執行 \`codex login\`" ;;
-  cursor-agent)
-    fix_en="replace the crew Cursor API key (security add-generic-password -s firstmate-cursor-api-key -a \"\$USER\" -w)"
-    fix_tw="請更換 crew 的 Cursor API key（security add-generic-password -s firstmate-cursor-api-key -a \"\$USER\" -w）" ;;
+
 esac
 case "$status" in unauthenticated|expired) ;; *) fix_en=''; fix_tw='' ;; esac
 
 case "$status" in
   authenticated)
+    if [ "$vendor" = cursor-agent ]; then
+      print_result authenticated "$version" \
+        "cursor-agent's model list confirms the crew Cursor API key" \
+        "cursor-agent 的模型清單確認 crew 的 Cursor API key 有效"
+      exit 0
+    fi
     print_result authenticated "$version" \
       "$vendor's own status check confirms the login a round would get" \
       "$vendor 自身的登入狀態檢查確認回合會拿到的登入有效" ;;
   unauthenticated)
+    if [ "$vendor" = cursor-agent ]; then
+      if [ -n "$cursor_key_rejected" ]; then
+        print_result unauthenticated "$version" \
+          'cursor rejected the crew Cursor API key as invalid; replace it: security add-generic-password -U -s firstmate-cursor-api-key -a "$USER" -w' \
+          'cursor 判定 crew 的 Cursor API key 無效；請更換：security add-generic-password -U -s firstmate-cursor-api-key -a "$USER" -w'
+      else
+        print_result unauthenticated "$version" \
+          'cursor-agent did not receive the crew Cursor API key; run fm doctor' \
+          'cursor-agent 沒有收到 crew 的 Cursor API key；請執行 fm doctor'
+      fi
+      exit 0
+    fi
     print_result unauthenticated "$version" \
       "$vendor says the login a round would get is not signed in${fix_en:+; $fix_en}" \
       "$vendor 表示回合會拿到的登入尚未登入${fix_tw:+；$fix_tw}" ;;

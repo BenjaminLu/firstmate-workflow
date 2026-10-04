@@ -4313,9 +4313,10 @@ than it is `x wrong version` with its install line:
 - herdr: 0.9.1, the floor firstmate's round-8 brief for this task gave (it
   names design.md's host section as its source, but no section here states
   a herdr version; this is where it is written down now).
-- claude 2.1.284, codex 0.155.1, cursor-agent 2026.09.23: the status check
+- claude 2.1.284, codex 0.155.1, cursor-agent 2026.10.01: the login check
   the probe runs has to exist, and these are the versions its recorded
-  transcripts (`tests/fixtures/auth-status`, 2026-09-29) came from. The
+  transcripts (`tests/fixtures/auth-status`, 2026-09-29 for claude/codex,
+  2026-10-05 for cursor-agent) came from. The
   vendors' changelogs and `--help` histories could not be read where these
   were recorded (the worker round had no network), so the first version that
   had each command is not known and each floor may be later than it has to
@@ -4346,8 +4347,9 @@ the operator's shell had, answered the wrong question both ways - it
 refused a keychain-only cursor setup that works and admitted an `agent
 login` that no round can use.
 
-With a login, the vendor's own status check runs - `claude auth status`,
-`codex login status`, `cursor-agent status` - with a fixed argv (never
+With a login, the vendor's own check runs - `claude auth status`,
+`codex login status`, `cursor-agent --list-models` (which reads the crew
+API key, unlike `status`) - with a fixed argv (never
 `FM_ADAPTER_ARGS` or anything else configurable), stdin closed, and an
 environment emptied but for `HOME`, `PATH`, `TMPDIR`, `USER` and `LOGNAME`
 - `HOME` and `TMPDIR` the probe's own, as a round's are (T-128) - plus
@@ -4379,25 +4381,50 @@ the round's own outage signatures. codex's and cursor-agent's plain-text
 answers are read with the same kind of phrase list the adapters use
 (`_FM_SIG`), narrowed to what a status check itself says.
 
-On macOS, only the cursor-agent status check runs through `sandbox-exec`
+On macOS, only the cursor-agent model-list check runs through `sandbox-exec`
 (or `FM_SANDBOX_TOOL`), using a minimal allow-default profile with the same
 `SECRET_SERVICES` mach-lookup denial as crew rounds. `FM_SANDBOX_OS` defaults
 to the real platform. Both settings are resolved before the environment is
 emptied; HOME remains the probe's empty temporary home. The confined shell
-writes `$work/started` before executing `cursor-agent status`. A missing tool
+writes `$work/started` before executing `cursor-agent --list-models`. A missing tool
 or a wrapper that exits without the marker fails closed as `keychain-blocked`
 ("could not confine cursor-agent's keychain access" / "無法限制 cursor-agent 的鑰匙圈存取");
 cursor-agent never runs unconfined as a fallback. A timeout takes precedence,
 even when the wrapper never writes the marker. Linux runs the check unwrapped.
 
-For cursor-agent's own answer, classification checks quota exhaustion, then
-expiry, then exit-0 `Logged in`, then a case-insensitive keychain error, then
-the usual unauthenticated signatures, exit-0 rule and indeterminate fallback.
-A working key wins over a keychain warning; a nonzero exit cannot confirm
-`Logged in`. A keychain error is `keychain-blocked`, with reasons
+For cursor-agent's own answer (T-195), after timeout and confinement failure,
+classification checks quota exhaustion, expiry, exit 0 with a line exactly
+`Available models`, `The provided API key is invalid`, a case-insensitive
+`keychain` with nonzero exit, the usual unauthenticated signatures, then
+`indeterminate`. The model-list success wins over the recorded keychain-save
+warning. Neither `Logged in`, exit 0 alone, nor a nonzero model list confirms
+the key. A nonzero keychain error remains `keychain-blocked`, with reasons
 "cursor-agent needs keychain storage, which crew rounds deny" and
 "cursor-agent 需要鑰匙圈儲存，而 crew 回合禁止存取鑰匙圈". Other vendors' ordering is unchanged.
-The pre-round cursor model list-check still uses the operator's real HOME.
+The separate adapter model-list check still uses the operator's real HOME.
+
+Cursor's reasons distinguish three failures, in English and Traditional Chinese:
+
+- Only login-env exit 77 with `why` starting with `no ` means every crew source
+  is missing: "no crew Cursor API key is stored; cursor-agent's own sign-in
+  (agent login) lives in the macOS keychain, which crew rounds cannot read" /
+  "尚未保存 crew 的 Cursor API key；cursor-agent 自己的登入（agent login）存在 macOS 鑰匙圈，crew 回合無法讀取",
+  followed by the existing policy hint. Darwin names the missing item and
+  absolute file path; Linux names the absolute file path alone. Other exit-77
+  refusals retain the original actionable reason (unreadable, empty, unsafe
+  permissions or unreachable store). The probe never asks whether the
+  operator's own keychain login works.
+- An invalid key is `unauthenticated`: "cursor rejected the crew Cursor API key
+  as invalid; replace it: security add-generic-password -U -s firstmate-cursor-api-key -a "$USER" -w" /
+  "cursor 判定 crew 的 Cursor API key 無效；請更換：security add-generic-password -U -s firstmate-cursor-api-key -a "$USER" -w".
+  `-U` replaces the existing item.
+- Authentication required with a key supplied is `unauthenticated`:
+  "cursor-agent did not receive the crew Cursor API key; run fm doctor" /
+  "cursor-agent 沒有收到 crew 的 Cursor API key；請執行 fm doctor".
+
+Success says "cursor-agent's model list confirms the crew Cursor API key" /
+"cursor-agent 的模型清單確認 crew 的 Cursor API key 有效". These reasons are emitted
+only through `print_result`; no vendor output or secret is printed.
 
 No keychain or preference is created or changed. The marker lives inside the
 probe's `$work`, removed on EXIT, INT, TERM and HUP. SIGKILL leaves that
@@ -4559,14 +4586,17 @@ flagged; ordinary untracked work is never named.
 CLIs that replay the recorded transcripts in `tests/fixtures/auth-status`
 (`replay.sh` prints a recording's answer and exits with its recorded
 code): `claude auth status` signed in and signed out, `codex login status`
-signed in and signed out, and `cursor-agent status` signed in and signed
-out, each with the CLI version, date and setup in its header. The worker
-round that recorded the others had no network, and there `cursor-agent
-status` answered `Not logged in` even with `CURSOR_API_KEY` set; firstmate
-recorded the signed-in answer (`✓ Logged in as …`, exit 0) on the host,
-outside any round, with the crew key handed in as `CURSOR_API_KEY`, as a
-round gets it. So `cursor-agent status` does read `CURSOR_API_KEY`, but
-only a host that reaches cursor.com can tell. The suite checks the fixed
+signed in and signed out, and `cursor-agent --list-models` with a working key,
+no key and a rejected key. Each recording names its CLI version, date, host,
+setup, redaction and exit code. The 2026-10-05 host recording used Cursor
+2026.10.01-e373342 on macOS Darwin 24.6.0, outside a round, with `env -i`,
+an empty temporary HOME and the auth-probe sandbox profile. `status` ignored
+`CURSOR_API_KEY`: absent, placeholder and working keys all returned
+`Not logged in`, exit 0. The older signed-in status recording reflected the
+operator's keychain session. `--list-models` reads the key: no key returned
+`Authentication required`, exit 1; the placeholder returned
+`The provided API key is invalid`, exit 1; the working key returned
+`Available models`, exit 0, after a keychain-save warning. The suite checks the fixed
 argv, the closed stdin, the scrubbed environment, the timeout, and that
 nothing of the vendor's own output or a secret reaches this script's own
 stdout. The operator's home and keychain are stand-ins, and each fake
@@ -4593,8 +4623,8 @@ Every suite that starts a real vendor's round through `fm-worker.sh`,
 `tests/herdr.test.sh` gives codex and gemini a login file in a home of its
 own (a key in the shell is shed, so it is no login), and its fake CLIs
 answer `--version` and their status check by replaying the same
-recordings - claude and codex signed in, cursor-agent as recorded, not
-logged in, so its rounds there are refused like gemini's.
+recordings - claude and codex signed in, cursor-agent with the recorded
+`Authentication required` answer, so its rounds there are refused like gemini's.
 
 #### T-157: diagnosing collected facts
 

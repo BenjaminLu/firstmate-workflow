@@ -47,11 +47,12 @@ printf '#!/usr/bin/env bash\ntouch %q\nexec "$(dirname "$0")/mock.sh" "$@"\n' "$
 chmod +x "$r10/bin/adapters/cursor-agent.sh"
 cat > "$d10/fakebin/cursor-agent" <<C
 #!/usr/bin/env bash
+[ "\$#" -eq 1 ] || exit 64
 [ "\$1" = --version ] && { echo 2026.10.01-e373342; exit 0; }
-[ "\$1" = status ] || exit 64
-printf 'status\n' >> "$d10/cursor-calls"
-[ "\${CURSOR_API_KEY:-}" = fixture-cursor-key ] || exit 1
-printf '✓ Logged in\nkeychain warning: not authenticated\n'
+[ "\$#" -eq 1 ] && [ "\$1" = --list-models ] || exit 64
+printf '%s\n' --list-models >> "$d10/cursor-calls"
+[ "\${CURSOR_API_KEY:-}" = fixture-cursor-key ] || exit 64
+exec "$ROOT/tests/fixtures/auth-status/replay.sh" "$ROOT/tests/fixtures/auth-status/cursor-agent-signed-in.txt"
 C
 auth_probe_sandbox_tool "$d10/sandbox-tool" "$d10"
 chmod +x "$d10/fakebin/cursor-agent"
@@ -62,7 +63,7 @@ cat "$d10/historical-event" > "$r10/state/events.jsonl"
     PATH="$d10/fakebin:$PATH" FM_ROOT="$r10" FM_GH="$GH10" \
     bin/fm-worker.sh --task T-Z >"$d10/out" 2>"$d10/err" )
 assert_eq "0" "$?" "a historical cursor refusal does not refuse a fresh signed-in round"
-assert_eq status "$(cat "$d10/cursor-calls" 2>/dev/null)" "the worker asks cursor status afresh"
+assert_eq --list-models "$(cat "$d10/cursor-calls" 2>/dev/null)" "the worker checks cursor models afresh"
 assert_ok "[ -f '$d10/cursor-ran' ]" "the authenticated cursor adapter runs"
 head -n 1 "$r10/state/events.jsonl" > "$d10/preserved-event"
 assert_ok "cmp -s '$d10/historical-event' '$d10/preserved-event'" "the historical event is preserved byte for byte"
