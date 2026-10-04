@@ -1,0 +1,20 @@
+{
+  "id": "T-180",
+  "title": "the autopilot sees a new task's PR: the task is resolved from the spec committed on the PR head, and old ASK records are not replayed as fresh wakes",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_autopilot.py",
+    "bin/lib/fm_autopilot_loop.py",
+    "bin/lib/**",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-180.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-04, after T-175 merged (b86adbe), the autopilot did nothing for T-179's PR #168. CI was red and there was no gate run, no CI wake and no record (`pulls[\"168\"]` stayed `{}`). The cause: `Pilot.task()` (bin/lib/fm_autopilot.py:233-235) accepts a task only if design/tasks/<task>.json exists in the main checkout. A new task's spec exists only on its PR branch until merge, because firstmate seeds it and removes the seed once the PR opens. So `pull()` returns at :268-269, before `advance()`, the pulls record and the CI wakes. `advance()` has the same guard in fm_autopilot_loop.py:142-145. Every new task is therefore invisible to the loop that T-175 built for it. The same restart also replayed T-055's 2026-10-03 ASK from draft PR #159 as a fresh wake: `advance()` matches every local ask record when the PR is a draft (fm_autopilot_loop.py:157-161), with no startup boundary.",
+    "Task resolution. The autopilot resolves a PR's task in this order:\n1. the branch-name grammar (T-119)\n2. the spec committed at the PR head (`git show <head>:design/tasks/<T>.json` with matching id, the way fm_binding reads it)\n3. the task's latest authorized pin\nThe main checkout's design/tasks is not a precondition. An unresolvable PR is recorded with its reason, once.",
+    "No replay. ASK and SCOPE-BLOCKED records wake firstmate only if they were written after the supervisor's startup boundary (T-172) and are not answered or superseded by a later brief for that task. A draft PR does not widen the head match to every historical record.",
+    "Tests (fail first, gh/git stubs answering like the real tools):\n- a PR whose spec exists only on its head is gated, and its CI failure wakes firstmate once\n- a restart with an old ASK on an open draft PR queues nothing\n- a new ASK after the restart wakes once\nEvidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}
