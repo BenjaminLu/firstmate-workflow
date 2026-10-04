@@ -89,4 +89,8 @@ if [ "$MODE" = start ] && [ -z "${FM_IN_ROUND:-}" ] &&
   "${FM_CODE_ROOT:-$REPO}/bin/fm-autopilot.sh" ensure --all --repo "$REPO" >&2 ||
     echo 'fm-session: autopilot unavailable; inspect project state/autopilot/service.log' >&2
 fi
+# The board serves REPO/board, so build there, even with a frozen launcher.
+if [ "$MODE" = start ] && [ -f "$REPO/games/voyage-2d/tools/prepare-board.sh" ]; then
+  bash "$REPO/games/voyage-2d/tools/prepare-board.sh" "$REPO" >&2 || :
+fi
 exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION" "$TIMEOUT"

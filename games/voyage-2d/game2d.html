@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Firstmate Voyage 2D</title>
+<!-- the page's rules: its own scripts only (the build pins the bundle by its hash), no connection
+     to any other host (a mod is data, loaded from the player's own file), images from the page or
+     data: only, fonts from Google Fonts -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-src 'self'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<link rel="icon" href="data:," />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700;800;900&family=Dela+Gothic+One&family=Noto+Sans+TC:wght@700;900&family=Noto+Sans+SC:wght@700;900&display=swap" />
+<style>
+  /* the stage-first HUD in the P5 language: red / black / white, tilted panels, hard edges.
+     Nothing covers the stage unless asked for. */
+  :root { --red: #e60012; --ink: #0c0608; --paper: #fff; --gold: #f2c040; --touch: 44px;
+    --safe-t: env(safe-area-inset-top, 0px); --safe-r: env(safe-area-inset-right, 0px); --safe-b: env(safe-area-inset-bottom, 0px); --safe-l: env(safe-area-inset-left, 0px); }
+  [hidden] { display: none !important; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1f3d; color: var(--ink); color-scheme: light;
+    font: 800 16px/1.15 "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
+  html[lang="zh-TW"] body { font-family: "Noto Sans TC", "Barlow Semi Condensed", "PingFang TC", sans-serif; font-weight: 900; }
+  html[lang="zh-CN"] body { font-family: "Noto Sans SC", "Barlow Semi Condensed", "PingFang SC", sans-serif; font-weight: 900; }
+  canvas#c { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+  button { font: inherit; color: inherit; min-width: var(--touch); min-height: var(--touch); cursor: pointer; border: 0; background: none; padding: 0 12px; }
+  button:focus-visible { outline: 4px solid var(--gold); outline-offset: 2px; }
+  /* ---- the status cluster, top left */
+  #status { position: fixed; left: calc(14px + var(--safe-l)); top: calc(20px + var(--safe-t)); display: flex; gap: 6px; transform: rotate(-1.5deg); transform-origin: left top; align-items: center; } /* the tilt keeps the last chip on screen */
+  .chip { display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 8px; background: var(--ink); color: #fff; clip-path: polygon(0 0, 100% 6%, 94% 100%, 4% 94%); font-size: 20px; min-height: 40px; }
+  .chip i { font-style: normal; font-size: 16px; width: 26px; height: 26px; display: grid; place-items: center; background: #fff; color: var(--ink); clip-path: polygon(10% 0, 100% 10%, 88% 100%, 0 90%); }
+  .chip.wait { background: var(--red); min-width: var(--touch); }
+  .chip.wait i { color: var(--red); }
+  .chip.wait.zero { background: #3a3238; }
+  .chip.wait.zero i { color: #3a3238; }
+  .chip small { font-size: 12px; opacity: .8; font-weight: 700; margin-left: 2px; }
+  .chip.ship { background: #fff; color: var(--ink); border: 0; }
+  .chip.ship i { background: var(--ink); color: #fff; }
+  /* ---- the language switch and the menu button, top right */
+  #corner { position: fixed; z-index: 10; right: calc(14px + var(--safe-r)); top: calc(14px + var(--safe-t)); display: flex; gap: 8px; align-items: center; }
+  #lang { display: flex; background: var(--ink); padding: 3px; clip-path: polygon(4% 0, 100% 0, 96% 100%, 0 100%); }
+  #lang button { color: #fff; padding: 0 12px; min-height: var(--touch); font-size: 16px; }
+  #lang button[aria-pressed="true"] { background: #fff; color: var(--ink); }
+  #menuBtn { width: 58px; height: 58px; background: var(--red); clip-path: polygon(8% 0, 100% 8%, 92% 100%, 0 92%); display: grid; place-items: center; padding: 0; }
+  /* ---- the whole ship (Z), under the menu button */
+  #zoomBtn { position: fixed; z-index: 9; right: calc(18px + var(--safe-r)); top: calc(84px + var(--safe-t)); width: 50px; height: 50px; padding: 0; background: var(--ink); color: #fff; font-size: 30px; line-height: 1; clip-path: polygon(8% 0, 100% 6%, 92% 100%, 0 94%); display: grid; place-items: center; }
+  #zoomBtn[aria-pressed="true"] { background: #fff; color: var(--red); box-shadow: inset 0 0 0 4px var(--ink); }
+  body[data-style="manga"] #zoomBtn { clip-path: none; border-radius: 12px; }
+  body.battle #zoomBtn, body.menu #zoomBtn { display: none; }
+  #menuBtn span { display: block; width: 28px; height: 5px; background: #fff; box-shadow: 0 -9px 0 #fff, 0 9px 0 #fff; }
+  /* ---- one prompt, bottom centre */
+  #prompt { position: fixed; left: 50%; bottom: calc(22px + var(--safe-b)); transform: translateX(-50%) rotate(-2deg); display: flex; align-items: center; gap: 12px; padding: 8px 22px 8px 12px;
+    background: #fff; border: 4px solid var(--ink); box-shadow: 8px 8px 0 var(--ink); white-space: nowrap; font-size: 22px; min-height: 56px; }
+  #prompt b { background: var(--red); color: #fff; padding: 4px 10px; font-size: 18px; transform: rotate(-4deg); }
+  /* ---- toasts slide in from the left and leave */
+  #toasts { position: fixed; left: calc(14px + var(--safe-l)); top: calc(78px + var(--safe-t)); display: flex; flex-direction: column; gap: 8px; pointer-events: none; max-width: min(460px, 70vw); }
+  .toast { display: flex; align-items: center; gap: 10px; padding: 7px 18px 7px 8px; background: var(--ink); color: #fff; clip-path: polygon(0 0, 100% 0, 95% 100%, 0 100%); font-size: 17px; animation: tin .35s cubic-bezier(.2,.9,.2,1.2) both; transition: opacity .35s, transform .35s; }
+  .toast.out { opacity: 0; transform: translateX(-30px); }
+  .toast .ic { flex: none; width: 32px; height: 32px; display: grid; place-items: center; background: var(--red); font-size: 17px; transform: rotate(-8deg); }
+  .toast.gold .ic { background: var(--gold); color: var(--ink); }
+  .toast small { display: block; font-size: 13px; opacity: .75; font-weight: 700; }
+  @keyframes tin { from { transform: translateX(-120%); } }
+  /* ---- the banner: the stage's big lines, tilted across the top */
+  #banner { position: fixed; left: 50%; top: calc(86px + var(--safe-t)); transform: translateX(-50%) rotate(-3deg) scale(.6); opacity: 0; pointer-events: none; transition: opacity .2s, transform .25s cubic-bezier(.2,.9,.2,1.4); }
+  #banner span { display: block; padding: 8px 30px; background: var(--ink); color: #fff; font-size: 24px; white-space: nowrap; clip-path: polygon(0 8%, 100% 0, 97% 100%, 2% 92%); border-bottom: 6px solid var(--red); }
+  #banner.show { opacity: 1; transform: translateX(-50%) rotate(-3deg) scale(1); }
+  #banner.transform span { background: var(--red); font-size: 40px; font-family: "Dela Gothic One", "Noto Sans TC", "Noto Sans SC", sans-serif; font-weight: 400; padding: 12px 40px; border-bottom-color: #fff; box-shadow: none; }
+  #banner.transform { top: calc(18vh + var(--safe-t)); }
+  /* ---- the pause menu: the game dims red, a tilted list on the left, the sheet on the right */
+  #menu { position: fixed; inset: 0; display: none; background: rgba(120, 0, 10, .55); }
+  #menu::before { content: ""; position: absolute; inset: 0; background: radial-gradient(rgba(0,0,0,.35) 1.4px, transparent 1.6px) 0 0 / 10px 10px; pointer-events: none; }
+  body.menu #menu { display: block; }
+  #menu nav { position: absolute; left: 4vw; top: 12vh; display: flex; flex-direction: column; gap: 14px; transform: rotate(-6deg); }
+  #menu nav button { text-align: left; padding: 6px 28px 6px 18px; font-size: 40px; background: var(--ink); color: #fff; clip-path: polygon(0 0, 100% 8%, 96% 100%, 3% 92%); transition: transform .15s; }
+  #menu nav button[aria-current] { background: #fff; color: var(--red); transform: translateX(26px) scale(1.06); }
+  #menu nav button small { display: block; font-size: 15px; opacity: .7; font-family: "Barlow Semi Condensed", sans-serif; font-weight: 800; }
+  #sheet { position: absolute; right: 3vw; top: 8vh; bottom: 8vh; width: min(1180px, 66vw); background: #fff; border: 6px solid var(--ink); box-shadow: 14px 14px 0 var(--ink); transform: rotate(1.2deg); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+  #sheet h2 { margin: 0; font-size: 38px; display: flex; align-items: baseline; gap: 14px; }
+  #sheet h2 small { font-size: 16px; color: #555; }
+  #sheetBody { flex: 1; min-height: 0; overflow: auto; }
+  #sheet footer { display: flex; justify-content: space-between; font-size: 15px; color: #555; }
+  #lanes { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; min-height: 100%; }
+  .lane { background: #f2efe8; border-top: 6px solid var(--ink); padding: 6px; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .lane h3 { margin: 0; font-size: 17px; display: flex; justify-content: space-between; }
+  .lane h3 b { background: var(--ink); color: #fff; padding: 0 6px; }
+  .card { background: #fff; border: 3px solid var(--ink); padding: 5px 6px; font-size: 14px; font-weight: 700; transform: rotate(var(--r, -1deg)); }
+  .card b { display: block; font-size: 15px; font-weight: 900; }
+  .card.red { border-color: var(--red); box-shadow: 4px 4px 0 var(--red); }
+  .card.held { box-shadow: 4px 4px 0 #5a2f8f; }
+  .card.done { opacity: .55; }
+  .card .tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+  .card .tags i { font-style: normal; font-size: 12px; background: #eee; padding: 0 4px; }
+  .card .acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .card .acts button { background: var(--ink); color: #fff; font-size: 14px; padding: 0 8px; min-height: var(--touch); clip-path: polygon(0 0, 100% 6%, 96% 100%, 2% 94%); }
+  .chartsvg { width: 100%; height: auto; font-family: inherit; }
+  .settings .set { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 2px solid #eee; flex-wrap: wrap; }
+  .settings .set > span { flex: 0 0 170px; font-size: 18px; }
+  .settings .set > div { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex: 1; }
+  .settings button { background: #f2efe8; border: 3px solid var(--ink); font-size: 16px; }
+  .settings button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+  .settings .big { font-size: 30px; }
+  .settings .hands { display: inline-flex; align-items: center; gap: 10px; }
+  .settings .hands button { min-width: 44px; min-height: 44px; font-size: 24px; font-weight: 900; line-height: 1; }
+  .settings .hands button:disabled { opacity: 0.35; cursor: default; }
+  .settings .hands .big { min-width: 2ch; text-align: center; }
+  .settings .modhint { flex-basis: 100%; font-size: 13px; color: #555; font-weight: 700; }
+  .settings .moderr { flex-basis: 100%; margin: 4px 0 0; padding: 6px 10px 6px 26px; background: #fff0f0; border-left: 5px solid var(--red); font: 700 13px/1.35 ui-monospace, Menlo, monospace; color: #7a0010; max-height: 180px; overflow: auto; }
+  .settings [data-mod] { font-size: 18px; margin-right: 6px; }
+  .settings small { color: #555; margin-right: 6px; }
+  /* ---- the mode badge: Playground is the simulated voyage, and says so everywhere, always */
+  #modeBadge { position: fixed; left: calc(12px + var(--safe-l)); bottom: calc(12px + var(--safe-b)); z-index: 20; display: flex; align-items: center; gap: 7px;
+    padding: 4px 12px 4px 8px; background: #ffd23a; color: var(--ink); border: 3px solid var(--ink); font-size: 14px; letter-spacing: .04em; transform: rotate(-2deg); pointer-events: none; }
+  #modeBadge b { font-size: 12px; }
+  /* ---- the crew detail card, anchored to the crewman */
+  #crewCard { position: fixed; left: 0; top: 0; width: 290px; background: #fff; border: 4px solid var(--ink); box-shadow: 7px 7px 0 var(--ink); padding: 6px 10px 8px; font-size: 14px; z-index: 5; }
+  #crewCard .cc-h { display: flex; align-items: center; gap: 8px; border-bottom: 3px solid var(--ink); padding-bottom: 4px; margin-bottom: 4px; }
+  #crewCard .cc-h b { flex: 1; font-size: 20px; }
+  #crewCard .cc-h button { min-width: 36px; min-height: 36px; padding: 0; font-size: 18px; }
+  .flag { width: 16px; height: 20px; background: var(--pc); clip-path: polygon(0 0, 100% 0, 70% 50%, 100% 100%, 0 100%); flex: none; }
+  #crewCard dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+  #crewCard dt { color: #666; font-weight: 700; }
+  #crewCard dd { margin: 0; font-weight: 800; overflow-wrap: anywhere; }
+  #crewCard i, .roster td i { display: inline-block; width: 10px; height: 10px; background: var(--pc); margin-right: 5px; transform: rotate(45deg); }
+  #crewFocus button { position: fixed; left: -200px; top: 0; }
+  #crewFocus button:focus { left: 8px; top: auto; bottom: 8px; background: var(--ink); color: #fff; }
+  /* the roster: every field its own column, grouped by role and state */
+  .roster { overflow: auto; }
+  .roster table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .roster th, .roster td { text-align: left; padding: 3px 5px; white-space: nowrap; }
+  .roster thead th { position: sticky; top: 0; background: var(--ink); color: #fff; font-size: 13px; }
+  .roster .grp th { background: #f2efe8; font-size: 16px; padding-top: 8px; border-top: 3px solid var(--ink); }
+  .roster .grp b { background: var(--ink); color: #fff; padding: 0 6px; font-size: 13px; }
+  .roster tbody tr:not(.grp) td { border-bottom: 1px solid #e4e0d8; }
+  .roster .c-task, .roster .c-activity { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+  .roster .c-name { font-weight: 900; }
+  .roster .dot { display: inline-block; width: 10px; height: 10px; background: #999; transform: rotate(45deg); margin-right: 7px; }
+  .roster .st-working .dot, .roster .st-walking .dot { background: var(--ink); } .roster .st-waiting .dot { background: var(--gold); } .roster .st-blocked .dot, .roster .st-down .dot { background: var(--red); } .roster .st-standby .dot { background: #3aa590; }
+  body.battle #crewCard, body.ending #crewCard, body.menu #crewCard { display: none !important; }
+  /* ---- the decision card: only while a decision waits */
+  #decision { position: fixed; inset: 0; z-index: 5; display: none; background: rgba(0,0,0,.4); }
+  body.decision #decision { display: block; }
+  body.menu #decision, body.battle #decision, body.ending #decision { display: none; }
+  .dcard { position: absolute; right: 5vw; top: 50%; transform: translateY(-50%) rotate(-2deg); width: min(620px, 92vw); max-height: 86vh; overflow: auto; background: var(--ink); color: #fff; padding: 20px 22px 18px;
+    clip-path: polygon(0 2%, 100% 0, 98% 100%, 2% 97%); animation: deal .45s cubic-bezier(.2,.9,.25,1.2) both; }
+  /* dealt from the deck (bottom right) with a flip; sealed, then off it flies; Later tucks it back */
+  .dcard { transform-origin: 80% 100%; }
+  @keyframes deal { 0% { transform: translate(34vw, 20vh) rotateY(180deg) rotate(18deg) scale(.35); opacity: .2; } 60% { opacity: 1; } 100% { transform: translateY(-50%) rotate(-2deg); } }
+  .dcard { animation: deal .42s cubic-bezier(.2,.9,.25,1.15) both; }
+  .dcard.sealed { animation: flyoff .26s .16s cubic-bezier(.5,0,.9,.4) forwards; }
+  @keyframes flyoff { to { transform: translate(-60vw, -120%) rotate(-24deg) scale(.7); opacity: 0; } }
+  .dcard.tucked { animation: tuck .3s cubic-bezier(.5,0,.8,.5) forwards; }
+  @keyframes tuck { to { transform: translate(34vw, 36vh) rotate(14deg) scale(.12); opacity: .3; } }
+  .seal { position: absolute; right: 26px; top: 16px; width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center; font: 400 34px "Dela Gothic One", sans-serif; color: #ffd6cf;
+    background: radial-gradient(circle at 38% 34%, #e0463a, #8a0f0a 70%); box-shadow: 0 0 0 5px rgba(138,15,10,.45), inset 0 -4px 0 rgba(0,0,0,.3); animation: stamp .16s cubic-bezier(.6,0,.9,.5) both; }
+  @keyframes stamp { from { transform: scale(2.6) rotate(-30deg); opacity: 0; } to { transform: rotate(-12deg); opacity: 1; } }
+  /* the options: a slight fan, dealt one after another; hover lifts and lights, the pick pulls forward */
+  .opts .opt { transform: rotate(var(--fan)); transition: transform .12s, box-shadow .12s; animation: fanin .24s calc(.18s + var(--i) * .05s) cubic-bezier(.2,.9,.3,1.3) both; }
+  .opts .opt.rec { transform: translateX(-12px) rotate(var(--fan)); }
+  @keyframes fanin { from { transform: translateY(30px) rotate(calc(var(--fan) * 4)); opacity: 0; } }
+  .opts .opt:hover, .opts .opt:focus-visible { transform: translateY(-6px) rotate(0); box-shadow: 0 0 0 4px var(--gold), 0 10px 22px rgba(0,0,0,.45); z-index: 1; position: relative; }
+  .opts .opt[aria-pressed="true"] { transform: translateX(-22px) scale(1.04) rotate(0); box-shadow: 0 0 0 5px var(--gold), 0 14px 28px rgba(0,0,0,.5); position: relative; z-index: 2; }
+  /* the infographic: the board's diagram (Live) or a before/after of the options (Playground) */
+  .dgm { margin: 4px 0 6px; }
+  .dgm.live iframe { width: 100%; height: 200px; border: 3px solid #fff; background: #fff; display: block; }
+  .dgm.sim svg { width: 100%; height: auto; display: block; background: #fff; }
+  .dgm.sim .hd { font: 900 11px "Barlow Semi Condensed", sans-serif; fill: #666; letter-spacing: .08em; }
+  .dgm.sim .lane rect { fill: #fff; stroke: var(--ink); stroke-width: 3; }
+  .dgm.sim .lane text { font: 900 13px "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; fill: var(--ink); }
+  .dgm.sim .lane.to rect { fill: var(--red); stroke: var(--ink); }
+  .dgm.sim .lane.to text { fill: #fff; }
+  .dgm.sim .rd { fill: var(--ink); } .dgm.sim .rd.new { fill: var(--red); }
+  .dgm.sim .lab { font: 800 11px "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; fill: var(--ink); }
+  .dgm.sim .arrow { stroke: var(--ink); stroke-width: 5; fill: none; }
+  .dgm.sim .key rect { fill: #eee; stroke: var(--ink); stroke-width: 2; } .dgm.sim .key text { font: 900 12px sans-serif; fill: var(--ink); }
+  .dgm.sim .after { opacity: 0; transition: opacity .12s; }
+  .dgm[data-hl="A"] .after[data-opt="A"], .dgm[data-hl="B"] .after[data-opt="B"], .dgm[data-hl="C"] .after[data-opt="C"], .dgm[data-hl="D"] .after[data-opt="D"], .dgm[data-hl=""] .after:first-of-type { opacity: 1; }
+  .dgm[data-hl="A"] .key[data-opt="A"] rect, .dgm[data-hl="B"] .key[data-opt="B"] rect, .dgm[data-hl="C"] .key[data-opt="C"] rect, .dgm[data-hl="D"] .key[data-opt="D"] rect { fill: var(--gold); }
+  /* the deck the card tucks into */
+  #deckIcon { position: fixed; right: calc(16px + var(--safe-r)); bottom: calc(16px + var(--safe-b)); z-index: 6; width: 58px; height: 76px; padding: 0; background: var(--ink); color: #fff; border: 3px solid #fff;
+    box-shadow: 4px 4px 0 var(--red), 8px 8px 0 var(--ink); transform: rotate(6deg); font: 400 26px "Dela Gothic One", sans-serif; }
+  body.battle #deckIcon, body.ending #deckIcon, body.menu #deckIcon { display: none !important; }
+  /* Manga's card: paper and ink, screentone, a brush-black kicker */
+  /* the merge card as an intent card: words, then spec lines with before ▶ after and evidence */
+  .dgm.ic { background: var(--paper); color: var(--ink); padding: 10px 12px 12px; border: 3px solid #fff; font-family: "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; }
+  .ic .icq { display: grid; gap: 2px; padding: 8px 12px; border: 3px solid var(--ink); border-radius: 14px 14px 14px 2px; background: #fff; font-size: 15px; font-weight: 700; }
+  .ic .icq b { font: 900 11px "Barlow Semi Condensed", sans-serif; letter-spacing: .08em; color: var(--red); }
+  .ic .icq mark { background: var(--gold); color: var(--ink); padding: 0 2px; }
+  .ic .ict { display: flex; justify-content: space-between; gap: 8px; margin: 8px 0 4px; font-size: 12.5px; font-weight: 800; }
+  .ic .ict em { font-style: normal; background: var(--red); color: #fff; padding: 0 6px; }
+  .ic .icl { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .ic .icl li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; grid-template-areas: "n name dots" "n ba ba"; gap: 2px 8px; align-items: center; border-top: 2px solid var(--ink); padding-top: 5px; }
+  .ic .icl i { grid-area: n; font: 900 13px "Barlow Semi Condensed", sans-serif; font-style: normal; color: var(--red); }
+  .ic .icn { grid-area: name; font-weight: 900; font-size: 14.5px; }
+  .ic .icba { grid-area: ba; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; font-weight: 800; }
+  .ic .icba s { color: var(--red); text-decoration-thickness: 2px; }
+  .ic .icba b { font-size: 10px; }
+  .ic .icba em { font-style: normal; background: var(--ink); color: #fff; padding: 0 6px; }
+  .ic .icd { grid-area: dots; display: flex; gap: 3px; }
+  .ic .icd u { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--ink); background: var(--ink); display: block; }
+  .ic .icd u.read { background: linear-gradient(90deg, var(--ink) 50%, #fff 50%); }
+  .ic .icd u.post { background: #fff; border-style: dashed; }
+  .ic .icf { margin-top: 6px; font-size: 12.5px; font-weight: 800; color: var(--red); }
+  .ic .icq small { font-size: 11.5px; font-weight: 800; color: #666; }
+  .ic .icmore { margin: 8px 0 4px; }
+  .ic .icmore button { width: 100%; min-height: 40px; border: 3px solid var(--ink); background: var(--gold); color: var(--ink); font: 900 14px "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; cursor: pointer; }
+  .ic .icmore button:hover, .ic .icmore button:focus-visible { background: var(--ink); color: var(--gold); }
+  .ic kbd, #isheet kbd { font: 900 11px "Barlow Semi Condensed", sans-serif; border: 2px solid currentColor; padding: 0 4px; margin-left: 4px; }
+  .ic .iclane { margin: 6px 0 0; border-top: 2px solid var(--ink); padding-top: 4px; }
+  .ic .iclane svg { max-height: 120px; }
+  /* the intent alignment sheet: everything on the merge card, with room */
+  #isheet { position: fixed; inset: 0; z-index: 60; background: rgba(12,6,8,.72); display: grid; place-items: center; padding: 2vh 2vw; }
+  #isheet .isin { width: min(1360px, 100%); max-height: 96vh; overflow: auto; background: var(--ink); color: #fff; padding: 18px 22px 22px; box-shadow: 10px 10px 0 var(--red); }
+  #isheet .ishd { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 16px; align-items: end; border-bottom: 4px solid var(--red); padding-bottom: 10px; margin-bottom: 14px; }
+  #isheet .ishd .kicker { grid-column: 1; justify-self: start; background: var(--red); color: #fff; font: 900 14px "Barlow Semi Condensed", "Noto Sans TC", sans-serif; padding: 2px 10px; }
+  #isheet .ishd h2 { grid-column: 1; margin: 0; font: 900 clamp(24px, 3vw, 36px)/1.1 "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; }
+  #isheet .isx { grid-column: 2; grid-row: 1 / span 2; min-height: 44px; background: #fff; color: var(--ink); border: 3px solid #fff; font: 900 16px "Barlow Semi Condensed", sans-serif; padding: 4px 14px; cursor: pointer; }
+  #isheet h4 { margin: 0 0 10px; font: 900 15px "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; color: var(--gold); letter-spacing: .02em; }
+  #isheet .isgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr) minmax(0, 1.1fr); gap: 18px; align-items: start; }
+  @media (max-width: 1100px) { #isheet .isgrid { grid-template-columns: minmax(0, 1fr); } }
+  #isheet .iswords ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  #isheet .iswords li { background: #fff; color: var(--ink); border: 3px solid #fff; padding: 8px 10px; border-radius: 14px 14px 14px 2px; font-family: "Noto Sans TC", "Noto Sans SC", sans-serif; }
+  #isheet .iswords li.w-mate { background: #2a2224; color: #fff; border-color: #555; border-radius: 14px 14px 2px 14px; margin-left: 18px; }
+  #isheet .iswords li b { display: block; font: 900 12px "Barlow Semi Condensed", "Noto Sans TC", sans-serif; color: var(--red); }
+  #isheet .iswords li.w-mate b { color: var(--gold); }
+  #isheet .iswords li b small { color: #888; font-weight: 700; }
+  #isheet .iswords li p { margin: 2px 0 4px; font-size: 15px; font-weight: 700; line-height: 1.45; }
+  #isheet .iswords mark { background: var(--gold); color: var(--ink); padding: 0 2px; }
+  #isheet .iswords a { display: inline-block; margin-right: 4px; font: 900 12px "Barlow Semi Condensed", sans-serif; color: #fff; background: var(--ink); padding: 0 6px; text-decoration: none; }
+  #isheet .isitems { display: grid; gap: 12px; }
+  #isheet .isitem { background: var(--paper); color: var(--ink); border: 3px solid #fff; padding: 12px 14px; }
+  #isheet .isitem header { display: flex; align-items: baseline; gap: 10px; }
+  #isheet .isitem header i { font: 900 18px "Barlow Semi Condensed", sans-serif; font-style: normal; color: var(--red); }
+  #isheet .isitem h3 { margin: 0; font: 900 20px "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; }
+  #isheet .isitem .ff { font: 900 11px "Barlow Semi Condensed", sans-serif; background: var(--ink); color: var(--gold); padding: 1px 6px; margin-left: auto; }
+  #isheet .isen { margin: 2px 0 8px; font: 700 13px/1.4 ui-monospace, Menlo, monospace; color: #555; }
+  #isheet .ischain { width: 100%; height: auto; display: block; }
+  @media (max-width: 640px) { #isheet .isitem { overflow-x: auto; } #isheet .ischain { min-width: 560px; } }
+  #isheet .ischain .nd rect { fill: #fff; stroke: var(--ink); stroke-width: 3; }
+  #isheet .ischain .nd text { font: 800 14px "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; fill: var(--ink); }
+  #isheet .ischain .nd.bad rect { fill: var(--red); } #isheet .ischain .nd.bad text { fill: #fff; }
+  #isheet .ischain .nd.ok rect { fill: var(--ink); } #isheet .ischain .nd.ok text { fill: var(--gold); }
+  #isheet .ischain .ar { stroke: var(--ink); stroke-width: 3.5; fill: none; } #isheet .ischain .ar.bad { stroke: var(--red); }
+  #isheet .ischain .rl { font: 900 14px "Barlow Semi Condensed", "Noto Sans TC", sans-serif; fill: var(--ink); } #isheet .ischain .rl.bad { fill: var(--red); }
+  #isheet .isev, #isheet .islegend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  #isheet .isev a, #isheet .isev span, #isheet .islegend span { display: inline-flex; align-items: center; gap: 6px; border: 2px solid var(--ink); padding: 2px 8px; font: 800 13px "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; }
+  #isheet .isev em { font-style: normal; font-weight: 900; }
+  #isheet .isev span.read, #isheet .isev span.post { background: #fff3cc; }
+  #isheet u { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--ink); background: var(--ink); display: block; }
+  #isheet .read u { background: linear-gradient(90deg, var(--ink) 50%, #fff 50%); }
+  #isheet .post u { background: #fff; border-style: dashed; }
+  #isheet .islegend span { border-color: #fff; color: #fff; } #isheet .islegend u { border-color: #fff; background: #fff; }
+  #isheet .islegend .read u { background: linear-gradient(90deg, #fff 50%, var(--ink) 50%); } #isheet .islegend .post u { background: var(--ink); }
+  #isheet .isfl { margin-top: 8px; background: var(--red); color: #fff; font: 800 14px "Noto Sans TC", "Noto Sans SC", sans-serif; padding: 4px 10px; }
+  #isheet .isdecide .dgm { margin: 0 0 10px; }
+  #isheet .isopts { display: grid; gap: 8px; }
+  #isheet .isopt { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 0 10px; align-items: center; text-align: left; background: #fff; color: var(--ink); border: 3px solid #fff; padding: 8px 12px; cursor: pointer; min-height: 52px; }
+  #isheet .isopt:first-child { background: var(--red); color: #fff; }
+  #isheet .isopt:hover, #isheet .isopt:focus-visible { box-shadow: 0 0 0 4px var(--gold); }
+  #isheet .isopt kbd { grid-row: 1 / span 2; font-size: 18px; padding: 2px 8px; }
+  #isheet .isopt b { font: 900 17px "Barlow Semi Condensed", "Noto Sans TC", "Noto Sans SC", sans-serif; }
+  #isheet .isopt small { font: 700 12.5px "Noto Sans TC", "Noto Sans SC", sans-serif; }
+  /* evidence in colour: green ran, amber read only, blue after the merge; each opens GitHub */
+  :root { --evok: #1f9a52; --evread: #e0a400; --evpost: #2a5ad8; }
+  .ic .icd a, .ic .icd u { width: 12px; height: 12px; border-radius: 50%; display: block; border: 2px solid var(--ink); }
+  .ic .icd .run { background: var(--evok); }
+  .ic .icd .read { background: linear-gradient(90deg, var(--evread) 50%, #fff 50%); }
+  .ic .icd .post { background: #fff; border: 2px dashed var(--evpost); }
+  .ic .icd a:hover, .ic .icd a:focus-visible { outline: 3px solid var(--gold); outline-offset: 1px; }
+  #isheet .isev a, #isheet .isev span { text-decoration: none; color: var(--ink); }
+  #isheet .isev .run { background: #dff5e7; border-color: var(--evok); }
+  #isheet .isev .read { background: #fff3cc; border-color: var(--evread); }
+  #isheet .isev .post { background: #e3ebff; border-color: var(--evpost); border-style: dashed; }
+  #isheet .isev a:hover, #isheet .isev a:focus-visible { box-shadow: 0 0 0 3px var(--gold); }
+  #isheet .run u { background: var(--evok); border-color: var(--evok); }
+  #isheet .read u { background: linear-gradient(90deg, var(--evread) 50%, #fff 50%); border-color: var(--evread); }
+  #isheet .post u { background: #fff; border: 2px dashed var(--evpost); }
+  #isheet .islegend .run u { background: var(--evok); border-color: #fff; } #isheet .islegend .read u { background: linear-gradient(90deg, var(--evread) 50%, #fff 50%); } #isheet .islegend .post u { background: var(--ink); border: 2px dashed #8fb0ff; }
+  #isheet .isen a, #isheet .islinks a { color: var(--evpost); font-weight: 900; text-decoration: underline; }
+  #isheet .islinks { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin: 8px 0 0; font: 700 13px "Barlow Semi Condensed", "Noto Sans TC", sans-serif; }
+  #isheet .islinks b { font-weight: 900; color: #666; }
+  #isheet .islinks b:not(:first-child) { margin-left: 8px; }
+  body[data-style="manga"] #isheet .isin { background: #f6eedb; color: #1a1410; border: 5px solid #1a1410; box-shadow: 10px 10px 0 #1a1410; }
+  body[data-style="manga"] #isheet h4 { color: #1a1410; }
+  body[data-style="manga"] .dcard { background: #f6eedb; color: #1a1410; border: 5px solid #1a1410; clip-path: none; border-radius: 3px;
+    background-image: radial-gradient(rgba(26,20,16,.13) 1.1px, transparent 1.3px); background-size: 7px 7px; box-shadow: 10px 10px 0 rgba(0,0,0,.55); }
+  body[data-style="manga"] .dcard p { color: #3a3028; }
+  body[data-style="manga"] .dcard .kicker { background: #1a1410; color: #fff; font-family: "Dela Gothic One", sans-serif; font-weight: 400; }
+  body[data-style="manga"] .dcard h2 { font-family: "Dela Gothic One", "Noto Sans TC", "Noto Sans SC", sans-serif; font-weight: 400; }
+  body[data-style="manga"] .opt { clip-path: none; border: 3px solid #1a1410; border-radius: 3px; background: #fffaf0; }
+  body[data-style="manga"] .opt.rec { background: #1a1410; color: #fff; }
+  body[data-style="manga"] .opt.rec .k { background: #fffaf0; color: #1a1410; }
+  body[data-style="manga"] .opt.rec em { background: #fffaf0; color: #1a1410; }
+  body[data-style="manga"] .opt.rec small { color: #d8d0c0; }
+  body[data-style="manga"] .dfoot button { color: #1a1410; border-color: #1a1410; }
+  body[data-style="manga"] .dgm.sim .lane.to rect { fill: #1a1410; }
+  body[data-style="manga"] .seal { background: radial-gradient(circle at 38% 34%, #3a3430, #0c0a08 70%); color: #f6eedb; }
+  .dcard.still, .dcard.still .opt { animation: none !important; transition: none !important; }
+  .dcard .kicker { display: inline-block; background: var(--red); padding: 4px 12px; font-size: 18px; transform: rotate(-4deg); }
+  .dcard.k-kraken .kicker { background: #7a2cb0; }
+  .dcard h2 { margin: 10px 0 4px; font-size: 34px; line-height: 1.08; }
+  .dcard p { margin: 0 0 12px; font-size: 17px; font-weight: 700; color: #ddd; }
+  .opt { display: flex; align-items: center; gap: 14px; width: 100%; margin-top: 10px; background: #fff; color: var(--ink); padding: 8px 14px; text-align: left; font-size: 23px; clip-path: polygon(0 0, 100% 6%, 98% 100%, 1% 94%); min-height: 64px; }
+  .opt .k { width: 50px; height: 50px; display: grid; place-items: center; background: var(--ink); color: #fff; font-size: 30px; transform: rotate(-6deg); flex: none; }
+  .opt em { font-style: normal; font-size: 13px; background: var(--ink); color: #fff; padding: 1px 6px; margin-left: 8px; vertical-align: middle; }
+  .opt small { display: block; font-size: 14px; color: #555; font-weight: 700; }
+  .opt.rec { background: var(--red); color: #fff; transform: translateX(-12px); }
+  .opt.rec .k { background: #fff; color: var(--red); }
+  .opt.rec em { background: #fff; color: var(--red); }
+  .opt.rec small { color: #ffd6d6; }
+  .opt[aria-pressed="true"] { outline: 5px solid var(--gold); outline-offset: -5px; }
+  /* the card's foot (Later) stays in view while a tall card (the intent card) scrolls */
+  .dfoot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; position: sticky; bottom: -18px; padding: 4px 0 6px; background: inherit; z-index: 2; }
+  /* the intent card carries more: on a desktop it is wider, so its title, words and options fit the screen */
+  @media (min-width: 1100px) { .dcard.k-merge { width: min(820px, 62vw); } .dcard.k-merge .iclane svg { max-height: 104px; }
+    .dcard.k-merge .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; align-items: stretch; } .dcard.k-merge .opt { margin-top: 0; } }
+  body[data-style="manga"] .dfoot { background: #f6eedb; }
+  .dfoot button { color: #fff; border: 3px solid #fff; font-size: 17px; }
+  .dfoot small { color: #aaa; font-size: 13px; }
+  /* ---- the special: lights at a full gauge in the fight */
+  #special { position: fixed; right: calc(18px + var(--safe-r)); bottom: calc(18px + var(--safe-b)); width: 150px; height: 150px; background: var(--red); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    clip-path: polygon(8% 0, 100% 6%, 92% 100%, 0 92%); animation: sp 0.6s ease-in-out infinite alternate; touch-action: none; padding: 0; }
+  body[data-style="manga"] #special { clip-path: none; border-radius: 50%; border: 8px solid #000; background: radial-gradient(circle at 40% 35%, #fff6b0, #ffd23a 45%, #e8801a); color: #000; }
+  #special b { font: 400 26px 'Dela Gothic One', system-ui, sans-serif; line-height: 1.05; }
+  #special small { font: 800 12px 'Barlow Semi Condensed', system-ui, sans-serif; letter-spacing: .04em; }
+  @keyframes sp { from { transform: scale(1) rotate(-3deg); } to { transform: scale(1.1) rotate(3deg); } }
+  #loading { position: fixed; left: 50%; top: 45%; transform: translate(-50%, -50%) rotate(-3deg); padding: 12px 22px; font-size: 22px; background: var(--ink); color: #fff; }
+  #error { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); padding: 8px 12px; background: #fff; border: 4px solid var(--red); max-width: 92vw; }
+  /* the fight and the ending keep the stage clear: the canvas draws their HUD */
+  body.battle #status, body.battle #toasts, body.battle #prompt { display: none !important; }
+  body.ending #zoomBtn, body.nohud #zoomBtn { display: none !important; }
+  body.ending #status, body.ending #corner, body.ending #toasts, body.ending #prompt, body.ending #special, body.ending #banner { display: none !important; }
+  body.menu #prompt, body.menu #toasts, body:not(.embed).decision #prompt { display: none !important; }
+  /* ?embed=1 (a panel in the captain's board): hide only what the board shows itself, the decision
+     card (and its deck) and the status counters; keep the game's own controls, compact, in one row:
+     language, sound, style, take the deck, the whole ship, the menu (Settings and mods) */
+  body.live #modeBadge, body.live #corner, body.live #menu { display: none !important; }
+  body.embed #status, body.embed #decision, body.embed #waitChip, body.embed #deckIcon { display: none !important; }
+  #quick { display: none; gap: 6px; }
+  body.embed #quick { display: flex; }
+  #quick button { width: 44px; height: 44px; padding: 0; background: var(--ink); color: #fff; font-size: 20px; clip-path: polygon(8% 0, 100% 6%, 92% 100%, 0 94%); }
+  #quick button[aria-pressed="true"] { background: #fff; color: var(--red); box-shadow: inset 0 0 0 3px var(--ink); }
+  body[data-style="manga"] #quick button { clip-path: none; border-radius: 10px; }
+  body.embed #corner { top: calc(8px + var(--safe-t)); right: calc(8px + var(--safe-r)); gap: 6px; }
+  body.embed #zoomBtn { top: calc(11px + var(--safe-t)); right: calc(8px + var(--safe-r)); width: 44px; height: 44px; font-size: 24px; z-index: 11; }
+  body.embed #corner { padding-right: 52px; }
+  body.embed #menuBtn { width: 50px; height: 50px; }
+  body.embed #lang button { min-height: 38px; padding: 0 9px; font-size: 14px; }
+  body.embed #toasts { top: calc(8px + var(--safe-t)); max-width: min(380px, 40vw); }
+  body.embed .toast { font-size: 14px; padding: 4px 12px 4px 6px; }
+  body.embed #banner { top: calc(64px + var(--safe-t)); }
+  body.embed #helmHint { bottom: calc(8px + var(--safe-b)); font-size: 13px; }
+  body.embed #modeBadge { transform: scale(.8); transform-origin: left bottom; }
+  body.embed #menu nav { left: 200px; }
+  body.nohud #status, body.nohud #corner, body.nohud #toasts, body.nohud #prompt { display: none !important; }
+  /* ---- phones */
+  @media (max-width: 720px), (max-height: 500px) {
+    .chip { font-size: 16px; padding: 3px 9px 3px 6px; min-height: 34px; }
+    .chip small { display: none; }
+    #status { gap: 4px; }
+    #lang button { padding: 0 8px; font-size: 14px; }
+    #menuBtn { width: 50px; height: 50px; }
+    #prompt { font-size: 16px; padding: 6px 14px 6px 8px; bottom: calc(16px + var(--safe-b)); min-height: var(--touch); }
+    #prompt b { font-size: 14px; }
+    .toast { font-size: 14px; }
+    #banner span { font-size: 17px; padding: 6px 18px; }
+    #banner.transform span { font-size: 24px; padding: 8px 20px; }
+    #menu nav { left: 3vw; top: auto; bottom: calc(10px + var(--safe-b)); gap: 6px; transform: rotate(-2deg); flex-direction: row; flex-wrap: wrap; right: 3vw; }
+    #menu nav button { font-size: 16px; padding: 0 10px 0 8px; }
+    #menu nav button small { display: none; }
+    #menu nav button[aria-current] { transform: translateY(-4px); }
+    #sheet { left: 3vw; right: 3vw; top: calc(70px + var(--safe-t)); bottom: calc(128px + var(--safe-b)); width: auto; transform: none; padding: 10px; box-shadow: 8px 8px 0 var(--ink); }
+    #sheet h2 { font-size: 24px; }
+    #sheet h2 small, #sheet footer { display: none; }
+    #lanes { grid-template-columns: repeat(6, 160px); }
+    .settings .set > span { flex-basis: 100%; }
+    .dcard { right: 3vw; left: 3vw; width: auto; transform: translateY(-50%) rotate(-1deg); padding: 14px; }
+    .dcard h2 { font-size: 24px; }
+    .dcard p { font-size: 14px; }
+    .opt { font-size: 18px; min-height: 54px; margin-top: 7px; }
+    .opt .k { width: 40px; height: 40px; font-size: 24px; }
+    .dfoot small { display: none; }
+    #special { width: 112px; height: 112px; right: 12px; }
+    #special b { font-size: 19px; }
+  }
+  @media (max-width: 720px) and (orientation: portrait) {
+    #prompt { bottom: calc(54px + var(--safe-b)); }
+    #status { flex-wrap: wrap; max-width: 52vw; }
+    #toasts { top: calc(118px + var(--safe-t)); }
+    #banner { top: calc(120px + var(--safe-t)); }
+  }
+  @media (max-height: 500px) { #toasts { top: calc(60px + var(--safe-t)); } #banner { top: calc(58px + var(--safe-t)); } #sheet { top: calc(60px + var(--safe-t)); bottom: calc(58px + var(--safe-b)); } }
+  /* ==== Manga: the whole HUD as a comic page. Paper and ink, screentone, brush-black heads,
+     speech balloons for the toasts, the prompt and the crew card, panel frames for the sheet,
+     SFX lettering on the banner. Same boxes, hit targets, keys and labels as Crimson: only paint
+     changes (frames are box-shadow rings, so nothing moves). Switches live with the Style setting. */
+  body[data-style="manga"] { --red: #1a1410; --ink: #1a1410; --paper: #f6eedb; --tone: radial-gradient(rgba(26,20,16,.28) 1.1px, transparent 1.4px) 0 0 / 6px 6px; }
+  body[data-style="manga"] button:focus-visible { outline-color: #e8801a; }
+  body[data-style="manga"] .chip { background: var(--paper); color: var(--ink); clip-path: none; border-radius: 6px; box-shadow: 0 0 0 3px var(--ink), 3px 4px 0 3px var(--ink); }
+  body[data-style="manga"] .chip i { background: var(--ink); color: var(--paper); clip-path: none; border-radius: 50%; }
+  body[data-style="manga"] .chip.wait { background: var(--ink); color: var(--paper); }
+  body[data-style="manga"] .chip.wait i { background: #ffd23a; color: var(--ink); }
+  body[data-style="manga"] .chip.wait.zero { background: var(--paper); color: var(--ink); background-image: var(--tone); }
+  body[data-style="manga"] .chip.wait.zero i { background: var(--ink); color: var(--paper); }
+  body[data-style="manga"] .chip.ship { background: #fff; }
+  body[data-style="manga"] #status { gap: 10px; }
+  body[data-style="manga"] #lang { background: var(--paper); clip-path: none; border-radius: 6px; box-shadow: 0 0 0 3px var(--ink), 3px 4px 0 3px var(--ink); }
+  body[data-style="manga"] #lang button { color: var(--ink); border-radius: 4px; }
+  body[data-style="manga"] #lang button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  body[data-style="manga"] #menuBtn { background: var(--paper); clip-path: none; border-radius: 50%; box-shadow: 0 0 0 4px var(--ink), 3px 4px 0 4px var(--ink); }
+  body[data-style="manga"] #menuBtn span { background: var(--ink); box-shadow: 0 -9px 0 var(--ink), 0 9px 0 var(--ink); }
+  /* speech balloons: the prompt and the toasts */
+  body[data-style="manga"] #prompt { background: #fff; border: 0; border-radius: 30px; box-shadow: 0 0 0 4px var(--ink), 5px 6px 0 4px var(--ink); transform: translateX(-50%); }
+  body[data-style="manga"] #prompt::after { content: ""; position: absolute; left: 34px; top: -16px; width: 22px; height: 18px; background: #fff; border: 4px solid var(--ink); border-bottom: 0; border-right: 0; transform: skewX(28deg); }
+  body[data-style="manga"] #prompt b { background: var(--ink); color: #fff; border-radius: 14px; transform: none; font-family: "Dela Gothic One", "Noto Sans TC", "Noto Sans SC", sans-serif; font-weight: 400; }
+  body[data-style="manga"] #toasts { gap: 14px; }
+  body[data-style="manga"] .toast { position: relative; background: #fff; color: var(--ink); clip-path: none; border-radius: 22px; box-shadow: 0 0 0 3px var(--ink); margin-left: 3px; }
+  body[data-style="manga"] .toast::after { content: ""; position: absolute; left: 22px; bottom: -11px; width: 14px; height: 12px; background: #fff; border-left: 3px solid var(--ink); border-bottom: 3px solid var(--ink); transform: skewX(-30deg); }
+  body[data-style="manga"] .toast .ic { background: var(--ink); color: #fff; border-radius: 50%; transform: none; }
+  body[data-style="manga"] .toast.gold .ic { background: #ffd23a; color: var(--ink); box-shadow: 0 0 0 2px var(--ink); }
+  body[data-style="manga"] .toast small { color: #5a5048; opacity: 1; }
+  /* the banner: SFX lettering on a burst */
+  body[data-style="manga"] #banner span { background: #fff; color: var(--ink); clip-path: polygon(0 18%, 6% 0, 14% 14%, 24% 2%, 34% 12%, 46% 0, 56% 12%, 68% 0, 78% 14%, 90% 2%, 100% 20%, 96% 50%, 100% 82%, 90% 98%, 78% 86%, 66% 100%, 54% 88%, 42% 100%, 30% 86%, 18% 100%, 8% 84%, 0 80%, 4% 50%);
+    border: 0; padding: 14px 44px; font-family: "Dela Gothic One", "Noto Sans TC", "Noto Sans SC", sans-serif; font-weight: 400; letter-spacing: .02em; }
+  body[data-style="manga"] #banner.transform span { background: #ffd23a; color: var(--ink); text-shadow: 2px 2px 0 #fff; }
+  /* the pause menu: the page dims to screentone, the tabs are panels, the sheet a framed page */
+  body[data-style="manga"] #menu { background: rgba(246, 238, 219, .5); }
+  body[data-style="manga"] #menu::before { background: radial-gradient(rgba(26,20,16,.45) 1.4px, transparent 1.7px) 0 0 / 8px 8px; }
+  body[data-style="manga"] #menu nav button { background: var(--paper); color: var(--ink); clip-path: none; border-radius: 4px; box-shadow: 0 0 0 4px var(--ink), 5px 6px 0 4px var(--ink); font-family: "Dela Gothic One", "Noto Sans TC", "Noto Sans SC", sans-serif; font-weight: 400; }
+  body[data-style="manga"] #menu nav button small { color: #5a5048; opacity: 1; }
+  body[data-style="manga"] #menu nav button[aria-current] { background: var(--ink); color: #fff; }
+  body[data-style="manga"] #menu nav button[aria-current] small { color: #d8d0c0; }
+  body[data-style="manga"] #sheet { background: var(--paper); border: 0; transform: none; border-radius: 2px; box-shadow: 0 0 0 6px var(--ink), 0 0 0 10px #fff, 0 0 0 13px var(--ink), 12px 14px 0 13px rgba(26,20,16,.55); }
+  body[data-style="manga"] #sheet h2 { font-family: "Dela Gothic One", "Noto Sans TC", "Noto Sans SC", sans-serif; font-weight: 400; background: var(--ink); color: #fff; margin: -16px -18px 0; padding: 8px 18px 10px; }
+  body[data-style="manga"] #sheet h2 small { color: #d8d0c0; font-family: "Barlow Semi Condensed", sans-serif; font-weight: 800; }
+  body[data-style="manga"] #sheet footer { color: #5a5048; }
+  body[data-style="manga"] .lane { background: #fff; background-image: var(--tone); border-top: 0; box-shadow: 0 0 0 3px var(--ink); border-radius: 2px; }
+  body[data-style="manga"] .lane h3 b { border-radius: 10px; }
+  body[data-style="manga"] .card { background: #fff; border-color: var(--ink); border-radius: 3px; }
+  body[data-style="manga"] .card.red { border-color: var(--ink); box-shadow: 4px 4px 0 var(--ink); background-image: var(--tone); }
+  body[data-style="manga"] .card .tags i { background: var(--paper); box-shadow: 0 0 0 1px var(--ink); }
+  body[data-style="manga"] .card .acts button { background: var(--ink); color: #fff; clip-path: none; border-radius: 16px; }
+  body[data-style="manga"] .settings .set { border-bottom: 2px dashed rgba(26,20,16,.35); }
+  body[data-style="manga"] .settings button { background: #fff; border-color: var(--ink); border-radius: 18px; }
+  body[data-style="manga"] .settings button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+  body[data-style="manga"] .settings small { color: #5a5048; }
+  body[data-style="manga"] .roster thead th { background: var(--ink); }
+  body[data-style="manga"] .roster .grp th { background: var(--paper); background-image: var(--tone); }
+  body[data-style="manga"] .roster .grp b { border-radius: 10px; }
+  body[data-style="manga"] .roster .st-blocked .dot, body[data-style="manga"] .roster .st-down .dot { background: #e8801a; }
+  /* the mode badge, the crew card (a balloon), the deck */
+  body[data-style="manga"] #modeBadge { background: #fff; border: 0; border-radius: 4px; box-shadow: 0 0 0 3px var(--ink), 3px 3px 0 3px var(--ink); }
+  body[data-style="manga"] #crewCard { background: #fff; border: 0; border-radius: 18px; box-shadow: 0 0 0 4px var(--ink), 6px 7px 0 4px var(--ink); }
+  body[data-style="manga"] #crewCard .cc-h { border-bottom: 3px solid var(--ink); }
+  body[data-style="manga"] #crewCard .cc-h b { font-family: "Dela Gothic One", "Noto Sans TC", "Noto Sans SC", sans-serif; font-weight: 400; }
+  body[data-style="manga"] #deckIcon { background: var(--paper); color: var(--ink); border: 0; border-radius: 4px; box-shadow: 0 0 0 3px var(--ink), 4px 4px 0 3px #fff, 7px 7px 0 5px var(--ink); }
+  body[data-style="manga"] #decision { background: rgba(246, 238, 219, .35); }
+  body[data-style="manga"] #loading { background: #fff; color: var(--ink); border-radius: 22px; box-shadow: 0 0 0 4px var(--ink); }
+  body[data-style="manga"] #error { border-color: var(--ink); border-radius: 12px; }
+  @media (max-width: 720px), (max-height: 500px) {
+    body[data-style="manga"] #status { gap: 7px; }
+    body[data-style="manga"] #menu nav button { box-shadow: 0 0 0 3px var(--ink), 3px 3px 0 3px var(--ink); }
+    body[data-style="manga"] #sheet { box-shadow: 0 0 0 4px var(--ink), 0 0 0 7px #fff, 0 0 0 9px var(--ink); }
+    body[data-style="manga"] #sheet h2 { margin: -10px -10px 0; padding: 6px 10px 8px; }
+    body[data-style="manga"] #banner span { padding: 10px 26px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .dcard, .dcard .opt, .seal, .toast, #special { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="The ship at sea. The crew act out the board."></canvas>
+<div id="status" aria-live="polite">
+  <div class="chip"><i>✓</i><span id="n-merged">0</span><small data-t="merged"></small></div>
+  <div class="chip"><i>⚓</i><span id="n-flight">0</span><small data-t="inflight"></small></div>
+  <button class="chip wait zero" id="waitChip"><i>!</i><span id="n-wait">0</span><small data-t="waiting"></small></button>
+  <div class="chip ship" id="shipChip"><i>⛵</i><span id="n-crew">7</span><small id="shipName"></small></div>
+</div>
+<div id="corner">
+  <div id="quick" role="group" aria-label="Controls"><button id="qSound" aria-pressed="false" aria-label="Sound (S)" title="S">♪</button><button id="qStyle" aria-label="Style" title="Style">✎</button><button id="qDeck" aria-pressed="false" aria-label="Take the deck (Q)" title="Q">☸</button></div>
+  <div id="lang" role="group" aria-label="Language"><button data-lang="en">EN</button><button data-lang="zh-TW">繁</button><button data-lang="zh-CN">简</button></div>
+  <button id="menuBtn" aria-label="Menu" aria-expanded="false"><span></span></button>
+</div>
+<input type="file" id="modFile" accept=".json,application/json" hidden />
+<button id="zoomBtn" aria-label="Whole ship (Z)" aria-pressed="false" title="Z"><span>⤢</span></button>
+<div id="modeBadge" role="status"><b>◆</b><span data-t="playground"></span></div>
+<div id="toasts" aria-live="polite"></div>
+<div id="banner"></div>
+<button id="prompt" hidden></button>
+<div id="menu" role="dialog" aria-modal="true">
+  <nav>
+    <button data-tab="board"><span data-t="board"></span><small>B</small></button>
+    <button data-tab="roster"><span data-t="roster"></span><small>L</small></button>
+    <button data-tab="chart"><span data-t="chart"></span><small>T</small></button>
+    <button data-tab="settings"><span data-t="settings"></span><small>K</small></button>
+    <button data-tab="resume"><span data-t="resume"></span><small>Esc</small></button>
+  </nav>
+  <section id="sheet">
+    <h2><span id="sheetTitle"></span><small id="sheetSub"></small></h2>
+    <div id="sheetBody"></div>
+    <footer><span data-t="paused"></span><span>Esc</span></footer>
+  </section>
+</div>
+<div id="decision" aria-live="polite"></div>
+<div id="crewCard" hidden role="dialog" aria-label="Crew details"></div>
+<div id="crewFocus" aria-label="Crew"></div>
+<button id="deckIcon" hidden aria-label="Cards waiting"><b>1</b></button>
+<button id="special" hidden aria-label="Special attack"></button>
+<div id="loading" hidden></div>
+<div id="error" hidden></div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>v2.5 UI concept</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700;800;900&family=Dela+Gothic+One&family=Noto+Sans+TC:wght@900&family=Noto+Sans+SC:wght@900&display=swap">
+<style>
+/* the stage-first HUD, in the style bible's P5 language: red / black / white, tilted panels,
+   hard edges, ink borders, ransom accents. Nothing covers the stage unless asked for. */
+:root { --red: #e60012; --ink: #0c0608; --paper: #fff; --gold: #f2c040; --navy: #1f2a5c; --touch: 44px;
+  --safe-t: env(safe-area-inset-top, 0px); --safe-r: env(safe-area-inset-right, 0px); --safe-b: env(safe-area-inset-bottom, 0px); --safe-l: env(safe-area-inset-left, 0px); }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font: 800 16px/1.1 "Barlow Semi Condensed", system-ui, sans-serif; color: var(--ink); }
+#stage { position: fixed; inset: 0; background: center / cover no-repeat; }
+.jp { font-family: "Dela Gothic One", "Hiragino Sans", sans-serif; font-weight: 400; }
+html[lang="zh-TW"] .jp, html[lang="zh-TW"] body { font-family: "Noto Sans TC", "Barlow Semi Condensed", sans-serif; font-weight: 900; }
+html[lang="zh-CN"] .jp, html[lang="zh-CN"] body { font-family: "Noto Sans SC", "Barlow Semi Condensed", sans-serif; font-weight: 900; }
+button { font: inherit; min-width: var(--touch); min-height: var(--touch); cursor: pointer; }
+/* ---- the status cluster: three icon counters, top left */
+#status { position: fixed; left: calc(14px + var(--safe-l)); top: calc(14px + var(--safe-t)); display: flex; gap: 6px; transform: rotate(-3deg); }
+.chip { display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 8px; background: var(--ink); color: #fff; clip-path: polygon(0 0, 100% 6%, 94% 100%, 4% 94%); font-size: 20px; }
+.chip i { font-style: normal; font-size: 18px; width: 26px; height: 26px; display: grid; place-items: center; background: #fff; color: var(--ink); clip-path: polygon(10% 0, 100% 10%, 88% 100%, 0 90%); }
+.chip.wait { background: var(--red); }
+.chip.wait i { color: var(--red); }
+.chip small { font-size: 12px; opacity: .8; font-weight: 700; margin-left: 2px; }
+/* ---- the menu button and the language switch, top right */
+#corner { position: fixed; right: calc(14px + var(--safe-r)); top: calc(14px + var(--safe-t)); display: flex; gap: 8px; align-items: center; }
+#lang { display: flex; background: var(--ink); padding: 3px; clip-path: polygon(4% 0, 100% 0, 96% 100%, 0 100%); }
+#lang button { border: 0; background: transparent; color: #fff; padding: 0 12px; min-height: 38px; font-size: 16px; }
+#lang button[aria-pressed="true"] { background: #fff; color: var(--ink); }
+#menuBtn { width: 58px; height: 58px; border: 0; background: var(--red); clip-path: polygon(8% 0, 100% 8%, 92% 100%, 0 92%); display: grid; place-items: center; box-shadow: none; }
+#menuBtn span { display: block; width: 28px; height: 5px; background: #fff; box-shadow: 0 -9px 0 #fff, 0 9px 0 #fff; }
+/* ---- one contextual prompt, bottom centre */
+#prompt { position: fixed; left: 50%; bottom: calc(22px + var(--safe-b)); transform: translateX(-50%) rotate(-2deg); display: flex; align-items: center; gap: 12px; padding: 10px 22px 10px 14px;
+  background: #fff; border: 4px solid var(--ink); box-shadow: 8px 8px 0 var(--ink); white-space: nowrap; font-size: 22px; }
+#prompt b { background: var(--red); color: #fff; padding: 4px 10px; font-size: 18px; transform: rotate(-4deg); }
+/* ---- toasts slide in from the left and leave */
+#toasts { position: fixed; left: calc(14px + var(--safe-l)); top: calc(96px + var(--safe-t)); display: flex; flex-direction: column; gap: 8px; }
+.toast { display: flex; align-items: center; gap: 10px; padding: 8px 18px 8px 10px; background: var(--ink); color: #fff; clip-path: polygon(0 0, 100% 0, 95% 100%, 0 100%); font-size: 18px; animation: tin .35s cubic-bezier(.2,.9,.2,1.2) both; }
+.toast .ic { width: 34px; height: 34px; display: grid; place-items: center; background: var(--red); font-size: 18px; transform: rotate(-8deg); }
+.toast.gold .ic { background: var(--gold); color: var(--ink); }
+.toast small { display: block; font-size: 13px; opacity: .75; font-weight: 700; }
+@keyframes tin { from { transform: translateX(-120%); } }
+/* ---- the pause menu: the game dims red, a tilted list on the left, the sheet on the right */
+#menu { position: fixed; inset: 0; display: none; background: rgba(120, 0, 10, .55); }
+#menu::before { content: ""; position: absolute; inset: 0; background: radial-gradient(rgba(0,0,0,.35) 1.4px, transparent 1.6px) 0 0 / 10px 10px; }
+body.menu #menu { display: block; }
+#menu nav { position: absolute; left: 4vw; top: 12vh; display: flex; flex-direction: column; gap: 14px; transform: rotate(-6deg); }
+#menu nav button { border: 0; text-align: left; padding: 8px 28px 8px 18px; font-size: 44px; background: var(--ink); color: #fff; clip-path: polygon(0 0, 100% 8%, 96% 100%, 3% 92%); }
+#menu nav button[aria-current] { background: #fff; color: var(--red); transform: translateX(26px) scale(1.06); box-shadow: none; }
+#menu nav button small { display: block; font-size: 16px; opacity: .7; font-family: "Barlow Semi Condensed", sans-serif; font-weight: 800; }
+#sheet { position: absolute; right: 3vw; top: 8vh; bottom: 8vh; width: min(1080px, 60vw); background: #fff; border: 6px solid var(--ink); box-shadow: 14px 14px 0 var(--ink); transform: rotate(1.5deg); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+#sheet h2 { margin: 0; font-size: 40px; display: flex; align-items: baseline; gap: 14px; }
+#sheet h2 small { font-size: 16px; color: #555; }
+#lanes { flex: 1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; min-height: 0; }
+.lane { background: #f2efe8; border-top: 6px solid var(--ink); padding: 6px; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+.lane h3 { margin: 0; font-size: 17px; display: flex; justify-content: space-between; }
+.lane h3 b { background: var(--ink); color: #fff; padding: 0 6px; }
+.card { background: #fff; border: 3px solid var(--ink); padding: 5px 6px; font-size: 14px; font-weight: 700; transform: rotate(var(--r, -1deg)); }
+.card b { display: block; font-size: 15px; font-weight: 900; }
+.card.red { border-color: var(--red); box-shadow: 4px 4px 0 var(--red); }
+.card.done { opacity: .55; }
+#sheet footer { display: flex; justify-content: space-between; font-size: 15px; color: #555; }
+/* ---- the decision card: only while a decision waits */
+#decision { position: fixed; inset: 0; display: none; background: rgba(0,0,0,.45); }
+body.decision #decision { display: block; }
+.dcard { position: absolute; right: 5vw; top: 50%; transform: translateY(-50%) rotate(-2deg); width: min(640px, 92vw); background: var(--ink); color: #fff; padding: 22px 22px 26px; clip-path: polygon(0 2%, 100% 0, 98% 100%, 2% 97%); }
+.dcard .kicker { display: inline-block; background: var(--red); padding: 4px 12px; font-size: 18px; transform: rotate(-4deg); }
+.dcard h2 { margin: 12px 0 4px; font-size: 38px; line-height: 1.05; }
+.dcard p { margin: 0 0 16px; font-size: 18px; font-weight: 700; color: #ddd; }
+.opt { display: flex; align-items: center; gap: 14px; width: 100%; margin-top: 10px; border: 0; background: #fff; color: var(--ink); padding: 10px 14px; text-align: left; font-size: 24px; clip-path: polygon(0 0, 100% 6%, 98% 100%, 1% 94%); }
+.opt .k { width: 52px; height: 52px; display: grid; place-items: center; background: var(--ink); color: #fff; font-size: 30px; transform: rotate(-6deg); flex: none; }
+.opt small { display: block; font-size: 15px; color: #555; font-weight: 700; }
+.opt.rec { background: var(--red); color: #fff; transform: translateX(-14px) scale(1.03); }
+.opt.rec .k { background: #fff; color: var(--red); }
+.opt.rec small { color: #ffd6d6; }
+/* ---- phones */
+@media (max-width: 720px) {
+  .chip { font-size: 16px; padding: 3px 9px 3px 6px; }
+  .chip small { display: none; }
+  #status { flex-direction: column; align-items: flex-start; gap: 4px; }
+  #lang button { padding: 0 8px; font-size: 14px; }
+  #prompt { font-size: 16px; padding: 8px 14px 8px 10px; bottom: calc(18px + var(--safe-b)); }
+  #prompt b { font-size: 14px; }
+  #toasts { top: calc(150px + var(--safe-t)); right: 14px; }
+  .toast { font-size: 15px; }
+  #menu nav { left: 4vw; top: auto; bottom: 3vh; gap: 6px; transform: rotate(-4deg); }
+  #menu nav button { font-size: 22px; padding: 4px 16px 4px 10px; }
+  #menu nav button small { font-size: 12px; }
+  #sheet { left: 3vw; right: 3vw; top: 11vh; bottom: 47vh; width: auto; transform: none; padding: 10px; }
+  #sheet h2 { font-size: 26px; }
+  #lanes { grid-template-columns: repeat(6, 150px); overflow-x: auto; }
+  .dcard { right: 4vw; left: 4vw; width: auto; transform: translateY(-50%) rotate(-1deg); }
+  .dcard h2 { font-size: 28px; }
+  .opt { font-size: 20px; }
+}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="status" aria-label="Status">
+  <div class="chip"><i>✓</i><span>3</span><small data-t="merged"></small></div>
+  <div class="chip"><i>⚓</i><span>2</span><small data-t="inflight"></small></div>
+  <div class="chip wait"><i>!</i><span>1</span><small data-t="waiting"></small></div>
+</div>
+<div id="corner">
+  <div id="lang" role="group" aria-label="Language">
+    <button data-lang="en">EN</button><button data-lang="zh-TW">繁</button><button data-lang="zh-CN">简</button>
+  </div>
+  <button id="menuBtn" aria-label="Menu"><span></span></button>
+</div>
+<div id="toasts"></div>
+<div id="prompt"><b data-t="tap"></b><span data-t="promptOrder"></span></div>
+<div id="menu" role="dialog" aria-modal="true">
+  <nav>
+    <button aria-current="true"><span data-t="board"></span><small>B</small></button>
+    <button><span data-t="roster"></span><small>L</small></button>
+    <button><span data-t="chart"></span><small>V</small></button>
+    <button><span data-t="settings"></span><small>K</small></button>
+    <button><span data-t="resume"></span><small>Esc</small></button>
+  </nav>
+  <section id="sheet">
+    <h2><span data-t="board"></span><small data-t="boardSub"></small></h2>
+    <div id="lanes"></div>
+    <footer><span data-t="paused"></span><span>Esc</span></footer>
+  </section>
+</div>
+<div id="decision" role="dialog" aria-modal="true">
+  <div class="dcard">
+    <span class="kicker" data-t="decisionKicker"></span>
+    <h2 data-t="decisionTitle"></h2>
+    <p data-t="decisionBody"></p>
+    <button class="opt rec"><span class="k">A</span><span><span data-t="optA"></span><small data-t="optAsub"></small></span></button>
+    <button class="opt"><span class="k">B</span><span><span data-t="optB"></span><small data-t="optBsub"></small></span></button>
+    <button class="opt"><span class="k">C</span><span><span data-t="optC"></span><small data-t="optCsub"></small></span></button>
+  </div>
+</div>
+<script>
+// every label in three languages; the choice is remembered (storage may be blocked)
+const T = {
+  en: { merged: "merged", inflight: "in flight", waiting: "waiting on you", tap: "TAP", promptOrder: "the captain · give the order",
+    board: "BOARD", roster: "ROSTER", chart: "VOYAGE CHART", settings: "SETTINGS", resume: "RESUME", boardSub: "the fleet's lanes · the game is paused",
+    lanes: ["Issues", "Backlog", "Ready", "Working", "Review", "Merged"], paused: "Paused · tap outside or press Esc to return",
+    decisionKicker: "DECISION · D-1101", decisionTitle: "How should T-103 land?", decisionBody: "worker-3 needs the captain's call before going on.",
+    optA: "As specced", optAsub: "keeps the plan · the larger change", optB: "Rescope smaller", optBsub: "one review round fewer · leaves a follow-up", optC: "Park it", optCsub: "frees the worker · the task waits",
+    toast1: "T-101 merged", toast1s: "the salvo fires · 3 merged", toast2: "worker-2 rated able seaman", toast2s: "7 merged, 4 on the first review" },
+  "zh-TW": { merged: "已合併", inflight: "進行中", waiting: "等你決定", tap: "點擊", promptOrder: "船長 · 下達命令",
+    board: "看板", roster: "船員名冊", chart: "航海圖", settings: "設定", resume: "繼續", boardSub: "艦隊的泳道 · 遊戲已暫停",
+    lanes: ["議題", "待辦", "就緒", "進行中", "審查", "已合併"], paused: "已暫停 · 點擊外面或按 Esc 返回",
+    decisionKicker: "決策 · D-1101", decisionTitle: "T-103 要怎麼落地？", decisionBody: "worker-3 需要船長決定才能繼續。",
+    optA: "照規格做", optAsub: "維持計畫 · 改動較大", optB: "縮小範圍", optBsub: "少一輪審查 · 留下後續任務", optC: "先擱置", optCsub: "釋放船員 · 任務等待",
+    toast1: "T-101 已合併", toast1s: "禮炮齊發 · 已合併 3 個", toast2: "worker-2 晉升為一等水手", toast2s: "合併 7 個，其中 4 個首輪通過" },
+  "zh-CN": { merged: "已合并", inflight: "进行中", waiting: "等你决定", tap: "点击", promptOrder: "船长 · 下达命令",
+    board: "看板", roster: "船员名册", chart: "航海图", settings: "设置", resume: "继续", boardSub: "舰队的泳道 · 游戏已暂停",
+    lanes: ["议题", "待办", "就绪", "进行中", "审查", "已合并"], paused: "已暂停 · 点击外面或按 Esc 返回",
+    decisionKicker: "决策 · D-1101", decisionTitle: "T-103 要怎么落地？", decisionBody: "worker-3 需要船长决定才能继续。",
+    optA: "照规格做", optAsub: "维持计划 · 改动较大", optB: "缩小范围", optBsub: "少一轮审查 · 留下后续任务", optC: "先搁置", optCsub: "释放船员 · 任务等待",
+    toast1: "T-101 已合并", toast1s: "礼炮齐发 · 已合并 3 个", toast2: "worker-2 晋升为一等水手", toast2s: "合并 7 个，其中 4 个首轮通过" },
+};
+const Q = new URLSearchParams(location.search);
+let lang = Q.get("lang");
+if (!lang) try { lang = localStorage.getItem("v2d-lang"); } catch {}
+if (!T[lang]) lang = "en";
+function apply(l) {
+  lang = l;
+  try { localStorage.setItem("v2d-lang", l); } catch {}
+  document.documentElement.lang = l;
+  const t = T[l];
+  document.querySelectorAll("[data-t]").forEach((e) => (e.textContent = t[e.dataset.t] ?? ""));
+  document.querySelectorAll("#lang button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.lang === l));
+  document.querySelectorAll("[data-t]").forEach((e) => e.classList.toggle("jp", l !== "en" && ["board", "roster", "chart", "settings", "resume", "decisionTitle"].includes(e.dataset.t)));
+  const cards = [[["#91", "Chart: tidewater"], ["#92", "Sound: ambient"]], [["T-104", "Kraken arms"], ["T-105", "Order ritual"]], [["T-106", "Merge salvo"]], [["T-103", "Clearing and a cheer", "red"], ["T-107", "Crew roster"]], [["T-102", "Chart band"]], [["T-101", "Board ranks", "done"]]];
+  document.getElementById("lanes").innerHTML = t.lanes.map((n, i) => `<div class="lane"><h3>${n}<b>${cards[i].length}</b></h3>${cards[i].map(([id, ti, k], j) => `<div class="card ${k || ""}" style="--r:${j % 2 ? 1 : -1.2}deg"><b>${id}</b>${ti}</div>`).join("")}</div>`).join("");
+  document.getElementById("toasts").innerHTML = Q.get("view") === "toast" ? `<div class="toast gold"><span class="ic">⚓</span><span>${t.toast1}<small>${t.toast1s}</small></span></div><div class="toast"><span class="ic">★</span><span>${t.toast2}<small>${t.toast2s}</small></span></div>` : "";
+}
+document.getElementById("lang").onclick = (e) => { const b = e.target.closest("button"); if (b) apply(b.dataset.lang); };
+document.getElementById("menuBtn").onclick = () => document.body.classList.toggle("menu");
+document.getElementById("stage").style.backgroundImage = `url(./${Q.get("bg") || "mock-bg-sail"}.png)`;
+const view = Q.get("view") || "hud";
+if (view === "menu") document.body.classList.add("menu");
+if (view === "decision") document.body.classList.add("decision"), (document.getElementById("prompt").style.display = "none");
+if (view === "menu") document.getElementById("prompt").style.display = "none";
+apply(lang);
+window.__ok = true;
+</script>
+</body></html>

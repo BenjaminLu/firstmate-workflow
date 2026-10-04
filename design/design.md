@@ -5170,3 +5170,39 @@ is informational; authoritative readiness and board authorization still govern
 any merge. Reminder inventory reuses the checks and verdict already read by PR
 advancement and folds local lifecycle events for rounds; it performs no extra
 GitHub requests or process probes. No wake or queue receipt proves delivery to a model.
+
+### T-125: Live voyage seam
+
+The v2d-15 2.5D stage is a panel above v1's workflow, or the same iframe enlarged
+with the existing workflow DOM in a drawer. F toggles size; Esc returns to the
+panel. Mode uses sessionStorage. A double Esc within 400 ms, including from the
+iframe, removes the iframe entirely. The browser-wide hidden preference uses
+localStorage. No stage animation or audio survives that document's removal.
+
+`BoardSource` consumes the host's existing `/api/state` and `/events` snapshots
+through a same-origin subscription. It does not open a second subscription or
+fetch an unfiltered project. Project keys identify tasks; real crew drive the
+ship. The adapter derives review streaks from allowed event/handoff records;
+opaque external aggregate identities disclose no private review payload. The
+recent-event window may have gaps, so task snapshots reconcile parked/final
+states. Approvals alone unlock Live victory; simulated ticks cannot approve,
+dispatch or merge real work. Playground staging hooks and mini-games are absent
+from Live operation.
+
+The drawer reuses the board's cards, named effects, task actions, confirmations
+and translated refusals. Its writes remain `POST /decisions` and `POST /tasks`,
+with the tab bearer token, browser Origin and the card's own project. Fight actions never write; the board
+remains usable during a fight. An answerable board card for a gripped task
+suppresses the shared monster’s fight prompt and target without releasing its arms. The Live-only adapter has the same narrow command seam;
+it never interprets an option letter as an effect. Live bundles have no remote
+fonts or other third-party requests. Playground builds refuse network code.
+
+`tools/build.py --live` generates the gitignored `board/public/voyage2d/index.html`.
+The existing static-file route serves it. CI builds Live before starting browser
+workers or game tests, then builds Playground and runs the vendored node tests.
+Session startup builds Live before starting the board; failure is reported and
+removes stale output, so the board serves its workflow without loading the game
+controller. E2e fixtures locate the built artifact or build in isolated scratch.
+On screens at most 650px wide the panel follows the decisions and precedes the
+lanes; desktop retains the panel above the decisions. The frozen 3D application stays outside this integration;
+any 3D follow-up requires its own approved scope.

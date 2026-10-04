@@ -184,6 +184,37 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 #watch.off,#watch .gap{color:var(--bad)}
 #watch[hidden]{display:none}
 .evidence-warning{border-left:3px solid var(--brass);background:var(--bg2);padding-left:8px}
+/* T-125: the same stage stays mounted when its size changes. */
+#voyage{margin:12px 20px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg2)}
+#voyage-bar{display:flex;gap:8px;padding:8px}
+#voyage-bar button{font:inherit;min-height:44px;padding:6px 14px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;cursor:pointer}
+#voyage-stage{display:block;width:100%;height:420px;border:0}
+#voyage-drawer[hidden],#voyage-mount[hidden],#voyage-workflow[hidden]{display:none}
+.voyage-full{overflow:hidden}
+.voyage-full #voyage{position:fixed;inset:0;margin:0;z-index:1000;border-radius:0;
+  display:grid;grid-template-columns:minmax(0,1fr) min(640px,50vw);grid-template-rows:auto minmax(0,1fr)}
+.voyage-full #voyage-bar{grid-column:1/-1}
+.voyage-full #voyage-mount{min-width:0;min-height:0}
+.voyage-full #voyage-stage{height:100%}
+.voyage-full #voyage-drawer{min-width:0;min-height:0;overflow:auto;background:var(--bg)}
+.voyage-full #voyage:has(#voyage-drawer[hidden]){grid-template-columns:minmax(0,1fr)}
+/* The drawer is narrower than the viewport: size lanes to their container. */
+.voyage-full #voyage-drawer .lanes{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
+.voyage-full #voyage-drawer .lane:has([role="menu"]){position:relative;z-index:1}
+.voyage-full #voyage-drawer [role="menu"],
+.voyage-full #voyage-drawer [role="dialog"],
+.voyage-full #voyage-drawer [role="alertdialog"]{position:relative;z-index:2}
+.voyage-full #voyage-drawer .counts{flex-wrap:wrap}
+.voyage-hidden #scene,.voyage-hidden #capstage{display:none!important}
+/* Reorder visually: moving an iframe's parent in the DOM reloads its stage. */
+@media(max-width:650px){
+  body{display:flex;flex-direction:column}
+  body>#voyage{order:1}
+  body>#shipregion,body>.lanes-wrap,body>.logwrap{order:2}
+  #voyage-stage{height:330px}
+  .voyage-full #voyage{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,2fr) minmax(0,3fr)}
+  .voyage-full #voyage:has(#voyage-drawer[hidden]){grid-template-rows:auto minmax(0,1fr)}
+}
 </style>
 </head>
 <body>
@@ -233,6 +264,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 <script src="ship.js"></script>
 <script src="diagram.js"></script>
 <script src="watch.js"></script>
+<script src="game.js"></script>
 <script>
 // the lanes come from the server, in lifecycle order; this is only how many
 // merged cards the merged lane shows before pointing at the history
@@ -376,6 +408,7 @@ function feedbackText() {
 }
 function pose() {
   const cap = document.getElementById('captain');
+  if (!cap) return;
   cap.dataset.pose = sent.size || SHIP.active()?.kind === 'order' ? 'order'
     : picks.size ? 'ready' : 'idle';
   // the portrait is the same captain, so it wears the same pose
@@ -391,7 +424,7 @@ function observe(outcomes) {
   for (const e of outcomes || []) {
     if (seen.has(e.identity)) continue;
     seen.add(e.identity);
-    if (!initialized) continue;
+    if (!initialized || window.VOYAGE?.hidden) continue;
     const kind = e.type === 'merged' ? 'merge' : 'order';
     SHIP.enqueue(document.getElementById('scene'), kind, e.identity);
   }
@@ -714,10 +747,10 @@ function render(s) {
   // before it is shown, so a decision without one leaves no empty frame
   DIAGRAM.mount(deck, lang).catch(() => {});
 
-  const crew = SHIP.render(document.getElementById("scene"), s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
+  const crew = window.VOYAGE?.hidden ? SHIP.crewOf(s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || '')) : SHIP.render(document.getElementById("scene"), s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
   SHIP.roster(document.getElementById("roster"), crew, t);
   observe(s.outcomes);
-  SHIP.captain(document.getElementById("captain"), pend.length || (feedback || SHIP.active() ? 1 : 0), t);
+  if (document.getElementById("captain")) SHIP.captain(document.getElementById("captain"), pend.length || (feedback || SHIP.active() ? 1 : 0), t);
   pose(); feedbackText();
   if (focusKey) {
     const replacement = [...deck.querySelectorAll('[data-id]')].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && (focusChoice ? el.dataset.c === focusChoice : !el.dataset.c));
@@ -732,6 +765,7 @@ function render(s) {
     return `<li class="${e.evidence_warning ? 'evidence-warning' : ''}"><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
       `<span class="k-${esc(e.type)}">${said(text, e)}</span></li>`;
   }).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
+  window.VOYAGE?.update(s, t, lang);
 }
 
 function validate(id) {
@@ -755,7 +789,7 @@ async function answer(id) {
   refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
     method: "POST", headers: credential({ "content-type": "application/json" }),
-    body: JSON.stringify({ id, chosen, ...(chosen === 'custom' ? {text} : {}) }),
+    body: JSON.stringify({ id, chosen, ...(decision?.project ? {project:decision.project} : {}), ...(chosen === 'custom' ? {text} : {}) }),
   }).then(x => x.status === 403 ? refusedFor(x) : x.json()).catch(() => ({ error: t("unreachable") }));
   sent.delete(id);
   if (r.error) {
@@ -778,7 +812,7 @@ async function answer(id) {
       eventFailed:r.eventRecorded === false};
     const identity = r.decision?.identity || `decision:${id}`;
     if (!r.already && !seen.has(identity)) {
-      seen.add(identity); SHIP.enqueue(document.getElementById('scene'), 'order', identity);
+      seen.add(identity); if (!window.VOYAGE?.hidden) SHIP.enqueue(document.getElementById('scene'), 'order', identity);
     }
   }
   render(latest);

@@ -503,3 +503,18 @@ review and merge-card readiness for each project. It wakes firstmate for a
 brief, a scope question, a failed gate or launcher, a missing verdict, or
 missing authored card details. Dispatch remains the board's intent action or
 `bin/fm-dispatch.sh`; the autopilot never restarts a worker or merges a PR.
+
+The board's Live voyage appears above the workflow on desktop, and below
+pending decisions on screens 650px wide or narrower. Press **F** or use the
+full-screen control for the same stage with the workflow in a drawer; **Esc**
+returns to the panel. The size is remembered for this tab. Press **Esc twice
+within 400 ms** to unload the voyage and leave the plain board; repeat to bring
+it back. This hidden state survives reloads and is shared across tabs.
+
+Live watches the selected project's board snapshots. Decisions and task actions
+use the board's existing authenticated controls. Fighting never writes to the
+board. The standalone Playground remains simulated and contains no network code.
+Build Live with `python3 games/voyage-2d/tools/build.py --live`. The generated
+`board/public/voyage2d/` bundle is gitignored. CI builds it before game and browser
+tests; `fm-session.sh start` builds it before starting the board. If that build
+fails, startup reports the failure and the board opens without the game panel.

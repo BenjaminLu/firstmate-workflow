@@ -1,0 +1,3 @@
+# Live output is built by CI and session start, never committed.
+*
+!.gitignore

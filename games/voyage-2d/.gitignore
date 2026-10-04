@@ -1,0 +1,7 @@
+node_modules/
+proofs/
+build/
+src/bake-data.js
+src/mods-data.js
+src/main.live.js
+shots/

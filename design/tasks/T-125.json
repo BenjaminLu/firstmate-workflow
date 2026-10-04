@@ -24,7 +24,10 @@
     "skills/firstmate/SKILL.md",
     "README.md",
     "design/design.md",
-    "design/tasks/T-125.json"
+    "design/tasks/T-125.json",
+    "tests/gate.test.sh",
+    "bin/fm-session.sh",
+    "tests/e2e/lib/fixture.ts"
   ],
   "acceptance": [
     "Why. Re-scoped on 2026-09-28 by the captain's decision: the board keeps v1 as the work tool and gains one game engine, the 2.5D voyage, in two sizes - a panel embedded in v1 (\"v2\") and the same stage full screen with the workflow inside it (\"v2.5\"). The 3D game is frozen and is out of scope here, and so is every 'later the 3D one' clause of the first version. The 2.5D game itself is being reworked outside this repository (a much larger ship with rooms, crew who never block the captain, data-only mods; tag v2d-15 in the games repo, the latest as of 2026-10-02); this task vendors that version, not the one first vendored on PR #103, which was closed for that reason. Its own spec file, design/tasks/T-125.json, is committed on this branch. Re-checked by firstmate on 2026-10-02 against main d9cf976 (T-166, T-142): depends on T-135 and T-139 because both change board/server.ts and board/public, and the game must land after them.",
@@ -33,6 +36,7 @@
     "The boss key. Esc pressed twice within about 400 ms, from the board or from inside the stage, removes the stage entirely: the iframe or canvas is unloaded, so no sound, no animation and no timers remain, and only v1's workflow and decision cards are left. The same keys bring the stage back. The state persists per browser (localStorage), so a reload does not bring the ship back unasked.",
     "Projects. Since T-142 (merged 2026-10-02) the board serves several projects with ?project= and filters the engine-wide view for privacy (T-142 item 6). The stage follows the board's selected project: in the engine-wide view it shows only what /api/state already exposes there, never another project's event text, decision details or crew activity, and its writes name the card's own project exactly as the board's cards do.",
     "Bundle and hygiene. The board serves the Live bundle as static files. bin/ci.sh runs games/voyage-2d's own test suite (`node --test`) and the build, and refuses a committed `board/public/voyage2d/` bundle that doesn't match a fresh build. The game's node_modules, proofs and build caches are not committed. Fonts are loaded as the board already loads them, with no new third-party origin. README and skills/firstmate/SKILL.md mention the modes and the boss key. design.md describes the seam (BoardSource, the allowed writes) and the 3D follow-up.",
-    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suite themselves. Stubs answer as the real routes do."
+    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suite themselves. Stubs answer as the real routes do.",
+    "Amended by captain decisions of 2026-10-04 (all A). D-firstmate-workflow-T125-1: tests/gate.test.sh joins the scope and its 'seven gates / gate 3' sweep excludes games/voyage-2d/ (vendored game content); a test proves the engine is still swept. D-firstmate-workflow-T125-2: on narrow screens (650px and below) the game panel sits below the decisions and above the lanes, so a pending decision stays visible without scrolling on a phone; desktop keeps the panel above the decisions. D-firstmate-workflow-T125-3: the Live bundle board/public/voyage2d/ is never committed (gitignored); bin/ci.sh builds it before the game tests and the end-to-end run, and bin/fm-session.sh start builds it before starting the board - a failed build is reported and the board runs without the game panel. This replaces the 'refuses a committed bundle that does not match a fresh build' rule above. tests/e2e/lib/fixture.ts is in scope for building or locating the bundle in e2e."
   ]
 }
