@@ -19,6 +19,12 @@ import tempfile
 from fm_project_paths import registry_reader
 
 
+# The engine revision that first required task-specific dispatch authority.
+# A backdated greenlight alone cannot make a newly written pin legacy.
+TASK_DISPATCH_COMMIT = 'f61b71457f18c4aec744ae1b9ff84b1bd5b84728'
+LEGACY_REASON = 'Pre-T-171 cross-task direct-order approval replaced by this task captain choice'
+
+
 def digest(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
@@ -79,25 +85,42 @@ class Pins:
         events = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
         return [e for e in events if e.get('project', 'firstmate-workflow') == self.project]
 
+    def readiness_decision(self):
+        # fm-ready retires this record on dispatch. The ended card still names
+        # the dispatch judgment when a first pin is created on a later round.
+        path = self.state / 'ready' / (self.task + '.json')
+        if path.is_file() and not path.is_symlink():
+            record = json.loads(path.read_text())
+            if record.get('task') == self.task:
+                return record.get('decision') if record.get('episode') else record.get('ended')
+        return None
+
+    def answer(self, decision):
+        if not isinstance(decision, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', decision):
+            return None
+        path = self.state / 'decisions' / (decision + '.json')
+        if not path.is_file() or path.is_symlink():
+            return None
+        answer = json.loads(path.read_text())
+        if (answer.get('chosen') == 'A' and answer.get('kind', 'choice') == 'choice'
+                and answer.get('task') == self.task and answer.get('id') == decision
+                and answer.get('project', 'firstmate-workflow') == self.project):
+            return answer
+        return None
+
     def approval(self, decision=None):
         events = self.events()
+        readiness = self.readiness_decision() if not decision else None
         for event in reversed(events):
             data = event.get('data') or {}
             if event.get('type') != 'decision_made' or event.get('task') != self.task:
                 continue
             id = data.get('decision', '')
-            if decision and id != decision:
+            if id != (decision or readiness):
                 continue
-            if not re.fullmatch(r'[A-Za-z0-9_-]+', id):
-                continue
-            path = self.state / 'decisions' / (id + '.json')
-            if not path.is_file() or path.is_symlink():
-                continue
-            answer = json.loads(path.read_text())
-            if (event.get('actor') != 'captain' or data.get('chosen') != 'A'
-                    or answer.get('chosen') != 'A' or answer.get('kind', 'choice') != 'choice'
-                    or answer.get('task') != self.task or answer.get('id') != id
-                    or answer.get('project', 'firstmate-workflow') != self.project):
+            answer = self.answer(id)
+            if (answer is None or event.get('actor') != 'captain'
+                    or data.get('chosen') != 'A'):
                 continue
             if not event.get('ts'):
                 continue
@@ -105,13 +128,13 @@ class Pins:
                         event=event, answer=answer)
         if decision:
             raise ValueError('missing or mismatched captain authorization for project/task/decision')
-        # A readiness card which has not been authorized must not become a
-        # direct order merely because an older global greenlight exists.
-        if any(e.get('task') == self.task and e.get('type') in ('decision_requested', 'decision_made')
-               for e in events):
-            return None
+
         for event in reversed(events):
-            if event.get('type') == 'greenlit' and event.get('ts'):
+            if (event.get('type') == 'greenlit'
+                    and event.get('ts')
+                    and (event.get('task') == self.task
+                         or (not event.get('task')
+                             and (not readiness or self.answer(readiness) is not None)))):
                 return dict(kind='direct-order', decision=event.get('id') or 'greenlit:' + event['ts'],
                             author='captain', time=event['ts'], event=event)
         return None
@@ -164,7 +187,28 @@ class Pins:
             raise ValueError('invalid approved scope glob')
         return engine_commit, target_commit, snapshots, parsed
 
-    def resolve(self, if_present=False):
+    def legacy_approval(self, pin):
+        """Recognize only the historical cross-task first-pin approval class.
+
+        Pins have engine provenance, not a separate creation timestamp. Require
+        a strict ancestor of the T-171 engine revision; missing history refuses
+        migration rather than treating an unknown revision as old.
+        """
+        approval = pin['approval']
+        event = approval.get('event', {})
+        if (pin['version'] != 1 or approval.get('kind') != 'direct-order'
+                or event.get('type') != 'greenlit'
+                or not isinstance(event.get('task'), str)
+                or event['task'] in ('', self.task)
+                or pin['engine_commit'] == TASK_DISPATCH_COMMIT):
+            return False
+        try:
+            ancestor = git(self.engine, 'merge-base', pin['engine_commit'], TASK_DISPATCH_COMMIT + '^').strip()
+        except ValueError:
+            return False
+        return ancestor == pin['engine_commit']
+
+    def resolve(self, if_present=False, *, for_repin=False):
         # A leftover lock/temp file is not a pin. Enumerate explicitly so an
         # unreadable store is an error, never silently treated as absent.
         records = [p for p in self.directory.iterdir() if p.name.endswith('.json')] if self.directory.exists() else []
@@ -174,6 +218,7 @@ class Pins:
         if not paths:
             raise ValueError('no pin for ' + self.project + '/' + self.task)
         previous = None
+        legacy_version = None
         for version, path in enumerate(paths, 1):
             if path.is_symlink() or path.name != str(version) + '.json':
                 raise ValueError('invalid append-only pin sequence')
@@ -213,12 +258,36 @@ class Pins:
                         or event.get('task') != self.task or event.get('data', {}).get('chosen') != 'A'
                         or event.get('data', {}).get('decision') != approval['decision']):
                     raise ValueError('pin approval provenance mismatch')
-            elif approval['kind'] != 'direct-order' or version != 1 or approval['event'].get('type') != 'greenlit':
-                raise ValueError('pin authorization mismatch')
+            elif (approval['kind'] != 'direct-order' or version != 1
+                  or approval['event'].get('type') != 'greenlit'
+                  or approval['event'].get('task') not in (None, '', self.task)):
+                if not self.legacy_approval(pin):
+                    raise ValueError('pin authorization mismatch')
+                legacy_version = version
+            if 'supersedes_legacy' in pin or 'supersedes_legacy_reason' in pin:
+                if (pin.get('supersedes_legacy') != legacy_version or legacy_version is None
+                        or version != legacy_version + 1 or pin.get('source') != 'repin'
+                        or approval['kind'] != 'choice'
+                        or not isinstance(pin.get('supersedes_legacy_reason'), str)
+                        or not pin['supersedes_legacy_reason'].strip()):
+                    raise ValueError('invalid legacy supersession')
             if approval['time'] != approval['event'].get('ts'):
                 raise ValueError('pin approval time mismatch')
             if previous:
-                self.check_approval_order(previous['approval'], approval)
+                self.check_approval_order(previous.get('spec_approval', previous['approval']), approval)
+            spec_approval = pin.get('spec_approval')
+            if spec_approval:
+                if version != 1 or pin['source'] != 'first-pin-on-resume' or self.external:
+                    raise ValueError('invalid branch spec approval')
+                current = self.approval(spec_approval['decision'])
+                if (any(current.get(key) != spec_approval.get(key)
+                        for key in ('kind', 'decision', 'author', 'time', 'event'))
+                        or any(current['answer'].get(key) != spec_approval['answer'].get(key)
+                               for key in ('id', 'task', 'project', 'chosen', 'kind', 'ts', 'expected_head'))):
+                    raise ValueError('branch spec approval provenance mismatch')
+                self.check_approval_order(approval, spec_approval)
+                if pin['snapshots']['spec']['source'] != 'approved-branch':
+                    raise ValueError('branch approval requires branch snapshot')
             if set(pin['snapshots']) != {'spec', 'design', 'conventions', 'contract'}:
                 raise ValueError('incomplete pin snapshots')
             expected = {
@@ -252,6 +321,14 @@ class Pins:
                         pass
                     else:
                         raise ValueError('absent provenance mismatch')
+                elif source == 'approved-branch':
+                    if self.external or name != 'spec' or not spec_approval:
+                        raise ValueError('invalid branch snapshot provenance')
+                    head = spec_approval['answer'].get('expected_head', '')
+                    if not re.fullmatch(r'[0-9a-f]{40,64}', head) or snap.get('commit') != head:
+                        raise ValueError('branch spec commit mismatch')
+                    if git(self.engine, 'show', head + ':' + snap['path']) != snap['text']:
+                        raise ValueError('branch spec bytes mismatch')
                 elif source not in (('local',) if self.external else ('seeded', 'uncommitted')):
                     raise ValueError('invalid snapshot provenance')
                 if not self.external and source == 'seeded':
@@ -274,9 +351,47 @@ class Pins:
                     or not spec['scope'] or not all(isinstance(s, str) and s and '\n' not in s for s in spec['scope'])):
                 raise ValueError('invalid pinned task scope')
             previous = pin
+        # Older chains can already contain valid choice-approved successors
+        # without a migration marker. Never rewrite those historical records.
+        if legacy_version == previous['version'] and not for_repin:
+            raise ValueError('pin authorization mismatch')
         return previous
 
-    def create(self, decision=None, resume=False):
+    def approved_branch_spec(self, worktree, snapshots, dispatch):
+        """Only a captain choice naming the exact proposed commit can widen pin 1.
+
+        expected_head is already carried by choice requests and answer receipts.
+        Human prose alone cannot establish approval of arbitrary branch bytes.
+        """
+        snap = snapshots['spec']
+        path = Path(worktree) / snap['path']
+        if not path.is_file() or path.is_symlink():
+            return None
+        text = path.read_bytes().decode('utf-8')
+        if text == snap['text']:
+            return None
+        for event in reversed(self.events()):
+            if event.get('type') != 'decision_made' or event.get('task') != self.task:
+                continue
+            decision = (event.get('data') or {}).get('decision')
+            if not decision or decision == dispatch['decision']:
+                continue
+            try:
+                approval = self.approval(decision)
+                self.check_approval_order(dispatch, approval)
+                head = approval['answer'].get('expected_head', '')
+                if not isinstance(head, str) or not re.fullmatch(r'[0-9a-f]{40,64}', head):
+                    continue
+                if git(self.engine, 'show', head + ':' + snap['path']) != text:
+                    continue
+            except ValueError:
+                continue
+            snapshots['spec'] = dict(text=text, sha256=digest(text), source='approved-branch',
+                                     path=snap['path'], commit=head)
+            return approval
+        return None
+
+    def create(self, decision=None, resume=False, spec_worktree=None):
         if list(self.directory.glob('*.json')) and not decision:
             return self.resolve()
         approval = self.approval(decision)
@@ -285,8 +400,16 @@ class Pins:
         if decision and not list(self.directory.glob('*.json')):
             raise ValueError('repin requires an existing pin')
         engine, target, snapshots, parsed = self.collect(repin=bool(decision))
+        spec_approval = None
+        if resume and not decision and not self.external and spec_worktree:
+            spec_approval = self.approved_branch_spec(spec_worktree, snapshots, approval)
+            spec = json.loads(snapshots['spec']['text'])
+            if (spec.get('id') != self.task or not isinstance(spec.get('scope'), list)
+                    or not spec['scope'] or not all(isinstance(s, str) and s and '\n' not in s
+                                                   for s in spec['scope'])):
+                raise ValueError('invalid approved branch task scope')
         if decision:
-            old = self.resolve()
+            old = self.resolve(for_repin=True)
             self.check_repin(old, decision, snapshots, approval)
         self.directory.mkdir(parents=True, exist_ok=True)
         lock = self.directory / '.lock'
@@ -294,7 +417,7 @@ class Pins:
             raise ValueError('pin lock must not be a symlink')
         with lock.open('a') as stream:
             fcntl.flock(stream, fcntl.LOCK_EX)
-            old = self.resolve() if list(self.directory.glob('*.json')) else None
+            old = self.resolve(for_repin=bool(decision)) if list(self.directory.glob('*.json')) else None
             if old and not decision:
                 return old
             if decision:
@@ -305,6 +428,11 @@ class Pins:
                        source='repin' if decision else ('first-pin-on-resume' if resume else 'dispatch'),
                        approval=approval, approval_binding='dispatch-time',
                        previous_sha256=digest(json.dumps(old, sort_keys=True)) if old else None)
+            if old and self.legacy_approval(old):
+                pin['supersedes_legacy'] = old['version']
+                pin['supersedes_legacy_reason'] = LEGACY_REASON
+            if spec_approval:
+                pin['spec_approval'] = spec_approval
             # Publish fully written bytes atomically, without replacing any record.
             with tempfile.NamedTemporaryFile(mode='w', dir=self.directory, delete=False) as out:
                 temporary = Path(out.name)
@@ -320,10 +448,12 @@ class Pins:
         if not old:
             raise ValueError('repin requires an existing pin')
         for path in self.directory.glob('*.json'):
-            if json.loads(path.read_text())['approval']['decision'] == decision:
+            record = json.loads(path.read_text())
+            if decision in (record['approval']['decision'], record.get('spec_approval', {}).get('decision')):
                 raise ValueError('repin decision already used')
-        self.check_approval_order(old['approval'], approval)
-        if all(old['snapshots'][key]['sha256'] == snap['sha256'] for key, snap in snapshots.items()):
+        self.check_approval_order(old.get('spec_approval', old['approval']), approval)
+        if (not self.legacy_approval(old)
+                and all(old['snapshots'][key]['sha256'] == snap['sha256'] for key, snap in snapshots.items())):
             raise ValueError('snapshots unchanged; no repin written')
 
     @staticmethod
@@ -363,6 +493,7 @@ def main():
     parser.add_argument('--task', required=True)
     parser.add_argument('--decision')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--spec-worktree')
     parser.add_argument('--if-present', action='store_true')
     parser.add_argument('--head')
     parser.add_argument('--base', default='main')
@@ -370,7 +501,7 @@ def main():
     try:
         pins = Pins(os.environ, args.task)
         if args.command == 'create':
-            pin = pins.create(args.decision, args.resume)
+            pin = pins.create(args.decision, args.resume, args.spec_worktree)
             if pin is None:
                 print('fm-pin: no dispatch authorization; no pin written', file=sys.stderr)
                 return 3

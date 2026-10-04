@@ -1,0 +1,18 @@
+{
+  "id": "T-184",
+  "title": "pins written before T-171 can be repinned by a captain decision: a legacy first-pin approval no longer freezes its task",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_spec_pins.py",
+    "bin/fm-project.sh",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-184.json"
+  ],
+  "acceptance": [
+    "Why. T-171 (f61b714, merged 2026-10-04) made a first pin valid only under the task's own dispatch authority. Pins written before it were approved by the old rule. T-182, T-183 and T-125 all have version 1 approved by T-166's greenlit of 2026-10-02 (`state/pins/<T>/1.json`). `resolve()` now refuses them with 'pin authorization mismatch' (bin/lib/fm_spec_pins.py around 233-236). `fm-project.sh repin` validates the chain first, so it refuses too, even with a fresh captain decision for that task (D-firstmate-workflow-T182-1, T183-3 and T125-1/2/3, all answered A on 2026-10-04). Those three tasks can neither gate nor run a round. T-171 shipped without a migration path for existing pins, which the spec firstmate wrote did not ask for.",
+    "Legacy pins. A version written before T-171, whose approval is a direct order naming another task, is a legacy approval. It is no longer refused outright: it may be superseded. `fm-project.sh repin --decision <id>` with a captain choice decision answered A, for exactly this project and task, writes the next version. The new version records `supersedes_legacy: <version>` and the reason. From then on, resolution and gates rely only on the newest version's approval. A legacy approval that has not been superseded still refuses, exactly as today. Nothing else about T-171's rules changes: no scope card ever becomes a first-pin approval, and a decision is never reused.",
+    "Tests (fail first): a task whose v1 has a cross-task greenlit approval\n- refuses to resolve\n- after a repin with its own answered choice decision, resolves and gates on v2\n- refuses a repin with another task's decision\n- refuses reuse of a decision already used\nEvidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

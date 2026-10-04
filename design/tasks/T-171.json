@@ -1,0 +1,13 @@
+{
+  "id": "T-171",
+  "title": "a task's first pin is approved by its dispatch authority, never by a scope card, and reads the spec the task actually runs",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": ["bin/lib/fm_spec_pins.py", "bin/fm-worker.sh", "bin/fm-project.sh", "tests/**", "design/design.md", "design/tasks/T-171.json"],
+  "acceptance": [
+    "Why. On 2026-10-03, T-140, T-141 and T-053 each needed an extra captain card. `approval()` in bin/lib/fm_spec_pins.py (lines ~82-107) picks the latest choice card answered A for the task, whatever it was about, so a scope-widening card answered before the first pin became that pin's approval, while `collect()` read the task file from main, which lacked the widened scope. The card was then 'already used' and the repin that matched the branch needed a second card.",
+    "The first pin's approval is the task's dispatch authority only: its readiness card answered A (the card fm-ready.sh records with `judged`), or the captain's direct order (greenlit). A choice card that is neither is never taken as first-pin approval; with no dispatch authority, no pin is written (as today).",
+    "A scope card answered A before the first pin may be passed as the repin authority afterwards; `fm-project.sh repin` accepts a decision answered after the dispatch authority even when no earlier repin used it. When the first pin is written on a later round whose branch already carries an edited task file, the first pin may read that branch file only when an unused captain decision for exactly that change exists; otherwise it reads main and gate 4 refuses as today.",
+    "Tests (fail first): a scope card answered before the first round is not consumed by the first pin and later authorizes the repin; a direct order or readiness card pins; an unrelated card never pins. Evidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}
