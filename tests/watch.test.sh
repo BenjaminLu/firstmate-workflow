@@ -408,7 +408,7 @@ class OwnerDeathBoundaries(Watch):
         self.assertEqual(0, after.returncode, after.stderr)
         self.assertEqual('finished: T-1 worker-a-t1-r1 ok', after.stdout.strip(), after.stderr)
 
-    def test_pending_handoff_is_not_lost_when_startup_spends_the_wait_budget(self):
+    def test_pending_handoff_does_not_extend_the_wait_budget(self):
         import fcntl
         W.save(W.wdir(self.root) / 'cursor', '0')
         self.push('slow-start', 'round_end', 'wake after slow startup')
@@ -416,30 +416,24 @@ class OwnerDeathBoundaries(Watch):
         fcntl.flock(handoff, fcntl.LOCK_EX)
         W.take(self.root, stage=1)
         stage = W.wdir(self.root) / 'wake/1.staged'
+        staged = stage.read_bytes()
         real_select = W.select.select
-        def publish(readers, writers, errors, timeout=None):
+        def wait(readers, writers, errors, timeout=None):
             if len(readers) >= 3:
-                # The deadline is already spent, but the live publisher
-                # still owns the wake. Complete the handoff at the wait.
-                os.replace(stage, stage.with_suffix('.json'))
-                return [readers[0]], [], []
+                self.fail('an expired budget must not enter another park wait')
             return real_select(readers, writers, errors, timeout)
         try:
             with patch.object(W, 'ensure', return_value=dict(pid=os.getpid())), \
                     patch.object(W.time, 'monotonic', side_effect=[0, 11]), \
-                    patch.object(W.select, 'select', publish):
-                self.assertEqual(['wake after slow startup'], W.arm(self.root, self.owner.pid, 10),
-                                 'an expired budget cannot discard a pending live handoff')
+                    patch.object(W.select, 'select', wait):
+                self.assertEqual([], W.arm(self.root, self.owner.pid, 10),
+                                 'the wait limit holds while a live handoff is pending')
+            self.assertEqual(staged, stage.read_bytes(), 'timeout leaves the wake durable')
         finally:
             os.close(handoff)
-
-    def test_pre_watch_history_does_not_prevent_an_idle_timeout(self):
-        self.push('history', 'round_end', 'predates the watch')
-        W.take(self.root)  # Establish the intentional first-watch baseline.
-        with patch.object(W, 'ensure', return_value=dict(pid=os.getpid())), \
-                patch.object(W.time, 'monotonic', side_effect=[0, 11]):
-            self.assertEqual([], W.arm(self.root, self.owner.pid, 10),
-                             'historical status items are not pending arm deliveries')
+        with patch.object(W, 'ensure', return_value=dict(pid=os.getpid())):
+            self.assertEqual(['wake after slow startup'], W.arm(self.root, self.owner.pid, 10),
+                             'the next arm can recover the pending wake')
 
     def test_another_owners_exception_cannot_silently_cancel_a_live_arm(self):
         stderr = io.StringIO()

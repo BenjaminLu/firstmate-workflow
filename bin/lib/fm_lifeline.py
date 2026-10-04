@@ -897,7 +897,7 @@ def keep(fd, pid, name, argv):
     if pid is not None:
         env['FM_SESSION_PID'] = str(pid)
     kwargs = dict(process_group=0) if sys.version_info >= (3, 11) else dict(preexec_fn=os.setpgrp)
-    launch_lock = record = None
+    launch_lock = record = child = None
     try:
         if scope:
             import fcntl
@@ -921,8 +921,18 @@ def keep(fd, pid, name, argv):
         print(f'fm-lifeline: cannot start {argv[0]}: {error}', file=sys.stderr)
         return 127
     finally:
-        if launch_lock is not None:
-            launch_lock.close()
+        try:
+            if record is not None and child is None:
+                # No process group exists to drain. Remove registration for
+                # every failed startup, including exceptions before Popen,
+                # while closure is still excluded by the launch lock.
+                try:
+                    os.unlink(record.name)
+                finally:
+                    record.close()
+        finally:
+            if launch_lock is not None:
+                launch_lock.close()
     why = None
     while why is None:
         try:

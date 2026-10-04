@@ -76,3 +76,48 @@ for watch in watches:
     }
   });
 }
+
+for (const failure of ['missing-program', 'before-spawn']) {
+  test(`teardown accepts a keeper that never started: ${failure}`, () => {
+    const scope = mkdtempSync(join(tmpdir(), 'fm-e2e-scope-'));
+    try {
+      const result = spawnSync('python3', ['-c', `
+import os, subprocess, sys
+from pathlib import Path
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import fm_lifeline as L
+scope, failure = sys.argv[2:]
+env = dict(os.environ, FM_LIFELINE_SCOPE=scope)
+if failure == 'missing-program':
+    command = [sys.executable, str(Path(sys.argv[1]) / 'fm_lifeline.py'),
+               'keep', '--pid', str(os.getpid()), '--', str(Path(scope) / 'missing')]
+else:
+    # Raise after registration, before Popen. A BaseException exercises the
+    # finally path as well as the normal OSError -> 127 start failure.
+    command = [sys.executable, '-c', """
+import os, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import fm_lifeline as L
+def interrupted():
+    raise KeyboardInterrupt('before spawn')
+L.os.setsid = interrupted
+L.keep(None, int(sys.argv[2]), 'not-started', ['unused'])
+""", sys.argv[1], str(os.getpid())]
+keeper = subprocess.run(command, env=env, capture_output=True, timeout=10)
+assert keeper.returncode == 127 if failure == 'missing-program' else keeper.returncode != 0
+if failure == 'before-spawn':
+    assert b'KeyboardInterrupt: before spawn' in keeper.stderr, keeper.stderr
+assert (Path(scope) / 'launch.lock').exists(), 'keeper reached scope registration'
+L.close_scope(scope)
+print('scope closed after failed startup')
+`, join(ROOT, 'bin/lib'), scope, failure], {timeout: 15_000});
+      expect(result.status, 'close_scope accepts a keeper with no started process: ' +
+        result.stderr?.toString()).toBe(0);
+      expect(result.stdout.toString()).toContain('scope closed after failed startup');
+    } finally {
+      rmSync(scope, {recursive:true, force:true});
+    }
+  });
+}

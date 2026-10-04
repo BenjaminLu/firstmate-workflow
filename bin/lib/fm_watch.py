@@ -546,25 +546,6 @@ def pending(root):
         return _claim(root, include_queue=True)
 
 
-def arm_pending(root):
-    """Work this arm may deliver, excluding history before the first watch.
-
-    The board's waiting() includes that history; using it for a deadline
-    would make an otherwise idle arm wait forever on status-only items.
-    """
-    with Locked(wdir(root) / 'cursor.lock'):
-        offset = _cursor(root)
-        items = _queue_from(root, offset)[0] if offset is not None else []
-        for path in (wdir(root) / 'wake').glob('*'):
-            if path.suffix not in ('.json', '.staged'):
-                continue
-            record = read_json(path)
-            if 'items' not in record and record.get('lines'):
-                return True
-            items.extend(record.get('items') or [])
-        return any(not delivered(root, item) for item in items)
-
-
 def arm(root, owner, max_wait=None):
     """Park until a wake is claimed (its lines), the wait ends ([]), or the
     owner exits (None). Blocks on this arm's doorbell, the owner's exit
@@ -615,16 +596,7 @@ def arm(root, owner, max_wait=None):
                         return lines
                     left = None if deadline is None else deadline - time.monotonic()
                     if left is not None and left <= 0:
-                        if not arm_pending(root):
-                            return []
-                        # Startup/handoff can spend the budget on a loaded
-                        # runner. A pending wake is already a reason to
-                        # return, but its publisher must finish (or exit for
-                        # recovery) first. Keep the kernel subscriptions;
-                        # never turn that wake into an empty timeout.
-                        print(f'fm-watch-arm: owner {owner} is live; wait budget expired '
-                              'with a pending wake; waiting for handoff', file=sys.stderr)
-                        left = None
+                        return []
                     ready, _, _ = select.select([bell.fd, owner_exit.fileno(), cycle_exit.fileno()] +
                                               [p.fileno() for p in publishers], [], [], left)
                     if owner_exit.fileno() in ready and owner_exit.gone():
