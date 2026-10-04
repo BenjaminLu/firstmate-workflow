@@ -150,7 +150,7 @@ if [ "$vendor" = cursor-agent ] && [ "$probe_os" = darwin ]; then
   # cursor. The marker distinguishes wrapper failure from cursor's answer.
   # shellcheck disable=SC2016  # expanded by the confined shell, not this probe
   argv=("$probe_tool" -p "$probe_profile" /bin/sh -c
-        'touch "$1"; shift; exec "$@"' _ "$work/started" "${argv[@]}")
+        'touch "$1"; shift 1; exec "$@"' _ "$work/started" "${argv[@]}")
 fi
 
 # Where the adapter points the vendor's own configuration, so the probe

@@ -205,6 +205,23 @@ fake cursor-agent 2026.10.01-e373342 '✓ Logged in' 1
 assert_eq indeterminate "$(field "$(run cursor-agent)" status)" "nonzero Logged in is not authenticated"
 
 fake_checks cursor-agent 'true' cursor-agent-signed-in cursor-agent-signed-out
+# Fail only profile generation; policy and login resolution still use Python.
+mkdir -p "$d/profile-failure-bin"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'if [ "${1:-}" = %q ] && [ "${2:-}" = auth-probe-profile ]; then\n' "$ROOT/bin/lib/fm_sandbox_policy.py"
+  printf '  touch %q\n' "$d/profile-generation-failed"
+  printf '  exit 1\nfi\n'
+  printf 'exec %q "$@"\n' "$suite_tools/python3"
+} > "$d/profile-failure-bin/python3"
+chmod +x "$d/profile-failure-bin/python3"
+out="$(PATH="$d/profile-failure-bin:$PATH" run cursor-agent)"
+assert_ok "[ -e '$d/profile-generation-failed' ]" "the profile helper failure is exercised"
+assert_eq keychain-blocked "$(field "$out" status)" "failed profile generation fails closed"
+assert_eq "could not confine cursor-agent's keychain access" "$(field "$out" en)" "profile generation failure explains the confinement refusal"
+assert_eq '無法限制 cursor-agent 的鑰匙圈存取' "$(field "$out" tw)" "profile generation failure explains the refusal in Traditional Chinese"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "failed profile generation never starts cursor status"
+
 out="$(FM_SANDBOX_TOOL="$d/missing-sandbox-tool" run cursor-agent)"
 assert_eq keychain-blocked "$(field "$out" status)" "a missing sandbox tool fails closed"
 assert_eq "could not confine cursor-agent's keychain access" "$(field "$out" en)" "a wrapper failure is distinguished from a vendor keychain error"
