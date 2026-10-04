@@ -7,7 +7,7 @@ printf 'vendor: mock\nproject:\n  check: true\n' > "$repo/config.yaml"
 printf 'state/\n' > "$repo/.gitignore"
 git -C "$repo" add config.yaml .gitignore; git -C "$repo" commit -qm contract
 git -C "$repo" push -q origin main
-printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
+printf '%s\n' '{"type":"greenlit","task":"T-Z","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
 cat > "$repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
@@ -71,7 +71,7 @@ for missing in contract design; do
     fi
     mkdir -p "$repo/state/pins/T-Z"
     touch "$repo/state/pins/T-Z/.lock"
-    printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
+    printf '%s\n' '{"type":"greenlit","task":"T-Z","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
     cat > "$repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64

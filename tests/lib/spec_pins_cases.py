@@ -40,6 +40,7 @@ class SpecPins(unittest.TestCase):
         self.p = Pins(self.env, 'T-X')
 
     def event(self, typ='greenlit', ts='2026-10-03T00:00:00Z', **kwargs):
+        kwargs.setdefault('task', 'T-X')
         event = dict(type=typ, ts=ts, actor='captain', **kwargs)
         with (self.state / 'events.jsonl').open('a') as f:
             f.write(json.dumps(event) + '\n')
@@ -50,6 +51,109 @@ class SpecPins(unittest.TestCase):
         (self.state / f'decisions/{id}.json').write_text(json.dumps(dict(
             id=id, project=project, task=task, chosen=chosen, kind=kind, ts=ts)))
         self.event('decision_made', ts=ts, project=project, task=task, data=dict(decision=id, chosen=chosen))
+
+    def readiness(self, decision='D-1'):
+        (self.state / 'ready').mkdir(exist_ok=True)
+        (self.state / 'ready/T-X.json').write_text(json.dumps(dict(
+            task='T-X', decision=decision, episode='@-1/-1', judged_at='2026-10-03T00:00:00Z')))
+
+    def test_unrelated_choice_never_dispatches(self):
+        self.decision()
+        self.assertIsNone(self.p.create())
+        self.assertFalse(self.p.directory.exists())
+
+    def test_greenlight_must_name_exact_project_and_task(self):
+        self.event(task='T-Y')
+        self.event(project='other')
+        self.event(task=None)
+        self.assertIsNone(self.p.create())
+
+    def test_scope_answer_before_first_pin_remains_repin_authority(self):
+        self.readiness()
+        self.decision()
+        self.decision('D-2', ts='2026-10-03T00:02:00Z')
+        first = self.p.create()
+        self.assertEqual(first['approval']['decision'], 'D-1')
+        self.spec.write_text('{"id":"T-X","scope":["wider/**"]}')
+        second = self.p.create(decision='D-2')
+        self.assertEqual(second['version'], 2)
+        self.assertEqual(self.p.resolve(), second)
+
+    def test_direct_order_survives_unrelated_choice(self):
+        self.event()
+        self.decision()
+        self.assertEqual(self.p.create()['approval']['kind'], 'direct-order')
+
+    def test_pre_pin_scope_answer_authorizes_cli_repin(self):
+        self.event()
+        self.decision()
+        self.p.create()
+        self.spec.write_text('{"id":"T-X","scope":["wider/**"]}')
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        result = subprocess.run(['bash', str(ROOT / 'bin/fm-project.sh'), 'repin',
+            '--repo', str(self.root), '--project', 'firstmate-workflow', '--task', 'T-X',
+            '--decision', 'D-1'], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['version'], 2)
+
+    def test_ended_or_wrong_task_readiness_cannot_dispatch(self):
+        self.decision()
+        self.readiness()
+        path = self.state / 'ready/T-X.json'
+        for record in (dict(task='T-X', ended='D-1'),
+                       dict(task='T-Y', decision='D-1', episode='@-1/-1')):
+            path.write_text(json.dumps(record))
+            self.assertIsNone(self.p.create())
+
+    def test_resume_does_not_accept_wrong_commit_or_unapproved_bytes(self):
+        self.event()
+        base_text = self.spec.read_text()
+        head = git(self.root, 'rev-parse', 'HEAD')
+        self.spec.write_text('{"id":"T-X","scope":["unapproved/**"]}')
+        self.decision()
+        receipt = self.state / 'decisions/D-1.json'
+        answer = json.loads(receipt.read_text())
+        answer['expected_head'] = head
+        receipt.write_text(json.dumps(answer))
+        pin = self.p.create(resume=True, spec_worktree=self.root)
+        self.assertEqual(pin['snapshots']['spec']['text'], base_text)
+        self.assertNotIn('spec_approval', pin)
+
+    def test_resumed_branch_requires_exact_unused_decision(self):
+        self.event()
+        base_text = self.spec.read_text()
+        worktree = Path(self.tmp.name) / 'round'
+        git(self.root, 'worktree', 'add', '-qb', 'task-branch', str(worktree), 'main')
+        branch_spec = worktree / 'design/tasks/T-X.json'
+        branch_spec.write_text('{"id":"T-X","scope":["wider/**"]}')
+        git(worktree, 'add', '.')
+        git(worktree, 'commit', '-qm', 'proposed task change')
+        head = git(worktree, 'rev-parse', 'HEAD')
+        self.decision()
+        # An unrelated card cannot authorize these bytes, even on resume.
+        first = self.p.create(resume=True, spec_worktree=worktree)
+        self.assertEqual(first['snapshots']['spec']['text'], base_text)
+        (self.p.directory / '1.json').unlink()
+        receipt = self.state / 'decisions/D-1.json'
+        answer = json.loads(receipt.read_text())
+        answer['expected_head'] = head
+        receipt.write_text(json.dumps(answer))
+        pin = self.p.create(resume=True, spec_worktree=worktree)
+        self.assertEqual(pin['snapshots']['spec']['text'], branch_spec.read_text())
+        self.assertEqual(pin['approval']['kind'], 'direct-order')
+        self.assertEqual(pin['spec_approval']['decision'], 'D-1')
+        self.assertEqual(self.p.resolve(), pin)
+        self.spec.write_text('{"id":"T-X","scope":["extra/**"]}')
+        with self.assertRaisesRegex(ValueError, 'already used'):
+            self.p.create(decision='D-1')
+        self.decision('D-2', ts='2026-10-03T00:02:00Z')
+        revised = self.p.create(decision='D-2')
+        self.assertEqual(self.p.resolve(), revised)
+        # Exact commit provenance and the receipt are rechecked by consumers.
+        answer['expected_head'] = git(self.root, 'rev-parse', 'main')
+        receipt.write_text(json.dumps(answer))
+        with self.assertRaises(ValueError):
+            self.p.resolve()
 
     def test_no_authorization_writes_nothing(self):
         self.assertIsNone(self.p.create())
@@ -72,6 +176,7 @@ class SpecPins(unittest.TestCase):
             self.p.scope('HEAD', 'main')
 
     def test_readiness_and_resume(self):
+        self.readiness()
         self.decision()
         pin = self.p.create(resume=True)
         self.assertEqual(pin['source'], 'first-pin-on-resume')
@@ -154,6 +259,7 @@ class SpecPins(unittest.TestCase):
         (home / 'CONVENTIONS.md').write_text('private conventions')
         (state / 'config.yaml').write_text('project:\n  check: private-check\n  docs:\n    - guide/**\n')
         self.state = state
+        self.readiness()
         self.decision(project='client')
         p = Pins(dict(self.env, FM_EXTERNAL='1', FM_PROJECT='client', FM_STATE_DIR=str(state),
                       FM_TASKS_DIR=str(home / 'tasks'), FM_DESIGN=str(home / 'design.md')), 'T-X')
