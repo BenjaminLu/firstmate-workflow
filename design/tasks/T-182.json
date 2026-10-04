@@ -1,0 +1,23 @@
+{
+  "id": "T-182",
+  "title": "a chat merge authorization is recorded with its expiry, and the autopilot warns firstmate an hour before it lapses, listing what could still merge",
+  "milestone": "M2",
+  "depends_on": ["T-180"],
+  "scope": [
+    "bin/lib/fm_autopilot.py",
+    "bin/lib/fm_autopilot_loop.py",
+    "bin/lib/**",
+    "bin/fm-decide.sh",
+    "skills/firstmate/SKILL.md",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-182.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-04 the captain's chat authorization ran to 08:00, but T-176 was carded, green and unmerged at 08:10. Nothing told firstmate the window was closing: the authorization existed only in the chat. The captain approved fixing this on 2026-10-04 (\"…影響體驗正確性的都修掉\").",
+    "Record. firstmate records a time-boxed merge authorization with `bin/fm-decide.sh --authorize-merges --until <ISO-8601 with offset> --quote \"<the captain's words>\"`. It is stored under the session state (not in any repository) with the time it was recorded. A new record replaces the previous one. `--authorize-merges --show` prints the current window, or none. This changes nothing about how merges happen: they still go only through a board card, answered by the captain or by firstmate within the window. The record is evidence and a timer, not a bypass.",
+    "Warn. While a window is open, the autopilot queues one wake 60 minutes before it closes (or at once, if less than 60 minutes remain when it is recorded): 'merge authorization ends at <time>'. The wake lists:\n- pending merge cards\n- PRs with a bound APPROVE and green CI, but no card\n- PRs still in review or worker rounds\nAt expiry it queues one wake, 'merge authorization ended', so firstmate stops answering merge cards. Both wakes fire once per window, and a restart does not repeat them (T-172 boundary).",
+    "Docs. skills/firstmate/SKILL.md says firstmate records every chat merge authorization this way the moment it is given, and answers merge cards only inside a recorded window.",
+    "Tests (fail first, with a clock stub):\n- recording, then 61 minutes before expiry, gives no wake\n- 60 minutes before expiry gives one wake with the three lists\n- expiry gives one wake\n- a restart repeats neither\n- a replaced window resets the warnings\nEvidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

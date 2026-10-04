@@ -5138,3 +5138,27 @@ persisted T-172 tracking boundary. Draft status does not relax these conditions.
 A later authorized firstmate brief supersedes earlier questions for that task.
 Each remaining question has its own durable wake identity, allowing a new
 question at the same head without replaying the previous one after restart.
+
+### Recorded chat merge windows (T-182)
+
+Firstmate immediately records each time-boxed chat authorization using
+`fm-decide.sh --authorize-merges --until <ISO-8601-with-offset> --quote "<words>"`
+with the appropriate repo/project context. `--show` prints the current record,
+or `none`. The atomic replacement lives in resolved runtime session state at
+`session/merge-authorization.json`, with a unique window id, quote, recorded time
+and expiry; external projects retain it outside their target repository.
+Firstmate answers board merge cards only within that recorded window. This is
+an evidence/timer facility, never a merge bypass or a replacement for gates.
+
+The supervisor subscribes to the writer's existing local doorbell, caches the
+window on startup and pushed notifications, and includes its deadlines alongside
+GitHub backoff. It queues one bilingual reminder at expiry minus 60 minutes
+(or immediately within that hour), listing pending merge cards, observed bound
+APPROVE/green-CI PRs without cards, and recorded in-flight worker/reviewer rounds. At expiry it
+queues one ended notice. Persisted wake identities include the unique window id,
+so T-172 restart recovery repeats neither notice and replacement resets both.
+A service starting after expiry sends only the ended notice. Cached PR evidence
+is informational; authoritative readiness and board authorization still govern
+any merge. Reminder inventory reuses the checks and verdict already read by PR
+advancement and folds local lifecycle events for rounds; it performs no extra
+GitHub requests or process probes. No wake or queue receipt proves delivery to a model.
