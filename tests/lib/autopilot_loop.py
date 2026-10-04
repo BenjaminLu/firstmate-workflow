@@ -13,6 +13,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 import fm_autopilot as A
+from autopilot_branch_fixture import BranchFixture, response
 
 HEAD = 'a' * 40
 BASE = 'b' * 40
@@ -22,7 +23,7 @@ PR = dict(number=12, title='T-001: fixture', state='open',
           mergeable=True, mergeable_state='clean', draft=False)
 
 
-class LoopTests(unittest.TestCase):
+class LoopTests(BranchFixture, unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
@@ -38,10 +39,16 @@ class LoopTests(unittest.TestCase):
         self.pilot.start_job = lambda kind, task, pr, argv, **extra: self.calls.append((kind, task, pr, argv, extra))
         self.pilot.authoritative_head = lambda task, pr: pr['head']['sha']
         self.pilot.command = self.command
+        self.branch_setup()
+        self.pilot.probe = self.probe
         self.pilot.read_head_spec = lambda pr, task: dict(id=task)
         self.pilot.emit = lambda *a, **kw: self.calls.append(('emit', a, kw))
         self.pilot.verdict = lambda task: {}
         self.pilot.busy = lambda task: False
+
+    def probe(self, argv):
+        self.calls.append(('probe', argv))
+        return self.branch_probe(argv)
 
     def command(self, argv, **kwargs):
         self.calls.append(('command', argv))
@@ -145,6 +152,7 @@ class LoopTests(unittest.TestCase):
     def test_restart_replays_no_gate(self):
         self.pilot.advance(PR, CHECKS, [])
         restored = A.Pilot(self.ctx)
+        restored.probe = self.probe
         restored.api = self.pilot.api
         restored.start_job = self.pilot.start_job
         restored.verdict = self.pilot.verdict
@@ -337,9 +345,214 @@ class LoopTests(unittest.TestCase):
         self.pilot.verdict = lambda task: dict(verdict='REJECT', head=HEAD, signature='old')
         self.pilot.advance(PR, CHECKS, [])
         next_pr = copy.deepcopy(PR); next_pr['head']['sha'] = 'c' * 40
-        self.pilot.pull(next_pr, [], [], [dict(CHECKS[0], head_sha='c' * 40)], [])
+        self.pull_at(next_pr, [], [], [dict(CHECKS[0], head_sha='c' * 40)], [])
         self.assertEqual(self.calls[-1][0], 'gate')
         self.assertEqual(self.calls[-1][2]['head']['sha'], 'c' * 40)
+
+    def lagging(self):
+        self.branch = PR['head']['ref']
+        self.local_refs[self.branch] = 'd' * 40
+        self.fetch_head = HEAD
+        self.worktree = str(self.root / 'task worktree')
+
+    def sync_poll(self, pr=PR):
+        self.pilot.data['poll_seq'] = self.pilot.data.get('poll_seq', 0) + 1
+        self.pilot.pull(pr, [], [], [dict(CHECKS[0], head_sha=pr['head']['sha'])], [])
+
+    def gates(self):
+        return [c for c in self.calls if c[0] == 'gate']
+
+    def git_calls(self, operation):
+        return [c[1] for c in self.calls if c[0] == 'probe' and operation in c[1]]
+
+    def test_clean_ancestor_fast_forwards_and_gates_same_poll(self):
+        self.lagging(); self.sync_poll()
+        self.assertEqual(self.local_refs[self.branch], HEAD)
+        self.assertEqual(self.git_calls('merge')[0][-3:], ['merge', '--ff-only', HEAD])
+        self.assertEqual(len(self.gates()), 1)
+
+    def test_missing_ref_creates_and_gates(self):
+        self.lagging(); self.local_refs.clear(); self.sync_poll()
+        self.assertIn(['git', '-C', str(self.root), 'update-ref',
+                       'refs/heads/' + self.branch, HEAD, ''], self.git_calls('update-ref'))
+        self.assertEqual(len(self.gates()), 1)
+
+    def test_dirty_worktree_holds_then_wakes_once(self):
+        self.lagging(); self.dirty = True
+        for count in range(1, 6):
+            self.sync_poll()
+            self.assertEqual(len(self.pilot.data['wakes']), int(count >= 3))
+        self.assertEqual(self.gates(), [])
+        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertIn(self.worktree, str(self.pilot.data['wakes']))
+        self.assertEqual(self.local_refs[self.branch], 'd' * 40)
+
+    def test_live_round_dirty_hold_is_silent_then_gates(self):
+        self.assert_live_hold(True)
+
+    def test_live_round_clean_hold_is_silent_then_gates(self):
+        self.assert_live_hold(False)
+
+    def assert_live_hold(self, dirty):
+        self.lagging(); self.dirty = dirty
+        with patch('fm_concurrent.live_rounds', return_value=[dict(task='T-001')]):
+            for _ in range(5): self.sync_poll(dict(PR, mergeable_state='behind'))
+        self.assertEqual(self.pilot.data['holds'], {})
+        self.assertEqual(self.pilot.data['wakes'], {})
+        self.assertEqual(self.gates(), [])
+        self.assertEqual(self.git_calls('PUT'), [])
+        self.dirty = False; self.sync_poll()
+        self.assertEqual(len(self.gates()), 1)
+        self.assertEqual(self.local_refs[self.branch], HEAD)
+
+    def test_busy_job_after_202_holds_dirty_ref_silently(self):
+        self.assert_busy_hold(True)
+
+    def test_busy_job_after_202_holds_clean_ref_silently(self):
+        self.assert_busy_hold(False)
+
+    def assert_busy_hold(self, dirty):
+        self.pull_at(dict(PR, mergeable_state='behind'), runs=CHECKS)
+        self.assertEqual(len(self.git_calls('PUT')), 1)
+        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
+        pr['mergeable_state'] = 'behind'
+        self.branch = pr['head']['ref']; self.fetch_head = pr['head']['sha']
+        self.worktree = str(self.root / 'task'); self.dirty = dirty
+        self.pilot.busy = lambda task: True
+        for _ in range(5): self.sync_poll(pr)
+        self.assertEqual(self.pilot.data['holds'], {})
+        self.assertEqual(self.pilot.data['wakes'], {})
+        self.assertEqual(len(self.git_calls('PUT')), 1)
+        self.assertEqual(len(self.gates()), 1)
+        self.pilot.busy = lambda task: False; self.dirty = False
+        self.sync_poll(pr)
+        self.assertEqual(self.local_refs[self.branch], 'c' * 40)
+        self.assertEqual(len(self.gates()), 2)
+
+    def test_equal_ref_clears_exhausted_sync_and_hold_then_advances(self):
+        self.lagging()
+        key = 'sync:12:' + HEAD
+        self.pilot.data['retries'][key] = dict(count=3, due_seq=99)
+        self.pilot.data['holds']['12'] = dict(head=HEAD, count=2)
+        self.local_refs[self.branch] = HEAD
+        self.sync_poll()
+        self.assertNotIn(key, self.pilot.data['retries'])
+        self.assertEqual(self.pilot.data['holds'], {})
+        self.assertEqual(self.git_calls('fetch'), [])
+        self.assertEqual(len(self.gates()), 1)
+
+    def test_sync_not_due_skips_advance_without_fetch(self):
+        self.lagging()
+        self.pilot.data['retries']['sync:12:' + HEAD] = dict(count=1, due_seq=3)
+        self.sync_poll()
+        self.assertEqual(self.gates(), [])
+        self.assertEqual(self.git_calls('fetch'), [])
+        self.assertEqual(self.pilot.data['wakes'], {})
+        self.sync_poll(); self.sync_poll()
+        self.assertEqual(len(self.gates()), 1)
+
+    def test_merge_base_error_retries_then_wakes_with_last_stderr(self):
+        self.lagging(); self.ancestor = 128
+        for attempts in (1, 2, 2, 3, 3):
+            self.sync_poll()
+            self.assertEqual(len(self.git_calls('merge-base')), attempts)
+        self.assertEqual(self.gates(), [])
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.assertIn('fatal: Not a valid commit name', str(self.pilot.data['wakes']))
+        self.assertEqual(self.pilot.data['actions'], {})
+
+    def test_sync_errors_use_last_nonempty_stderr_and_keep_private_cleanup(self):
+        self.lagging()
+        self.git_error = ('fetch', 128, '', 'first line\nfatal: final error\n\n')
+        for _ in range(4): self.sync_poll()
+        line = next(iter(self.pilot.data['wakes'].values()))['line']
+        self.assertIn('fatal: final error', line)
+        self.assertNotIn('first line', line)
+        self.assertEqual(len(self.git_calls('update-ref')), 3)
+        self.assertEqual(self.gates(), [])
+
+    def test_nonancestor_keeps_stale_binding_park_and_wake(self):
+        self.lagging(); self.ancestor = 1
+        def stale(*args):
+            raise ValueError('authoritative PR head differs from fetched head or local task ref; refresh before accepting')
+        self.pilot.authoritative_head = stale
+        self.sync_poll()
+        self.assertEqual(self.local_refs[self.branch], 'd' * 40)
+        self.assertEqual(self.gates(), [])
+        self.assertTrue(any(a['state'] == 'uncertain' for a in self.pilot.data['actions'].values()))
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.assertEqual(self.pilot.data['retries'], {})
+
+    def test_moved_during_fetch_never_moves_or_creates(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                self.lagging()
+                if missing: self.local_refs.clear()
+                before = dict(self.local_refs)
+                self.fetch_head = 'c' * 40
+                self.sync_poll()
+                self.assertEqual(self.local_refs, before)
+        self.assertEqual(self.gates(), [])
+        self.assertEqual(self.pilot.data['retries'], {})
+        self.assertEqual(self.pilot.data['wakes'], {})
+        self.assertEqual(self.git_calls('merge'), [])
+        self.assertTrue(all('-d' in c for c in self.git_calls('update-ref')))
+
+    def test_no_worktree_uses_compare_and_swap_and_mismatch_retries(self):
+        self.lagging(); self.worktree = None
+        # Limit the failure to the public-ref CAS, leaving private cleanup intact.
+        original = self.pilot.probe
+        def racing(argv):
+            if argv[3] == 'update-ref' and argv[4].startswith('refs/heads/'):
+                self.calls.append(('probe', argv))
+                return 1, '', 'fatal: ref changed'
+            return original(argv)
+        self.pilot.probe = racing
+        self.sync_poll()
+        expected = ['git', '-C', str(self.root), 'update-ref',
+                    'refs/heads/' + self.branch, HEAD, 'd' * 40]
+        self.assertIn(expected, self.git_calls('update-ref'))
+        self.assertEqual(self.pilot.data['retries']['sync:12:' + HEAD]['count'], 1)
+        self.assertEqual(self.gates(), [])
+        self.pilot.probe = original; self.sync_poll()
+        self.assertEqual(self.local_refs[self.branch], HEAD)
+        self.assertEqual(len(self.gates()), 1)
+
+    def test_parked_advance_survives_migration_and_sync(self):
+        self.pilot.advance(PR, CHECKS, [])
+        token, action = next(iter(self.pilot.data['actions'].items()))
+        action['state'] = 'uncertain'
+        self.pilot.data.pop('migrated_t190', None); self.pilot.save()
+        restored = A.Pilot(self.ctx)
+        restored.probe = self.probe
+        self.assertEqual(restored.data['actions'][token], action)
+        self.pilot.data = restored.data
+        self.calls.clear(); self.lagging(); self.sync_poll()
+        self.assertEqual(self.local_refs[self.branch], HEAD)
+        self.assertEqual(self.gates(), [])
+        self.assertEqual(self.pilot.data['actions'][token], action)
+        self.assertEqual(self.pilot.data['wakes'], {})
+
+    def test_each_sync_command_error_defers_advance_and_retries(self):
+        for operation in ('rev-parse', 'worktree', 'status', 'merge'):
+            with self.subTest(operation=operation):
+                self.pilot.data['retries'].clear()
+                self.lagging()
+                self.git_error = (operation, 128, '', 'noise\nfatal: ' + operation + ' failed\n')
+                self.sync_poll()
+                self.assertEqual(self.pilot.data['retries']['sync:12:' + HEAD]['count'], 1)
+                self.assertEqual(self.gates(), [])
+                self.assertEqual(self.pilot.data['wakes'], {})
+                self.assertEqual(self.pilot.data['actions'], {})
+
+    def test_exhausted_sync_checks_equal_ref_but_makes_no_more_attempts(self):
+        self.lagging()
+        self.pilot.data['retries']['sync:12:' + HEAD] = dict(count=3, due_seq=0)
+        for _ in range(5): self.sync_poll()
+        self.assertEqual(len(self.git_calls('--verify')), 5)
+        self.assertEqual(self.git_calls('fetch'), [])
+        self.assertEqual(self.gates(), [])
+        self.assertEqual(self.pilot.data['wakes'], {})
 
 
 if __name__ == '__main__': unittest.main()

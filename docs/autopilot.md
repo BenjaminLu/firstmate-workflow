@@ -24,8 +24,16 @@ only when the latest verdict is APPROVE and gate 7 cannot carry it because it
 is unsigned legacy evidence or its spec, contract or conventions hash changed.
 Worker edits, standing rejections and carried approvals do not start rounds. A failed launcher queues judgment.
 
-Mechanical actions update only mergeable, behind task branches after rechecking
-the observed head and mergeability; restacking delegates to the existing policy and lease checks. Returning
+Mechanical branch updates use GitHub's REST compare-and-swap with the observed
+head SHA, only for open, non-draft, mergeable, behind task branches. Live rounds
+and busy autopilot jobs defer updates silently. An accepted update suppresses
+another request for 20 polls; head races are reconsidered on the next poll.
+Other failures retry at poll offsets 0, 1 and 3, then wake once.
+Before advancing, the service privately fetches a changed head and fast-forwards
+an ancestor local task ref when no round or job is active and its tracked
+worktree is clean. Active work holds silently; an idle dirty worktree wakes once
+after three held polls. Unpublished divergent work is retained for judgment.
+Restacking delegates to the existing policy and lease checks. Returning
 reviewers receive re-check requests when publication policy permits it; local
 mode retains a request for firstmate. Ready tasks hold and queue a bilingual request for firstmate to re-read the
 spec against main and author the recommendation, evidence and readiness card.
@@ -33,14 +41,17 @@ The card retains proceed, rescope, park and drop effects; it authorizes no merge
 project conventions. Autopilot neither runs gates nor claims an approval, current
 CI, six-gate readiness or permission to merge.
 
-Service state and write-ahead action records live in `state/autopilot/` for the
+Service state, branch retry/pending records and other write-ahead action records live in `state/autopilot/` for the
 self project, or `FM_HOME/projects/<name>/state/autopilot/` externally. Judgment
 records live in the corresponding `state/wake-queue/`, then enter T-137's
 `state/session/wake.jsonl` transport. CI failures, findings, failed/lost rounds,
 B/C answers, convention changes and ambiguous mechanical outcomes carry reason
 lines. Overdue items produce bilingual board events and desktop notifications.
-An action interrupted after its write-ahead record is held for reconciliation;
-it is never blindly replayed. The service's log names failures before startup.
+Branch update steps no longer write reconciliation records: they are re-decided
+from observed GitHub state. Other actions interrupted after their write-ahead
+record remain held for reconciliation. The one-time upgrade removes legacy
+update actions and undelivered update wakes; delivered wake files and parked
+advance actions remain unchanged. The service's log names failures before startup.
 
 Native source loading, enablement, exact-definition trust, reload and model
 receipt remain separate T-164 facts. A FIFO notification, queued record,
@@ -60,3 +71,5 @@ crash recovery through `fm.sh`, owner exit and isolated writer notification.
 `tests/autopilot-entrypoints.test.sh` covers session-start wiring, registry
 fan-out, resume holds, frozen launch arguments and round exclusion. Workers author these tests
 without running them; CI and the gates establish red/base and green/head evidence.
+
+Tests that drive `pull()` directly advance `data["poll_seq"]` themselves.

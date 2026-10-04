@@ -4901,8 +4901,18 @@ to the shared fail-first engine without consulting the target config.
 Before accepting evidence, synchronize and verify GitHub's authoritative PR head
 against the local task ref and isolated checkout. CI/check statuses, gates,
 reviewed head/base/patch, final-answer provenance, reviewer identity and merge
-candidate are bound to that verified SHA. If GitHub update-branch advances the
-remote while local refs remain stale, green local gates prove no readiness.
+candidate are bound to that verified SHA. Before advance, the autopilot compares
+the local task ref to the observed PR head. Equal refs need no fetch; a missing
+ref is created only after a private fetch matches that head. An ancestor ref
+fast-forwards after that same fetch check, only with no live worker/reviewer
+round, no busy autopilot job, and a clean tracked task worktree. Active rounds
+and jobs hold silently even when dirty; an idle dirty worktree wakes once after
+three held polls. A worktree fast-forwards with `merge --ff-only`; a ref without
+a worktree uses an old-SHA compare-and-swap. A moved fetch skips this poll.
+Divergent unpublished work remains untouched and authoritative binding still
+refuses it. Equal refs clear sync retries and holds, including after manual
+repair. Sync errors retry at poll offsets 0, 1 and 3, then wake once with the
+last command error. Stale local gates still prove no readiness.
 Refresh/refuse on mismatch, remote movement or unreadability. T-051/T-052/T-138
 own regressions for that boundary; check again before presenting/using a card.
 
@@ -5120,8 +5130,19 @@ notifications. Only GitHub is polled, with endpoint ETags, confirmed convention
 cadence and bounded network backoff. Per-reviewer quiet periods batch findings;
 no idle timer invokes a model.
 
-Mechanical branch updates recheck MERGEABLE, BEHIND and the expected head;
-restacking follows confirmed policy and expected-head lease checks. Every new
+Mechanical branch updates require an open, non-draft PR observed as mergeable
+and behind; unknown mergeability never authorizes an update. With no live round
+or busy autopilot job for the task, REST `PUT /repos/{repo}/pulls/{n}/update-branch`
+uses `expected_head_sha` as GitHub's compare-and-swap. HTTP 202 stores a
+`{head, seq}` pending marker, suppressing another PUT for 20 poll steps on that
+head. An expected-head 422 means a race and is re-decided next poll without a
+wake. Other responses use an uncached PR re-read: a changed head means a race;
+an unchanged head or failed re-read retries at poll offsets 0, 1 and 3, then
+wakes once with the last HTTP status or transport error. Update failures stay
+isolated to their PR. The persistent poll sequence advances even on policy or
+network errors; retries, holds and pending markers are pruned when the head
+changes or the PR becomes terminal. Restacking follows confirmed policy and
+expected-head lease checks. Every new
 worker or base-update head runs gates. Gate 7 decides whether an approval
 carries, whether changed pinned inputs require review, or whether a new worker
 change needs a verdict. A current-head REJECT wakes firstmate for a brief and
@@ -5130,9 +5151,14 @@ reviewers can receive policy-permitted re-check requests. Readiness holds for
 firstmate's recommendation and evidence (§6); landing remains the captain's
 card or the team's handoff, never an autopilot merge.
 
-Before a mechanical side effect the service persists a write-ahead action
-record under `state/autopilot/`. Completion marks it done; interruption or an
-ambiguous result queues reconciliation rather than replaying the action. CI
+Branch updates are re-decided from GitHub state, without a write-ahead action
+record. Other mechanical effects retain their write-ahead records under
+`state/autopilot/`: completion marks them done; interruption or an ambiguous
+result queues reconciliation rather than replaying the action. The one-time
+`migrated_t190` upgrade removes legacy update actions and their undelivered
+action wakes before recovery, without rewriting delivered wake files or
+requeueing anything. Parked advance actions remain for firstmate reconciliation;
+their stored identities cannot establish why they failed. CI
 failures, findings, failed/lost rounds, B/C answers, readiness and conventions
 drift persist reason lines under `state/wake-queue/` and enter the T-137 bridge.
 `autopilot_waiting` reports overdue judgment bilingually to the board and desktop;
