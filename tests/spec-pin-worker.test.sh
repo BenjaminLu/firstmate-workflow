@@ -7,7 +7,7 @@ printf 'vendor: mock\nproject:\n  check: true\n' > "$repo/config.yaml"
 printf 'state/\n' > "$repo/.gitignore"
 git -C "$repo" add config.yaml .gitignore; git -C "$repo" commit -qm contract
 git -C "$repo" push -q origin main
-printf '%s\n' '{"type":"greenlit","task":"T-Z","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
+printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
 cat > "$repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
@@ -58,6 +58,47 @@ for corruption in hash unreadable; do
   fi
 done
 rm -rf "$d"
+# A resumed PR's first pin must receive the actual round worktree, not main.
+d="$(fixture)"; repo="$d/repo"; GH="$(ghstub "$d")"
+printf 'vendor: mock\nproject:\n  check: true\n' > "$repo/config.yaml"
+printf 'state/\n' > "$repo/.gitignore"
+git -C "$repo" add config.yaml .gitignore; git -C "$repo" commit -qm contract
+git -C "$repo" push -q origin main
+git -C "$repo" checkout -qb t-z-resume
+jq '.scope += ["wider/**", "design/tasks/T-Z.json"]' "$repo/design/tasks/T-Z.json" > "$d/spec.json"
+cp "$d/spec.json" "$repo/design/tasks/T-Z.json"
+mkdir -p "$repo/src"
+printf 'earlier implementation\n' > "$repo/src/prior"
+git -C "$repo" add design/tasks/T-Z.json src/prior
+git -C "$repo" commit -qm 'approved scope and earlier implementation'
+head="$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" push -q origin t-z-resume
+git -C "$repo" checkout -q main
+mkdir -p "$repo/state/ready" "$repo/state/decisions"
+printf '%s\n' '{"task":"T-Z","ended":"D-ready","ended_at":"2026-10-03T00:03:00Z"}' > "$repo/state/ready/T-Z.json"
+printf '%s\n' '{"id":"D-ready","task":"T-Z","kind":"choice","chosen":"A"}' > "$repo/state/decisions/D-ready.json"
+jq -n --arg head "$head" '{id:"D-scope",task:"T-Z",kind:"choice",chosen:"A",expected_head:$head}' > "$repo/state/decisions/D-scope.json"
+printf '%s\n' \
+  '{"type":"decision_made","actor":"captain","task":"T-Z","ts":"2026-10-03T00:00:00Z","data":{"decision":"D-ready","chosen":"A"}}' \
+  '{"type":"decision_made","actor":"captain","task":"T-Z","ts":"2026-10-03T00:01:00Z","data":{"decision":"D-scope","chosen":"A"}}' > "$repo/state/events.jsonl"
+cat > "$repo/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = run ] || exit 64
+cp "$2" "$FM_SEEN/prompt.md"
+cp "$FM_PINNED_DIR/spec.json" "$FM_SEEN/adapter-spec.json"
+mkdir -p "$3/wider"
+printf 'resumed implementation\n' > "$3/wider/feature"
+M
+chmod +x "$repo/bin/adapters/mock.sh"
+(cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --pr 42) > "$d/out" 2>&1
+assert_eq 0 "$?" 'resumed PR worker pins after readiness retirement'
+assert_eq approved-branch "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'resumed launcher passes worktree for approved branch scope'
+assert_eq D-ready "$(jq -r '.approval.decision' "$repo/state/pins/T-Z/1.json")" 'resumed pin retains retired dispatch authority'
+assert_eq D-scope "$(jq -r '.spec_approval.decision' "$repo/state/pins/T-Z/1.json")" 'resumed pin binds exact scope approval'
+assert_ok "cmp '$d/spec.json' '$d/adapter-spec.json'" 'resumed adapter receives the approved branch spec bytes'
+assert_contains "$(cat "$d/prompt.md")" 'first-pin-on-resume' 'resumed prompt names first-pin provenance'
+rm -rf "$d"
+
 # Authorized legacy sources cannot pin, but still run in both self modes.
 for missing in contract design; do
   for mode in default explicit; do
@@ -71,7 +112,7 @@ for missing in contract design; do
     fi
     mkdir -p "$repo/state/pins/T-Z"
     touch "$repo/state/pins/T-Z/.lock"
-    printf '%s\n' '{"type":"greenlit","task":"T-Z","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
+    printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
     cat > "$repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64

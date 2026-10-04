@@ -79,15 +79,32 @@ class Pins:
         events = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
         return [e for e in events if e.get('project', 'firstmate-workflow') == self.project]
 
+    def readiness_decision(self):
+        # fm-ready retires this record on dispatch. The ended card still names
+        # the dispatch judgment when a first pin is created on a later round.
+        path = self.state / 'ready' / (self.task + '.json')
+        if path.is_file() and not path.is_symlink():
+            record = json.loads(path.read_text())
+            if record.get('task') == self.task:
+                return record.get('decision') if record.get('episode') else record.get('ended')
+        return None
+
+    def answer(self, decision):
+        if not isinstance(decision, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', decision):
+            return None
+        path = self.state / 'decisions' / (decision + '.json')
+        if not path.is_file() or path.is_symlink():
+            return None
+        answer = json.loads(path.read_text())
+        if (answer.get('chosen') == 'A' and answer.get('kind', 'choice') == 'choice'
+                and answer.get('task') == self.task and answer.get('id') == decision
+                and answer.get('project', 'firstmate-workflow') == self.project):
+            return answer
+        return None
+
     def approval(self, decision=None):
         events = self.events()
-        readiness = None
-        if not decision:
-            path = self.state / 'ready' / (self.task + '.json')
-            if path.is_file() and not path.is_symlink():
-                record = json.loads(path.read_text())
-                if record.get('task') == self.task and record.get('episode'):
-                    readiness = record.get('decision')
+        readiness = self.readiness_decision() if not decision else None
         for event in reversed(events):
             data = event.get('data') or {}
             if event.get('type') != 'decision_made' or event.get('task') != self.task:
@@ -95,16 +112,9 @@ class Pins:
             id = data.get('decision', '')
             if id != (decision or readiness):
                 continue
-            if not re.fullmatch(r'[A-Za-z0-9_-]+', id):
-                continue
-            path = self.state / 'decisions' / (id + '.json')
-            if not path.is_file() or path.is_symlink():
-                continue
-            answer = json.loads(path.read_text())
-            if (event.get('actor') != 'captain' or data.get('chosen') != 'A'
-                    or answer.get('chosen') != 'A' or answer.get('kind', 'choice') != 'choice'
-                    or answer.get('task') != self.task or answer.get('id') != id
-                    or answer.get('project', 'firstmate-workflow') != self.project):
+            answer = self.answer(id)
+            if (answer is None or event.get('actor') != 'captain'
+                    or data.get('chosen') != 'A'):
                 continue
             if not event.get('ts'):
                 continue
@@ -114,8 +124,11 @@ class Pins:
             raise ValueError('missing or mismatched captain authorization for project/task/decision')
 
         for event in reversed(events):
-            if (event.get('type') == 'greenlit' and event.get('task') == self.task
-                    and event.get('ts')):
+            if (event.get('type') == 'greenlit'
+                    and event.get('ts')
+                    and (event.get('task') == self.task
+                         or (not event.get('task')
+                             and (not readiness or self.answer(readiness) is not None)))):
                 return dict(kind='direct-order', decision=event.get('id') or 'greenlit:' + event['ts'],
                             author='captain', time=event['ts'], event=event)
         return None
@@ -219,7 +232,7 @@ class Pins:
                     raise ValueError('pin approval provenance mismatch')
             elif (approval['kind'] != 'direct-order' or version != 1
                   or approval['event'].get('type') != 'greenlit'
-                  or approval['event'].get('task') != self.task):
+                  or approval['event'].get('task') not in (None, '', self.task)):
                 raise ValueError('pin authorization mismatch')
             if approval['time'] != approval['event'].get('ts'):
                 raise ValueError('pin approval time mismatch')

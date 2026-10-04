@@ -256,7 +256,7 @@ class PinnedContext(unittest.TestCase):
                           ('contract', state / 'config.yaml')]:
             path.write_bytes(self.pin['snapshots'][key]['text'].encode())
         (state / 'events.jsonl').write_text(json.dumps(dict(type='greenlit', actor='captain',
-                                                          project='private', task='T-173', ts='2026-10-03T00:00:00Z')) + '\n')
+                                                          project='private', ts='2026-10-03T00:00:00Z')) + '\n')
         pins = Pins(dict(FM_ENGINE_ROOT=str(engine), FM_TARGET_ROOT=str(target), FM_STATE_DIR=str(state),
                          FM_EXTERNAL='1', FM_PROJECT='private', FM_TASKS_DIR=str(private / 'tasks'),
                          FM_DESIGN=str(private / 'design.md')), 'T-173')

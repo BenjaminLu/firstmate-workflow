@@ -40,7 +40,6 @@ class SpecPins(unittest.TestCase):
         self.p = Pins(self.env, 'T-X')
 
     def event(self, typ='greenlit', ts='2026-10-03T00:00:00Z', **kwargs):
-        kwargs.setdefault('task', 'T-X')
         event = dict(type=typ, ts=ts, actor='captain', **kwargs)
         with (self.state / 'events.jsonl').open('a') as f:
             f.write(json.dumps(event) + '\n')
@@ -52,20 +51,21 @@ class SpecPins(unittest.TestCase):
             id=id, project=project, task=task, chosen=chosen, kind=kind, ts=ts)))
         self.event('decision_made', ts=ts, project=project, task=task, data=dict(decision=id, chosen=chosen))
 
-    def readiness(self, decision='D-1'):
+    def readiness(self, decision='D-1', retired=False):
         (self.state / 'ready').mkdir(exist_ok=True)
-        (self.state / 'ready/T-X.json').write_text(json.dumps(dict(
-            task='T-X', decision=decision, episode='@-1/-1', judged_at='2026-10-03T00:00:00Z')))
+        record = (dict(task='T-X', ended=decision, ended_at='2026-10-03T00:03:00Z')
+                  if retired else dict(task='T-X', decision=decision, episode='@-1/-1',
+                                       judged_at='2026-10-03T00:00:00Z'))
+        (self.state / 'ready/T-X.json').write_text(json.dumps(record))
 
     def test_unrelated_choice_never_dispatches(self):
         self.decision()
         self.assertIsNone(self.p.create())
         self.assertFalse(self.p.directory.exists())
 
-    def test_greenlight_must_name_exact_project_and_task(self):
+    def test_greenlight_cannot_name_another_project_or_task(self):
         self.event(task='T-Y')
         self.event(project='other')
-        self.event(task=None)
         self.assertIsNone(self.p.create())
 
     def test_scope_answer_before_first_pin_remains_repin_authority(self):
@@ -82,7 +82,9 @@ class SpecPins(unittest.TestCase):
     def test_direct_order_survives_unrelated_choice(self):
         self.event()
         self.decision()
-        self.assertEqual(self.p.create()['approval']['kind'], 'direct-order')
+        pin = self.p.create()
+        self.assertIsNotNone(pin, 'production project greenlight authorizes the first pin')
+        self.assertEqual(pin['approval']['kind'], 'direct-order')
 
     def test_pre_pin_scope_answer_authorizes_cli_repin(self):
         self.event()
@@ -96,14 +98,40 @@ class SpecPins(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['version'], 2)
 
-    def test_ended_or_wrong_task_readiness_cannot_dispatch(self):
+    def test_wrong_task_readiness_cannot_dispatch(self):
         self.decision()
         self.readiness()
-        path = self.state / 'ready/T-X.json'
-        for record in (dict(task='T-X', ended='D-1'),
-                       dict(task='T-Y', decision='D-1', episode='@-1/-1')):
-            path.write_text(json.dumps(record))
-            self.assertIsNone(self.p.create())
+        (self.state / 'ready/T-X.json').write_text(json.dumps(
+            dict(task='T-Y', decision='D-1', episode='@-1/-1')))
+        self.assertIsNone(self.p.create())
+
+    def test_project_greenlight_respects_only_own_readiness_answer(self):
+        self.event()
+        self.readiness()
+        for chosen in ('B', 'C', 'D'):
+            with self.subTest(chosen=chosen):
+                self.decision(chosen=chosen)
+                self.assertIsNone(self.p.create())
+        self.decision()
+        # Production legacy fixtures can have a receipt without decision_made.
+        (self.state / 'events.jsonl').unlink()
+        self.event()
+        pin = self.p.create()
+        self.assertEqual(pin['approval']['kind'], 'direct-order')
+        self.assertEqual(self.p.resolve(), pin)
+
+    def test_unanswered_readiness_blocks_project_greenlight(self):
+        self.event()
+        self.readiness()
+        self.assertIsNone(self.p.create())
+
+    def test_task_direct_order_overrides_readiness_hold(self):
+        self.readiness()
+        self.decision(chosen='B')
+        self.event(task='T-X')
+        pin = self.p.create()
+        self.assertEqual(pin['approval']['kind'], 'direct-order')
+        self.assertEqual(self.p.resolve(), pin)
 
     def test_resume_does_not_accept_wrong_commit_or_unapproved_bytes(self):
         self.event()
@@ -176,9 +204,10 @@ class SpecPins(unittest.TestCase):
             self.p.scope('HEAD', 'main')
 
     def test_readiness_and_resume(self):
-        self.readiness()
+        self.readiness(retired=True)
         self.decision()
         pin = self.p.create(resume=True)
+        self.assertIsNotNone(pin, 'retired readiness still authorizes the first pin')
         self.assertEqual(pin['source'], 'first-pin-on-resume')
         self.assertEqual(pin['approval']['decision'], 'D-1')
         self.assertEqual(pin['approval']['author'], 'captain')

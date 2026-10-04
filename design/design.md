@@ -4647,9 +4647,15 @@ to the self task entry and any path component beginning `.fm-`.
 
 Initial authority comes from dispatch records only (T-171): the captain's
 `decision_made` A for the readiness card named by `state/ready/<task>.json`
-(`fm-ready.sh judged`), with a matching project/task choice answer, or a
-`greenlit` event for this exact project and task as a direct order. An unrelated
-choice or scope card never authorizes the first pin or masks a direct order.
+(`fm-ready.sh judged`), including the `ended` card retained after dispatch,
+with a matching project/task choice answer, or a captain `greenlit` event for
+this exact project and task as a direct order. Existing project-wide captain
+greenlights also authorize the first pin unless this task's own readiness
+card exists without a matching A receipt. A readiness A receipt without a
+`decision_made` event permits that legacy greenlight fallback; it does not
+fabricate a decision event. An unrelated choice or scope card never authorizes
+the first pin or masks a direct order. Pin resolution accepts the recorded
+project-wide authority without depending on the mutable readiness record.
 A scope answer recorded after dispatch authority but before pin creation remains
 available to `fm-project.sh repin`; ordering compares authorization times, not
 pin creation time.
