@@ -19,6 +19,12 @@ import tempfile
 from fm_project_paths import registry_reader
 
 
+# The engine revision that first required task-specific dispatch authority.
+# A backdated greenlight alone cannot make a newly written pin legacy.
+TASK_DISPATCH_COMMIT = 'f61b71457f18c4aec744ae1b9ff84b1bd5b84728'
+LEGACY_REASON = 'Pre-T-171 cross-task direct-order approval replaced by this task captain choice'
+
+
 def digest(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
@@ -181,7 +187,28 @@ class Pins:
             raise ValueError('invalid approved scope glob')
         return engine_commit, target_commit, snapshots, parsed
 
-    def resolve(self, if_present=False):
+    def legacy_approval(self, pin):
+        """Recognize only the historical cross-task first-pin approval class.
+
+        Pins have engine provenance, not a separate creation timestamp. Require
+        a strict ancestor of the T-171 engine revision; missing history refuses
+        migration rather than treating an unknown revision as old.
+        """
+        approval = pin['approval']
+        event = approval.get('event', {})
+        if (pin['version'] != 1 or approval.get('kind') != 'direct-order'
+                or event.get('type') != 'greenlit'
+                or not isinstance(event.get('task'), str)
+                or event['task'] in ('', self.task)
+                or pin['engine_commit'] == TASK_DISPATCH_COMMIT):
+            return False
+        try:
+            ancestor = git(self.engine, 'merge-base', pin['engine_commit'], TASK_DISPATCH_COMMIT + '^').strip()
+        except ValueError:
+            return False
+        return ancestor == pin['engine_commit']
+
+    def resolve(self, if_present=False, *, for_repin=False):
         # A leftover lock/temp file is not a pin. Enumerate explicitly so an
         # unreadable store is an error, never silently treated as absent.
         records = [p for p in self.directory.iterdir() if p.name.endswith('.json')] if self.directory.exists() else []
@@ -191,6 +218,7 @@ class Pins:
         if not paths:
             raise ValueError('no pin for ' + self.project + '/' + self.task)
         previous = None
+        legacy_version = None
         for version, path in enumerate(paths, 1):
             if path.is_symlink() or path.name != str(version) + '.json':
                 raise ValueError('invalid append-only pin sequence')
@@ -233,7 +261,16 @@ class Pins:
             elif (approval['kind'] != 'direct-order' or version != 1
                   or approval['event'].get('type') != 'greenlit'
                   or approval['event'].get('task') not in (None, '', self.task)):
-                raise ValueError('pin authorization mismatch')
+                if not self.legacy_approval(pin):
+                    raise ValueError('pin authorization mismatch')
+                legacy_version = version
+            if 'supersedes_legacy' in pin or 'supersedes_legacy_reason' in pin:
+                if (pin.get('supersedes_legacy') != legacy_version or legacy_version is None
+                        or version != legacy_version + 1 or pin.get('source') != 'repin'
+                        or approval['kind'] != 'choice'
+                        or not isinstance(pin.get('supersedes_legacy_reason'), str)
+                        or not pin['supersedes_legacy_reason'].strip()):
+                    raise ValueError('invalid legacy supersession')
             if approval['time'] != approval['event'].get('ts'):
                 raise ValueError('pin approval time mismatch')
             if previous:
@@ -314,6 +351,10 @@ class Pins:
                     or not spec['scope'] or not all(isinstance(s, str) and s and '\n' not in s for s in spec['scope'])):
                 raise ValueError('invalid pinned task scope')
             previous = pin
+        # Older chains can already contain valid choice-approved successors
+        # without a migration marker. Never rewrite those historical records.
+        if legacy_version == previous['version'] and not for_repin:
+            raise ValueError('pin authorization mismatch')
         return previous
 
     def approved_branch_spec(self, worktree, snapshots, dispatch):
@@ -368,7 +409,7 @@ class Pins:
                                                    for s in spec['scope'])):
                 raise ValueError('invalid approved branch task scope')
         if decision:
-            old = self.resolve()
+            old = self.resolve(for_repin=True)
             self.check_repin(old, decision, snapshots, approval)
         self.directory.mkdir(parents=True, exist_ok=True)
         lock = self.directory / '.lock'
@@ -376,7 +417,7 @@ class Pins:
             raise ValueError('pin lock must not be a symlink')
         with lock.open('a') as stream:
             fcntl.flock(stream, fcntl.LOCK_EX)
-            old = self.resolve() if list(self.directory.glob('*.json')) else None
+            old = self.resolve(for_repin=bool(decision)) if list(self.directory.glob('*.json')) else None
             if old and not decision:
                 return old
             if decision:
@@ -387,6 +428,9 @@ class Pins:
                        source='repin' if decision else ('first-pin-on-resume' if resume else 'dispatch'),
                        approval=approval, approval_binding='dispatch-time',
                        previous_sha256=digest(json.dumps(old, sort_keys=True)) if old else None)
+            if old and self.legacy_approval(old):
+                pin['supersedes_legacy'] = old['version']
+                pin['supersedes_legacy_reason'] = LEGACY_REASON
             if spec_approval:
                 pin['spec_approval'] = spec_approval
             # Publish fully written bytes atomically, without replacing any record.
@@ -408,7 +452,8 @@ class Pins:
             if decision in (record['approval']['decision'], record.get('spec_approval', {}).get('decision')):
                 raise ValueError('repin decision already used')
         self.check_approval_order(old.get('spec_approval', old['approval']), approval)
-        if all(old['snapshots'][key]['sha256'] == snap['sha256'] for key, snap in snapshots.items()):
+        if (not self.legacy_approval(old)
+                and all(old['snapshots'][key]['sha256'] == snap['sha256'] for key, snap in snapshots.items())):
             raise ValueError('snapshots unchanged; no repin written')
 
     @staticmethod

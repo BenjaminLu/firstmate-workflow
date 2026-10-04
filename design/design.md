@@ -4660,6 +4660,24 @@ A scope answer recorded after dispatch authority but before pin creation remains
 available to `fm-project.sh repin`; ordering compares authorization times, not
 pin creation time.
 
+T-184 provides a migration for first pins whose pre-T-171 direct-order
+approval names another task. Their recorded engine commit must be an ancestor
+of T-171's parent; approval timestamps alone do not establish legacy status.
+Missing engine history refuses migration. Pins do not record a separate write
+time, so engine provenance is the available historical boundary. An unsuperseded
+legacy pin still refuses resolution and gates. An exact project/task captain
+choice A can supersede it through `fm-project.sh repin --decision <id>`, even
+when snapshot hashes are unchanged: replacing the obsolete authority is itself
+a change. The next version records `supersedes_legacy: 1` and
+`supersedes_legacy_reason`, retains the history hash, and leaves v1 untouched.
+The decision must be unused and newer than the previous approval. Resolution
+uses the successor's valid approval while continuing to verify the complete
+chain and its snapshots. Existing chains with valid choice-approved v2/v3
+above legacy v1 also resolve without rewriting history or requiring a marker
+that the old writer did not produce. All other first-pin and repin rules remain
+in force; in particular, a scope card never supplies initial dispatch authority,
+and ordinary repins still require changed snapshot hashes.
+
 On resume, the launcher passes its actual worktree to the pin collector.
 A changed self task file can replace the base snapshot only when an unused
 captain choice A for the same project/task names a commit through the existing
