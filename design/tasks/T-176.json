@@ -1,0 +1,20 @@
+{
+  "id": "T-176",
+  "title": "the Python embedded in fm-config.sh and ci.sh moves into bin/lib modules, behaviour unchanged",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-config.sh",
+    "bin/ci.sh",
+    "bin/lib/**",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-176.json"
+  ],
+  "acceptance": [
+    "Why. The captain ordered the refactor on 2026-10-03 ('照你的意思全面重構，確保所有功能正常'). bin/fm-config.sh (1876 lines, sourced by 38 scripts) and bin/ci.sh (1257 lines) are mostly Python written as bash heredocs and `python3 -c` strings: about 1600 and 700 lines. That code gets no Python lint or compile check. It is quoted through bash, so three bash 3.2 vs 5.2 defects recorded this month came from exactly this mixing (patsub_replacement, CJK swallowing variable names, brace expansion of escaped JSON). It is also unreadable as either language.",
+    "Move, do not rewrite. Each embedded Python program becomes a function in a bin/lib module: an existing one where it belongs (fm_spec_pins, fm_project_paths, ...) or a new one named for its job. The bash function keeps its name, arguments, stdout, stderr and exit codes, and becomes a thin call: `python3 \"$_fm_code_dir/lib/<module>.py\" <subcommand> ...`. No behaviour changes: the same inputs give the same bytes out and the same exit status. Where the embedded code relied on bash interpolation into the Python source, pass the value as an argument or environment variable instead; never splice shell values into code.",
+    "Every caller still works. The sourced API of fm-config.sh is unchanged for all 38 sourcing scripts, the board and the adapters. Every test fixture that builds a partial engine tree (copies bin/fm-config.sh without bin/lib) copies the new modules too. Sweep tests/ for fixtures that copy fm-config.sh or ci.sh. Python checks: ci.sh compiles every bin/lib module (py_compile) as part of its fast checks, if it does not already.",
+    "Tests. The existing suites are the behaviour contract and must pass unchanged, except for fixture file lists. Add a check that fm-config.sh and ci.sh contain no `python3 - <<`, `python3 <<` or multi-line `python3 -c` program longer than 5 lines, so the mix does not return. Evidence is the required GitHub check and the six gates; gate 5 must show the new check red on base. Workers do not run the suites."
+  ]
+}

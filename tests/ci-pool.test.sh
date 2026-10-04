@@ -191,7 +191,9 @@ probe_gate() { # <fixture-dir> <label>
   wait "$pid" 2>/dev/null
   exec 8>&-; rm -f "$p/openpipe"
 }
-p="$(safe_tmpdir)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
+p="$(safe_tmpdir)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"; config_modules_fixture "$p/bin/"
 probe_gate "$p" "the gate finishes on a tree with no tests at all"
 mkdir -p "$p/tests"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$p/tests/reads-stdin.test.sh"
