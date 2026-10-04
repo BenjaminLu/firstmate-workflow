@@ -124,7 +124,7 @@ test('every pull request number links to its pull request on the registered repo
     await expect(page.locator('#dropConfirm')).toContainText(EN.dropConfirm.replace('{id}','T-A'));
     await page.locator('[data-cancel-drop="T-A"]').click();
     expect(events().length).toBe(before);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test('without a github entry a pull request number is plain text, never a guessed link', async ({page}) => {
@@ -146,7 +146,7 @@ test('without a github entry a pull request number is plain text, never a guesse
     await expect(page.locator('#log')).toContainText('pushed, replaces #5');
     await expect(page.locator('a[data-pr]')).toHaveCount(0);
     await expect(page.locator('a[href*="/pull/"]')).toHaveCount(0);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 // T-054: two registered projects live at the same time, with the same task id

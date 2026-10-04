@@ -41,5 +41,5 @@ test('T-159: CI waiting is distinct on the card, roster and ship until review st
     await expect(page.locator(`[data-crew="${actor}"] .fig`)).toHaveClass(/s-review/);
     const resumed = (await (await page.request.get(`${b.url}/api/state`)).json()).crew.find(c => c.id === actor);
     expect(resumed.window_expected).toBe(true);
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });

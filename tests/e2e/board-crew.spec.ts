@@ -19,7 +19,7 @@ test('legacy scalar records disclose missing details without invented translatio
     await expect(page.locator('.dcard')).toContainText('Legacy literal title');
     await expect(page.locator('.explanation')).toHaveText(TW.missingDetails);
     await expect(page.locator('.tradeoffs')).toHaveCount(0);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 // its own board: it emits a merge, and with the file's tests running in
@@ -48,7 +48,7 @@ test("a crewman turns under the pointer, and the ahoy fires", async ({ page }) =
     await expect(page.locator("#vessel")).toHaveClass(/heel/);
     await expect(page.locator("#salvo")).toHaveClass(/fire/);
     await expect(page.locator(".scene .fig.cheer").first()).toBeVisible();
-  } finally { stopBoard(own); }
+  } finally { await stopBoard(own); }
 });
 
 test("nothing here can reach a model", async () => {
@@ -94,7 +94,7 @@ test("no cards retains one idle captain aboard", async ({ page }) => {
     // decision region. A DOM node hidden by an ancestor does not pass.
     await expect(page.locator(".scene #captain")).toBeVisible();
     await expect(page.locator("#captain")).toHaveAttribute("data-pose", "idle");
-  } finally { stopBoard(quiet); }
+  } finally { await stopBoard(quiet); }
 });
 
 test("captain and left helm stay on the real deck at every width and rate", async ({page}) => {
@@ -132,7 +132,7 @@ test("captain and left helm stay on the real deck at every width and rate", asyn
         expect(boxes.helm.x+boxes.helm.w/2).toBeGreaterThan(boxes.hull.x);
       }
     }
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
 test("a crewman below the top deck still names the task he is on", async ({ page }) => {
@@ -160,7 +160,7 @@ test("a crewman below the top deck still names the task he is on", async ({ page
     // and the roster still carries what each of them is on
     const jobs = await page.locator(".roster .jb").allInnerTexts();
     expect(jobs.filter((j) => /^(T|SK)-[0-9]{3,}/.test(j)).length).toBe(9);
-  } finally { stopBoard(many); }
+  } finally { await stopBoard(many); }
 });
 
 test("T-127: vendor, model and CLI version are separate fields, read from the run itself", async ({ page }) => {
@@ -208,7 +208,7 @@ test("T-127: vendor, model and CLI version are separate fields, read from the ru
     const tag = page.locator('[data-bubble="worker-1"] .who');
     await expect(tag).not.toContainText("claude-sonnet-5");
     await expect(tag).not.toContainText("claude-opus-5-5");
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 test("T-127: an old run without vendor or model still renders", async ({ page }) => {
@@ -225,7 +225,7 @@ test("T-127: an old run without vendor or model still renders", async ({ page })
     await expect(card.locator(".cmodel")).toHaveText(EN.crewUnknown);
     await expect(card.locator(".cmodel")).not.toHaveClass(/\bwarn\b/);
     await expect(card.locator(".ccli")).toHaveText(EN.crewUnknown);
-  } finally { stopBoard(b); }
+  } finally { await stopBoard(b); }
 });
 
 test("the ship follows the crew, not the backlog", async ({ page }) => {
@@ -243,7 +243,7 @@ test("the ship follows the crew, not the backlog", async ({ page }) => {
     await expect(page.locator(".roster li")).toHaveCount(2);
     const small = await page.locator(".scene").getAttribute("data-rate");
     expect(small).toBe("rate1");        // two aboard is the smallest ship
-  } finally { stopBoard(many); }
+  } finally { await stopBoard(many); }
 });
 
 test("the ship grows with the crew", async ({ page }) => {
@@ -269,7 +269,7 @@ test("the ship grows with the crew", async ({ page }) => {
       return sail < top;
     });
     expect(clear).toBe(true);
-  } finally { stopBoard(big); }
+  } finally { await stopBoard(big); }
 });
 
 // --- T-122: only the captain's browser writes ---------------------------------

@@ -114,6 +114,6 @@ test('continuation history, readable mobile content and persistent controls', as
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=320)).toBe(true);
     await expect(page.locator('#card-D-1 textarea')).toHaveValue('Literal 船長');
     expect(posts).toBe(0);
-  } finally {stopBoard(b);}
+  } finally {await stopBoard(b);}
 });
 
