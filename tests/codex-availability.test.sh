@@ -26,7 +26,10 @@ class Availability(unittest.TestCase):
         self.home = Path(self.tmp.name).resolve()
         code = self.home / 'code'
         (code / 'bin/adapters').mkdir(parents=True)
-        for name in ['bin/fm-config.sh', 'bin/fm-herdr.py', 'bin/adapters/_lib.sh', 'bin/adapters/codex.sh']:
+        (code / 'bin/lib').mkdir()
+        for name in ['bin/lib/fm_registry.py', 'bin/lib/fm_config_values.py',
+                     'bin/lib/fm_config_tasks.py', 'bin/lib/fm_config_runtime.py',
+                     'bin/fm-config.sh', 'bin/fm-herdr.py', 'bin/adapters/_lib.sh', 'bin/adapters/codex.sh']:
             shutil.copy2(root / name, code / name)
         sandbox = code / 'bin/fm-sandbox.sh'
         sandbox.write_text('''#!/usr/bin/env bash

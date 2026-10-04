@@ -12,8 +12,10 @@ git init -q --bare "$barec"
 git init -q -b main "$rc"
 git -C "$rc" config user.email a@b.c; git -C "$rc" config user.name t
 mkdir -p "$rc/bin" "$rc/design" "$rc/state/worktrees"
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
 cp "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-config.sh" \
-   "$ROOT/bin/fm-emit.sh" "$rc/bin/"
+   "$ROOT/bin/fm-emit.sh" "$rc/bin/"; config_modules_fixture "$rc/bin/"
 printf 'base\n' > "$rc/README"; git -C "$rc" add README; git -C "$rc" commit -qm base
 git -C "$rc" remote add origin "$barec"; git -C "$rc" push -q -u origin main
 git -C "$rc" branch -q t-ck-branch

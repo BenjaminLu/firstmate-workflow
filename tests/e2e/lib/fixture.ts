@@ -71,10 +71,10 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   // register nothing
   for (const f of ['fm-emit.sh','fm-diagram.sh','fm-decide.sh','fm-config.sh','fm-herdr.py']) cpSync(join(ROOT,'bin',f), join(d,'bin',f));
   // the lifeline every merge the board starts runs under (T-151), and
-  // nothing else from bin/lib: the board reads the watch's files under
+  // the extracted config helpers: the board reads the watch's files under
   // state/watch itself (T-137) and runs none of bin/lib's watch or hook code
   mkdirSync(join(d, 'bin/lib'));
-  for (const f of ['fm_lifeline.py', 'fm-lifeline.sh', 'fm_project_paths.py']) cpSync(join(ROOT, 'bin/lib', f), join(d, 'bin/lib', f));
+  for (const f of ['fm_lifeline.py', 'fm-lifeline.sh', 'fm_project_paths.py', 'fm_registry.py', 'fm_config_values.py', 'fm_config_tasks.py', 'fm_config_runtime.py']) cpSync(join(ROOT, 'bin/lib', f), join(d, 'bin/lib', f));
 
   const tasks = readTasks(ROOT);
   if (tasks.length < stages.length) {
