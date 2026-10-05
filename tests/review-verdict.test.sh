@@ -720,4 +720,82 @@ M
   rm -rf "$df"
 done
 
+# T-213: movement while the review waits for CI.
+for movement in base head retarget closed; do
+  df="$(fixture)"; rf="$df/repo"; GHf="$(ghstub "$df")"
+  reviewed_head="$(git -C "$rf" rev-parse work)"
+  reviewed_base="$(git -C "$rf" merge-base main work)"
+  reviewed_patch="$(git -C "$rf" diff-tree -r -p --no-renames "$reviewed_base" "$reviewed_head" |
+    git patch-id --stable | cut -d ' ' -f 1)"
+  cat > "$GHf" <<'GH'
+#!/usr/bin/env bash
+set -eu
+here="$(cd "$(dirname "$0")/.." && pwd)"
+echo "gh $*" >> "$here/ghcalls"
+case "$*" in
+  "api repos/"*"/branches/"*"/protection/required_status_checks")
+    if [ ! -e "$here/moved" ]; then
+      touch "$here/moved"
+      case "$FM_FIXTURE_MOVEMENT" in
+        base|head)
+          ref=main
+          [ "$FM_FIXTURE_MOVEMENT" != head ] || ref=work
+          old="$(git -C "$FM_TARGET_ROOT" rev-parse "$ref")"
+          blob="$(printf 'unrelated change\n' | git -C "$FM_TARGET_ROOT" hash-object -w --stdin)"
+          tree="$( { git -C "$FM_TARGET_ROOT" ls-tree "$old"; printf '100644 blob %s\tunrelated.txt\n' "$blob"; } |
+            git -C "$FM_TARGET_ROOT" mktree)"
+          new="$(printf 'move during CI wait\n' | git -C "$FM_TARGET_ROOT" commit-tree "$tree" -p "$old")"
+          git -C "$FM_TARGET_ROOT" update-ref "refs/heads/$ref" "$new"
+          ;;
+        retarget) printf 'other-base\n' > "$FM_TARGET_ROOT/.fixture-pr-base" ;;
+        closed) touch "$FM_TARGET_ROOT/.fixture-pr-closed" ;;
+      esac
+    fi
+    printf '{"contexts":[],"checks":[]}\n'
+    ;;
+esac
+exit 0
+GH
+  cat > "$rf/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+set -eu
+[ "$1" = run ] || exit 64
+touch "$FM_TARGET_ROOT/.adapter-ran"
+printf 'APPROVE:T-Z\n' > "$3/verdict.txt"
+M
+  chmod +x "$rf/bin/adapters/mock.sh"
+  out="$(cd "$rf" && FM_ROOT="$rf" FM_GH="$GHf" FM_FIXTURE_MOVEMENT="$movement" \
+    bin/fm-review.sh --task T-Z --branch work --pr 9 2>"$df/stderr")"; code=$?
+  actor="$(jq -r 'select(.type=="review_opened")|.actor' "$rf/state/events.jsonl")"
+  verdict_heads="$(jq -r 'select(.kind=="verdict")|.head' "$rf/state/evidence/self/T-Z/"*.json)"
+  assert_ok "test -f '$df/moved'" "$movement happened on the required-checks request"
+  if [ "$movement" = base ]; then
+    assert_eq 0 "$code" 'base moving during the CI wait does not refuse review'
+    assert_ok "test -f '$rf/.adapter-ran'" 'base movement still runs the reviewer'
+    assert_ne "$reviewed_base" "$(git -C "$rf" rev-parse main)" 'the CI request really advanced main'
+    assert_eq "$reviewed_head" "$verdict_heads" 'the CI-wait verdict keeps its original head'
+    assert_eq "$reviewed_base" "$(jq -r 'select(.kind=="verdict")|.base' "$rf/state/evidence/self/T-Z/"*.json)" \
+      'the CI-wait verdict keeps its original merge-base'
+    assert_eq "$reviewed_patch" "$(jq -r 'select(.kind=="verdict")|.patch' "$rf/state/evidence/self/T-Z/"*.json)" \
+      'the CI-wait verdict keeps its original patch-id'
+    assert_contains "$(cat "$df/ghcalls")" 'pr comment' 'the CI-wait base-move verdict is projected'
+    assert_contains "$(jq -r .type "$rf/state/events.jsonl")" approved 'the CI-wait base-move verdict emits approved'
+  else
+    assert_eq 65 "$code" "$movement during the CI wait refuses review"
+    assert_fail "test -e '$rf/.adapter-ran'" "$movement during the CI wait never starts the adapter"
+    assert_eq '' "$verdict_heads" "$movement during the CI wait records no verdict"
+    assert_lacks "$(cat "$df/ghcalls")" 'pr comment' "$movement during the CI wait projects no verdict"
+    failure="$(jq -c 'select(.type=="review_failed")' "$rf/state/events.jsonl" | tail -1)"
+    assert_eq infrastructure_error "$(jq -r '.data.review_outcome' <<<"$failure")" \
+      "$movement during the CI wait emits infrastructure failure"
+    assert_contains "$(jq -r '.summary.en' <<<"$failure")" 'while the review waited for CI' \
+      "$movement failure names the CI wait"
+    assert_contains "$(cat "$df/stderr")" 'fm-review: the PR changed while the review waited for CI' \
+      "$movement refusal explains why no review ran"
+    assert_contains "$(cat "$df/stderr")" 'fm-binding:' "$movement preserves the binding refusal reason"
+  fi
+  assert_fail "test -e '$rf/state/runs/$actor/stale-final.txt'" "$movement during the CI wait leaves no stale final"
+  rm -rf "$df"
+done
+
 finish
