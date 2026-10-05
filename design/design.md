@@ -4922,6 +4922,11 @@ Resolve explicit `--project`, then `FM_PROJECT`, then configured default through
 one shared resolver. Never infer project from cwd or remote. Validate project
 names (`[a-z0-9-]`, at most 24 characters), duplicate names, unknown fields,
 origin identity, canonical paths, traversal and symlink escapes before writes.
+Origin identity is the managed clone's configured `remote.origin.url` and
+`remote.origin.pushurl`, compared byte for byte with the project's GitHub URL,
+never the `insteadOf`-rewritten form. A user's global SSH rewrite is accepted;
+a matching rewrite in the clone's local config, a second URL, or a push URL to
+another repository is refused (T-217).
 Reject FM_HOME inside the engine (exit 65); prevent cleanup crossing roots.
 Migration from engine `state/projects/` requires operator approval and verified
 recovery; never silently move it. Optional local history excludes repo/worktrees
@@ -5240,7 +5245,7 @@ CI wait does not turn pending into failure or approval.
 
 Private repositories are accepted. Unreadable protection (including 404) means
 unknown, never unprotected, rejected merely for privacy, or implicitly safe.
-Confirm project checks and policy before readiness. Sync validates clone origin
+Confirm project checks and policy before readiness. Sync validates clone origin (rule in §15.1)
 and path, configures local guards/excludes without copying engine files to the
 target. Every GitHub operation names the repository. Credentials/settings are
 not changed as an incidental task side effect.

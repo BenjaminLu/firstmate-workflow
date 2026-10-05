@@ -13,6 +13,7 @@ import tempfile
 from urllib.parse import quote
 
 sys.dont_write_bytecode = True
+import fm_origin
 from fm_conventions import read_policy, validate
 from fm_project_paths import external_home
 
@@ -377,7 +378,7 @@ def main(argv=None):
             expected=os.environ.get('FM_GITHUB_URL','https://github.com')+'/'+args.target+'.git'
             managed=home/'repo'
             if managed.exists():
-                if git(managed,'remote','get-url','origin') != expected:
+                if fm_origin.check(managed, expected) is not None:
                     raise ValueError('managed clone origin does not match inspected repository')
                 e['commits']=git(managed,'log','-30','--format=%s').splitlines()
             else:

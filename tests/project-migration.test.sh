@@ -71,6 +71,7 @@ import sys
 from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('migration', pathlib.Path(sys.argv[1]) / 'bin/lib/fm_project_migrate.py')
 module = importlib.util.module_from_spec(spec)
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'bin/lib'))
 spec.loader.exec_module(module)
 t = pathlib.Path(sys.argv[2])
 engine = t / 'rollback-engine'
@@ -103,5 +104,41 @@ assert (pins / 'b.json').read_text() == 'second private record'
 assert not target.exists()
 PYTEST
 assert_eq 0 "$?" "failed shared transfer rolls back clone and all records"
+# Migration shares configured-origin validation, including global rewrites.
+export GIT_CONFIG_GLOBAL="$t/gitconfig" GIT_CONFIG_NOSYSTEM=1
+ln -s "$t/remotes" "$t/alias"
+git config --global "url.$t/alias/.insteadOf" "$t/remotes/"
+python3 - "$ROOT" "$t" <<'PYTEST'
+import pathlib
+import subprocess
+import sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'bin/lib'))
+import fm_project_migrate
+root = pathlib.Path(sys.argv[2])
+origin = str(root / 'remotes/owner/private-app.git')
+for name in ('accepted', 'wrong'):
+    source = root / 'rewrite-engine/state/projects' / name
+    source.mkdir(parents=True)
+    repo = source / 'repo'
+    subprocess.run(['git', 'clone', '-q', origin, str(repo)], check=True)
+    loaded = subprocess.check_output(['git', '-C', str(repo), 'remote', 'get-url', 'origin'], text=True)
+    assert loaded == str(root / 'alias/owner/private-app.git') + '\n', 'migration global rewrite setup loaded'
+    target = root / 'rewrite-home/projects' / name
+    if name == 'accepted':
+        fm_project_migrate.migrate(source, target, origin)
+        assert (target / 'repo/.git').is_dir(), 'global rewrite must allow legacy migration'
+        assert not source.exists()
+    else:
+        subprocess.run(['git', '-C', str(repo), 'remote', 'set-url', 'origin', str(root / 'other.git')], check=True)
+        try:
+            fm_project_migrate.migrate(source, target, origin)
+        except ValueError as error:
+            assert str(error) == 'legacy origin mismatch'
+        else:
+            raise AssertionError('wrong configured legacy origin was accepted')
+        assert repo.is_dir() and not target.exists()
+PYTEST
+assert_eq 0 "$?" "migration accepts global rewrite and refuses wrong configured origin"
+unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
 safe_rm_rf "$t"
 finish
