@@ -1,4 +1,5 @@
 {
+  "hostUnconfirmed": "{vendor}（未確認）",
   "history": "已完成歷史（展開或收合）",
   "laneClosed": "已關閉",
   "laneUnknown": "等待更新",

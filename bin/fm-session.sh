@@ -27,22 +27,32 @@ REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 # Refresh only in firstmate's session, never when a board launches a round.
-if [ "$MODE" = start ] || [ "$MODE" = status ]; then
+if { [ "$MODE" = start ] || [ "$MODE" = status ]; } &&
+   [ -z "${FM_IN_ROUND:-}" ] && [ -z "${FM_RUN_DIR:-}" ]; then
   if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_host.py" "$REPO" "$FM_STATE_DIR"; then
-    echo 'fm-session: host refresh failed; firstmate host is unknown' >&2
-    # This informational collector must not block the session, even when its
-    # file or imports are missing. Replace stale facts without depending on it.
-    host_tmp=''
-    if mkdir -p "$FM_STATE_DIR/session" &&
-       host_tmp="$(mktemp "$FM_STATE_DIR/session/.host-XXXXXXXX")" &&
-       printf '%s\n' '{"harness":null,"cli_version":null,"model":null,"model_source":null}' > "$host_tmp" &&
-       mv -f "$host_tmp" "$FM_STATE_DIR/session/host.json"; then
-      :
+    if [ -e "$FM_STATE_DIR/session/host.json" ]; then
+      recorded="$(jq -r '.harness // "unknown"' "$FM_STATE_DIR/session/host.json" 2>/dev/null)"
+      echo "fm-session: host refresh failed; keeping the recorded host ${recorded:-unknown}" >&2
     else
-      [ -z "$host_tmp" ] || rm -f "$host_tmp"
-      echo 'fm-session: could not write the unknown host record' >&2
+      echo 'fm-session: host refresh failed; firstmate host is unknown' >&2
+      # A failed informational collector must not destroy previously known facts.
+      host_tmp=''
+      if mkdir -p "$FM_STATE_DIR/session" &&
+         host_tmp="$(mktemp "$FM_STATE_DIR/session/.host-XXXXXXXX")" &&
+         printf '%s\n' '{"harness":null,"cli_version":null,"model":null,"model_source":null}' > "$host_tmp" &&
+         mv -f "$host_tmp" "$FM_STATE_DIR/session/host.json"; then
+        :
+      else
+        [ -z "$host_tmp" ] || rm -f "$host_tmp"
+        echo 'fm-session: could not write the unknown host record' >&2
+      fi
     fi
   fi
+fi
+if [ "$MODE" = start ] || [ "$MODE" = status ]; then
+  jq -r 'select(.confirmed == false and .harness != null) |
+    "fm-session: firstmate host record is unconfirmed: it says \(.harness) (recorded \(.unconfirmed_since // "unknown") by session \(.session.pid // "unknown")); this session could not detect its own harness. Run with FM_HARNESS=<claude|codex> bin/fm-session.sh status to confirm it."' \
+    "$FM_STATE_DIR/session/host.json" >&2 2>/dev/null || true
 fi
 # The reviewer's engine is the captain's to choose. A project that names none
 # is said out loud here, once per start, rather than reviewed by whatever the

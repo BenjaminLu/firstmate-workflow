@@ -392,6 +392,7 @@
 .crewcard dd.job{display:block;margin:0;-webkit-line-clamp:unset;color:var(--brass,#d9a441)}
 /* T-127: a model other than the one requested is the warning colour, the
    same one a failed gate uses, with both names in the text itself */
+.crewcard dd.cvendor.warn{color:#e0967d;font-weight:650}
 .crewcard dd.cmodel.warn{color:#e0967d;font-weight:650}
 .crewcard a[data-pr]{color:inherit;pointer-events:auto}
 .crewcard .att,.roster .att{color:#7f9db5;font-size:13px}
@@ -418,6 +419,7 @@
 .roster .rl,.roster .pj,.roster .rd,.roster .rv,.roster .rm{font-size:13px;color:#c6d8e8;min-width:0;overflow-wrap:anywhere}
 /* T-127: the vendor and model the round actually ran on; the warning colour
    is the same one a failed gate uses, so a mismatch reads as a problem */
+.roster .rv.warn{color:#e0967d;font-weight:650}
 .roster .rm.warn{color:#e0967d;font-weight:650}
 .roster h4.rgroup{margin:0;padding:6px 13px;font:650 12px var(--mono);color:#c6d8e8;
   background:rgba(217,164,65,.05);border-top:1px solid var(--line)}
