@@ -63,6 +63,40 @@ jq 'del(."zh-TW".options.B.cons)' "$d/details.json" > "$d/invalid.json"
 assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-98 --task T-1 --details '$d/invalid.json'" "incomplete localized tradeoffs fail"
 assert_fail "test -f '$d/state/pending/D-98.json'" "invalid payload creates no partial card"
 
+# T-210: request-time intent validation, using the shared STE fixture helper.
+ste_dir="$(fixture)"
+ste_id=2100
+for mode in pass fail missing counts state legacy; do
+  ste_id=$((ste_id+1))
+  python3 "$ROOT/tests/lib/ste_cases.py" fixture "$mode" > "$ste_dir/intent.json"
+  ste_out="$(FM_ROOT="$ste_dir" "$ste_dir/bin/fm-decide.sh" --request "D-$ste_id" --task T-210 --details "$ste_dir/intent.json" 2>&1)"
+  ste_rc=$?
+  case "$mode" in
+    pass)
+      assert_eq 0 "$ste_rc" 'intent request succeeds'
+      assert_eq true "$(jq '.ste.intent_card and .ste.ok' "$ste_dir/state/pending/D-2101.json")" 'pending card stores STE report';;
+    legacy)
+      assert_eq 0 "$ste_rc" 'legacy details still succeed'
+      assert_eq false "$(jq 'has("ste")' "$ste_dir/state/pending/D-2106.json")" 'legacy has no STE key';;
+    *)
+      ste_expected=64; [ "$mode" = fail ] && ste_expected=65
+      assert_eq "$ste_expected" "$ste_rc" "intent refusal: $mode"
+      assert_fail "test -e '$ste_dir/state/pending/D-$ste_id.json'" 'refusal writes no pending record'
+      if [ "$mode" = fail ]; then
+        assert_contains "$ste_out" "the card's text breaks the STE rules; nothing was written" 'STE refusal explanation'
+        assert_contains "$ste_out" 'Ensure the check passes. -> R6' 'STE refusal names sentence and rule'
+      fi;;
+  esac
+done
+rm -f "$ste_dir/bin/lib/fm_ste.py"
+python3 "$ROOT/tests/lib/ste_cases.py" fixture pass > "$ste_dir/intent.json"
+ste_out="$(FM_ROOT="$ste_dir" "$ste_dir/bin/fm-decide.sh" --request D-2107 --task T-210 --details "$ste_dir/intent.json" 2>&1)"
+assert_eq 70 "$?" 'intent request refuses a missing checker'
+assert_fail "test -e '$ste_dir/state/pending/D-2107.json'" 'missing checker writes no record'
+python3 "$ROOT/tests/lib/ste_cases.py" fixture legacy > "$ste_dir/intent.json"
+assert_ok "FM_ROOT='$ste_dir' '$ste_dir/bin/fm-decide.sh' --request D-2108 --task T-210 --details '$ste_dir/intent.json'" 'legacy details need no checker'
+rm -rf "$ste_dir"
+
 # Legacy skill-update path: D-SK-* + matching SK-* + --title, no invented details.
 dleg="$(fixture)"
 leg_title='skill-update: worker - say the round-three rule once (A adopt it, B leave it)'

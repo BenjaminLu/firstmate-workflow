@@ -403,6 +403,24 @@ if [ "$MODE" = request ]; then
     ' "$DETAILS" >/dev/null 2>&1 || {
       echo 'fm-decide: details.effect names, for an option the card offers, one of merge (merge cards only), hold, park, drop, dispatch or send_back' >&2; exit 64;
     }
+    ste='null'
+    if jq -e 'any(.en,."zh-TW"; has("intent") or has("why") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table"))' "$DETAILS" >/dev/null; then
+      [ -r "$HERE/lib/fm_ste.py" ] || {
+        echo "fm-decide: missing $HERE/lib/fm_ste.py; nothing was written" >&2; exit 70;
+      }
+      ste_error="$(mktemp)" || exit 70
+      ste="$(python3 "$HERE/lib/fm_ste.py" check-details "$DETAILS" 2> "$ste_error")"
+      ste_rc=$?
+      if [ "$ste_rc" -ne 0 ]; then
+        if [ "$ste_rc" -eq 65 ]; then
+          echo "fm-decide: the card's text breaks the STE rules; nothing was written" >&2
+        fi
+        cat "$ste_error" >&2
+        rm -f "$ste_error"
+        case "$ste_rc" in 64|65) exit "$ste_rc";; *) exit 70;; esac
+      fi
+      rm -f "$ste_error"
+    fi
     # the last check before anything is written: GitHub's word on the pair
     [ "$KIND" = choice ] || pr_agrees
     binding='null'
@@ -413,10 +431,11 @@ if [ "$MODE" = request ]; then
         echo 'fm-decide: verified candidate SHA required' >&2; exit 65; }
     fi
     payload="$(jq -cn --arg expected_head "$EXPECTED_HEAD" --argjson binding "$binding" --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
-      --arg project "$RECORD" --slurpfile details "$DETAILS" \
+      --argjson ste "$ste" --arg project "$RECORD" --slurpfile details "$DETAILS" \
       '{id:$id,expected_head:$expected_head,binding:$binding}
        + (if $kind=="merge" then {gates:[true,true,null,true,true,true,true]} else {} end) + (if $task=="" then {} else {task:$task} end)
        + {kind:$kind,details:$details[0],title:$details[0].en.title}
+       + (if $ste==null then {} else {ste:$ste} end)
        + (if $project=="" then {} else {project:$project} end)
        + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
     (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || exit 65

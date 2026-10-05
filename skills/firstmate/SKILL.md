@@ -715,24 +715,44 @@ translated dynamic content. The JSON file passed to `--details` has this shape
     "explanation": "Choose how reviewers compare the current and proposed screens.",
     "before": "The current screen shows one diagram at a time.",
     "after": "Option A places the current and proposed diagrams side by side.",
-    "outcome": "The selected layout will guide the next scoped prototype; no merge is authorized.",
+    "outcome": "The selected layout guides the next prototype. This choice grants no merge approval.",
     "options": {
-      "A": {"description": "Compare side by side", "pros": "Both states stay visible.", "cons": "Requires more horizontal space."},
-      "B": {"description": "Stack the diagrams", "pros": "Fits narrow windows.", "cons": "Comparing distant details requires scrolling."},
-      "C": {"description": "Keep the current single diagram", "pros": "Requires no layout change.", "cons": "Reviewers must switch between states."}
-    }
+      "A": {"description": "Compare side by side", "pros": "Both states stay visible.", "cons": "Needs more horizontal space."},
+      "B": {"description": "Stack the diagrams", "pros": "Fits narrow windows.", "cons": "Reviewers scroll to compare distant details."},
+      "C": {"description": "Keep the current single diagram", "pros": "Needs no layout change.", "cons": "Reviewers must switch between states."}
+    },
+    "intent": [{"kind": "fact", "text": "Reviewers compare both states."}],
+    "why": [{"kind": "fact", "text": "One view helps reviewers compare changes."}],
+    "scope_in": ["Diagram layout"],
+    "scope_out": ["Merge policy"],
+    "done": [{"kind": "fact", "text": "Both states fit in the chosen layout."}],
+    "notes": [{"kind": "caution", "text": "Wide diagrams need more space."}],
+    "questions": [{"kind": "fact", "text": "Does this match your goal?"}],
+    "before_nodes": [{"state": "gone", "label": "One diagram"}],
+    "after_nodes": [{"state": "new", "label": "Two diagrams"}],
+    "change_table": [{"text": "Both states stay visible.", "A": "✓", "B": "✓", "C": "—"}]
   },
   "zh-TW": {
     "title": "選擇圖表審閱版面",
     "explanation": "選擇審閱者比較目前畫面與提案畫面的方式。",
     "before": "目前畫面一次只顯示一張圖表。",
-    "after": "選項 A 將目前與提案圖表並排顯示。",
-    "outcome": "選定版面將用於下一個範圍明確的原型；此決定不授權合併。",
+    "after": "選項 A 把目前與提案圖表放在同一列。",
+    "outcome": "選定版面用於下一個原型。此決定不授權合併。",
     "options": {
       "A": {"description": "並排比較", "pros": "兩種狀態持續可見。", "cons": "需要較寬的視窗。"},
       "B": {"description": "上下排列圖表", "pros": "適合較窄的視窗。", "cons": "比較相距較遠的細節時需要捲動。"},
       "C": {"description": "保留目前的單張圖表", "pros": "不需變更版面。", "cons": "審閱者必須切換狀態才能比較。"}
-    }
+    },
+    "intent": [{"kind": "fact", "text": "審查者比較兩種狀態。"}],
+    "why": [{"kind": "fact", "text": "同一畫面方便審查者比較變更。"}],
+    "scope_in": ["圖表版面"],
+    "scope_out": ["合併政策"],
+    "done": [{"kind": "fact", "text": "兩種狀態都能放入選定版面。"}],
+    "notes": [{"kind": "caution", "text": "寬圖表需要更多空間。"}],
+    "questions": [{"kind": "fact", "text": "這符合你的目標嗎？"}],
+    "before_nodes": [{"state": "gone", "label": "單張圖表"}],
+    "after_nodes": [{"state": "new", "label": "兩張圖表"}],
+    "change_table": [{"text": "兩種狀態持續可見。", "A": "✓", "B": "✓", "C": "—"}]
   }
 }
 ```
@@ -742,9 +762,25 @@ and each locale's `title`, `explanation`, `before`, `after`, `outcome`, plus
 `options.A`, `.B`, `.C` objects with `description`, `pros`, `cons`. Every leaf
 listed here must be a string with a non-whitespace character and at most 2000
 Unicode code points (jq `length`), not an array. Extra keys are not rejected.
-This validator does not assess truth, translation quality or diagram quality.
-Use one JSON document per file; the script's jq stream check is not an explicit
-single-document guard.
+The optional locale fields are `intent`, `why`, `scope_in`, `scope_out`, `done`,
+`notes`, `questions`, `before_nodes`, `after_nodes`, and `change_table`. Each is
+present in both locales or neither; any one makes `intent` mandatory in both.
+The checker in `bin/lib/fm_ste.py` owns their shapes and the writing rules.
+Run `python3 bin/lib/fm_ste.py check-details <file>` before `--request`.
+Malformed new fields exit 64; text that fails STE exits 65. A passing intent
+card stores the checker's report as `ste` beside `details` in the pending record.
+Use `python3 bin/lib/fm_ste.py rules` for the bilingual rule table and word lists.
+
+Every dispatch, merge and scope-widening card firstmate raises carries `intent`,
+`why`, `scope_in`, `scope_out`, `done`, and `before_nodes`/`after_nodes`. Add
+`notes` when there is a caution and `questions` for anything you are unsure of.
+Pass check-details before raising the card. Fix a refusal by rewriting the text;
+never drop the intent fields to bypass it. Existing cards without these fields
+keep their current behavior.
+
+These validators do not assess truth, translation quality, diagram quality or
+compliance with rules marked for manual review. Check those yourself. Use one
+JSON document per file; the strict details validator rejects a document stream.
 
 An option that should do something when chosen names it in the optional
 top-level `effect` map (T-118): `{"B": "park"}` and so on, one of `merge`
