@@ -874,7 +874,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.restart_branch_pilot(); self.pilot.recover()
         self.assertEqual(self.pilot.data, before)
 
-    def test_t205_review_actions_block_gate_seven_without_second_job(self):
+    def test_t205_review_actions_block_gate7_without_second_job(self):
         for status in ('started', 'uncertain'):
             for existing in (False, True):
                 with self.subTest(status=status, existing=existing):
