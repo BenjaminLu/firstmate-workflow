@@ -18,6 +18,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   spec.tasks.push({id:'T-QUEUE',title:'Queued behind unmerged work',depends_on:[first]});
   spec.tasks.push({id:'T-READY',title:'Nothing to wait on',depends_on:[]});
   writeTasks(root, spec.tasks);
+  emitFixture(root,'captain','T-DECIDED','decision_requested','Dispatch T-DECIDED: a decided title','派工 T-DECIDED：決定的標題');
   emitFixture(root,'worker-absent','T-ABSENT','dispatched','Work on an unlisted task','處理未列出的任務',{role:'worker'});
   emitFixture(root,'worker-2',spec.tasks[1].id,'gate_failed','Gate five failed','第五道閘未過',{gate:5});
   emitFixture(root,'worker-1',first,'crew_status','Counting gates','計算閘門',{role:'worker',progress:{done:2,total:5}});
@@ -69,6 +70,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     const queued = page.locator('[data-task="T-QUEUE"]');
     await expect(queued).toContainText(`${EN.blockedOn} ${first}`);
     await expect(page.locator('[data-lane="backlog"] [data-task="T-QUEUE"]')).toHaveCount(1);
+    await expect(page.locator('[data-task="T-DECIDED"] .t')).toHaveText('a decided title');
     await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(EN.titleMissing);
     await expect(page.locator('[data-task="T-ABSENT"]')).toContainText('worker-absent');
     await expect(page.locator(`[data-task="${spec.tasks[1].id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}','5'));
@@ -121,6 +123,8 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
       await page.locator(`[data-l="${locale}"]`).click();
       const want = locale === 'en' ? EN : locale === 'zh-TW' ? TW : CN;
       await expect(page.locator('[data-count="waiting"] span')).toHaveText(want.waitingOnYou);
+      await expect(page.locator('[data-task="T-DECIDED"] .t')).toHaveText(
+        locale === 'en' ? 'a decided title' : locale === 'zh-TW' ? '決定的標題' : '决定的标题');
       await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(want.titleMissing);
       await expect(queued).toContainText(want.blockedOn);
       await expect(page.locator('#rosterBtn')).toHaveText(want.rosterBtn);
