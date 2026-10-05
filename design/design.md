@@ -367,6 +367,35 @@ fail before a pending record is written; existing IDs cannot be replaced.
 Legacy scalar records remain readable with an explicit missing-details notice.
 Trusted repository diagram fragments are assets, never fields in this input.
 
+Intent cards add optional locale fields (T-210): `intent`, `why`, `done` and
+`questions` hold `{kind: "step"|"fact", text}` items; `notes` holds
+`{kind: "note"|"caution", text}` items. These arrays hold 1–12 items, except
+questions hold 1–6. `scope_in` and `scope_out` are arrays of plain strings,
+each 1–200 code points. `before_nodes` and `after_nodes` hold 1–8
+`{state, label}` items: `same` in either, `gone` only before, `new` only after.
+`change_table` holds 1–8 `{text, A, B, C}` rows with marks `✓`, `—` or `?`.
+Other new text is 1–2000 code points; prohibited controls and lone surrogates
+are refused. Each field is present in both locales or neither; questions,
+node arrays and change-table rows have matching counts. Any new field requires
+`intent` in both locales. Unknown locale keys remain forward compatible.
+
+`bin/lib/fm_ste.py` is the single writing-rule and glossary source. Its
+`check-details` CLI validates the new fields and checks intent-card prose and
+node labels before `fm-decide.sh` binds or writes a request. Malformed fields
+exit 64; STE failures exit 65 with each failing sentence and rule. Warnings do
+not refuse a card. A passing request stores the report in `ste` beside
+`details`, for read-only display. `rules` exports the bilingual rule table,
+limits and word lists. Legacy details and already-pending cards without new
+fields bypass this check and receive no `ste` key; no records are migrated.
+
+The five defaults, each changeable by a later card, are: enforce STE when an
+intent card is raised; turn “No, change it” into a spec-change request (T-211);
+use the captain-approved Chinese Z1–Z8 rules and glossary from `fm_ste.py`;
+apply this standard to cards only, not PR bodies or worker briefs; and provide
+no light theme. STE has no Chinese standard; these Chinese rules are the
+approved equivalent. Mechanical checks do not prove meaning or the rules
+marked “checked by eye”.
+
 A new card's id names its owner, `D-<project>-<task>-<n>`, and is allocated by
 `fm-decide.sh --allocate` before the card is requested (section 15.4).
 `fm-autopilot.sh` consumes `state/decision-details/<id>.json` after gates pass,
@@ -2145,6 +2174,13 @@ Celebration must not hide what is being celebrated: the banner sits clear of
 the ship.
 
 ### Interaction
+
+T-211 renders the intent, reason, scope, completion, notes and confirmation
+sections, plus before/after nodes and the change table. It displays the stored
+`ste` report without recomputing it and gets rule text from `fm_ste.py rules`.
+It also records the captain's confirmation answers; “No, change it” becomes a
+spec-change request under the defaults in §5.2. Cards already pending without
+intent fields keep their current rendering.
 
 Drag a figure to turn it, drag the deck to turn the whole crew, double-click to
 reset. Every pose is a `.fig.s-<state>` class, so **e2e asserts classes rather
