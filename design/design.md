@@ -2823,13 +2823,24 @@ counter spans dispatch completion and the send-back start check. While draining,
 `/decisions`, `/tasks` and `/open` refuse with `503 boardRestarting` before any
 effect. Only a session-owned board is stopped, and its replacement retains the
 same live session owner, falling back to the caller's session only if that owner
-is gone. The port must stop answering before the replacement starts; even an
-HTTP error means it is still occupied. Replacement and browser sign-in run under
-the board lock, with one browser open against the surviving board. A hand-started
+is gone. The port counts as free only when a TCP connect is refused; even an
+HTTP error means it is still occupied. A listener that does not answer the root
+check in time is never mistaken for a free port. When it cannot replace that
+listener, `fm board` refuses with exit 70 and names its pid, when known, and the
+manual step (`kill <pid>`, then `fm board`) in English and Chinese; without a
+pid it asks to stop the process listening on the port. Replacement and browser
+sign-in run under the board lock, with one browser open against the surviving
+board. A hand-started
 board, or an older board without `/drain`, keeps the English and Chinese notice
-to restart by hand. A board that will not stop within ten seconds is released
-and named in the notice. A drain also releases itself after 30 seconds if its
+to restart by hand, naming `kill <pid>` when the pid is known. A board that
+will not stop within ten seconds is released and named in the notice, also
+with `kill <pid>` when known. A drain also releases itself after 30 seconds if its
 caller disappears. Unknown, dirty or equal checkout code triggers no drain.
+A reused board with unknown previous code (no record, no `code` key, or
+`code: null`) and a known clean checkout also remains undrained and is not
+marked stale. It gets a bilingual `code_unknown_reason` notice naming its pid
+when known and the manual restart step if recent changes are missing; `fm board`
+prints that notice after the JSON and still exits 0.
 `board.json` retains the board's owner and code; a successful replacement adds
 `replaced` (old and new short code) and bilingual `replaced_reason`, with no
 stale notice. No stored record is migrated, and autopilot never starts or

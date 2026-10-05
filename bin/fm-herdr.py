@@ -2343,6 +2343,57 @@ def board_check_port(root, port):
         raise RuntimeError(f'board port belongs to an unverified root: http://127.0.0.1:{port}')
 
 
+def board_listening(port):
+    """Only a refused TCP connection proves the port is free."""
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=2):
+            return True
+    except ConnectionRefusedError:
+        return False
+    except OSError:
+        return True
+
+
+def board_port_pid(port):
+    """Best-effort listener identity for a manual restart notice."""
+    try:
+        lsof = shutil.which('lsof')
+        if not lsof: return None
+        result = subprocess.run([lsof, '-nP', '-t', f'-iTCP:{port}', '-sTCP:LISTEN'],
+                                capture_output=True, text=True, timeout=5, check=True)
+        pid = int(result.stdout.splitlines()[0])
+        return pid if pid > 1 else None
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+
+
+class BoardRefusal(RuntimeError):
+    def __init__(self, port, pid=None):
+        stop_en = f'stop it (kill {pid})' if pid else f'stop the process listening on :{port}'
+        stop_tw = f'請停止它（kill {pid}）' if pid else f'請停止佔用 :{port} 的程序'
+        self.reason = {
+            'en': f'the board on :{port} runs old code or is not answering and cannot be replaced; {stop_en} and run fm board',
+            'zh-TW': f':{port} 上的看板執行舊程式或沒有回應，無法替換；{stop_tw}後再執行 fm board'}
+        super().__init__(self.reason['en'])
+
+
+def board_manual_reason(before, after, port, drained, did_not_stop=False):
+    pid = drained.get('pid') if drained else None
+    if type(pid) is not int or pid <= 1:
+        pid = None
+    elif did_not_stop:
+        try: os.kill(pid, 0)
+        except OSError: pid = None
+    if pid is None: pid = board_port_pid(port)
+    stop_en = f'stop the board process (kill {pid})' if pid else 'stop the board process'
+    stop_tw = f'停止看板程序（kill {pid}）' if pid else '停止看板程序'
+    failed_en = ' and did not stop when asked' if did_not_stop else ''
+    failed_tw = '，要求停止但沒有停下' if did_not_stop else ''
+    return {
+        'en': f'the board runs older code ({before} -> {after}){failed_en}; restart it by hand: {stop_en} and run fm board',
+        'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}）{failed_tw}；請手動重啟：{stop_tw}後執行 fm board'}
+
+
 def configured_board_port(root):
     try:
         result = subprocess.run(['/bin/bash', '-c', '. "$1"; fm_board_port "$2"',
@@ -2395,7 +2446,9 @@ def board_start(root):
             # Any response means a different/unverifiable listener, never reuse it.
             try: http_get(url); occupied = True
             except urllib.error.HTTPError: occupied = True
-            except OSError: occupied = False
+            except OSError:
+                if board_listening(port): raise BoardRefusal(port, board_port_pid(port))
+                occupied = False
             if occupied: raise RuntimeError('board port belongs to an unverified root: ' + url)
             bun = shutil.which('bun')
             if not bun: raise RuntimeError('board requires Bun')
@@ -2412,7 +2465,10 @@ def board_start(root):
                 if child.poll() is not None: break
                 if board_matches(root, url): break
                 time.sleep(.1)
-            if not board_matches(root, url): raise RuntimeError('board did not verify; inspect state/session/board.log')
+            if not board_matches(root, url):
+                if child.poll() is not None and board_listening(port):
+                    raise BoardRefusal(port, board_port_pid(port))
+                raise RuntimeError('board did not verify; inspect state/session/board.log')
             return owner
         owner = previous.get('owner')
         stale_reason = None
@@ -2420,16 +2476,16 @@ def board_start(root):
         old = previous.get('code')
         if reused and old and current and not current['dirty'] and not board_same_code(old, current):
             before, after = board_short_code(old), board_short_code(current)
-            stale_reason = {
-                'en': f'the board runs older code ({before} -> {after}); restart it by hand: stop the board process and run fm board',
-                'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}）；請手動重啟：停止看板程序後執行 fm board'}
             drained = board_drain(url, port)
+            if drained is None:
+                stale_reason = board_manual_reason(before, after, port, drained)
             if drained is not None:
                 if drained.get('status') == 409:
                     stale_reason = {
                         'en': f'the board runs older code ({before} -> {after}); a merge or an answer is in progress, so it was not replaced; run fm board again when it ends',
                         'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}）；有合併或回覆正在進行，所以沒有替換；結束後再執行一次 fm board'}
                 elif drained.get('session_owned') is not True:
+                    stale_reason = board_manual_reason(before, after, port, drained)
                     board_drain(url, port, release=True)
                 else:
                     pid = drained.get('pid')
@@ -2443,8 +2499,9 @@ def board_start(root):
                                 try: http_get(url)
                                 except urllib.error.HTTPError: pass  # still a listener, even on 5xx
                                 except OSError:
-                                    freed = True
-                                    break
+                                    if not board_listening(port):
+                                        freed = True
+                                        break
                                 time.sleep(.1)
                         except OSError: pass
                     if freed:
@@ -2460,9 +2517,7 @@ def board_start(root):
                         replaced = {'from': before, 'to': after}
                     else:
                         board_drain(url, port, release=True)
-                        stale_reason = {
-                            'en': f'the board runs older code ({before} -> {after}) and did not stop when asked; restart it by hand: stop the board process and run fm board',
-                            'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}），要求停止但沒有停下；請手動重啟：停止看板程序後執行 fm board'}
+                        stale_reason = board_manual_reason(before, after, port, drained, did_not_stop=True)
         elif not reused:
             owner = fresh_start(None)
         page = bool(http_get(url))
@@ -2480,6 +2535,13 @@ def board_start(root):
             record['code'] = current
         elif 'code' in previous:
             record['code'] = previous['code']
+        if reused and old is None and current and not current['dirty']:
+            pid = board_port_pid(port)
+            stop_en = f'stop it (kill {pid})' if pid else f'stop the process listening on :{port}'
+            stop_tw = f'請停止它（kill {pid}）' if pid else f'請停止佔用 :{port} 的程序'
+            record['code_unknown_reason'] = {
+                'en': f'the board on :{port} has no recorded code, so fm board cannot tell whether it runs current code; if it does not show recent changes, {stop_en} and run fm board',
+                'zh-TW': f':{port} 上的看板沒有記錄程式版本，fm board 無法判斷它是否為最新；如果看不到最新的改動，{stop_tw}後再執行 fm board'}
         if stale_reason:
             record['stale'] = True
             record['stale_reason'] = stale_reason
@@ -2841,12 +2903,16 @@ def main(args):
         return 0
     if mode == 'board':
         # a board that cannot start, or a tab that could not be signed in, is
-        # said in one line and a non-zero exit, never a traceback
+        # reported with a non-zero exit, never a traceback
         try: record = board_start(args[0])
+        except BoardRefusal as error:
+            for lang in ('en', 'zh-TW'):
+                print('fm board: ' + error.reason[lang], file=sys.stderr)
+            return 70
         except (OSError, RuntimeError) as error:
             print('fm board: ' + str(error), file=sys.stderr); return 70
         print(json.dumps(record, indent=2))
-        for reason in {**record.get('stale_reason', {}), **record.get('replaced_reason', {})}.values():
+        for reason in {**record.get('stale_reason', {}), **record.get('replaced_reason', {}), **record.get('code_unknown_reason', {})}.values():
             print('fm board: ' + reason, file=sys.stderr)
         if record.get('sign_in_error'):
             print('fm board: ' + record['sign_in_error'], file=sys.stderr); return 69

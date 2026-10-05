@@ -8,31 +8,13 @@ for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
 done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
-import importlib.util
-import json
-import os
-from pathlib import Path
-import shutil
-import signal
-import socket
-import subprocess
 import sys
-import tempfile
-import time
-import unittest
-from unittest.mock import call, patch
+from pathlib import Path
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(sys.argv[1]) / 'tests/lib'))
+from session_fixture import *  # tests/lib/session_fixture.py
 
-sys.dont_write_bytecode = True  # Import production code without dirtying the checkout.
-root = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location('managed', root / 'bin/fm-herdr.py')
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
-class Session(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.repo = Path(self.tmp.name)
-        shutil.copytree(root / 'bin', self.repo / 'bin')
-        shutil.copytree(root / 'skills', self.repo / 'skills')
+class Session(SessionFixture):
     def test_role_context_reaches_supported_launchers(self):
         for role in ['worker', 'reviewer', 'firstmate']:
             result = m.role_context(self.repo, role, 'T-035', 'worker-mira-t035-r2', 'payload')
@@ -163,7 +145,8 @@ class Session(unittest.TestCase):
              patch.object(m.subprocess,'Popen') as spawn:
             with self.assertRaisesRegex(RuntimeError,'unverified root'): m.board_start(self.repo)
             self.assertFalse(spawn.called)
-    def test_board_code_notice_uses_its_own_git_fixture(self):
+    @patch.object(m, 'board_port_pid', return_value=None)
+    def test_board_code_notice_uses_its_own_git_fixture(self, port_pid):
         import contextlib, io
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as temporary:
@@ -181,6 +164,7 @@ class Session(unittest.TestCase):
                  patch.object(m, 'board_open', return_value={}), \
                  patch.object(m, 'board_matches', side_effect=[False, True, True]), \
                  patch.object(m, 'http_get', side_effect=[OSError(), b'page']), \
+                 patch.object(m, 'board_listening', return_value=False), \
                  patch.object(m.shutil, 'which', return_value='/fixture/bun'), \
                  patch.object(m, 'lifeline') as life:
                 life.return_value.session_owner.return_value = os.getpid()
@@ -254,6 +238,8 @@ class Session(unittest.TestCase):
                         return stack.enter_context(patch.object(obj, name, **kw))
                     mocked(m, 'configured_board_port', return_value=4173)
                     mocked(m, 'board_matches', return_value=True)
+                    mocked(m, 'board_listening', return_value=False)
+                    mocked(m, 'board_port_pid', return_value=7373 if case in ('invalid-pid', 'dead-pid') else None)
                     if case == 'unknown-current': mocked(m, 'board_code_id', return_value=None)
                     opened = mocked(m, 'board_open', return_value={})
                     mocked(m.shutil, 'which', return_value='/fixture/bun')
@@ -317,10 +303,153 @@ class Session(unittest.TestCase):
                                 self.assertEqual(call('http://127.0.0.1:4173', 4173, release=True), drain.call_args)
                                 self.assertEqual(2, drain.call_count)
                                 self.assertIn('restart it by hand' if case == 'hand' else 'did not stop when asked', reason)
+                        if case in ('invalid-pid', 'dead-pid'):
+                            for text in result['stale_reason'].values():
+                                self.assertIn('kill 7373', text)
+                                self.assertNotIn('kill True' if case == 'invalid-pid' else 'kill 900', text)
                         if case == 'timeout': self.assertEqual([900], stopped)
                         else: self.assertEqual([], stopped)
                         if case in ('hand', 'busy', 'equal', 'dirty', 'unknown', 'unknown-current'): self.assertEqual(killed.call_count, 0)
                     git('checkout', '--', 'board')
+
+    def test_board_held_port_refusal_and_free_port_launch(self):
+        import contextlib, io
+        with contextlib.ExitStack() as stack:
+            def mocked(obj, name, **kw): return stack.enter_context(patch.object(obj, name, **kw))
+            mocked(m, 'configured_board_port', return_value=4173)
+            matches = mocked(m, 'board_matches', return_value=False)
+            get = mocked(m, 'http_get', side_effect=TimeoutError())
+            listening = mocked(m, 'board_listening', return_value=True)
+            pid = mocked(m, 'board_port_pid', return_value=4242)
+            mocked(m, 'board_open', return_value={})
+            mocked(m.shutil, 'which', return_value='/fixture/bun')
+            life = mocked(m, 'lifeline'); life.return_value.session_owner.return_value = 900
+            for known in (4242, None):
+                pid.return_value = known
+                stop_en = 'stop it (kill 4242)' if known else 'stop the process listening on :4173'
+                stop_tw = '請停止它（kill 4242）' if known else '請停止佔用 :4173 的程序'
+                reason = {'en': 'the board on :4173 runs old code or is not answering and cannot be replaced; ' + stop_en + ' and run fm board',
+                          'zh-TW': ':4173 上的看板執行舊程式或沒有回應，無法替換；' + stop_tw + '後再執行 fm board'}
+                with self.assertRaises(m.BoardRefusal) as error: m.board_start(self.repo)
+                self.assertEqual(reason, error.exception.reason)
+                self.assertEqual(reason['en'], str(error.exception))
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    self.assertEqual(70, m.main(['board', str(self.repo)]))
+                self.assertEqual(['fm board: ' + reason[lang] for lang in ('en', 'zh-TW')], err.getvalue().splitlines())
+                self.assertEqual('', out.getvalue())
+                self.assertEqual(0, life.return_value.start.call_count)
+            listening.return_value = False
+            matches.side_effect = [False, True, True]
+            get.side_effect = [ConnectionRefusedError(), b'page']
+            life.return_value.start.return_value.poll.return_value = None
+            self.assertFalse(m.board_start(self.repo)['reused'])
+            self.assertEqual(1, life.return_value.start.call_count)
+            # A competing listener may acquire the port after the initial check.
+            matches.side_effect = None; matches.return_value = False
+            get.side_effect = TimeoutError()
+            listening.side_effect = [False, True]
+            life.return_value.start.return_value.poll.return_value = 1
+            with self.assertRaises(m.BoardRefusal): m.board_start(self.repo)
+            self.assertEqual(2, life.return_value.start.call_count)
+
+    def test_board_unknown_code_and_manual_restart_pid_notices(self):
+        import contextlib, io
+        with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as stack:
+            repo = Path(temporary).resolve()
+            for folder in ('board', 'i18n'):
+                (repo / folder).mkdir(); (repo / folder / 'fixture').write_text('old')
+            def git(*args):
+                subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+            git('init', '-q'); git('config', 'user.name', 'Board fixture')
+            git('config', 'user.email', 'board@example.invalid')
+            git('add', '.'); git('commit', '-qm', 'old')
+            old = m.board_code_id(repo)
+            (repo / 'board/fixture').write_text('new')
+            git('add', '.'); git('commit', '-qm', 'new')
+            path = repo / 'state/session/board.json'; path.parent.mkdir(parents=True)
+            def mocked(obj, name, **kw): return stack.enter_context(patch.object(obj, name, **kw))
+            mocked(m, 'configured_board_port', return_value=4173)
+            mocked(m, 'board_matches', return_value=True)
+            get = mocked(m, 'http_get', return_value=b'page')
+            mocked(m, 'board_open', return_value={})
+            pid = mocked(m, 'board_port_pid', return_value=4242)
+            drain = mocked(m, 'board_drain', return_value=None)
+            life = mocked(m, 'lifeline'); killed = mocked(m.os, 'kill')
+            for previous in (None, {'root': str(repo)}, {'code': None}):
+                if previous is None: path.unlink(missing_ok=True)
+                else: path.write_text(json.dumps(previous))
+                reply = m.board_start(repo)
+                self.assertTrue(reply['reused']); self.assertNotIn('stale', reply)
+                reason = reply['code_unknown_reason']
+                self.assertEqual({'en', 'zh-TW'}, set(reason))
+                for text in reason.values():
+                    self.assertIn('kill 4242', text); self.assertIn(':4173', text)
+                self.assertEqual(0, drain.call_count)
+                self.assertEqual(0, killed.call_count)
+                self.assertEqual(0, life.return_value.start.call_count)
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    self.assertEqual(0, m.main(['board', str(repo)]))
+                self.assertEqual(reply, json.loads(out.getvalue()))
+                self.assertEqual(['fm board: ' + reason[lang] for lang in ('en', 'zh-TW')], err.getvalue().splitlines())
+            pid.return_value = None
+            reply = m.board_start(repo)
+            self.assertIn('stop the process listening on :4173', reply['code_unknown_reason']['en'])
+            self.assertIn('請停止佔用 :4173 的程序', reply['code_unknown_reason']['zh-TW'])
+            for payload, expected in ((None, 4242), ({'session_owned': False, 'pid': 5151}, 5151)):
+                path.write_text(json.dumps({'code': old}))
+                pid.return_value = 4242; pid.reset_mock(); drain.return_value = payload
+                reply = m.board_start(repo)
+                self.assertIn('restart it by hand', reply['stale_reason']['en'])
+                self.assertIn('請手動重啟', reply['stale_reason']['zh-TW'])
+                for text in reply['stale_reason'].values(): self.assertIn('kill ' + str(expected), text)
+                self.assertEqual(1 if payload is None else 0, pid.call_count)
+            # HTTP silence after SIGTERM never proves that the listener stopped.
+            path.write_text(json.dumps({'code': old}))
+            drain.return_value = {'session_owned': True, 'pid': 5151, 'owner': 900}
+            drain.reset_mock(); pid.reset_mock()
+            mocked(m, 'board_listening', return_value=True)
+            ticks = iter([0, 1, 11])
+            mocked(m.time, 'monotonic', side_effect=lambda: next(ticks))
+            mocked(m.time, 'sleep')
+            get.side_effect = [TimeoutError(), b'page']
+            reply = m.board_start(repo)
+            self.assertIn(call(5151, signal.SIGTERM), killed.call_args_list)
+            self.assertEqual(0, life.return_value.start.call_count)
+            self.assertEqual(call('http://127.0.0.1:4173', 4173, release=True), drain.call_args)
+            self.assertIn('did not stop', reply['stale_reason']['en'])
+            for text in reply['stale_reason'].values(): self.assertIn('kill 5151', text)
+            self.assertEqual(0, pid.call_count)
+
+    def test_board_listening_only_connection_refused_means_free(self):
+        for error, expected in ((ConnectionRefusedError(), False), (TimeoutError(), True),
+                                (ConnectionResetError(), True), (OSError('unreachable'), True)):
+            with patch.object(m.socket, 'create_connection', side_effect=error) as connect:
+                self.assertEqual(expected, m.board_listening(4173))
+                self.assertEqual(call(('127.0.0.1', 4173), timeout=2), connect.call_args)
+        try:
+            with socket.socket() as listener:
+                listener.bind(('127.0.0.1', 0)); port = listener.getsockname()[1]
+                listener.listen()
+                self.assertTrue(m.board_listening(port))
+            self.assertFalse(m.board_listening(port))
+        except PermissionError as error:
+            self.skipTest('loopback bind prohibited: ' + str(error))
+
+    def test_board_port_pid_is_optional_and_never_raises(self):
+        with patch.object(m.shutil, 'which', return_value=None), patch.object(m.subprocess, 'run') as run:
+            self.assertIsNone(m.board_port_pid(4173)); self.assertEqual(0, run.call_count)
+        with patch.object(m.shutil, 'which', return_value='/fixture/lsof'), patch.object(m.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            for output, expected in (('4242\n5151\n', 4242), ('', None), ('1\n', None), ('0', None), ('bad', None)):
+                run.return_value.stdout = output
+                self.assertEqual(expected, m.board_port_pid(4173))
+            self.assertEqual(call(['/fixture/lsof', '-nP', '-t', '-iTCP:4173', '-sTCP:LISTEN'],
+                                  capture_output=True, text=True, timeout=5, check=True), run.call_args)
+            for error in (OSError(), subprocess.TimeoutExpired('lsof', 5), subprocess.CalledProcessError(1, 'lsof')):
+                run.side_effect = error
+                self.assertIsNone(m.board_port_pid(4173))
 
     def test_board_drain_http_contract_and_failures(self):
         import io
@@ -665,6 +794,7 @@ class Session(unittest.TestCase):
         with patch.dict(os.environ, {'FM_SESSION_PID': '31337', 'FM_PORT': '4173'}), \
              patch.object(m, 'board_matches', side_effect=[False, False, True, True]), \
              patch.object(m, 'http_get', side_effect=[OSError('nothing there'), b'page']), \
+             patch.object(m, 'board_listening', return_value=False), \
              patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/bun' if name == 'bun' else None), \
              patch.object(m.lifeline(), 'start', side_effect=start), \
              patch.object(m, 'configured_board_port', return_value=4173), \
@@ -838,10 +968,6 @@ class Session(unittest.TestCase):
         self.assertIn('still running', text)
         self.assertRegex(text, r'finished exit=0 after \d+s')
 
-    def session_cli(self, *args):
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
-        return subprocess.run(['bash', str(self.repo / 'bin/fm-session.sh'), *args, '--repo', str(self.repo)],
-                              cwd=self.repo, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     def decision_files(self):
         state = self.repo / 'state'
         return {str(p.relative_to(state)): p.read_bytes()
@@ -988,189 +1114,5 @@ class Session(unittest.TestCase):
             refused = self.session_cli('ack', '--decision', bad)
             self.assertNotEqual(0, refused.returncode, bad)
         self.assertEqual([owned + '.json'], sorted(p.name for p in (state / 'session/acknowledged').iterdir()))
-    def start_with(self, config):
-        """T-043: session start against a fixture that declares its own project contract."""
-        import io, contextlib
-        (self.repo / 'config.yaml').write_text(config)
-        out = io.StringIO()
-        with patch.object(m, 'board_start', return_value=dict(stub=True)) as board, \
-             patch.dict(os.environ, {'FM_SESSION_PID': str(os.getpid())}), \
-             contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            rc = m.main(['session', 'start', str(self.repo)])
-        return rc, json.loads(out.getvalue()), board
-    def test_start_runs_declared_setup_once_and_reports_it(self):
-        rc, report, board = self.start_with(
-            'vendor: mock\nproject:\n  setup: echo ran >> setup-count && echo "it\'s done"\n  check: make test\n')
-        self.assertEqual(0, rc)
-        self.assertEqual('ran\n', (self.repo / 'setup-count').read_text(), 'setup runs exactly once, in the checkout')
-        project = report['project']
-        self.assertEqual(['setup', 'check'], project['declared'])
-        self.assertEqual(0, project['setup']['exit'])
-        self.assertTrue(project['ready'])
-        self.assertTrue(board.called)
-    def test_failed_setup_is_not_ready_and_never_aborts_startup(self):
-        rc, report, board = self.start_with(
-            'project:\n  setup: echo "lockfile is out of date" >&2; exit 4\n  check: make test\n')
-        self.assertEqual(0, rc, 'a failed setup is reported, not fatal')
-        self.assertTrue(board.called, 'the rest of startup still runs')
-        self.assertEqual(dict(stub=True), report['board'])
-        project = report['project']
-        self.assertEqual(4, project['setup']['exit'])
-        self.assertIn('lockfile is out of date', project['setup']['error'])
-        self.assertFalse(project['ready'])
-    def test_start_without_setup_runs_nothing(self):
-        rc, report, _ = self.start_with('project:\n  check: make test\n')
-        self.assertEqual(0, rc)
-        self.assertEqual(['check'], report['project']['declared'])
-        self.assertIsNone(report['project']['setup'])
-        self.assertTrue(report['project']['ready'])
-        self.assertFalse((self.repo / 'state/session/project-setup.log').exists())
-    def test_start_without_check_is_not_ready(self):
-        rc, report, _ = self.start_with('vendor: mock\n')
-        self.assertEqual(0, rc)
-        self.assertEqual([], report['project']['declared'])
-        self.assertFalse(report['project']['ready'])
-        self.assertIn('declares no project.check', report['project']['error'])
-    def test_status_reports_contract_and_never_runs_setup(self):
-        (self.repo / 'config.yaml').write_text('project:\n  setup: touch setup-ran\n  check: make test\n  tests:\n    - "*_test.go"\n')
-        status = self.session_cli('status')
-        self.assertEqual(0, status.returncode, status.stderr)
-        project = json.loads(status.stdout)['project']
-        self.assertEqual(['setup', 'check', 'tests'], project['declared'])
-        self.assertIsNone(project['setup'], 'status reports; it does not run')
-        self.assertFalse((self.repo / 'setup-ran').exists(), 'status never runs setup')
-        self.assertFalse((self.repo / 'state/crew/rosters.json').exists(), 'status never draws a crew')
-    def test_start_draws_the_crew_once_and_a_second_start_keeps_it(self):
-        """T-104: the installation's crew is drawn the first time firstmate runs."""
-        crew = self.repo / 'state/crew/rosters.json'
-        with patch.dict(os.environ, {'FM_ROSTER_SEED': 'first'}):
-            rc, report, _ = self.start_with('vendor: mock\n')
-        self.assertEqual(0, rc)
-        self.assertTrue(report['crew']['drawn_now'])
-        drawn = json.loads(crew.read_text())
-        self.assertEqual((24, 24), (len(drawn['workers']), len(drawn['reviewers'])))
-        self.assertEqual([], [n for n in drawn['workers'] if n in drawn['reviewers']])
-        self.assertEqual(drawn['workers'], report['crew']['workers'])
-        saved = crew.read_bytes()
-        with patch.dict(os.environ, {'FM_ROSTER_SEED': 'second'}):
-            rc, report, _ = self.start_with('vendor: mock\n')
-        self.assertEqual(0, rc)
-        self.assertFalse(report['crew']['drawn_now'])
-        self.assertEqual(saved, crew.read_bytes(), 'a second start keeps the same crew')
-    def roster_cli(self, *args, seed='cli'):
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
-        env['FM_ROSTER_SEED'] = seed
-        return subprocess.run(['bash', str(self.repo / 'bin/fm.sh'), 'roster', *args, '--repo', str(self.repo)],
-                              cwd=self.repo, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
-    def test_fm_roster_prints_draws_once_and_redraws_only_when_asked(self):
-        crew = self.repo / 'state/crew/rosters.json'
-        none = self.roster_cli()
-        self.assertEqual(1, none.returncode, none.stderr)
-        self.assertIn('no crew drawn yet; roster init draws one', none.stderr)
-        self.assertFalse(crew.exists())
-        init = self.roster_cli('init')
-        self.assertEqual(0, init.returncode, init.stderr)
-        drawn = json.loads(crew.read_text())
-        self.assertIn('workers (24, drawn ' + drawn['drawn_at'] + '): ' + ' '.join(drawn['workers']), init.stdout)
-        self.assertIn('reviewers (24, drawn ' + drawn['drawn_at'] + '): ' + ' '.join(drawn['reviewers']), init.stdout)
-        saved = crew.read_bytes()
-        again = self.roster_cli('init', seed='other')
-        self.assertEqual(1, again.returncode, again.stderr)
-        self.assertIn('already has a crew', again.stderr)
-        self.assertIn('never redrawn unless you ask with --redraw', again.stderr)
-        self.assertEqual(saved, crew.read_bytes())
-        shown = self.roster_cli(seed='other')
-        self.assertEqual(0, shown.returncode, shown.stderr)
-        self.assertIn(' '.join(drawn['reviewers']), shown.stdout)
-        self.assertEqual(saved, crew.read_bytes())
-        redraw = self.roster_cli('init', '--redraw', seed='other')
-        self.assertEqual(0, redraw.returncode, redraw.stderr)
-        self.assertIn('Ranks and service records keyed by the old names stay with the old names', redraw.stdout)
-        redrawn = json.loads(crew.read_text())
-        self.assertNotEqual(drawn['workers'], redrawn['workers'])
-        self.assertIn(' '.join(redrawn['workers']), redraw.stdout)
-    def test_emit_status_is_board_path_not_pane_heartbeat(self):
-        """T-036: pane text is board activity only after emit-status."""
-        d = Path(tempfile.mkdtemp()); self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
-        (d/'bin').mkdir(); (d/'state').mkdir()
-        shutil.copy(root/'bin/fm-emit.sh', d/'bin/fm-emit.sh')
-        shutil.copy(root/'bin/fm-herdr.py', d/'bin/fm-herdr.py')
-        self.assertEqual(0, m.main(['emit-status','--root',str(d),'--actor','session-h',
-            '--task','T-S','--role','worker','--en','pane heartbeat','--tw','窗格心跳']))
-        ev = json.loads((d/'state/events.jsonl').read_text().splitlines()[0])
-        self.assertEqual('crew_status', ev['type'])
-        self.assertEqual('pane heartbeat', ev['data']['activity']['en'])
-        self.assertNotIn('progress', ev.get('data', {}))
-    def reviewer_report(self, config, mode='start'):
-        """T-066: fm-session.sh itself, with the session engine stubbed out.
-
-        `exec` keeps the pid, so the frozen-entry check passes without a
-        snapshot, and the stub stands in for everything after the report."""
-        (self.repo / 'bin/fm-herdr.py').write_text('import sys\nprint("stub " + " ".join(sys.argv[1:3]))\n')
-        (self.repo / 'config.yaml').write_text(config)
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
-        return subprocess.run(
-            ['bash', '-c', 'export FM_ENTRY_PID=$$ FM_ENTRY_SCRIPT=fm-session.sh; exec "$0" "$@"',
-             str(self.repo / 'bin/fm-session.sh'), mode, '--repo', str(self.repo)],
-            env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
-    def test_start_reports_a_project_that_names_no_reviewer(self):
-        for config, missing in [('vendor: claude\n', 'vendor and model'),
-                                ('vendor: claude\nreviewer:\n  vendor: claude\n', 'model'),
-                                ('reviewer:\n  model: opus-5\n', 'vendor')]:
-            result = self.reviewer_report(config)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertIn('stub session start', result.stdout, 'startup carries on after the report')
-            self.assertIn('config.yaml names no reviewer ' + missing + ';', result.stderr, config)
-            self.assertIn("the reviewer is the captain's choice", result.stderr)
-            self.assertIn('installed adapters:', result.stderr)
-    def test_start_is_quiet_when_the_reviewer_is_named(self):
-        result = self.reviewer_report('reviewer:\n  vendor: claude\n  model: opus-5\n')
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn('stub session start', result.stdout)
-        self.assertNotIn('names no reviewer', result.stderr)
-        # and this repository names its own: claude and opus-5, the captain's choice
-        result = self.reviewer_report((root / 'config.yaml').read_text())
-        self.assertNotIn('names no reviewer', result.stderr)
-    def test_start_reports_a_model_the_vendor_does_not_accept(self):
-        """T-127: a missing model was already reported; an unrecognised one
-        is too - opus-5 is not a name claude accepts, only a name it fell
-        back to before the model was applied at all."""
-        result = self.reviewer_report('reviewer:\n  vendor: claude\n  model: opus-5\n')
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("reviewer model 'opus-5' is not one claude is known to accept", result.stderr)
-        self.assertNotIn('names no reviewer', result.stderr)
-    def test_start_is_quiet_about_a_model_the_vendor_does_accept(self):
-        for model in ['claude-opus-5-5', 'opus', 'claude-sonnet-5']:
-            result = self.reviewer_report('reviewer:\n  vendor: claude\n  model: ' + model + '\n')
-            self.assertNotIn('is not one claude is known to accept', result.stderr, model)
-        # this repository's own config names one claude accepts
-        result = self.reviewer_report((root / 'config.yaml').read_text())
-        self.assertNotIn('is not one claude is known to accept', result.stderr)
-    def test_start_reports_the_worker_model_too(self):
-        result = self.reviewer_report('vendor: claude\nmodel: opus-5\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n')
-        self.assertIn("worker model 'opus-5' is not one claude is known to accept", result.stderr)
-    def test_start_checks_the_worker_vendor_and_model_that_actually_run(self):
-        """T-146: the worker's own vendor, not the top-level one, paired with
-        that vendor's model - here claude and models.claude, under a codex
-        top level, so the check that used to ask codex (no catalogue, quiet)
-        now asks claude about the name claude would be handed."""
-        result = self.reviewer_report('vendor: codex\nmodels:\n  claude: opus-5\n  codex: gpt-6-astra\n'
-                                      'worker:\n  vendor: claude\n'
-                                      'reviewer:\n  vendor: claude\n  model: claude-opus-5-5\n')
-        self.assertIn("worker model 'opus-5' is not one claude is known to accept", result.stderr)
-    def test_start_is_quiet_about_a_vendor_with_no_offline_catalogue(self):
-        """T-127: fm_model_known returns 2 (no catalogue) for a vendor other
-        than claude - not 1 (not known) - and a config check that reads that
-        as any nonzero code would wrongly warn about every codex/cursor-agent
-        /gemini model, however real, that it simply cannot check."""
-        for config in ('vendor: codex\nmodel: o1\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n',
-                       'vendor: claude\nmodel: claude-opus-5-5\nreviewer:\n  vendor: cursor-agent\n  model: gpt-5\n'):
-            result = self.reviewer_report(config)
-            self.assertNotIn('is not one', result.stderr, config)
-    def test_status_does_not_repeat_the_reviewer_report(self):
-        result = self.reviewer_report('vendor: claude\n', mode='status')
-        self.assertIn('stub session status', result.stdout)
-        self.assertNotIn('names no reviewer', result.stderr)
-
 unittest.main(argv=['session'], verbosity=2)
 PY
