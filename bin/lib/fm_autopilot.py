@@ -598,6 +598,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
         if kind in ('agent_finished', 'commit_pushed', 'pr_opened', 'approved', 'review_failed'):
             self.data['next_poll'] = 0
         reasons = dict(worker_crashed='Worker round failed', agent_lost='Round lost',
+                       worker_note_unsent='Worker note unsent; run bin/fm.sh unsent --post',
                        review_failed='Review requires judgment', conventions_drift='Conventions drift',
                        gate_failed='Gate failed')
         reason = reasons.get(kind)

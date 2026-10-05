@@ -4,7 +4,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 python3 - "$ROOT" <<'PY'
-import json, sys, tempfile, unittest
+import json, shlex, sys, tempfile, unittest
 from pathlib import Path
 sys.dont_write_bytecode=True
 root=Path(sys.argv[1]); sys.path[:0]=[str(root/'tests/lib'),str(root/'bin/lib')]
@@ -45,7 +45,7 @@ class LauncherProjection(unittest.TestCase):
     def test_post_note_projection_failure_is_warned_and_delivered(self):
         for mode in ('summary','check','threads','comments'):
             with self.subTest(mode=mode):
-                p=self.run_block(function(worker,'post_note')+'post_note "$work/note" 9; result=$?; echo "$result:$spoke"',
+                p=self.run_block(function(worker,'note_landed')+function(worker,'post_note')+'post_note "$work/note" 9; result=$?; echo "$result:$spoke"',
                     'projection='+mode+'; spoke=0;\n'+self.recorder(True)+
                     'fm_comment_projection() { echo comment >> "$work/calls"; return 1; };\n')
                 self.assertEqual(p.stdout.strip().splitlines()[-1],'0:1')
@@ -53,9 +53,39 @@ class LauncherProjection(unittest.TestCase):
                 self.assertIn('PRIVATE report','\n'.join(f.read_text() for f in (self.home/'state').rglob('*.md')))
                 self.assertIn('comment' if mode=='comments' else 'project --pr 9 --head abc --stage worker',
                               (self.home/'calls').read_text())
+    def test_external_transient_refusal_is_not_retried_or_looked_up(self):
+        transient = ('GraphQL: Something went wrong while executing your query on 2026-10-04T17:11:07Z. '
+                     'Please include `C81F:1B67BD:77CAE6:96A060:6AC288AB` when reporting this issue.')
+        gh = self.home/'gh'
+        gh.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "'+str(self.home/'calls')+'"\nexit 1\n')
+        gh.chmod(0o755)
+        p=self.run_block(function(worker,'note_landed')+function(worker,'post_note')+
+            'post_note "$work/note" 9; echo "$spoke"',
+            'projection=comments; spoke=0;\n'+self.recorder(True)+
+            'fm_comment_projection() { echo comment >> "$work/calls"; cat "$3" > "$work/offered"; '
+            'echo '+shlex.quote(transient)+' >&2; return 1; };\n')
+        self.assertEqual(p.stdout.strip().splitlines()[-1], '1')
+        self.assertEqual((self.home/'calls').read_text(), 'comment\n')
+        self.assertEqual((self.home/'offered').read_bytes(), (self.home/'note').read_bytes())
+        self.assertNotIn('worker_note_unsent', (self.home/'events').read_text())
+
+    def test_external_private_note_failure_with_changes_stays_private(self):
+        functions=''.join(function(worker,name) for name in
+                          ('note_landed','post_note','save_unsent','keep_unsent','note_refused','note_unsent'))
+        delivery=section(worker,'if [ "$projection" = comments ] && [ "$asked" = 1 ] && [ -z "$PR" ]', '\n# asking IS the work')
+        p=shell(root,self.home,functions+delivery+'echo round-continued',
+            'projection=comments; spoke=0; asked=1; held=""; rebuilt=0; say="$work/note";\n'
+            'worker_changed_files() { return 0; }; fm_private_note() { return 1; };\n')
+        self.assertEqual(p.returncode,73,p.stderr)
+        self.assertNotIn('round-continued',p.stdout)
+        self.assertFalse((self.home/'comments').exists())
+        events=(self.home/'events').read_text()
+        self.assertIn('worker_crashed',events)
+        self.assertNotIn('worker_note_unsent',events)
+
     def test_self_comment_refusal_keeps_note_and_fails_round(self):
         functions=''.join(function(worker,name) for name in
-                          ('post_note','save_unsent','keep_unsent','note_refused'))
+                          ('note_landed','post_note','save_unsent','keep_unsent','note_refused','note_unsent'))
         delivery=section(worker,'if [ "$projection" = comments ] && [ "$asked" = 1 ] && [ -z "$PR" ]', '\n# asking IS the work')
         p=shell(root,self.home,functions+delivery+'echo round-continued',
             'FM_EXTERNAL=0; projection=comments; spoke=0; asked=1; held=""; rebuilt=0; say="$work/note";\n'
