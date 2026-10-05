@@ -10,13 +10,13 @@ ERRORS = (ValueError, RuntimeError, OSError, subprocess.SubprocessError)
 
 
 class BranchUpdates:
-    def prune_branches(self, number, head=None):
+    def prune_branches(self, number, head=None, *, keep=None):
         """Drop only this PR's obsolete observations; None means terminal."""
         for token in list(self.data['retries']):
             kind, pr, sha = token.split(':', 2)
-            if pr == number and (head is None or sha != head):
+            if token != keep and pr == number and (head is None or sha != head):
                 del self.data['retries'][token]
-        for name in ('holds', 'updates', 'advanced'):
+        for name in ('holds', 'updates', 'advanced', 'rechecked'):
             item = self.data[name].get(number)
             if item and (head is None or item['head'] != head):
                 del self.data[name][number]

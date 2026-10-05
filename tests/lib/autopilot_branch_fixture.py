@@ -13,6 +13,13 @@ def response(status='202 Accepted', message='Updating pull request branch.'):
             'gh: ' + status if code >= 400 else '')
 
 
+def recheck_response(code, reason, body, message=''):
+    """gh api --include keeps HTTP errors on stdout and diagnoses on stderr."""
+    return (int(code >= 400), f'HTTP/2.0 {code} {reason}' +
+            '\r\nContent-Type: application/json; charset=utf-8\r\n\r\n' + json.dumps(body),
+            f'gh: {message} (HTTP {code})' if code >= 400 else '')
+
+
 class BranchFixture:
     def branch_setup(self):
         self.local_refs = {}

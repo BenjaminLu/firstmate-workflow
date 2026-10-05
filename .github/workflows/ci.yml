@@ -9,6 +9,7 @@ name: ci
 # bash suites, and merged by the `fail-first` job (T-158). The final `ci` job is the one required status check; it
 # needs every other job and fails if any of them failed or was skipped, so
 # branch protection and gate 6 read the same thing they always did (T-134).
+# The ci job also checks that every suite ran exactly once.
 on:
   push:
     branches: [main]
@@ -33,8 +34,31 @@ jobs:
       - name: bin/ci.sh --stage fast
         run: bash bin/ci.sh --stage fast
 
+  bash-timings:
+    name: bash timings
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      timings: ${{ steps.timings.outputs.timings }}
+    steps:
+      # One best-effort read for all bash shards: none read is a split by size.
+      - name: previous suite timings
+        id: timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/timings
+          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --status success --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -p 'suite-timings-*' -D /tmp/timings 2>/dev/null || true
+          fi
+          find /tmp/timings -name 'suite-timings-*.txt' -exec cat {} + > /tmp/timings.txt 2>/dev/null || true
+          { echo 'timings<<FM_TIMINGS_END'; grep -v '^FM_TIMINGS_END$' /tmp/timings.txt || true; echo 'FM_TIMINGS_END'; } >> "$GITHUB_OUTPUT"
+
   bash:
     name: bash suites (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    needs: [bash-timings]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -53,35 +77,28 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - name: install dependencies
         run: bun install --frozen-lockfile
-      # Best effort: the durations the previous green run on main recorded,
-      # so the shards are balanced by how long each suite actually took, not
-      # only by its size. A first run, a fresh fork, or no permission to read
-      # actions here all leave this file empty or absent, and bin/ci.sh reads
-      # that exactly like any other suite it has no duration for - estimated
-      # in seconds from its size, or by size alone when nothing was recorded
-      # (T-148). Nothing here fails the job.
-      - name: previous suite timings
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p /tmp/timings
-          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
-            --status success --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
-          if [ -n "$run_id" ]; then
-            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -p 'suite-timings-*' -D /tmp/timings 2>/dev/null || true
-          fi
-          find /tmp/timings -name 'suite-timings-*.txt' -exec cat {} + > /tmp/timings.txt 2>/dev/null || true
       - name: "bin/ci.sh --stage bash --shard ${{ matrix.shard }}/6"
         env:
+          FM_BASH_TIMINGS: ${{ needs.bash-timings.outputs.timings }}
+          FM_CI_ASSIGNED_OUT: /tmp/suite-assigned/suite-assigned-${{ matrix.shard }}.txt
           FM_CI_TIMINGS_IN: /tmp/timings.txt
           FM_CI_TIMINGS_OUT: /tmp/suite-timings-${{ matrix.shard }}.txt
-        run: bash bin/ci.sh --stage bash --shard "${{ matrix.shard }}/6"
+        run: |
+          printf '%s\n' "$FM_BASH_TIMINGS" > /tmp/timings.txt
+          bash bin/ci.sh --stage bash --shard "${{ matrix.shard }}/6"
       - name: upload suite timings
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: suite-timings-${{ matrix.shard }}
           path: /tmp/suite-timings-${{ matrix.shard }}.txt
+          if-no-files-found: ignore
+      - name: upload suite assignment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-assigned-${{ matrix.shard }}
+          path: /tmp/suite-assigned/suite-assigned-${{ matrix.shard }}.txt
           if-no-files-found: ignore
 
   bun:
@@ -148,7 +165,8 @@ jobs:
   # `fail-first` job merges their parts into the one report. The timings the
   # split is balanced by are read once, here, and handed to every shard: a
   # green run on main finishing between two shards' downloads would give
-  # them two different splits, and a suite to none of them.
+  # them two different splits, and a suite to none of them. The bash shards
+  # now read theirs once too, in bash-timings (T-196).
   fail-first-timings:
     name: fail-first timings
     if: github.event_name == 'pull_request'
@@ -157,7 +175,7 @@ jobs:
     outputs:
       timings: ${{ steps.timings.outputs.timings }}
     steps:
-      # best effort, as the bash shards' own: none read is a split by size
+      # Best effort, like bash-timings: none read is a split by size.
       - name: previous suite timings
         id: timings
         env:
@@ -259,6 +277,20 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            bin
+            tests
+      - name: download suite assignments
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: suite-assigned-*
+          merge-multiple: true
+          path: /tmp/suite-assigned
+      - name: every suite ran once
+        run: mkdir -p /tmp/suite-assigned && bash bin/ci.sh --coverage /tmp/suite-assigned
       - name: every stage passed
         run: |
           echo "fast=${{ needs.fast.result }} bash=${{ needs.bash.result }} bun=${{ needs.bun.result }} e2e=${{ needs.e2e.result }} fail-first=${{ needs.fail-first.result }}"

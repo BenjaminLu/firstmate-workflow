@@ -14,7 +14,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 import fm_autopilot as A
-from autopilot_branch_fixture import BranchFixture, response
+from autopilot_branch_fixture import BranchFixture, response, recheck_response
 
 HEAD = 'a' * 40
 PR = dict(number=12, state='open', head=dict(sha=HEAD, ref='t-001-work'),
@@ -253,16 +253,152 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertFalse(any('--request' in x or 'judged' in x for x in self.calls))
         self.assertTrue(any(x[0] == 'wake' for x in self.calls))
 
+    def recheck_setup(self, *, old=True):
+        self.pilot.policy.update(reviewers=['alice'], post='threads')
+        if old:
+            self.pilot.data['pulls']['12'] = dict(head='b' * 40, task='T-001')
+        self.review_posts = []
+        self.review_answer = recheck_response(201, 'Created',
+            dict(copy.deepcopy(PR), requested_reviewers=[dict(login='alice')]))
+        original_probe, original_command = self.pilot.probe, self.pilot.command
+        def is_request(argv):
+            return any(arg.endswith('/requested_reviewers') for arg in argv)
+        def answer(argv):
+            self.assertIn('POST', argv)
+            self.review_posts.append((self.pilot.data['poll_seq'], argv))
+            if isinstance(self.review_answer, Exception): raise self.review_answer
+            return self.review_answer
+        def probe(argv):
+            return answer(argv) if is_request(argv) else original_probe(argv)
+        def command(argv, **kwargs):
+            if not is_request(argv): return original_command(argv, **kwargs)
+            rc, out, err = answer(argv)
+            if rc: raise RuntimeError(err)
+            return out if '--include' in argv else out.partition('\r\n\r\n')[2]
+        self.pilot.probe, self.pilot.command = probe, command
+        return [dict(id=1, user={'login':'alice'}, commit_id='b'*40, state='APPROVED')]
+
     def test_recheck_respects_local_projection(self):
-        reviews = [dict(id=1, user={'login':'alice'}, commit_id='b'*40, state='CHANGES_REQUESTED')]
-        self.pilot.policy.update(reviewers=['alice'], post='local')
-        self.pilot.recheck('T-001', PR, reviews)
-        self.assertEqual(self.calls, [])
+        reviews = self.recheck_setup()
+        self.pilot.policy['post'] = 'local'
+        self.pull_at(PR, reviews); self.pull_at(PR, reviews)
+        self.assertEqual(self.review_posts, [])
+        identity = 'autopilot-' + A.key(['self', A.key(['recheck', 12, HEAD, 'alice'])])
+        self.assertEqual(list(self.pilot.data['wakes']), [identity])
+        self.assertIn('Reviewer re-check needed: alice', str(self.pilot.data['wakes']))
         self.pilot.policy['post'] = 'threads'
-        self.pilot.recheck('T-001', PR, reviews)
-        self.assertIn('repos/owner/repo/pulls/12/requested_reviewers', self.calls[-1])
-        self.pilot.recheck('T-001', PR, reviews)
-        self.assertEqual(len(self.calls), 1)
+        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
+        self.pull_at(pr, reviews); self.pull_at(pr, reviews)
+        self.assertEqual(len(self.review_posts), 1)
+        self.assertEqual(self.pilot.data['actions'], {})
+
+    def test_recheck_head_record_completes_after_one_post(self):
+        reviews = self.recheck_setup()
+        self.pull_at(PR, reviews); self.pull_at(PR, reviews)
+        self.assertEqual(len(self.review_posts), 1)
+        self.assertEqual(self.review_posts[0][1], ['gh', 'api', '-X', 'POST',
+            'repos/owner/repo/pulls/12/requested_reviewers', '-f', 'reviewers[]=alice', '--include'])
+        self.assertEqual(self.pilot.data['rechecked']['12'], dict(head=HEAD, names=[]))
+        self.assertEqual(self.pilot.data['actions'], {})
+
+    def test_recheck_transient_failures_retry_at_zero_one_three(self):
+        reviews = self.recheck_setup()
+        self.review_answer = recheck_response(503, 'Service Unavailable',
+                                             dict(message='Service Unavailable'), 'Service Unavailable')
+        for _ in range(8): self.pull_at(PR, reviews)
+        self.assertEqual([seq for seq, _ in self.review_posts], [1, 2, 4])
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.assertIn('HTTP/2.0 503 Service Unavailable', str(self.pilot.data['wakes']))
+        self.assertEqual(self.pilot.data['actions'], {})
+
+    def test_recheck_transport_and_missing_status_failures_are_bounded(self):
+        reviews = self.recheck_setup()
+        for index, answer in enumerate((RuntimeError('connection reset'), (1, '', ''), (1, '', 'gh: offline'))):
+            with self.subTest(answer=answer):
+                pr = copy.deepcopy(PR); pr['head']['sha'] = str(index) * 40
+                self.review_answer = answer
+                start = self.pilot.data['poll_seq']
+                before = len(self.review_posts)
+                for _ in range(8): self.pull_at(pr, reviews)
+                self.assertEqual([seq - start for seq, _ in self.review_posts[before:]], [1, 2, 4])
+                self.assertEqual(len(self.pilot.data['wakes']), index + 1)
+        self.assertIn('connection reset', str(self.pilot.data['wakes']))
+        self.assertIn('missing HTTP status line', str(self.pilot.data['wakes']))
+        self.assertIn('gh: offline', str(self.pilot.data['wakes']))
+
+    def test_recheck_success_or_requested_clears_pending_retry(self):
+        reviews = self.recheck_setup()
+        success = self.review_answer
+        for index, outcome in enumerate(('201', 'requested')):
+            with self.subTest(outcome=outcome):
+                pr = copy.deepcopy(PR); pr['head']['sha'] = str(index) * 40
+                self.review_answer = recheck_response(503, 'Service Unavailable', {}, 'Service Unavailable')
+                self.pull_at(pr, reviews)
+                self.assertIn('recheck-alice:12:' + pr['head']['sha'], self.pilot.data['retries'])
+                before = len(self.review_posts)
+                self.review_answer = success
+                if outcome == 'requested': pr['requested_reviewers'] = [dict(login='ALICE')]
+                self.pull_at(pr, reviews); self.pull_at(pr, reviews)
+                self.assertEqual(len(self.review_posts) - before, int(outcome == '201'))
+                self.assertEqual(self.pilot.data['rechecked']['12']['names'], [])
+                self.assertEqual(self.pilot.data['retries'], {})
+                self.assertEqual(self.pilot.data['wakes'], {})
+
+    def test_recheck_refusals_wake_once_without_retry(self):
+        reviews = self.recheck_setup()
+        messages = [
+            'Reviews may only be requested from collaborators. One or more of the users or teams you specified is not a collaborator of the owner/repo repository.',
+            'Review cannot be requested from pull request author.']
+        for index, message in enumerate(messages):
+            with self.subTest(message=message):
+                pr = copy.deepcopy(PR); pr['head']['sha'] = str(index) * 40
+                self.review_answer = recheck_response(422, 'Unprocessable Entity',
+                    dict(message=message, documentation_url=
+                         'https://docs.github.com/rest/pulls/review-requests#request-reviewers-for-a-pull-request',
+                         status='422'), message)
+                self.pull_at(pr, reviews); self.pull_at(pr, reviews)
+                self.assertEqual(len(self.review_posts), index + 1)
+                ident = 'autopilot-' + A.key(['self', f'recheck-refused-12-{pr["head"]["sha"]}-alice'])
+                self.assertIn('reviewer re-check refused: alice: ' + message,
+                              self.pilot.data['wakes'][ident]['line'])
+                self.assertTrue(self.pilot.data['wakes'][ident]['summary']['zh-TW'])
+                self.assertEqual(self.pilot.data['retries'], {})
+                self.assertEqual(self.pilot.data['rechecked']['12']['names'], [])
+
+    def test_recheck_already_requested_and_first_observation_do_not_post(self):
+        reviews = self.recheck_setup(old=False)
+        self.pull_at(PR, reviews)
+        self.assertEqual(self.review_posts, [])
+        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
+        pr['requested_reviewers'] = [dict(login='ALICE')]
+        self.pull_at(pr, reviews)
+        self.assertEqual(self.review_posts, [])
+        self.assertEqual(self.pilot.data['rechecked']['12']['names'], [])
+
+    def test_recheck_head_change_replaces_pending_and_prunes_old_token(self):
+        reviews = self.recheck_setup()
+        self.review_answer = recheck_response(503, 'Service Unavailable', {}, 'Service Unavailable')
+        self.pull_at(PR, reviews)
+        old_token = 'recheck-alice:12:' + HEAD
+        self.assertIn(old_token, self.pilot.data['retries'])
+        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
+        self.pull_at(pr, reviews)
+        self.assertNotIn(old_token, self.pilot.data['retries'])
+        self.assertEqual(self.pilot.data['rechecked']['12'], dict(head='c'*40, names=['alice']))
+        self.assertIn('recheck-alice:12:' + 'c'*40, self.pilot.data['retries'])
+        pr.update(state='closed', merged_at='now')
+        self.pilot.closed_pull(pr)
+        self.assertNotIn('12', self.pilot.data['rechecked'])
+
+    def test_recheck_review_at_head_completes_pending_without_post(self):
+        reviews = self.recheck_setup()
+        self.review_answer = RuntimeError('transport unavailable')
+        self.pull_at(PR, reviews)
+        reviews.append(dict(id=2, user=dict(login='ALICE'), commit_id=HEAD, state='APPROVED'))
+        self.pull_at(PR, reviews)
+        self.assertEqual(len(self.review_posts), 1)
+        self.assertEqual(self.pilot.data['rechecked']['12']['names'], [])
+        self.assertEqual(self.pilot.data['retries'], {})
 
     def test_protected_base_never_updated_even_with_task_like_name(self):
         self.pilot.ctx['base'] = PR['head']['ref']
@@ -270,6 +406,11 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_team_merge_is_observed_once_without_invoking_merge(self):
+        def emit(kind, task, en, tw, pr=None, actor='autopilot'):
+            self.calls.append(('emit', (kind, task, en, tw, pr)))
+            with (self.state / 'events.jsonl').open('a') as log:
+                log.write(json.dumps(dict(type=kind, task=task, pr=pr, actor=actor)) + '\n')
+        self.pilot.emit = emit
         pr = copy.deepcopy(PR); pr.update(state='closed', merged_at='2026-10-03T12:00:00Z')
         self.pilot.data['pulls']['12'] = {}
         self.pilot.closed_pull(pr)
@@ -491,6 +632,57 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.pilot.data, first)
         self.assertEqual(path.read_bytes(), b'{"delivered":"unchanged"}\n')
         self.assertFalse(any(c[0] == 'wake' for c in self.calls))
+
+    def test_event_recheck_migration_removes_all_states_before_recovery_once(self):
+        removed = []
+        for kind in ('pr-event', 'recheck', 'observed-merge'):
+            for index, status in enumerate(('started', 'done', 'uncertain')):
+                identity = [kind, 12 + index, 'merged']
+                token = A.key(identity); removed.append(token)
+                self.pilot.data['actions'][token] = dict(state=status, identity=identity, task='T-001')
+                self.pilot.queue('action-' + token, 'T-001', 'legacy action', '舊步驟')
+        for number in ('12', '13', '14'):
+            self.pilot.data['pulls'][number] = dict(terminal=True, head=HEAD, task='T-001')
+        self.pilot.data['pulls']['99'] = dict(head=HEAD, task='T-001')
+        for number in (98, 99):
+            identity = ['pr-event', number, 'closed']
+            token = A.key(identity); removed.append(token)
+            self.pilot.data['actions'][token] = dict(state='uncertain', identity=identity, task='T-001')
+            self.pilot.queue('action-' + token, 'T-001', 'legacy closure', '舊關閉事件')
+        for kind in ('restack', 'launch-review'):
+            for status in ('started', 'done', 'uncertain'):
+                token = kind + status
+                self.pilot.data['actions'][token] = dict(state=status, identity=[kind, token], task='T-001')
+        expected = copy.deepcopy(self.pilot.data['actions'])
+        expected = {k: dict(v, state='uncertain' if v['state'] == 'started' else v['state'])
+                    for k, v in expected.items() if k not in removed}
+        delivered = self.state / 'wake-queue'; delivered.mkdir()
+        path = delivered / ('autopilot-' + A.key(['self', 'action-' + removed[0]]) + '.json')
+        payload = b'{"delivered":"unchanged"}\n'; path.write_bytes(payload)
+        self.pilot.data['wakes'][path.stem]['pushed'] = True
+        self.pilot.data.pop('migrated_t200', None)
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        self.assertEqual(self.pilot.data['actions'], expected)
+        self.assertTrue(self.pilot.data['migrated_t200'])
+        self.assertEqual(self.pilot.data['pulls']['12']['event_pending'], 'merged')
+        self.assertEqual(self.pilot.data['pulls']['14']['event_pending'], 'merged')
+        self.assertNotIn('event_pending', self.pilot.data['pulls']['13'])
+        self.assertNotIn('98', self.pilot.data['pulls'])
+        self.assertNotIn('event_pending', self.pilot.data['pulls']['99'])
+        for token in removed[1:]:
+            ident = 'autopilot-' + A.key(['self', 'action-' + token])
+            self.assertNotIn(ident, self.pilot.data['wakes'])
+            self.assertFalse((delivered / (ident + '.json')).exists())
+        retained = {'autopilot-' + A.key(['self', 'action-' + kind + 'started'])
+                    for kind in ('restack', 'launch-review')}
+        self.assertEqual(set(self.pilot.data['wakes']), {path.stem} | retained)
+        for ident in retained:
+            self.assertIn('Autopilot stopped during an action', self.pilot.data['wakes'][ident]['line'])
+        self.assertEqual(path.read_bytes(), payload)
+        first = copy.deepcopy(self.pilot.data)
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        self.assertEqual(self.pilot.data, first)
+        self.assertEqual(path.read_bytes(), payload)
 
     def test_advance_migration_removes_all_states_before_recovery_once(self):
         tokens = []

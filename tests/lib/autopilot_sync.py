@@ -97,6 +97,135 @@ print(json.dumps(answer))
         self.pilot().poll()
         self.assertEqual(len(self.events(p)), 4, 'restart must not replay a terminal or open event')
 
+    def test_terminal_event_retries_finish_without_restarting_series(self):
+        p = self.pilot()
+        pr = pull(12, 't-001-work', 'T-001: work', 'closed', '2099-01-01T00:00:00Z')
+        p.data['pulls']['12'] = dict(task='T-001', head='a'*40,
+            merge_evidence=dict(head='a'*40, approved=True, green=True))
+        self.response([pr])
+        attempts = []
+        error = 'fm-emit: timed out waiting for the event log lock'
+        def fail(*args, **kwargs):
+            attempts.append(p.data['poll_seq'])
+            raise RuntimeError(error)
+        p.emit = fail
+        token = 'event-merged:12:' + 'a'*40
+        for offset in range(8):
+            p.poll()
+            self.assertTrue(p.data['pulls']['12']['terminal'])
+            self.assertEqual(A.merge_authorization.inventory(p)[1], [])
+            if offset < 3:
+                self.assertEqual(p.data['pulls']['12']['event_pending'], 'merged')
+                self.assertEqual(p.data['retries'][token]['count'], 1 if offset == 0 else 2)
+            else:
+                self.assertNotIn('event_pending', p.data['pulls']['12'])
+                self.assertEqual(p.data['retries'], {})
+        self.assertEqual(attempts, [1, 2, 4])
+        self.assertEqual(len(p.data['wakes']), 1)
+        self.assertIn('T-001 #12 event-merged failed after 3 attempts: ' + error, str(p.data['wakes']))
+        self.assertEqual(p.data['actions'], {})
+
+    def test_failed_terminal_event_never_leaves_pr_in_merge_ready_inventory(self):
+        p = self.pilot()
+        pr = pull(12, 't-001-work', 'T-001: work', 'closed', '2099-01-01T00:00:00Z')
+        p.data['pulls']['12'] = dict(task='T-001', head='a'*40,
+            merge_evidence=dict(head='a'*40, approved=True, green=True))
+        self.assertEqual(A.merge_authorization.inventory(p)[1], ['T-001 #12'])
+        def fail(*args, **kwargs):
+            raise RuntimeError('fm-emit: timed out waiting for the event log lock')
+        p.emit = fail
+        self.response([pr])
+        for _ in range(5):
+            p.poll()
+            self.assertTrue(p.data['pulls']['12']['terminal'])
+            self.assertEqual(A.merge_authorization.inventory(p)[1], [])
+
+    def test_pending_event_retries_after_leaving_recent_list_then_succeeds(self):
+        for seen_open in (False, True):
+            with self.subTest(seen_open=seen_open):
+                p = self.pilot('example-app' if seen_open else 'firstmate-workflow')
+                pr = pull(12, 't-001-work', 'T-001: work', 'closed', '2099-01-01T00:00:00Z')
+                if seen_open: p.data['pulls']['12'] = dict(head='a'*40)
+                recent, fetched, attempts = [pr], [], []
+                def api(endpoint):
+                    if endpoint.startswith('pulls?state=open'): return []
+                    if endpoint.startswith('pulls?state=closed'): return list(recent)
+                    if endpoint == 'pulls/12':
+                        fetched.append(p.data['poll_seq']); return pr
+                    raise AssertionError(endpoint)
+                p.api = api
+                emit = p.emit
+                def flaky(*args, **kwargs):
+                    attempts.append(p.data['poll_seq'])
+                    if len(attempts) < 3:
+                        raise RuntimeError('fm-emit: timed out waiting for the event log lock')
+                    return emit(*args, **kwargs)
+                p.emit = flaky
+                p.poll()
+                self.assertTrue(p.data['pulls']['12']['terminal'])
+                self.assertEqual(p.data['pulls']['12']['event_pending'], 'merged')
+                recent.clear()
+                for _ in range(5): p.poll()
+                self.assertEqual(attempts, [1, 2, 4])
+                self.assertIn(2, fetched); self.assertIn(4, fetched)
+                self.assertEqual([r['type'] for r in self.events(p)], ['merged'])
+                self.assertNotIn('event_pending', p.data['pulls']['12'])
+                self.assertEqual(p.data['retries'], {})
+                self.assertEqual(p.data['actions'], {})
+                self.assertEqual(p.data['wakes'], {})
+
+    def test_failed_open_event_is_pruned_when_pr_merges(self):
+        p = self.pilot()
+        pr = pull(12, 't-001-work', 'T-001: work')
+        emit = p.emit
+        def fail(*args, **kwargs):
+            raise RuntimeError('fm-emit: timed out waiting for the event log lock')
+        p.emit = fail
+        self.response([pr]); p.poll()
+        self.assertIn('event-pr_opened:12:' + 'a'*40, p.data['retries'])
+        pr.update(state='closed', merged_at='2099-01-01T00:00:00Z')
+        p.emit = emit
+        self.response([pr]); p.poll()
+        self.assertEqual([r['type'] for r in self.events(p)], ['merged'])
+        self.assertTrue(p.data['pulls']['12']['terminal'])
+        self.assertEqual(p.data['retries'], {})
+
+    def test_same_poll_recent_and_detail_closure_writes_one_row(self):
+        p = self.pilot()
+        opened = pull(12, 't-001-work', 'T-001: work')
+        closed = dict(opened, state='closed', merged_at='2099-01-01T00:00:00Z')
+        def api(endpoint):
+            if endpoint.startswith('pulls?state=open'): return [opened]
+            if endpoint.startswith('pulls?state=closed'): return [closed]
+            if endpoint == 'pulls/12': return closed
+            raise AssertionError(endpoint)
+        p.api = api
+        p.poll()
+        self.assertEqual([r['type'] for r in self.events(p)], ['pr_opened', 'merged'])
+
+    def test_migration_repairs_missing_terminal_event_on_next_poll(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                project = 'example-app' if existing else 'firstmate-workflow'
+                p = self.pilot(project)
+                pr = pull(12, 't-001-work', 'T-001: work', 'closed', 'now')
+                p.data['pulls']['12'] = dict(terminal=True, head='a'*40)
+                token = A.key(['pr-event', 12, 'merged'])
+                p.data['actions'][token] = dict(identity=['pr-event', 12, 'merged'],
+                                               state='uncertain', task='T-001')
+                p.queue('action-' + token, 'T-001', 'legacy', '舊步驟')
+                p.data.pop('migrated_t200', None)
+                if existing: p.emit('merged', 'T-001', 'merged', '已合併', 12, actor='github')
+                p.save(); p = self.pilot(project)
+                self.assertEqual(p.data['pulls']['12']['event_pending'], 'merged')
+                self.assertNotIn(token, p.data['actions'])
+                self.assertEqual(p.data['wakes'], {})
+                p.api = lambda endpoint: pr if endpoint == 'pulls/12' else []
+                p.poll(); p.poll()
+                self.assertEqual(len(self.events(p)), 1)
+                self.assertNotIn('event_pending', p.data['pulls']['12'])
+                self.assertEqual(p.data['retries'], {})
+
     def test_failure_or_invalid_response_writes_no_event(self):
         p = self.pilot()
         for value in ('offline', 'junk'):

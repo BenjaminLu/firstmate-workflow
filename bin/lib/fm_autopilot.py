@@ -27,7 +27,7 @@ import fm_lifeline as life
 from fm_conventions import read_policy
 from fm_watch import Locked, read_json, save_json, notify
 from fm_autopilot_loop import MechanicalLoop
-from fm_autopilot_branches import BranchUpdates
+from fm_autopilot_branches import BranchUpdates, ERRORS
 import fm_merge_authorization as merge_authorization
 
 BIN = Path(__file__).resolve().parents[1]
@@ -62,7 +62,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
         if not isinstance(self.data, dict): raise ValueError('invalid autopilot recovery state')
         for name, default in dict(offset=0, wake_offset=0, actions={}, seen={}, batches={},
                                   wakes={}, pulls={}, cache={}, failures=0, next_poll=0,
-                                  poll_seq=0, retries={}, holds={}, updates={}, advanced={}).items():
+                                  poll_seq=0, retries={}, holds={}, updates={}, advanced={}, rechecked={}).items():
             self.data.setdefault(name, default)
         if not self.data.get('migrated_t190'):
             for token, action in list(self.data['actions'].items()):
@@ -82,6 +82,20 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     if not self.data['wakes'].get(wake, {}).get('pushed'):
                         self.data['wakes'].pop(wake, None)
             self.data['migrated_t193'] = True
+        if not self.data.get('migrated_t200'):
+            for token, action in list(self.data['actions'].items()):
+                identity = action.get('identity') or []
+                if identity and identity[0] in ('pr-event', 'recheck', 'observed-merge'):
+                    if (identity[0] == 'pr-event' and action.get('state') != 'done'
+                            and len(identity) == 3 and identity[2] in ('merged', 'closed')):
+                        previous = self.data['pulls'].get(str(identity[1]), {})
+                        if previous.get('terminal'):
+                            previous['event_pending'] = identity[2]
+                    del self.data['actions'][token]
+                    wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
+                    if not self.data['wakes'].get(wake, {}).get('pushed'):
+                        self.data['wakes'].pop(wake, None)
+            self.data['migrated_t200'] = True
         # Existing installations establish the remote boundary on upgrade.
         self.data.setdefault('tracking_started', self.clock())
         if 'legacy_ask_records' not in self.data:
@@ -332,22 +346,49 @@ class Pilot(BranchUpdates, MechanicalLoop):
         return json.loads(result.stdout)
 
     def recheck(self, task, pr, reviews):
-        names = self.policy.get('reviewers', [])
-        for name in names:
-            prior = [r for r in reviews if r.get('user', {}).get('login', '').lower() == name.lower()]
-            if not prior or any(r.get('commit_id') == pr['head']['sha'] for r in prior):
-                continue
-            identity = ['recheck', pr['number'], pr['head']['sha'], name]
+        number, head = str(pr['number']), pr['head']['sha']
+        names = self.data['rechecked'][number]['names']
+        requested = {r.get('login', '').lower() for r in pr.get('requested_reviewers', [])}
+        for name in list(names):
+            kind = 'recheck-' + name.lower()
+            token = f'{kind}:{number}:{head}'
             if self.policy['post'] == 'local':
-                self.queue(key(identity), task, 'Reviewer re-check needed: ' + name,
-                           '需要審查者重新檢查：' + name)
+                self.queue(key(['recheck', pr['number'], head, name]), task,
+                           'Reviewer re-check needed: ' + name, '需要審查者重新檢查：' + name)
+                names.remove(name)
+                self.data['retries'].pop(token, None)
                 continue
-            def request(name=name):
-                # Request a review, not a fabricated approval or public round
-                # log. Repository and reviewer are structured REST fields.
-                self.command(self.gh('api', 'repos/' + self.ctx['repository'] + '/pulls/' + str(pr['number']) +
-                                     '/requested_reviewers', '--method', 'POST', '-f', 'reviewers[]=' + name))
-            self.once(identity, task, request)
+            if name.lower() in requested or any(
+                    r.get('user', {}).get('login', '').lower() == name.lower()
+                    and r.get('commit_id') == head for r in reviews):
+                names.remove(name)
+                self.data['retries'].pop(token, None)
+                continue
+            if not self.retry_due(token):
+                continue
+            try:
+                rc, out, err = self.probe(self.gh('api', '-X', 'POST',
+                    f"repos/{self.ctx['repository']}/pulls/{number}/requested_reviewers",
+                    '-f', 'reviewers[]=' + name, '--include'))
+                normalized = out.replace('\r\n', '\n')
+                status = re.match(r'^(HTTP/\S+ ([0-9]{3})[^\n]*)', normalized)
+                line = status[1] if status else (err.strip().splitlines()[-1] if err.strip() else 'missing HTTP status line')
+                code = int(status[2]) if status else None
+                if code == 201:
+                    names.remove(name)
+                    self.data['retries'].pop(token, None)
+                    continue
+                if code == 422:
+                    message = json.loads(normalized.partition('\n\n')[2])['message']
+                    names.remove(name)
+                    self.data['retries'].pop(token, None)
+                    self.queue(f'recheck-refused-{number}-{head}-{name}', task,
+                               f'{task} #{number} reviewer re-check refused: {name}: {message}',
+                               f'{task} #{number} 審查者重新檢查請求遭拒：{name}：{message}')
+                    continue
+            except ERRORS as error:
+                line = str(error)
+            self.branch_failure(kind, number, head, task, line)
 
     def restack(self, pr, parent):
         task = self.task(pr)
@@ -370,6 +411,13 @@ class Pilot(BranchUpdates, MechanicalLoop):
         if not task: return
         old = self.data['pulls'].get(number)
         if old and old.get('head') and old['head'] != head:
+            names = []
+            for name in self.policy.get('reviewers', []):
+                prior = [r for r in reviews if r.get('user', {}).get('login', '').lower() == name.lower()]
+                if prior and not any(r.get('commit_id') == head for r in prior):
+                    names.append(name)
+            self.data['rechecked'][number] = dict(head=head, names=names)
+        if self.data['rechecked'].get(number, {}).get('head') == head:
             self.recheck(task, pr, reviews)
         self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
         try:
@@ -436,7 +484,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 if self.observed_closure(item): self.closed_pull(item)
             open_numbers = {str(item['number']) for item in pulls}
             for number, previous in list(self.data['pulls'].items()):
-                if number not in open_numbers and not previous.get('terminal'):
+                if number not in open_numbers and (not previous.get('terminal') or previous.get('event_pending')):
                     self.closed_pull(self.api('pulls/' + number))
             for item in pulls:
                 number = item['number']
@@ -483,14 +531,33 @@ class Pilot(BranchUpdates, MechanicalLoop):
 
     def closed_pull(self, pr):
         if pr.get('state') != 'closed' or not self.observed_closure(pr): return
+        number = str(pr['number'])
+        previous = self.data['pulls'].get(number, {})
+        if previous.get('terminal') and not previous.get('event_pending'):
+            return
+        kind = 'merged' if pr.get('merged_at') else 'closed'
+        token = f'event-{kind}:{number}:{pr["head"]["sha"]}'
         self.observe_pr(pr)
+        retry = self.data['retries'].get(token)
+        pending = retry is not None and retry['count'] < 3
+        if previous.get('terminal'):
+            if not pending:
+                previous.pop('event_pending', None)
+                self.prune_branches(number)
+            self.save()
+            return
         task = self.task(pr)
         if task and not pr.get('merged_at'):
-            self.queue('closed-' + str(pr['number']), task,
+            self.queue('closed-' + number, task,
                        f'PR #{pr["number"]} closed without merging; task needs judgment',
                        f'PR #{pr["number"]} 已關閉但未合併；任務需要判斷')
-        self.data['pulls'].setdefault(str(pr['number']), {})['terminal'] = True
-        self.prune_branches(str(pr['number']))
+        previous = self.data['pulls'].setdefault(number, {})
+        if pending:
+            previous['event_pending'] = kind
+        else:
+            previous.pop('event_pending', None)
+        self.prune_branches(number, keep=token if pending else None)
+        previous['terminal'] = True
         self.save()
 
     def inspect_policy(self):
