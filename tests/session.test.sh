@@ -739,7 +739,7 @@ class Session(unittest.TestCase):
         events = [dict(type=kind, task=task, actor=actor, data=dict(reason=reason))
                   for kind, task, actor, reason in [
                       ('merged', 'T-199', 'firstmate', ''), ('closed', 'T-200', 'captain', ''),
-                      ('reopened', 'T-200', 'worker', 'not authorized'),
+                      ('reopened', 'T-200', 'firstmate', 'not authorized'),
                       ('reopened', 'T-200', 'captain', '  '),
                       ('merged', 'T-201', 'firstmate', ''),
                       ('reopened', 'T-201', 'captain', 'retry')]]
