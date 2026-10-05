@@ -293,7 +293,8 @@ class Session(unittest.TestCase):
                         self.assertEqual(owner, life.return_value.start.call_args.kwargs['owner'])
                         self.assertEqual(owner, result['owner'])
                         self.assertTrue(result['page_http_verified'])
-                        drain.assert_called_once_with('http://127.0.0.1:4173', 4173)
+                        self.assertEqual(drain.call_count, 1)
+                        self.assertEqual(drain.call_args, call('http://127.0.0.1:4173', 4173))
                         if case == 'http-errors': self.assertEqual(['occupied'] * 3 + ['free', 'free'], responses)
                         mocked(m, 'board_start', return_value=result)
                         out, err = io.StringIO(), io.StringIO()
@@ -303,9 +304,9 @@ class Session(unittest.TestCase):
                         self.assertEqual(['fm board: replaced the board: ' + change, 'fm board: 看板已換成新程式：' + change], err.getvalue().splitlines())
                     else:
                         self.assertTrue(result['reused']); self.assertEqual(903, result['owner'])
-                        life.return_value.start.assert_not_called()
+                        self.assertEqual(life.return_value.start.call_count, 0)
                         if case in ('equal', 'dirty', 'unknown', 'unknown-current'):
-                            drain.assert_not_called(); self.assertNotIn('stale', result)
+                            self.assertEqual(drain.call_count, 0); self.assertNotIn('stale', result)
                         else:
                             self.assertTrue(result['stale'])
                             reason = result['stale_reason']['en']
@@ -318,7 +319,7 @@ class Session(unittest.TestCase):
                                 self.assertIn('restart it by hand' if case == 'hand' else 'did not stop when asked', reason)
                         if case == 'timeout': self.assertEqual([900], stopped)
                         else: self.assertEqual([], stopped)
-                        if case in ('hand', 'busy', 'equal', 'dirty', 'unknown', 'unknown-current'): killed.assert_not_called()
+                        if case in ('hand', 'busy', 'equal', 'dirty', 'unknown', 'unknown-current'): self.assertEqual(killed.call_count, 0)
                     git('checkout', '--', 'board')
 
     def test_board_drain_http_contract_and_failures(self):
@@ -344,7 +345,7 @@ class Session(unittest.TestCase):
             with patch.object(m, 'board_secret', return_value='fixture-secret'), patch.object(m.urllib.request, 'urlopen', side_effect=error):
                 self.assertEqual({'busy': 'merge', 'status': 409} if status == 409 else None, m.board_drain(url, 4173))
         with patch.object(m, 'board_secret', side_effect=FileNotFoundError()), patch.object(m.urllib.request, 'urlopen') as send:
-            self.assertIsNone(m.board_drain(url, 4173)); send.assert_not_called()
+            self.assertIsNone(m.board_drain(url, 4173)); self.assertEqual(send.call_count, 0)
         for error in (OSError(), ValueError()):
             with patch.object(m, 'board_secret', return_value='fixture-secret'), patch.object(m.urllib.request, 'urlopen', side_effect=error):
                 self.assertIsNone(m.board_drain(url, 4173))
