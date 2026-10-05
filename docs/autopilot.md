@@ -68,8 +68,29 @@ The one-time `migrated_t200` upgrade drops legacy pr-event, recheck and
 observed-merge actions with their undelivered wakes, marking a terminal PR
 whose pr-event action was not done as `event_pending` so its row is written by
 the normal retry series. Delivered wake files remain unchanged.
-The remaining write-ahead classes are restack and review launch;
-interrupted actions remain held for reconciliation.
+Review launch is the remaining write-ahead action class; interrupted launches
+remain held for reconciliation. Restack uses a per-PR-head `restacks` record
+with `head`, `parent`, `task` and outcome `started`, `done`, `moved`, `conflict`
+or `published`. `migrated_t204` removes legacy restack actions and their
+undelivered wakes once, leaving delivered wake files untouched.
+
+Restack helper exits distinguish completion (0), refusal (65), rebase conflict
+(66), GitHub head movement (67), a stale local ref (68), publication without
+completion (69), an unknown push outcome (71), and a live worker (75).
+Autopilot holds active work silently and tries 75 again next poll. It accepts
+67 silently only when a fresh GitHub read confirms the head changed; otherwise
+it retries. Conflicts and unfinished publication wake firstmate immediately
+once. Exits 64, 65, 68 and 70 retry at poll offsets 0, 1 and 3, then wake once
+with the last stderr line. Normal local synchronization can heal 68 between
+attempts. Exit 71, timeout, kill or an unrecognized status retains `started`,
+wakes once with “outcome unknown”, and requires reconciliation before review.
+Startup also wakes once for every `started` restack, regardless of the PR's
+current base. `started` and `published` holds survive head changes; they end
+when the PR closes or firstmate finishes by hand, moving the child's base off
+the merged parent so autopilot no longer restacks it. Other records clear on
+head changes. A cleanup failure preserves the publication/unknown outcome,
+or appears as `tree_cleanup` in a successful helper result.
+
 The one-time `migrated_t190` upgrade removes legacy update actions and their
 undelivered wakes. Delivered wake files remain unchanged, and legacy advance
 actions with their undelivered wakes are removed by `migrated_t193`. Eligible

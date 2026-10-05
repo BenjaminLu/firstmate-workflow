@@ -5,12 +5,37 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 
 from fm_binding import command, fetch_ref, git, github, remote_head, sha
 from fm_conventions import read_policy
+
+
+class RestackConflict(ValueError):
+    """The rebase failed before publication."""
+
+
+class RestackMoved(ValueError):
+    """GitHub no longer has the expected child."""
+
+
+class RestackStaleLocal(ValueError):
+    """The local task ref does not match GitHub."""
+
+
+class RestackPublished(ValueError):
+    """The push succeeded but finishing requires reconciliation."""
+
+
+class RestackPushUnknown(ValueError):
+    """A push was attempted; its remote outcome is unknown."""
+
+
+class RestackHeld(ValueError):
+    """A live worker owns the task exclusion."""
 
 
 def deletable(repository, branch):
@@ -69,8 +94,14 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
     if branch in ('main', 'master', 'HEAD', policy['base']) or not re.match(r'^(?:t|sk)-\d+(?:-|$)', branch, re.I):
         raise ValueError('protected or non-task branch cannot be restacked')
     git(root, 'check-ref-format', 'refs/heads/' + branch)
-    if child['headRefOid'] != expected or git(root, 'rev-parse', 'refs/heads/' + branch) != expected:
-        raise ValueError('task head changed; synchronize before restacking')
+    if child['headRefOid'] != expected:
+        raise RestackMoved('task head changed on GitHub; synchronize before restacking')
+    try:
+        local = git(root, 'rev-parse', 'refs/heads/' + branch)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        raise RestackStaleLocal('local task ref is not the expected head; synchronize before restacking') from error
+    if local != expected:
+        raise RestackStaleLocal('local task ref is not the expected head; synchronize before restacking')
     parent_view = github(repository, 'pr', 'view', str(parent), '--repo', repository,
                          '--json', 'state,headRefName,headRefOid,baseRefName')
     if parent_view['state'] != 'MERGED' or child['baseRefName'] != parent_view['headRefName']:
@@ -92,15 +123,24 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
     # Never replay the parent's squash-merged commits onto its replacement.
     boundary = git(root, 'merge-base', old_base, expected)
     Path(scratch).mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='restack-', dir=scratch) as directory:
+    directory = tempfile.mkdtemp(prefix='restack-', dir=scratch)
+    try:
         tree = str(Path(directory) / 'tree')
         git(root, 'worktree', 'add', '--detach', tree, expected)
+        push_attempted = False
+        result = None
         try:
-            git(tree, '-c', 'core.hooksPath=/dev/null', 'rebase', '--onto', new_base, boundary)
+            rebase = subprocess.run(['git', '-C', tree, '-c', 'core.hooksPath=/dev/null',
+                                     'rebase', '--onto', new_base, boundary],
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+            if rebase.returncode:
+                line = next((line.strip() for line in reversed(rebase.stderr.splitlines()) if line.strip()),
+                            'command failed')
+                raise RestackConflict('rebase conflict restacking onto ' + target + ': ' + line)
             head = sha(git(tree, 'rev-parse', 'HEAD'))
             current = remote_head(repository, pr)
             if current != child:
-                raise ValueError('child moved during restack; nothing published')
+                raise RestackMoved('child moved during restack; nothing published')
             # A managed task worktree may stay, but never discard dirty work.
             attached = None
             for entry in git(root, 'worktree', 'list', '--porcelain').split('\n\n'):
@@ -111,37 +151,57 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
                         raise ValueError('task branch checked out outside managed worktrees')
                     if git(attached, 'status', '--porcelain'):
                         raise ValueError('task worktree is dirty; retained without publication')
-            # Publish first: if the push loses its lease, PR metadata is untouched.
-            git(tree, 'push', '--force-with-lease=refs/heads/' + branch + ':' + expected,
-                url, 'HEAD:refs/heads/' + branch)
+            # A failed push is ambiguous: the remote may already have accepted it.
+            push_attempted = True
             try:
-                command([os.environ.get('FM_GH', 'gh'), 'pr', 'edit', str(pr), '--repo', repository, '--base', target])
-            except (ValueError, OSError) as error:
-                raise ValueError('task head published as ' + head + '; retarget to ' + target +
-                                 ' failed; synchronize and finish retarget before review: ' + str(error)) from error
-            now = remote_head(repository, pr)
-            if now['headRefOid'] != head or now['baseRefName'] != target or now['baseRefOid'] != new_base:
-                raise ValueError('remote moved after publication; synchronize and revalidate')
-            if attached:
-                if git(attached, 'status', '--porcelain') or git(attached, 'rev-parse', 'HEAD') != expected:
-                    raise ValueError('remote updated but local tree changed; retained, synchronize before review')
-                git(attached, 'checkout', '--detach', expected)
-            git(root, 'update-ref', 'refs/heads/' + branch, head, expected)
-            if attached:
-                git(attached, 'checkout', branch)
-            # Update only the tracking ref; never overwrite a local base's work.
-            git(root, 'fetch', '--no-tags', url,
-                'refs/heads/' + target + ':refs/remotes/origin/' + target)
-            release = 'retained by policy or open dependents'
+                git(tree, 'push', '--force-with-lease=refs/heads/' + branch + ':' + expected,
+                    url, 'HEAD:refs/heads/' + branch)
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                raise RestackPushUnknown('push outcome unknown for ' + branch +
+                                         ' (expected old head ' + expected + '): ' + str(error)) from error
             try:
-                release_parent(root, repository, parent_view['headRefName'], old_base, policy)
-                release = 'retention policy applied'
-            except (ValueError, OSError) as error:
-                release = 'cleanup deferred: ' + str(error)
-            return {'head': head, 'base': target, 'base_head': new_base, 'parent_cleanup': release,
-                    'requires': 'synchronize local base; fresh review binding, CI and six gates'}
+                try:
+                    command([os.environ.get('FM_GH', 'gh'), 'pr', 'edit', str(pr), '--repo', repository, '--base', target])
+                except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
+                    raise ValueError('retarget to ' + target +
+                                     ' failed; synchronize and finish retarget before review: ' + str(error)) from error
+                now = remote_head(repository, pr)
+                if now['headRefOid'] != head or now['baseRefName'] != target or now['baseRefOid'] != new_base:
+                    raise ValueError('remote moved after publication; synchronize and revalidate')
+                if attached:
+                    if git(attached, 'status', '--porcelain') or git(attached, 'rev-parse', 'HEAD') != expected:
+                        raise ValueError('remote updated but local tree changed; retained, synchronize before review')
+                    git(attached, 'checkout', '--detach', expected)
+                git(root, 'update-ref', 'refs/heads/' + branch, head, expected)
+                if attached:
+                    git(attached, 'checkout', branch)
+                # Update only the tracking ref; never overwrite a local base's work.
+                git(root, 'fetch', '--no-tags', url,
+                    'refs/heads/' + target + ':refs/remotes/origin/' + target)
+                release = 'retained by policy or open dependents'
+                try:
+                    release_parent(root, repository, parent_view['headRefName'], old_base, policy)
+                    release = 'retention policy applied'
+                except (ValueError, OSError) as error:
+                    release = 'cleanup deferred: ' + str(error)
+                result = {'head': head, 'base': target, 'base_head': new_base, 'parent_cleanup': release,
+                          'requires': 'synchronize local base; fresh review binding, CI and six gates'}
+                return result
+            except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
+                raise RestackPublished('task head published as ' + head + '; ' + str(error)) from error
         finally:
-            git(root, 'worktree', 'remove', '--force', tree)
+            pending = sys.exc_info()[1]
+            try:
+                git(root, 'worktree', 'remove', '--force', tree)
+            except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
+                if not push_attempted:
+                    raise
+                if isinstance(pending, (RestackPublished, RestackPushUnknown)):
+                    pending.args = (str(pending) + '; tree cleanup failed: ' + str(error),)
+                elif result is not None:
+                    result['tree_cleanup'] = str(error)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def main():
@@ -186,14 +246,23 @@ def main():
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
-                raise ValueError('task has a live worker; restack held') from error
-            print(json.dumps(restack(root, repo, args.pr, args.parent, args.expected_head,
-                                     policy, str(state / 'tmp'))))
+                raise RestackHeld('task has a live worker; restack held') from error
+            result = restack(root, repo, args.pr, args.parent, args.expected_head,
+                             policy, str(state / 'tmp'))
+            try:
+                print(json.dumps(result), flush=True)
+            except OSError as error:
+                raise RestackPublished('restack published; result output failed: ' + str(error)) from error
 
 
 if __name__ == '__main__':
     try:
         main()
+    except (RestackConflict, RestackMoved, RestackStaleLocal, RestackPublished,
+            RestackPushUnknown, RestackHeld) as error:
+        print('fm-stack: ' + str(error), file=sys.stderr)
+        sys.exit({RestackConflict: 66, RestackMoved: 67, RestackStaleLocal: 68,
+                  RestackPublished: 69, RestackPushUnknown: 71, RestackHeld: 75}[type(error)])
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
         print('fm-stack: ' + str(error), file=sys.stderr)
         sys.exit(65)

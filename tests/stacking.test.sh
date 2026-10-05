@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # T-143: policy, dependency selection, per-PR bases and safe retention.
+# Python fixture dependency: tests/lib/stacking_fixture.py
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"

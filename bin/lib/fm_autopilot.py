@@ -62,7 +62,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
         if not isinstance(self.data, dict): raise ValueError('invalid autopilot recovery state')
         for name, default in dict(offset=0, wake_offset=0, actions={}, seen={}, batches={},
                                   wakes={}, pulls={}, cache={}, failures=0, next_poll=0,
-                                  poll_seq=0, retries={}, holds={}, updates={}, advanced={}, rechecked={}).items():
+                                  poll_seq=0, retries={}, holds={}, updates={}, advanced={}, rechecked={}, restacks={}).items():
             self.data.setdefault(name, default)
         if not self.data.get('migrated_t190'):
             for token, action in list(self.data['actions'].items()):
@@ -96,6 +96,15 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     if not self.data['wakes'].get(wake, {}).get('pushed'):
                         self.data['wakes'].pop(wake, None)
             self.data['migrated_t200'] = True
+        if not self.data.get('migrated_t204'):
+            for token, action in list(self.data['actions'].items()):
+                identity = action.get('identity') or []
+                if identity and identity[0] == 'restack':
+                    del self.data['actions'][token]
+                    wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
+                    if not self.data['wakes'].get(wake, {}).get('pushed'):
+                        self.data['wakes'].pop(wake, None)
+            self.data['migrated_t204'] = True
         # Existing installations establish the remote boundary on upgrade.
         self.data.setdefault('tracking_started', self.clock())
         if 'legacy_ask_records' not in self.data:
@@ -242,6 +251,9 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 action['state'] = 'uncertain'
                 self.queue('action-' + token, action['task'], 'Autopilot stopped during an action; reconcile its outcome',
                            '自動駕駛於步驟執行中停止；請核對結果')
+        for number, record in self.data['restacks'].items():
+            if record['outcome'] == 'started':
+                self.restack_interrupted(number, record)
 
     def api(self, endpoint):
         cached = self.data['cache'].get(endpoint, {})
@@ -398,9 +410,71 @@ class Pilot(BranchUpdates, MechanicalLoop):
             self.queue('restack-held-' + str(pr['number']), task, 'Merged stack base needs confirmed restack policy',
                        '堆疊基底已合併；需確認重設基底政策')
             return
-        self.once(['restack', pr['number'], pr['head']['sha'], parent['number']], task,
-                  lambda: self.command(self.script('lib/fm-restack.sh', '--pr', pr['number'],
-                                                   '--parent', parent['number'], '--expected-head', pr['head']['sha'])))
+        number, head = str(pr['number']), pr['head']['sha']
+        record = self.data['restacks'].get(number, {})
+        if record.get('parent') == parent['number']:
+            if record.get('outcome') == 'published':
+                return
+            if record.get('outcome') == 'started':
+                self.restack_interrupted(number, record)
+                return
+            if record.get('head') == head:
+                return
+        if self.round_live(task) or self.busy(task):
+            return
+        token = f'restack:{number}:{head}'
+        if not self.retry_due(token):
+            return
+        record = dict(head=head, parent=parent['number'], task=task, outcome='started')
+        self.data['restacks'][number] = record
+        self.save()
+        try:
+            rc, out, err = self.probe(self.script('lib/fm-restack.sh', '--pr', number,
+                                                '--parent', parent['number'], '--expected-head', head))
+            line = next((line.strip() for line in reversed(err.splitlines()) if line.strip()), 'command failed')
+        except subprocess.TimeoutExpired:
+            self.restack_interrupted(number, record)
+            return
+        except Exception as error:
+            # Failure to start has no helper-side effect and may be retried.
+            rc, line = 65, str(error)
+        if rc not in (0, 64, 65, 66, 67, 68, 69, 70, 75):
+            self.restack_interrupted(number, record)
+            return
+        if rc == 75:
+            del self.data['restacks'][number]
+            self.save()
+            return
+        outcome = {0: 'done', 66: 'conflict', 69: 'published'}.get(rc)
+        if rc == 67:
+            try:
+                fresh = json.loads(self.command(self.gh('pr', 'view', number, '--repo',
+                                                       self.ctx['repository'], '--json', 'headRefOid')))
+                if fresh['headRefOid'] != head:
+                    outcome = 'moved'
+            except (ValueError, KeyError, TypeError, RuntimeError, OSError, subprocess.SubprocessError):
+                pass
+        if outcome:
+            record['outcome'] = outcome
+            self.data['retries'].pop(token, None)
+            if rc == 66:
+                self.queue(f'restack-conflict-{number}-{head}', task,
+                           f'{task} #{number} restack hit a rebase conflict; resolve by hand: {line}',
+                           f'{task} #{number} 重新堆疊遇到 rebase 衝突；需手動處理：{line}')
+            elif rc == 69:
+                self.queue(f'restack-published-{number}-{head}', task,
+                           f'{task} #{number} restack published but did not finish; synchronize and finish before review: {line}',
+                           f'{task} #{number} 重新堆疊已發布但未完成；請同步並完成後再審查：{line}')
+            self.save()
+            return
+        del self.data['restacks'][number]
+        self.branch_failure('restack', number, head, task, line)
+
+    def restack_interrupted(self, number, record):
+        task, head = record['task'], record['head']
+        self.queue(f'restack-interrupted-{number}-{head}', task,
+                   f'{task} #{number} restack outcome unknown (timed out or interrupted); reconcile before review',
+                   f'{task} #{number} 重新堆疊結果不明（逾時或中斷）；審查前請先核對')
 
     def pull(self, pr, reviews, comments, runs, statuses):
         if pr['state'] != 'open' or self.policy_error or pr['head']['ref'] == self.ctx['base']:

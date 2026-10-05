@@ -29,10 +29,15 @@ class BranchFixture:
         self.dirty = False
         self.put_answer = response()
         self.git_error = None
+        self.restack_answer = (0, json.dumps(dict(head="c" * 40)), "")
 
     def branch_probe(self, argv):
         if argv[1:4] == ['api', '-X', 'PUT']:
             return self.put_answer
+        if argv[0].endswith('lib/fm-restack.sh'):
+            if isinstance(self.restack_answer, Exception):
+                raise self.restack_answer
+            return self.restack_answer
         assert argv[0] == 'git', argv
         args = argv[3:]
         if self.git_error and self.git_error[0] in args:

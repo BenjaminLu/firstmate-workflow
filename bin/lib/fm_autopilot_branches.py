@@ -20,6 +20,9 @@ class BranchUpdates:
             item = self.data[name].get(number)
             if item and (head is None or item['head'] != head):
                 del self.data[name][number]
+        item = self.data['restacks'].get(number)
+        if item and (head is None or (item['head'] != head and item['outcome'] not in ('published', 'started'))):
+            del self.data['restacks'][number]
 
     def round_live(self, task):
         from fm_concurrent import live_rounds
