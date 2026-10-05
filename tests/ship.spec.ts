@@ -11,6 +11,22 @@ const SHIP = createRequire(import.meta.url)(join(ROOT, "board/public/ship.js"));
 const CSS = readFileSync(join(ROOT, "board/public/ship.css"), "utf8");
 const T = (k: string) => k;
 
+test("removing the ship preserves decision controls and page-wide reduced motion", () => {
+  const css = CSS.replace(/\s+/g, "");
+  for (const rule of [
+    '.acts{flex-wrap:wrap}',
+    '.acts .tradeoffs,.acts label{width:100%}',
+    '.acts textarea{display:block;width:100%;min-height:80px}',
+    '.acts [aria-pressed="true"]{outline:2px solid var(--brass)}',
+    '.acts [hidden]{display:none}',
+    '#orderFeedback{white-space:pre-wrap;overflow-wrap:anywhere}',
+    '.change-fallback{display:flex;align-items:center;gap:16px}',
+    '.change-fallback section{flex:1}',
+    '.change-fallback[hidden]{display:none}',
+    '@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}',
+  ]) expect(css).toContain(rule.replace(/\s+/g, ""));
+});
+
 const stub = () => ({
   onclick: null as unknown, textContent: "", style: {} as Record<string, string>,
   classList: { add() {}, remove() {} }, setAttribute() {},

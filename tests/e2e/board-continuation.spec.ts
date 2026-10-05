@@ -109,6 +109,12 @@ test('continuation history, readable mobile content and persistent controls', as
     await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:testInfo.outputPath('mobile-decisions.png')});
     await page.locator('#roster').screenshot({path:testInfo.outputPath('mobile-roster.png')});
     await page.addStyleTag({content:'body{font-size:32px} .dcard h3{font-size:44px} .explanation,.tradeoffs,.acts button,.acts label,.acts textarea{font-size:32px}'});
+    await expect(page.locator('#card-D-1 textarea')).toHaveCSS('display','block');
+    const textareaSize = await page.locator('#card-D-1 textarea').evaluate(el => ({
+      width: el.getBoundingClientRect().width,
+      labelWidth: el.parentElement!.getBoundingClientRect().width,
+    }));
+    expect(Math.abs(textareaSize.width - textareaSize.labelWidth)).toBeLessThanOrEqual(1);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=320)).toBe(true);
     await expect(page.locator('#card-D-1 textarea')).toHaveValue('Literal 船長');
     expect(posts).toBe(0);

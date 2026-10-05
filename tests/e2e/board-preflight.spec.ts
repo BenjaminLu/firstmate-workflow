@@ -38,7 +38,6 @@ test('preflight crew remains labelled through warnings, never creates tasks or c
       await page.goto(`${b.url}/?lang=${lang}`);
       await expect(page.locator(`[data-crew-chip="${actor}"] .cd`)).toHaveText(label);
       await expect(page.locator(`[data-roster="${actor}"] .rd`)).toHaveText(label);
-      await expect(page.locator(`[data-roster="${actor}"] .rd`)).toHaveText(label);
     }
     await page.locator('[data-sort="round"]').click();
     const sorted=await page.locator('#roster [data-roster]').evaluateAll(els=>els.map(el=>el.getAttribute('data-roster')));

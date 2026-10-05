@@ -1,4 +1,16 @@
-/* Crew roster and the voyage captain portrait. */
+/* Decision controls, crew roster and the voyage captain portrait. */
+/* These page rules also serve the decision deck when the voyage is closed. */
+.acts{flex-wrap:wrap}
+.acts .tradeoffs,.acts label{width:100%}
+.acts textarea{display:block;width:100%;min-height:80px}
+.acts [aria-pressed="true"]{outline:2px solid var(--brass)}
+.acts [hidden]{display:none}
+#orderFeedback{white-space:pre-wrap;overflow-wrap:anywhere}
+.change-fallback{display:flex;align-items:center;gap:16px}
+.change-fallback section{flex:1}
+.change-fallback[hidden]{display:none}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
 .roster li.st-waiting_ci{--av:#806839}
 .roster{margin:12px 0 0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .roster h3{margin:0;padding:8px 12px;font:650 11px var(--mono);letter-spacing:.06em;
