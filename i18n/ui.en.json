@@ -1,4 +1,5 @@
 {
+  "hostUnconfirmed": "{vendor} (unconfirmed)",
   "history": "Completed history (expand or collapse)",
   "laneClosed": "Closed",
   "laneUnknown": "Awaiting update",
