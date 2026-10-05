@@ -5283,11 +5283,14 @@ carry generic task labels rather than private spec titles, and PR/Actions reques
 name the selected repository. Both initial and rebuilt isolated review checkouts
 clone the target repository with their own objects and no remote. External review
 requires a PR and compares its authoritative head and fresh base with local refs
-before preparation and after the CI wait. Before recording the final verdict,
+before preparation. After the CI wait and before recording the final verdict,
 the PR must remain open, its head must match the reviewed head, fetched PR ref
-and local task ref, and its base branch name must be unchanged; main having moved
-does not void the round. A moved or unreadable head, retargeted base or closed PR
-retains the final answer as stale evidence instead of publishing current approval.
+and local task ref, and its base branch name must be unchanged; main moving during
+the CI wait does not void the round (T-213). A moved or unreadable head, retargeted
+base or closed PR after the CI wait refuses the round before the adapter runs,
+with a reason on stderr and a review_failed infrastructure_error event. At the
+final check, it retains the final answer as stale evidence instead of publishing
+current approval.
 The verdict stays bound to the original reviewed head, merge-base and patch-id;
 only gate 7's existing patch-id rule decides whether it covers a later head.
 Accepted risk: a semantic conflict introduced by main outside the reviewed files
@@ -5342,9 +5345,10 @@ refuse an unrepresentable prompt.
 The frozen engine supplies roles and context; a target need not contain engine
 files. For self and external reviews with a PR, shared authoritative head/base
 verification refuses a remote update-branch that left the local ref stale before
-preparing review, after the CI wait and before publishing. Legacy self review
-without a PR remains local-only and establishes no remote readiness. The isolated
-checkout must match the named head and merge-base. Gate/candidate binding remains
+preparing review. After the CI wait and before publishing, head/ref equality and
+the unchanged base name remain required, without base-tip freshness (T-213).
+Legacy self review without a PR remains local-only and establishes no remote
+readiness. The isolated checkout must match the named head and merge-base. Gate/candidate binding remains
 the shared T-138 boundary. These structural guarantees do not prove a model
 followed its role or inspected omitted design. Workers leave publication and
 suites to the outside launcher and CI; reviewer context excludes worker reports

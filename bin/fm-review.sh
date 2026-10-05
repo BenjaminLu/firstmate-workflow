@@ -282,16 +282,16 @@ task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.jso
 }
 R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
 # Local refs alone never establish which change GitHub will land.
-# The shared binding reader fetches and compares both authoritative refs, and
-# refuses a stale local task/base rather than overwriting unpublished work.
-REVIEW_PR_BASE=''; REVIEW_PR_BASE_HEAD=''
+# The start check requires a fresh base. After the CI wait and at the final
+# check, bind the reviewed head and base name only (T-213, T-201).
+REVIEW_PR_BASE=''
 verify_review_head() {
   if [ -z "$PR" ]; then
     [ "$FM_EXTERNAL" != 1 ] || { echo 'fm-review: external review requires --pr' >&2; return 65; }
     return 0  # Legacy local-only self review establishes no remote readiness.
   fi
   local verified
-  if [ "${1:-}" = final ]; then
+  if [ "${1:-}" = final ] || [ "${1:-}" = settled ]; then
     verified="$(fm_binding review-final --task "$TASK" --pr "$PR" --branch "$BRANCH" \
       --head "$R_HEAD" --base-name "$REVIEW_PR_BASE")" || return 65
     [ -n "$R_HEAD" ] && [ "$verified" = "$R_HEAD" ]
@@ -303,16 +303,12 @@ verify_review_head() {
   verified="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || return 65
   [ -n "$R_HEAD" ] && [ "$verified" = "$R_HEAD" ] || {
     echo 'fm-review: authoritative PR head moved; refresh before review' >&2; return 65; }
-  if [ -n "${REVIEW_PR_BASE:-}" ]; then
-    [ "$(fm_binding base --task "$TASK" --pr "$PR")" = "$REVIEW_PR_BASE" ] &&
-      [ "$(git rev-parse "$REVIEW_PR_BASE^{commit}")" = "$REVIEW_PR_BASE_HEAD" ] || return 65
-  fi
 }
 verify_review_head || exit 65
 if [ -n "$PR" ]; then
   BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 65
   REVIEW_PR_BASE="$BASE"
-  REVIEW_PR_BASE_HEAD="$(git rev-parse "$BASE^{commit}")" || exit 65
+  git rev-parse --verify -q "$BASE^{commit}" >/dev/null || exit 65
 fi
 spec="$(task_spec "$TASK" "${R_HEAD:-$BRANCH}")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
@@ -816,7 +812,15 @@ prompt="$work/prompt.md"
 # results (T-153); nothing to wait on without a pull request. The names are
 # read once, from what the base requires (T-155)
 [ -z "$PR" ] || { required_names; ci_wait; }
-verify_review_head || exit 65
+# Unlike the start check's fresh base, this and the final check bind only the
+# reviewed head and base name: main may advance during CI (T-213, T-201).
+if ! verify_review_head settled; then
+  echo 'fm-review: the PR changed while the review waited for CI; no review ran' >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+    --en 'PR head changed, retargeted or closed while the review waited for CI; no review ran' \
+    --tw '審核等待 CI 期間 PR 版本變更、改了 base 或已關閉；沒有執行審核'
+  exit 65
+fi
 # shellcheck source=bin/lib/fm-pinned.sh
 . "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-pinned.sh"
 fm_round_pinned reviewer "$spec" || exit 65

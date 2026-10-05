@@ -174,7 +174,8 @@ else:
         (self.home / 'move').touch()
         result = self.run_review()
         self.assertEqual(65, result.returncode, result.stderr)
-        self.assertIn('authoritative PR head differs', result.stderr)
+        self.assertIn('local task ref differs from reviewed head', result.stderr)
+        self.assertIn('fm-review: the PR changed while the review waited for CI', result.stderr)
         self.assertFalse(list(self.home.glob('capture-*.json')))
         self.assertFalse((self.home / 'published').exists())
 
