@@ -14,37 +14,26 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
   test(`the board reads in ${lang}`, async ({ page }) => {
     await open(page, lang);
 
-    // the crew are agents: firstmate, one per working agent, the captain
-    await expect(page.locator(".scene .pivot")).toHaveCount(CREW.length + 2);
-    await expect(page.locator(".roster li")).toHaveCount(CREW.length + 1);
-    for (const s of new Set(CREW)) {
-      await expect(page.locator(`.scene .fig.s-${s}`).first()).toBeVisible();
+    await expect(page.locator("#scene, #captain")).toHaveCount(0);
+    await expect(page.locator(".roster li.rrow")).toHaveCount(CREW.length + 1);
+    for (const state of new Set(CREW)) {
+      await expect(page.locator(`.roster li.st-${state}`).first()).toBeVisible();
+      const dictionary = lang === 'en' ? EN : lang === 'zh-TW' ? TW : CN;
+      await expect(page.locator(`.roster li.st-${state} .st`).first()).toHaveText(dictionary['lane'+state[0].toUpperCase()+state.slice(1)]);
     }
-    // the captain is NOT on the deck: the crew are agents doing work and
-    // he is the person they are waiting on
-    await expect(page.locator(".scene .fig.r-cap")).toHaveCount(1);
-    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(1);
+    await expect(page.locator('#capstage .capimg')).toHaveAttribute('src', '/voyage2d/captain.webp');
     // the badge counts the cards, rather than being pinned to the one
     // this fixture happens to have
     const cards = await page.locator(".dcard").count();
     await expect(page.locator("#pcount")).toHaveText(String(cards));
     expect(cards).toBeGreaterThan(0);
-    // every crewman says who he is over his own head, and what he is on in
-    // the card that head holds (T-116)
-    await expect(page.locator(".scene .bub")).toHaveCount(CREW.length + 1);
-    await expect(page.locator(".scene .bub:not(.mini) .job").first()).not.toBeEmpty();
-    // the full bubbles name the agent; the chips below them name him too,
-    // and the work is in each card and the roster (T-116)
-    const named = await page.locator(".scene .bub:not(.mini) .who").allInnerTexts();
     const listed = await page.locator(".roster .nm").allInnerTexts();
-    for (const n of named) expect(listed).toContain(n);
+    await expect(page.locator('.roster .jb .act').first()).not.toBeEmpty();
     // and the roster is named after the agents, not after the tasks
     const agents = listed.filter((n) => /^(worker|reviewer)-\d+$/.test(n));
     expect(agents.length).toBe(CREW.length);
     const jobs = await page.locator(".roster .jb").allInnerTexts();
     expect(jobs.some((j) => /^(T|SK)-[0-9]{3,}/.test(j))).toBe(true);
-    await expect(page.locator(".scene .port").first()).toBeVisible();
-    await expect(page.locator(".scene .mast .sail").first()).toBeVisible();
 
     // t() falls back to the key itself, so the way to catch an unresolved
     // key is to read the label and compare it with the dictionary. A
@@ -56,7 +45,7 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
       // the stylesheet upper-cases these, so compare the words not the case
       expect(labels[i].toLowerCase()).toBe(w.toLowerCase());
     }
-    const aboard = await page.locator(".shipbar span").nth(1).innerText();
+    const aboard = await page.locator(".rosterbar .aboard").innerText();
     expect(aboard).toContain(want("aboard"));
     expect(aboard).toContain(`${CREW.length + 1}/24`);
 

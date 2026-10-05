@@ -298,14 +298,19 @@ declared="$(sed -n 's/^type CrewState = //p' "$ROOT/board/server.ts" \
   | tr -d ';"' | tr '|' '\n' | tr -d ' ' | sed '/^$/d')"
 assert_ne "" "$declared" "the crew states are declared in one place"
 for st in $declared; do
-  assert_contains "$css_rules" ".fig.s-$st" "the page can draw state $st"
+  assert_contains "$css_rules" ".roster li.st-$st" "the page can draw state $st"
 done
 # and the animation each of them names actually exists: a --baseAnim
 # pointing at a keyframe nobody defined resolves to nothing, silently,
 # and a check that greps only for the selector cannot tell
-for anim in $(printf '%s' "$css_rules" | grep -oE '\-\-baseAnim:[a-zA-Z0-9_-]+' | cut -d: -f2 | sort -u); do
-  assert_contains "$css_rules" "@keyframes $anim" "the keyframe $anim is defined"
-done
+animations="$(printf '%s' "$css_rules" | grep -oE '\-\-baseAnim:[a-zA-Z0-9_-]+' | cut -d: -f2 | sort -u)"
+if [ -z "$animations" ]; then
+  assert_lacks "$css_rules" "--baseAnim" "the roster has no scene animation references"
+else
+  for anim in $animations; do
+    assert_contains "$css_rules" "@keyframes $anim" "the keyframe $anim is defined"
+  done
+fi
 # and what the fixture produced is inside that set
 for st in $(jq -r '.crew[].state' <<<"$sv" | sort -u); do
   assert_contains "$declared" "$st" "state $st is one the server declares"

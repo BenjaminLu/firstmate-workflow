@@ -1,253 +1,9 @@
-/* The ship. Every decision here is recorded in design.md section 8; this is a
-   rewrite of the prototype in design/proposals, not a copy of it.
-
-   The load-bearing ones: decks and hull come out of one curve in one SVG so
-   they share a projection with the crew; brass is the only accent so the crew
-   are the brightest layer; a crowd stacks onto more decks rather than
-   stretching the hull; and everything aligns to --deckY0 + row * --rowStep. */
-.scene{position:relative;height:var(--sceneH);margin:14px 0 0;border:1px solid var(--line);
-  border-radius:13px;overflow:hidden;perspective:900px;perspective-origin:50% 38%;
-  background:linear-gradient(180deg,#050f19 0%,#0a2739 46%,#040c14 100%);
-  --tar:#171210;--timber:#3b2617;--timber2:#2a1d13;
-  --brass:#d9a441;--canvasSail:#cdbfa6;--blood:#6e1b1b;--rope:#6d5836}
-.scene .horizon{position:absolute;left:0;right:0;top:0;height:62px;
-  background:linear-gradient(180deg,#07121d,#123047);opacity:.75}
-.shipbar{position:absolute;top:9px;left:13px;right:13px;z-index:6;display:flex;flex-wrap:wrap;gap:8px 11px;
-  align-items:center;font-size:13px;color:#7fa8c6;pointer-events:none}
-.shipbar .tier{font:650 11px var(--mono);color:var(--brass);letter-spacing:.04em}
-
-.ship{position:absolute;inset:0;pointer-events:none;z-index:0}
-.hullwrap{position:absolute;left:50%;bottom:var(--hullBottom,12px);transform:translateX(-50%);
-  width:var(--deckW,58%);transition:width .5s cubic-bezier(.3,.8,.3,1)}
-.hullsvg{display:block;filter:drop-shadow(0 14px 26px rgba(0,0,0,.62))}
-.ports{position:absolute;inset:0;pointer-events:none;z-index:3}
-.port{position:absolute;width:38px;height:30px;margin:0 0 -15px -19px;border-radius:3px;
-  background:radial-gradient(ellipse at 50% 32%,#10151e,#03050a 72%);
-  box-shadow:0 0 0 2.5px var(--brass),0 0 12px rgba(201,151,47,.4),inset 0 4px 7px rgba(0,0,0,.95)}
-.port b{position:absolute;top:10px;left:-30px;width:38px;height:12px;border-radius:5px;
-  background:linear-gradient(180deg,#5b6672,#20272e 60%,#0d1116);box-shadow:0 2px 4px rgba(0,0,0,.9)}
-.port::after{content:"";position:absolute;top:-13px;left:1px;width:36px;height:12px;border-radius:2px;
-  background:linear-gradient(180deg,#6b4a2a,#33210f);box-shadow:0 0 0 1.5px var(--brass);
-  transform-origin:50% 100%;transform:rotate(-24deg)}
-.prow{position:absolute;z-index:3;pointer-events:none;transform:translateX(-24%) scaleX(-1)}
-.prow .spar{position:absolute;left:96px;top:24px;width:112px;height:7px;border-radius:3px;
-  background:linear-gradient(90deg,#33230f,#8a6438);transform:rotate(-14deg);transform-origin:0 50%}
-
-.mast{position:absolute;left:var(--mx);width:5px;border-radius:2px;z-index:1;
-  bottom:calc(var(--deckY0) + var(--topR,0) * var(--rowStep));
-  background:linear-gradient(90deg,#8a6438,#241708);transform:translateX(-50%)}
-.mast .yard{position:absolute;left:50%;width:var(--yw,74px);height:5px;border-radius:2px;
-  transform:translateX(-50%);background:linear-gradient(90deg,#241708,#8a6438,#241708)}
-.mast .sail{position:absolute;left:50%;transform:translateX(-50%);width:var(--sw,66px);
-  background:repeating-linear-gradient(90deg,rgba(0,0,0,.07) 0 1px,transparent 1px 13px),
-    linear-gradient(180deg,var(--canvasSail),#a89b81);box-shadow:0 5px 18px rgba(0,0,0,.45);
-  clip-path:polygon(7% 0,93% 0,100% 84%,90% 100%,80% 85%,68% 99%,56% 84%,44% 99%,32% 85%,20% 100%,10% 86%,0 84%)}
-.mast .sail.main{background:linear-gradient(180deg,#5a1414,#2a0909)}
-.mast .jolly{position:absolute;top:-5px;left:6px;width:32px;height:18px;background:#0b0b0d;
-  border:1px solid #2a2a2e;display:flex;align-items:center;justify-content:center;
-  clip-path:polygon(0 0,100% 0,84% 50%,100% 100%,0 100%)}
-.mast .jolly svg{width:13px;height:13px;margin-right:4px}
-.helm{position:absolute;left:var(--hx);width:40px;height:40px;transform:translateX(-50%);z-index:2;
-  bottom:calc(var(--deckY0) + var(--topR,0) * var(--rowStep) + 4px)}
-.helm .ring{position:absolute;inset:0;border-radius:50%;border:4px solid var(--brass);
-  box-shadow:inset 0 0 0 3px #120d09}
-.helm i{position:absolute;left:50%;top:50%;width:50px;height:3px;margin:-1.5px 0 0 -25px;
-  border-radius:2px;background:var(--brass);opacity:.9}
-.helm i:nth-child(2){transform:rotate(45deg)} .helm i:nth-child(3){transform:rotate(90deg)}
-.helm i:nth-child(4){transform:rotate(135deg)}
-
-/* crew: box faces, so shading comes from geometry and a pose is a class */
-.pivot{position:absolute;left:var(--px);width:92px;height:100px;margin-left:-46px;z-index:3;
-  pointer-events:auto;  /* .ship turns them off for the hull; the crew are grabbable.
-     Found by the browser suite: without this no crewman could be dragged,
-     which is why one line of the board is inside T-014's scope. */
-  bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep));transform-style:preserve-3d;
-  cursor:grab;touch-action:none;transition:transform .16s ease-out;
-  transform:rotateX(var(--rx,8deg)) rotateY(var(--ry,-26deg)) scale(var(--sc,.86))}
-.pivot.dragging{cursor:grabbing;transition:none}
-.fig{position:absolute;inset:0;transform-style:preserve-3d}
-.fig *{position:absolute;transform-style:preserve-3d}
-.bx{width:var(--w);height:var(--h)}
-.bx>i{display:block;background:var(--c);border-radius:2px}
-.bx>i.fr{width:var(--w);height:var(--h);transform:translateZ(calc(var(--d)/2))}
-.bx>i.sd{width:var(--d);height:var(--h);left:calc(var(--w)/2 - var(--d)/2);
-  transform:rotateY(90deg) translateZ(calc(var(--w)/2));filter:brightness(.58)}
-.bx>i.lf{width:var(--d);height:var(--h);left:calc(var(--w)/2 - var(--d)/2);
-  transform:rotateY(-90deg) translateZ(calc(var(--w)/2));filter:brightness(.8)}
-.bx>i.bk{width:var(--w);height:var(--h);transform:translateZ(calc(var(--d)/-2)) rotateY(180deg);
-  filter:brightness(.45)}
-.bx>i.tp{width:var(--w);height:var(--d);top:calc(var(--h)/2 - var(--d)/2);
-  transform:rotateX(90deg) translateZ(calc(var(--h)/2));filter:brightness(1.34)}
-.fig .sh{left:50%;bottom:-8px;width:64px;height:16px;margin-left:-32px;border-radius:50%;
-  background:radial-gradient(ellipse,rgba(0,0,0,.62),transparent 72%);transform:translateZ(-16px)}
-.fig .shoeL{--w:13px;--h:6px;--d:16px;left:31px;bottom:0;transform-origin:50% -18px}
-.fig .shoeR{--w:13px;--h:6px;--d:16px;left:48px;bottom:0;transform-origin:50% -18px}
-.fig .legL{--w:11px;--h:22px;--d:12px;left:32px;bottom:5px;transform-origin:50% 2px}
-.fig .legR{--w:11px;--h:22px;--d:12px;left:49px;bottom:5px;transform-origin:50% 2px}
-.fig .torso{--w:32px;--h:34px;--d:20px;left:30px;bottom:24px}
-.fig .neck{--w:10px;--h:7px;--d:10px;left:41px;bottom:55px}
-.fig .head{--w:21px;--h:20px;--d:19px;left:36px;bottom:61px}
-.fig .brim{--w:29px;--h:3px;--d:26px;left:32px;bottom:77px}
-.fig .crown{--w:22px;--h:8px;--d:20px;left:35px;bottom:79px}
-.fig .eye{left:41px;bottom:70px;width:3px;height:3.5px;border-radius:1px;background:#1b2836;
-  box-shadow:8px 0 0 #1b2836;transform:translateZ(10px)}
-.fig .armL{--w:8px;--h:23px;--d:11px;left:22px;bottom:31px;transform-origin:50% 2px;transform:rotate(6deg)}
-.fig .armR{--w:8px;--h:23px;--d:11px;left:62px;bottom:31px;transform-origin:50% 2px;transform:rotate(-6deg)}
-.fig .handL,.fig .handR{--w:9px;--h:8px;--d:11px;left:-1px;bottom:-6px}
-.fig .tool{left:-4px;bottom:-9px;width:0;height:0;opacity:0}
-.fig{--trouser:#27394a;--shoe:#151f29;--skin:#f0cfa9}
-.fig.r-fm{--suit:#2c4d74;--hat:#d9a441;--trouser:#1f3244}
-.fig.r-w {--suit:#b4672a;--hat:#e8ae3e}
-.fig.r-r {--suit:#6b45a0;--hat:#c07bf0}
-/* A role the page has no name for is a mismatch between the server's
-   vocabulary and this sheet's, and the page said it should be visible
-   rather than painted as a worker. Without a rule it inherited .fig and
-   looked like a crewman in the default suit, which is the quiet failure
-   the comment claimed not to have. Magenta is used by nothing else. */
-.fig.r-unknown{--suit:#ff00a8;--hat:#ff00a8;--trouser:#ff00a8;outline:2px dashed #ff00a8}
-.fig .head,.fig .neck,.fig .handL,.fig .handR{--c:var(--skin)}
-.fig .torso,.fig .armL,.fig .armR{--c:var(--suit)}
-.fig .legL,.fig .legR{--c:var(--trouser)}
-.fig .shoeL,.fig .shoeR{--c:var(--shoe)}
-.fig .crown,.fig .brim{--c:var(--hat)}
-/* state wins over action; the action owns the arms, so nothing leaks */
-.fig .armL,.fig .armR{animation:none}
-.fig .legL,.fig .shoeL{animation:stepA var(--step,1.25s) ease-in-out infinite}
-.fig .legR,.fig .shoeR{animation:stepB var(--step,1.25s) ease-in-out infinite}
-@keyframes stepA{0%,100%{transform:translateY(0) rotate(2deg)}50%{transform:translateY(-7px) rotate(-16deg)}}
-@keyframes stepB{0%,100%{transform:translateY(-7px) rotate(-16deg)}50%{transform:translateY(0) rotate(2deg)}}
-.fig{translate:0 0;animation-name:var(--baseAnim,bobk),hopk;
-  animation-duration:var(--baseDur,4.4s),var(--hopEvery,11s);
-  animation-timing-function:ease-in-out,ease-out;animation-iteration-count:infinite,infinite;
-  animation-delay:0s,var(--hopDelay,0s)}
-@keyframes bobk{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
-@keyframes slumpk{0%,100%{transform:translateY(3px)}50%{transform:translateY(6px)}}
-@keyframes scank{0%,100%{transform:rotateY(-17deg)}50%{transform:rotateY(19deg)}}
-@keyframes hopk{0%,88%,100%{translate:0 0}91%{translate:0 -11px}94%{translate:0 -3px}}
-@keyframes hammer{0%,100%{transform:rotate(-14deg)}45%{transform:rotate(-86deg)}}
-@keyframes swab{0%,100%{transform:rotate(-34deg)}50%{transform:rotate(-72deg)}}
-@keyframes haul{0%,100%{transform:rotate(-70deg)}50%{transform:rotate(-40deg)}}
-.fig.s-working{--baseAnim:bobk;--baseDur:2.5s}
-.fig.s-gate{--baseAnim:slumpk;--baseDur:2.2s;filter:saturate(.5) brightness(.86)}
-.fig.s-review{--baseAnim:scank;--baseDur:3.6s}
-.fig.s-waiting_ci{--baseAnim:bobk;--baseDur:6.5s;filter:saturate(.5)}
-.bub.st-waiting_ci{--bubEdge:#806839}
+/* Crew roster and the voyage captain portrait. */
 .roster li.st-waiting_ci{--av:#806839}
-.fig.s-captain{--baseAnim:bobk;--baseDur:3.1s}
-.fig.s-queued{--baseAnim:bobk;--baseDur:6.5s;filter:grayscale(.75) brightness(.6)}
-.fig.a-hammer .armR{animation:hammer var(--sp,.62s) ease-in-out infinite}
-.fig.a-hammer .tool{opacity:1;width:16px;height:10px;border-radius:2px;transform:translateZ(6px);
-  background:linear-gradient(180deg,#c2cedb,#63717e);box-shadow:0 0 0 2px #26313c}
-.fig.a-swab .armL{transform:rotate(-34deg)}
-.fig.a-swab .armR{animation:swab 1.5s ease-in-out infinite}
-.fig.a-swab .tool{opacity:1;width:4px;height:26px;border-radius:2px;left:2px;bottom:-22px;
-  background:#6b4f2c;transform:translateZ(6px)}
-.fig.a-haul .armL,.fig.a-haul .armR{transform:rotate(-64deg);animation:haul 1.25s ease-in-out infinite}
-.fig.a-lookout .armR{transform:rotate(-106deg)}
-.fig.a-lookout .tool{opacity:1;width:26px;height:7px;border-radius:4px;left:-17px;bottom:2px;
-  background:linear-gradient(90deg,#e2eaf3,#6d7c8c);box-shadow:0 0 0 2px #26313c;transform:translateZ(6px)}
-.fig.a-helm .armL,.fig.a-helm .armR{transform:rotate(-58deg)}
-.fig.a-lean .armL,.fig.a-lean .armR{transform:rotate(-96deg)}
-.fig.a-lean .legL,.fig.a-lean .legR,.fig.a-lean .shoeL,.fig.a-lean .shoeR{animation:none}
-.scene .fig.cheer .armL,.scene .fig.cheer .armR{animation:crewArms 2.8s both;animation-delay:inherit}
-@keyframes crewArms{0%,100%{transform:rotate(0)}15%,65%{transform:rotate(-150deg)}}
-
-/* a bubble over every head, clear of the deck above */
-.bub{position:absolute;left:var(--px);transform:translateX(-50%);z-index:5;
-  bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep) + var(--figH,62px) + 10px);
-  width:max-content;min-width:0;max-width:min(var(--tagW,15%),206px);background:rgba(12,19,27,.94);
-  border:1px solid var(--bubEdge,#2c3f52);border-radius:9px;padding:5px 8px 6px;text-align:center;
-  box-shadow:0 6px 18px rgba(0,0,0,.55)}
-.bub::after{content:"";position:absolute;left:50%;bottom:-6px;width:10px;height:10px;margin-left:-5px;
-  transform:rotate(45deg);background:rgba(12,19,27,.94);
-  border-right:1px solid var(--bubEdge,#2c3f52);border-bottom:1px solid var(--bubEdge,#2c3f52)}
-/* T-116: the tag is the name and the project's pennant; a name wider than
-   its gap is cut with an ellipsis, never allowed to reach the next tag */
-.bub .who{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  font:650 13px var(--mono);color:#dbe8f4}
-.bub .job{margin-top:3px;font-size:13px;color:#9dbdd6;line-height:1.3;overflow:hidden;
-  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
-.bub.st-working{--bubEdge:#2f5478} .bub.st-review{--bubEdge:#5a3f7d}
-.bub.st-gate{--bubEdge:#7c322b}
-.bub.st-captain{--bubEdge:#2c5f49}
-.bub.st-queued{--bubEdge:#26323d;opacity:.6}
-
-/* ahoy */
-.vessel{position:absolute;inset:0;transform-origin:50% 88%}
-.vessel.heel{animation:heel 1.8s cubic-bezier(.3,.7,.3,1)}
-@keyframes heel{0%{transform:rotate(0)}18%{transform:rotate(-2.4deg)}46%{transform:rotate(1.9deg)}
-                72%{transform:rotate(-1deg)}100%{transform:rotate(0)}}
-.salvo{position:absolute;inset:0;pointer-events:none;z-index:4}
-.salvo i{position:absolute;width:40px;height:24px;margin:0 0 -12px -20px;border-radius:50%;opacity:0;
-  background:radial-gradient(ellipse,#fffbe8,#f6b447 38%,rgba(246,180,71,0) 72%)}
-.salvo.fire i{animation:flash .34s ease-out}
-@keyframes flash{0%{opacity:0;transform:scale(.25)}18%{opacity:1;transform:scale(1.35) translateX(-7px)}
-                 100%{opacity:0;transform:scale(2.1) translateX(-26px)}}
-.ahoy{position:absolute;left:0;right:0;top:9%;text-align:center;z-index:9;pointer-events:none;opacity:0;
-  font:800 clamp(26px,4.4vw,46px)/1 var(--sans);letter-spacing:.14em;color:#ffe6a8;
-  text-shadow:0 0 28px rgba(217,164,65,.7),0 5px 0 #6b4410}
-.ahoy.on{animation:ahoyIn 1.7s cubic-bezier(.2,1.5,.3,1)}
-.ahoy.active{opacity:1;top:40px;font-size:clamp(14px,2vw,22px);line-height:1.2;background:var(--bg)}
-.helm.orders{animation:orders 2s ease-in-out both}
-@keyframes orders{from{transform:translateX(-50%) rotate(0)}to{transform:translateX(-50%) rotate(720deg)}}
-.fig.cheer{animation:crewOrder 2.8s both}
-@keyframes crewOrder{0%{translate:0 0}15%,65%{translate:0 -8px}100%{translate:0 0}}
-.captain .fig.r-cap .tool{opacity:1;width:5px;height:25px;background:#e8eff7;border-bottom:5px solid var(--brass);transform:rotate(20deg)}
-.captain[data-pose="idle"] .armR{transform:rotate(10deg)}
-.captain[data-pose="idle"] .fig.r-cap .tool{height:10px;opacity:.45;background:#3b2617;border-bottom:0}
-.captain[data-pose="ready"] .armR{transform:rotate(-65deg)}
-.captain[data-pose="ready"] .fig.r-cap .tool{height:38px;opacity:1;background:#e8eff7;border-bottom:5px solid var(--brass)}
-.captain[data-pose="order"] .armR{transform:rotate(-155deg)!important}
-.captain[data-pose="order"] .fig.r-cap .tool{height:52px;opacity:1;background:#e8eff7;border-bottom:5px solid var(--brass)}
-.acts{flex-wrap:wrap}.acts .tradeoffs,.acts label{width:100%}
-.acts textarea{display:block;width:100%;min-height:80px}
-.acts [aria-pressed="true"]{outline:2px solid var(--brass)}
-.acts [hidden]{display:none}
-#orderFeedback{white-space:pre-wrap;overflow-wrap:anywhere}
-.change-fallback{display:flex;align-items:center;gap:16px}
-.change-fallback section{flex:1}
-.change-fallback[hidden]{display:none}
-@media(prefers-reduced-motion:reduce){.helm.orders,.fig.cheer{animation:none}.ahoy.active{opacity:1}}
-@keyframes ahoyIn{0%{opacity:0;transform:scale(.55)}16%{opacity:1;transform:scale(1.1)}
-                  30%{transform:scale(1)}74%{opacity:1}100%{opacity:0;transform:translateY(-18px)}}
-.ahoy small{display:block;margin-top:7px;font:600 13px var(--mono);letter-spacing:.24em;
-  color:#c9972f;text-shadow:none}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
-
-/* the remaining six of the twelve actions; each one holds something, so no
-   pose is an empty swing */
-@keyframes saw{0%,100%{transform:rotate(-40deg) translateX(0)}50%{transform:rotate(-40deg) translateX(9px)}}
-@keyframes chart{0%,100%{transform:rotate(-88deg)}50%{transform:rotate(-74deg)}}
-@keyframes sound{0%,100%{transform:rotate(-24deg)}50%{transform:rotate(12deg)}}
-.fig.a-saw .armR{animation:saw .8s ease-in-out infinite}
-.fig.a-saw .tool{opacity:1;width:30px;height:7px;left:-22px;bottom:0;transform:translateZ(6px);
-  background:linear-gradient(180deg,#dbe4ee,#7b8894);clip-path:polygon(0 0,100% 0,100% 60%,0 60%,4% 100%,10% 60%,18% 100%,26% 60%,34% 100%,42% 60%)}
-.fig.a-paint .armR{animation:swab .95s ease-in-out infinite}
-.fig.a-paint .tool{opacity:1;width:7px;height:16px;left:1px;bottom:-14px;border-radius:2px;
-  background:linear-gradient(180deg,#6b4f2c 60%,#2f4f6e 60%);transform:translateZ(6px)}
-.fig.a-chart .armL,.fig.a-chart .armR{transform:rotate(-80deg);animation:chart 2.4s ease-in-out infinite}
-.fig.a-chart .tool{opacity:1;width:26px;height:18px;left:-16px;bottom:-4px;border-radius:2px;
-  background:linear-gradient(180deg,#e6dcc2,#c3b493);box-shadow:0 0 0 1.5px #6b4f2c;transform:translateZ(9px)}
-.fig.a-lantern .armR{transform:rotate(-38deg)}
-.fig.a-lantern .tool{opacity:1;width:12px;height:15px;left:-1px;bottom:-16px;border-radius:3px;
-  background:radial-gradient(circle at 50% 40%,#ffe9ae,#c9972f);
-  box-shadow:0 0 14px rgba(217,164,65,.75),0 0 0 1.5px #3a2a10;transform:translateZ(6px)}
-.fig.a-coil .armL,.fig.a-coil .armR{transform:rotate(-58deg);animation:haul 1.9s ease-in-out infinite}
-.fig.a-coil .tool{opacity:1;width:20px;height:20px;left:-11px;bottom:-12px;border-radius:50%;
-  border:4px solid var(--rope);transform:translateZ(8px)}
-.fig.a-sound .armR{animation:sound 1.7s ease-in-out infinite}
-.fig.a-sound .tool{opacity:1;width:3px;height:30px;left:3px;bottom:-28px;background:var(--rope);
-  box-shadow:0 30px 0 -1px #4a5560;transform:translateZ(6px)}
-.fig.r-cap{--suit:#5d1d1d;--hat:#1b1b20;--trouser:#2a2118;--skin:#eec89f}
-.fig.r-cap .crown{--h:11px} .fig.r-cap .brim{--w:35px;--d:31px;left:29px}
-.fig.r-cap .coat{--w:36px;--h:30px;--d:23px;--c:#7c2626;left:28px;bottom:24px}
-
 .roster{margin:12px 0 0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .roster h3{margin:0;padding:8px 12px;font:650 11px var(--mono);letter-spacing:.06em;
   color:var(--brass);background:rgba(217,164,65,.07);border-bottom:1px solid var(--line);
   display:flex;justify-content:space-between}
-/* two columns of rows, as the prototype has them: dot, name, stage and pull
-   request on the first line; task and authored activity on the second */
 .roster[hidden]{display:none}
 .roster ul.rows{list-style:none;margin:0;padding:0;max-height:320px;overflow:auto;display:grid;
   grid-template-columns:repeat(auto-fill,minmax(min(100%,408px),1fr));gap:1px;background:var(--line)}
@@ -258,10 +14,9 @@
 .roster .nm{font:650 13px var(--mono);color:#dbe8f4}
 .roster .st{font-size:13px;padding:1px 7px;border-radius:99px;border:1px solid var(--bubEdge,#2c3f52);color:#9dbdd6}
 .roster .rpr{margin-left:auto;font:600 13px var(--mono);color:#7f9db5}
-.roster .rpr a,.roster .jb a[data-pr],.bub a[data-pr]{color:inherit;text-decoration:none;pointer-events:auto}
-.roster .rpr a:hover,.roster .rpr a:focus-visible,.roster .jb a[data-pr]:hover,.roster .jb a[data-pr]:focus-visible,
-.bub a[data-pr]:hover,.bub a[data-pr]:focus-visible{text-decoration:underline}
-.roster .rpr a:focus-visible,.roster .jb a[data-pr]:focus-visible,.bub a[data-pr]:focus-visible{outline:2px solid currentColor;outline-offset:2px;border-radius:3px}
+.roster .rpr a,.roster .jb a[data-pr]{color:inherit;text-decoration:none;pointer-events:auto}
+.roster .rpr a:hover,.roster .rpr a:focus-visible,.roster .jb a[data-pr]:hover,.roster .jb a[data-pr]:focus-visible{text-decoration:underline}
+.roster .rpr a:focus-visible,.roster .jb a[data-pr]:focus-visible{outline:2px solid currentColor;outline-offset:2px;border-radius:3px}
 .roster .jb{color:#8fa9bd;min-width:0}
 .roster .jb .tk{font:600 13px var(--mono);color:#8fb2cc}
 .roster .jb .tt{color:#c6d8e8}
@@ -269,141 +24,43 @@
 .roster .jb .pb{display:block;margin-top:4px;width:100%;height:3px;
   background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
 .roster .jb .pb i{display:block;height:100%;background:var(--accent)}
-.roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
+.roster li.st-working{--av:#2f5478}
+.roster li.st-review{--av:#5a3f7d}
 .roster li.st-gate{--av:#7c322b}
 .roster li.st-captain{--av:#2c5f49}
 .roster li.st-queued{--av:#26323d;opacity:.62}
-.shipbar button{pointer-events:auto;font:650 13px var(--mono);color:#0f1621;cursor:pointer;
-  background:linear-gradient(180deg,#f0c46a,#c9972f);border:0;border-radius:99px;padding:3px 11px}
-.shipbar button.mute{background:transparent;color:#7fa8c6;border:1px solid var(--line)}
-.shipbar button.toggle{background:rgba(9,20,30,.72);color:#9dc0d8;border:1px solid #27455e}
-.shipbar button.toggle[aria-pressed="true"]{background:#1d4b7a;border-color:#1d4b7a;color:#fff}
-.shipbar .ahoybtn{letter-spacing:.12em;box-shadow:0 2px 0 #6d4d13}
-.shipbar .ahoybtn:active{transform:translateY(2px);box-shadow:none}
-.shipbar .ahoybtn.q{letter-spacing:0;background:linear-gradient(180deg,#cfd8e2,#8a96a3);box-shadow:0 2px 0 #4a545e}
-.shipbar .hint{color:#5d84a3}
-@media(max-width:900px){.shipbar .hint{display:none}}
-/* the rig the prototype draws: shrouds and a topsail over each course */
-.mast .shroud{position:absolute;bottom:0;width:42px;height:54px;opacity:.34;
-  background:repeating-linear-gradient(180deg,var(--rope) 0 1px,transparent 1px 8px)}
-.mast .shroud.l{right:50%;clip-path:polygon(100% 0,100% 100%,0 100%)}
-.mast .shroud.r{left:50%;clip-path:polygon(0 0,100% 100%,0 100%)}
-
-/* The captain's portrait beside the first decision. A picture of the one
-   captain aboard, dressed and posed as he is on the ship. */
 .capstage{flex:0 0 184px;position:relative;height:318px;border:1px solid #3a2a52;border-radius:14px;
   overflow:hidden;perspective:620px;perspective-origin:50% 44%;
   background:radial-gradient(120% 90% at 50% 10%,rgba(60,38,96,.5),rgba(10,14,22,0) 70%),
     linear-gradient(180deg,#140f22,#0a0d14)}
 .capstage[hidden]{display:none}
-.capstage .floor{position:absolute;left:-18%;right:-18%;bottom:22px;height:100px;
-  background:repeating-linear-gradient(90deg,#6a4828 0 20px,#553a20 20px 40px);
-  transform:rotateX(76deg);transform-origin:50% 100%;box-shadow:inset 0 22px 38px rgba(0,0,0,.6)}
-.capstage .glow{position:absolute;left:50%;bottom:68px;width:120px;height:26px;margin-left:-60px;
-  border-radius:50%;background:radial-gradient(ellipse,rgba(201,151,47,.3),transparent 70%)}
-.capstage .capfig{position:absolute;left:50%;bottom:84px;width:92px;height:100px;margin-left:-46px;
-  transform-style:preserve-3d;transform-origin:50% 100%;transform:rotateX(6deg) rotateY(-18deg) scale(1.34)}
 .capstage .lbl{position:absolute;left:0;right:0;bottom:9px;padding:0 8px;text-align:center;
   font:650 13px var(--mono);color:var(--brass);letter-spacing:.06em;overflow-wrap:anywhere}
 .capstage .lbl span{display:block;margin-top:2px;font:400 13px var(--sans);color:#8b7aa8;letter-spacing:0}
-.capstage .fig.r-cap .tool{opacity:1;width:5px;height:25px;background:#e8eff7;border-bottom:5px solid var(--brass);transform:rotate(20deg)}
-.capstage[data-pose="idle"] .armR{transform:rotate(10deg)}
-.capstage[data-pose="idle"] .fig.r-cap .tool{height:10px;opacity:.45;background:#3b2617;border-bottom:0}
-.capstage[data-pose="ready"] .armR{transform:rotate(-65deg)}
-.capstage[data-pose="ready"] .fig.r-cap .tool{height:38px}
-.capstage[data-pose="order"] .armR{transform:rotate(-155deg)}
-.capstage[data-pose="order"] .fig.r-cap .tool{height:52px}
 @media(max-width:820px){.capstage{flex:0 0 auto;height:236px}}
-/* three poses were still empty-handed. Every one of the twelve holds
-   something now, so no crewman mimes his work. */
-.fig.a-haul .tool{opacity:1;width:4px;height:34px;left:2px;bottom:-30px;border-radius:2px;
-  background:repeating-linear-gradient(180deg,var(--rope) 0 4px,#4a3a22 4px 8px);transform:translateZ(6px)}
-.fig.a-helm .tool{opacity:1;width:22px;height:5px;left:-13px;bottom:0;border-radius:3px;
-  background:linear-gradient(90deg,#f0c46a,#8a6414);box-shadow:0 0 0 1.5px #3a2a10;transform:translateZ(8px)}
-.fig.a-lean .tool{opacity:1;width:11px;height:13px;left:-2px;bottom:-11px;border-radius:2px;
-  background:linear-gradient(180deg,#9aa6b2,#4b5661);box-shadow:0 0 0 1.5px #262f38,
-  inset 0 3px 0 #e8d9a8;transform:translateZ(6px)}
-
-.scene .sea{position:absolute;left:0;right:0;bottom:0;z-index:4;pointer-events:none;
-  background:linear-gradient(180deg,rgba(24,74,105,.0),rgba(18,58,84,.72) 34%,rgba(6,20,31,.9));
-  box-shadow:inset 0 2px 0 rgba(160,205,232,.22)}
-/* a name chip for the decks that have a deck above them: the bubble would
-   blindfold the crew standing over it, and the roster carries the job text */
-.bub.mini{padding:2px 7px 3px;max-width:112px;background:rgba(9,15,22,.9)}
-.bub.mini .who{font-size:13px}
-.bub.mini::after{display:none}
-
-/* The captain shares the actual ship coordinate system and deck surface. */
-.scene .captain{position:absolute;inset:0;width:auto;min-height:0;padding:0;display:block;background:none;border:0;box-shadow:none;pointer-events:none}
-.scene .captain .pivot{bottom:calc(var(--deckY0) + var(--capRow) * var(--rowStep));pointer-events:auto}
-.scene .pivot{transform-origin:50% 100%}
-.scene{touch-action:none}
 .roster .jb{white-space:normal;overflow:visible;text-overflow:clip;font-size:16px;overflow-wrap:anywhere}
-.roster .nm,.roster .st,.roster h3,.shipbar,.shipbar .tier,.shipbar button,.bub .who,.bub .job,.bub.mini .who{font-size:13px}
+.roster .nm,.roster .st,.roster h3{font-size:13px}
 .roster li{font-size:16px}
 .roster .nm{overflow-wrap:anywhere}
 .roster ul{max-height:280px}
-.fig.s-unknown{--baseAnim:bobk}.st-unknown{--bubEdge:#566777}
-.handoffs{position:absolute;inset:0;pointer-events:none;z-index:8}
-.stern{position:absolute;right:0;top:0;width:10px;height:18px;border:2px solid var(--brass);background:#806431;border-radius:3px}
-.handoff{position:absolute;transform:translate(-50%,-50%);padding:4px 8px;background:var(--brass);color:#171210;border-radius:5px;font-size:16px}
-.handoff.static{position:relative;transform:none;left:auto;top:auto;margin:50px 12px 0;overflow-wrap:anywhere}
-.pivot.react .fig{animation:receive .7s ease-out}.bub.ping{outline:3px solid var(--brass)}
-@keyframes receive{50%{translate:0 -9px}}
-@media(prefers-reduced-motion:reduce){.pivot.react .fig{animation:none}}
-/* T-054: whose task it is, when more than one project is aboard. The name
-   is data; the chip only frames it, on the ship and on the page alike. */
 .pchip{display:inline-block;max-width:100%;padding:0 6px;border:1px solid #4a3a1a;border-radius:99px;
   font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace;color:#e0b45c;background:rgba(217,164,65,.08);
   line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
 #merging{list-style:none;margin:0 0 10px;padding:0}
 #merging li{font-size:16px;padding:6px 0;color:#93a7bd;overflow-wrap:anywhere}
 #merging li.unknown{color:#f2b544}
-
-/* --- T-116: a quiet name tag, a detail card on demand, a roster in columns */
-/* the project's pennant: one colour per project, the same everywhere */
-.pennant{display:inline-block;width:9px;height:12px;margin-left:6px;vertical-align:-1px;
-  background:var(--pc,#d9a441);clip-path:polygon(0 0,100% 50%,0 100%)}
-/* with several projects the pennant is also the tag's .pchip: keep its shape */
-.pennant.pchip{padding:0;border:0;border-radius:0;max-width:none;line-height:normal;overflow:visible}
-/* T-127: a small vendor mark, a dot in the vendor's own colour - never the
-   model, which stays in the detail card; the tag stays quiet */
-.vmark{display:inline-block;width:6px;height:6px;margin-left:5px;border-radius:50%;
-  background:var(--vc,#7f9db5);vertical-align:1px}
-/* read by a screen reader, never drawn */
 .sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;
   clip-path:inset(50%);white-space:nowrap}
 .pdot{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:2px;background:var(--pc,#d9a441)}
 .pchip[style*="--pc"]{border-color:var(--pc);color:var(--pc)}
-/* a tag off the deck's spacing - firstmate's, at the helm - stacks one line up */
-.bub.alt{bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep) + var(--figH,62px) + 38px)}
-.bub.mini .who{white-space:nowrap;overflow-wrap:normal}
-/* a far deck of a crowded ship, on a narrow screen, keeps only its pennant */
-@media(max-width:640px){.bub.far .who{font-size:0;text-overflow:clip}.bub.far .pennant{margin:0}}
-.bub.open{z-index:20}
-.crewcard{position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%);z-index:20;
-  width:max-content;max-width:min(340px,86vw);padding:8px 11px;text-align:left;pointer-events:auto;
-  background:#0c131b;border:1px solid var(--bubEdge,#2c3f52);border-radius:10px;
-  box-shadow:0 10px 26px rgba(0,0,0,.6)}
-.crewcard[hidden]{display:none}
-.crewcard dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;margin:0}
-.crewcard dt{font:600 13px var(--mono);color:#7f9db5}
-.crewcard dd{margin:0;font-size:13px;color:#dbe8f4;overflow-wrap:anywhere}
-.crewcard dd.job{display:block;margin:0;-webkit-line-clamp:unset;color:var(--brass,#d9a441)}
-/* T-127: a model other than the one requested is the warning colour, the
-   same one a failed gate uses, with both names in the text itself */
-.crewcard dd.cvendor.warn{color:#e0967d;font-weight:650}
-.crewcard dd.cmodel.warn{color:#e0967d;font-weight:650}
-.crewcard a[data-pr]{color:inherit;pointer-events:auto}
-.crewcard .att,.roster .att{color:#7f9db5;font-size:13px}
-/* the roster: one row per crew member, one column per field */
+.roster .att{color:#7f9db5;font-size:13px}
 .roster h3 .rgroupbtn{margin-left:auto;margin-right:10px;font:650 11px var(--mono);color:#9dc0d8;cursor:pointer;
   background:rgba(9,20,30,.72);border:1px solid #27455e;border-radius:99px;padding:1px 9px}
 .roster h3 .rgroupbtn[aria-pressed="true"]{background:#1d4b7a;border-color:#1d4b7a;color:#fff}
 .roster .rhead,.roster li.rrow{display:grid;align-items:center;column-gap:10px;
   grid-template-columns:8px minmax(70px,1fr) minmax(62px,.7fr) minmax(80px,1fr) minmax(70px,.8fr)
-    minmax(70px,.8fr) minmax(44px,.5fr) minmax(64px,.7fr) minmax(44px,.5fr) minmax(0,2.6fr);
-  grid-template-areas:"av nm rl pj rv rm rd st pr jb"}
+    minmax(70px,.8fr) minmax(64px,.7fr) minmax(44px,.5fr) minmax(64px,.7fr) minmax(44px,.5fr) minmax(0,2.6fr);
+  grid-template-areas:"av nm rl pj rv rm rc rd st pr jb"}
 .roster .rhead{padding:5px 13px;border-bottom:1px solid var(--line);background:rgba(9,20,30,.5)}
 .roster .rhead>:first-child{grid-column:2}
 .roster .rhead .rsort,.roster .rhead .rcol{font:650 11px var(--mono);letter-spacing:.04em;color:#7f9db5;
@@ -412,24 +69,44 @@
 .roster .rhead .rsort[aria-pressed="true"]{color:var(--brass,#d9a441);text-decoration:underline}
 .roster ul.rows{grid-template-columns:minmax(0,1fr)}
 .roster li.rrow .l1{display:contents}
-.roster li.rrow .av{grid-area:av}.roster li.rrow .nm{grid-area:nm}.roster li.rrow .rl{grid-area:rl}
-.roster li.rrow .pj{grid-area:pj}.roster li.rrow .rd{grid-area:rd}.roster li.rrow .st{grid-area:st;justify-self:start}
-.roster li.rrow .rv{grid-area:rv}.roster li.rrow .rm{grid-area:rm}
-.roster li.rrow .rpr{grid-area:pr;margin-left:0}.roster li.rrow .jb{grid-area:jb}
-.roster .rl,.roster .pj,.roster .rd,.roster .rv,.roster .rm{font-size:13px;color:#c6d8e8;min-width:0;overflow-wrap:anywhere}
-/* T-127: the vendor and model the round actually ran on; the warning colour
-   is the same one a failed gate uses, so a mismatch reads as a problem */
+.roster li.rrow .av{grid-area:av}
+.roster li.rrow .nm{grid-area:nm}
+.roster li.rrow .rl{grid-area:rl}
+.roster li.rrow .pj{grid-area:pj}
+.roster li.rrow .rd{grid-area:rd}
+.roster li.rrow .st{grid-area:st;justify-self:start}
+.roster li.rrow .rv{grid-area:rv}
+.roster li.rrow .rm{grid-area:rm}
+.roster li.rrow .rpr{grid-area:pr;margin-left:0}
+.roster li.rrow .jb{grid-area:jb}
+.roster .rl,.roster .pj,.roster .rd,.roster .rv,.roster .rm,.roster .rc{font-size:13px;color:#c6d8e8;min-width:0;overflow-wrap:anywhere}
 .roster .rv.warn{color:#e0967d;font-weight:650}
 .roster .rm.warn{color:#e0967d;font-weight:650}
 .roster h4.rgroup{margin:0;padding:6px 13px;font:650 12px var(--mono);color:#c6d8e8;
   background:rgba(217,164,65,.05);border-top:1px solid var(--line)}
 .roster h4.rgroup span{color:#7f9db5}
-/* on a phone each row is two lines of the same cells, each labelled */
 @media(max-width:640px){
   .roster .rhead .rcol,.roster .rhead .rsort[data-sort="task"]{display:none}
   .roster .rhead{display:flex;flex-wrap:wrap;gap:4px 12px}
   .roster li.rrow{grid-template-columns:8px minmax(0,1fr) auto auto auto;row-gap:4px;
-    grid-template-areas:"av nm rl pj st" ". jb jb rd pr" ". rv rv rm rm"}
+    grid-template-areas:"av nm rl pj st" ". jb jb rd pr" ". rv rm rc rc"}
   .roster li.rrow [data-label]::before{content:attr(data-label) " ";display:block;
     font:600 11px var(--mono);color:#7f9db5}
 }
+.roster li.rrow .rc{grid-area:rc}
+.roster .cwindow{display:block;font-size:13px;color:#9dbdd6}
+.roster li.st-unknown{--av:#566777;--bubEdge:#566777}
+.roster li[data-role="fm"] .av{border-radius:0}
+.roster li[data-role="w"] .av{border-radius:50%}
+.roster li[data-role="r"] .av{border-radius:2px;transform:rotate(45deg)}
+.roster li[data-role="unknown"] .av{background:#e0967d;border:1px solid #f2b544}
+.rosterbar{display:flex;justify-content:flex-end;align-items:center;gap:12px;min-height:44px;font:650 13px var(--mono);color:#9dc0d8}
+.rosterbar .toggle{min-height:44px;padding:3px 11px;font:inherit;cursor:pointer;border-radius:99px;
+  background:rgba(9,20,30,.72);color:#9dc0d8;border:1px solid #27455e}
+.rosterbar .toggle[aria-pressed="true"]{background:#1d4b7a;border-color:#1d4b7a;color:#fff}
+.capstage .capimg{position:absolute;left:50%;bottom:84px;width:92px;height:auto;margin-left:-46px}
+.capstage .capimg[hidden]{display:none}
+.capstage[data-pose="idle"] .capimg{filter:none;transform:none}
+.capstage[data-pose="ready"] .capimg{filter:drop-shadow(0 0 6px var(--brass));transform:none}
+.capstage[data-pose="order"] .capimg{filter:drop-shadow(0 0 6px var(--brass));transform:translateY(-6px)}
+@media(prefers-reduced-motion:reduce){.capstage[data-pose="order"] .capimg{transform:none}}

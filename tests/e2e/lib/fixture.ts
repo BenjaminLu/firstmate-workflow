@@ -61,10 +61,14 @@ export function writeTasks(root: string, tasks: any[]) {
 // CI builds before starting Playwright. Direct e2e invocations can locate that
 // output, or build in an isolated copy so parallel workers never share scratch.
 let voyageBundle: string | undefined;
+let captainSprite: Buffer;
 function liveBundle(): string {
   if (voyageBundle !== undefined) return voyageBundle;
   const artifact=join(ROOT,'board/public/voyage2d/index.html');
-  if (existsSync(artifact)) return voyageBundle=readFileSync(artifact,'utf8');
+  if (existsSync(artifact) && existsSync(join(ROOT,'board/public/voyage2d/captain.webp'))) {
+    captainSprite=readFileSync(join(ROOT,'board/public/voyage2d/captain.webp'));
+    return voyageBundle=readFileSync(artifact,'utf8');
+  }
   const buildRoot=mkdtempSync(join(tmpdir(),'fm-voyage-build-'));
   try {
     cpSync(join(ROOT,'games/voyage-2d'),join(buildRoot,'games/voyage-2d'),{
@@ -72,6 +76,7 @@ function liveBundle(): string {
     });
     const result=spawnSync('bash',[join(buildRoot,'games/voyage-2d/tools/prepare-board.sh'),buildRoot],{encoding:'utf8'});
     if(result.status!==0) throw new Error(`Live bundle build failed: ${result.stderr} ${result.stdout}`);
+    captainSprite=readFileSync(join(buildRoot,'board/public/voyage2d/captain.webp'));
     return voyageBundle=readFileSync(join(buildRoot,'board/public/voyage2d/index.html'),'utf8');
   } finally {rmSync(buildRoot,{recursive:true,force:true});}
 }
@@ -84,6 +89,7 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   cpSync(join(ROOT, "board"), join(d, "board"), { recursive: true });
   mkdirSync(join(d,"board/public/voyage2d"),{recursive:true});
   writeFileSync(join(d,"board/public/voyage2d/index.html"),bundle);
+  writeFileSync(join(d,"board/public/voyage2d/captain.webp"),captainSprite);
   cpSync(join(ROOT, "i18n"), join(d, "i18n"), { recursive: true });
   cpSync(join(ROOT, "design/tasks"), join(d, "design/tasks"), { recursive: true });
   mkdirSync(join(d, 'bin'));

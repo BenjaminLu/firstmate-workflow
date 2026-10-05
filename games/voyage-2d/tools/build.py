@@ -58,6 +58,11 @@ if live:
     temporary = target.with_suffix('.tmp')
     temporary.write_text(out)
     temporary.replace(target)
+    sprite = json.loads(Path("bake/sprites.json").read_text())["crew"]["captain"]["facings"]["f"]["whole"]["img"]
+    portrait = target.with_name("captain.webp")
+    temporary = portrait.with_suffix('.tmp')
+    temporary.write_bytes(base64.b64decode(sprite.split(',', 1)[1], validate=True))
+    temporary.replace(portrait)
 
 else:
     output.parent.mkdir(parents=True, exist_ok=True)

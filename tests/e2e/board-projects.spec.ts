@@ -51,9 +51,9 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     }
     await expect(lane('alpha').locator('.t')).toHaveText('alpha one');
     await expect(lane('beta').locator('.t')).not.toContainText('beta one');
-    // crew bubbles: each crewman says whose task it is on
-    await expect(page.locator('[data-bubble="worker-a"] .pchip')).toHaveText('alpha');
-    await expect(page.locator('[data-bubble="worker-b"] .pchip')).toHaveText('beta');
+    // crew roster: each crewman says whose task it is on
+    await expect(page.locator('[data-roster="worker-a"] .pchip')).toHaveText('alpha');
+    await expect(page.locator('[data-roster="worker-b"] .pchip')).toHaveText('beta');
     // decision cards: every project's in one list, oldest first, each with its chip
     await expect(page.locator('#pcount')).toHaveText('2');
     await expect(page.locator('#deck > .dcard')).toHaveAttribute('id', 'card-D-beta-T001-1');
@@ -92,8 +92,8 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await page.goto(`${b.url}/?lang=en&project=alpha`);
     await expect(page.locator('[data-task="T-001"]')).toHaveCount(1);
     await expect(page.locator('[data-task="T-001"]')).toHaveAttribute('data-project', 'alpha');
-    await expect(page.locator('[data-bubble="worker-b"]')).toHaveCount(0);
-    await expect(page.locator('[data-bubble="worker-a"]')).toHaveCount(1);
+    await expect(page.locator('[data-roster="worker-b"]')).toHaveCount(0);
+    await expect(page.locator('[data-roster="worker-a"]')).toHaveCount(1);
     await expect(page.locator('#pcount')).toHaveText('1');
   } finally { rmSync(hold, {force:true}); await stopBoard(b); }
 });
@@ -221,7 +221,7 @@ test('a board of one project shows no project chip anywhere, and says a merge ou
   try {
     await page.goto(`${b.url}/?lang=en`);
     await expect(page.locator('[data-task="T-1"]')).toHaveCount(1);
-    await expect(page.locator('[data-bubble="worker-a"]')).toHaveCount(1);
+    await expect(page.locator('[data-roster="worker-a"]')).toHaveCount(1);
     await expect(page.locator('#history .history-cards .card', {hasText:'T-3'})).toHaveCount(1);
     // the owned id shows its project as it did before this task: plain text
     await expect(page.locator(`#card-${owned} > .meta`)).toHaveText(`${owned} · fixture · T-1`);

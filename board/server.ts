@@ -2085,7 +2085,7 @@ const serveFile = (name: string) => {
   // the real file, not wherever a link in the tree points
   const real = realpathSync(p), pub = realpathSync(base);
   if (!real.startsWith(pub + "/") || !statSync(real).isFile()) return new Response("not found", { status: 404 });
-  const type = name.endsWith(".css") ? "text/css"
+  const type = name.endsWith(".webp") ? "image/webp" : name.endsWith(".css") ? "text/css"
     : name.endsWith(".js") ? "text/javascript" : "text/html; charset=utf-8";
   const body = name === "index.html"
     ? readFileSync(real, "utf8").replace('data-default-language="en"', `data-default-language="${DEFAULT_LANGUAGE}"`)
