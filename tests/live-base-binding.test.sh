@@ -130,11 +130,11 @@ for mode in base head; do
 done
 for control in VIEW_BASE_NAME VIEW_HEAD FETCHED_PULL_HEAD LOCAL_TASK_HEAD PR_STATE; do
   case "$control" in
-    VIEW_BASE_NAME) values='other-base'; reason='base' ;;
-    VIEW_HEAD) values="$OLD_BASE"; reason='head' ;;
-    FETCHED_PULL_HEAD) values="$OLD_BASE"; reason='fetched head' ;;
-    LOCAL_TASK_HEAD) values="$OLD_BASE"; reason='local task ref' ;;
-    PR_STATE) values='CLOSED MERGED'; reason='not open' ;;
+    VIEW_BASE_NAME) values='other-base'; reason='PR base name differs from reviewed base name' ;;
+    VIEW_HEAD) values="$OLD_BASE"; reason='authoritative PR head differs from reviewed head' ;;
+    FETCHED_PULL_HEAD) values="$OLD_BASE"; reason='fetched head differs from reviewed head' ;;
+    LOCAL_TASK_HEAD) values="$OLD_BASE"; reason='local task ref differs from reviewed head' ;;
+    PR_STATE) values='CLOSED MERGED'; reason='PR is not open' ;;
   esac
   for value in $values; do
     export "$control=$value"

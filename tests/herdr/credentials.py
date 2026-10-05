@@ -147,10 +147,11 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         self.assertEqual(0,answer.returncode,answer.stderr)
         self.assertNotIn('authoritative head unknown or stale', answer.stdout + answer.stderr)
         # Autopilot verifies before gates and launch, then review verifies before preparation,
-        # after the CI wait and before publication. Each review verification
-        # also resolves or rechecks the live base through base mode.
+        # after the CI wait and before publication. The first two review checks
+        # also recheck the live base. The final review-final check fetches only the
+        # PR head and binds the head and base name without requiring base freshness.
         pair = ['refs/pull/35/head', 'refs/heads/main']
-        self.assertEqual(pair * 2 + (pair + ['refs/heads/main']) * 3,
+        self.assertEqual(pair * 2 + (pair + ['refs/heads/main']) * 2 + ['refs/pull/35/head'],
                          (self.repo/'binding-fetches').read_text().splitlines())
         self.assertEqual({'worker','reviewer'},{json.loads(p.read_text())['role'] for p in self.results()})
 
