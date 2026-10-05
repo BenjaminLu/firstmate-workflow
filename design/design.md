@@ -484,6 +484,12 @@ ownership evidence on restart, never a PID/directory polling loop.
   already moved. A later pushed reconciliation or bounded GitHub retry may
   resolve it; no local liveness polling is introduced.
 
+The board's existing re-read of its own decision records, looking only for a
+record still saying `running`, never stops the board on failure: a failed read
+skips that tick (logged once per distinct error) and retries on the next; this
+is a read of the board's own records, not liveness polling of a helper or its
+directories, so completion and ownership remain writer-pushed as stated above.
+
 A board that is down starts no merges, so a turn held while it is down holds
 back nothing that could have run.
 
