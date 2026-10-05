@@ -229,16 +229,16 @@ git() { printf '%s\\n' "$*" >> "$work/gitcalls"; command git "$@"; }
 
     def test_gate_unreadable_policy_replays_clean_branch(self):
         self.base_moves()
-        self.assert_gate_unreadable_policy_replays(True)
+        self.check_gate_unreadable_policy_replays(True)
 
     def test_gate_unreadable_policy_replays_conflicting_merge(self):
         self.base_moves('conflict')
         self.git('merge', '--no-ff', '--no-commit', 'main', check=False)
         (self.tree / 'app').write_text('both intentions\n')
         self.commit('resolved merge')
-        self.assert_gate_unreadable_policy_replays(False)
+        self.check_gate_unreadable_policy_replays(False)
 
-    def assert_gate_unreadable_policy_replays(self, success):
+    def check_gate_unreadable_policy_replays(self, success):
         gate = function(root / 'bin/fm-gate.sh', 'gate2')
         # Even a failed reader that printed a recognized method cannot shortcut.
         p = self.run_body(gate + '\nBRANCH=task; gate2',
