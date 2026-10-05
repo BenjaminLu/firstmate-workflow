@@ -67,6 +67,13 @@ prompt="${2-}"; tree="${3-}"; log="${4-}"
 [ -f "$prompt" ] || { echo "cursor-agent: no prompt at $prompt" >&2; exit 64; }
 [ -d "$tree" ]   || { echo "cursor-agent: no worktree at $tree" >&2; exit 64; }
 fm_adapter_context "$0"
+# Plan B (2026-10-05): keep the crew keychain deny and keep Cursor's login
+# in memory. This undocumented switch accepts file, memory or default;
+# default uses the macOS keychain, and file would persist credentials.
+# It also prevents the unconfined model check reading the operator's agent
+# login: without CURSOR_API_KEY already in this environment it exits 1 and
+# listcheck stays silent. The round's own model-refusal check decides then.
+export AGENT_CLI_CREDENTIAL_STORE=memory
 
 command -v cursor-agent >/dev/null 2>&1 || {
   # stderr, not the log: the log is what the VENDOR said, and a caller that

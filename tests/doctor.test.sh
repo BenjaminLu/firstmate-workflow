@@ -71,6 +71,29 @@ run_doctor() { "$DOCTOR" --facts "$facts" --repo "$repo" "$@"; }
 assert_eq "0" "$?" "the real collector emits facts without judging the host"
 assert_contains "$(cat "$d/collected")" $'host\tos\t' "the collector records the host platform"
 
+# This fake PATH exercises collection, never judging; the CLI symlink follows
+# Cursor's moving versions directory without naming anything on the host.
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+collector_tools="$d/collector-tools"; mkdir -p "$collector_tools"
+fixture_path "$collector_tools" 'claude codex gemini cursor-agent agent herdr mise bun node jq gh shellcheck' || exit 1
+cursor_version_dir="$d/versions/2026.10.01-e373342"
+mkdir -p "$cursor_version_dir"
+printf '#!/usr/bin/env bash\nprintf "2026.10.01-e373342\\n"\n' > "$cursor_version_dir/cursor-agent"
+chmod +x "$cursor_version_dir/cursor-agent"
+ln -s "$cursor_version_dir/cursor-agent" "$collector_tools/cursor-agent"
+printf 'const store = "AGENT_CLI_CREDENTIAL_STORE";\n' > "$cursor_version_dir/index.js"
+collected="$(PATH="$collector_tools" "$DOCTOR" --collect --repo "$repo")"
+assert_contains "$collected" $'bundle\tcursor-agent\tnames' "collector resolves the cursor symlink and finds the store switch"
+assert_eq 1 "$(grep -c $'^bundle\tcursor-agent\t' <<<"$collected")" "collector emits exactly one cursor bundle row"
+printf 'const store = "default";\n' > "$cursor_version_dir/index.js"
+collected="$(PATH="$collector_tools" "$DOCTOR" --collect --repo "$repo")"
+assert_contains "$collected" $'bundle\tcursor-agent\tabsent' "collector detects a bundle without the switch"
+rm "$collector_tools/cursor-agent"
+collected="$(PATH="$collector_tools" "$DOCTOR" --collect --repo "$repo")"
+# Regression guard: no installed cursor means no bundle row, also on base.
+assert_lacks "$collected" $'bundle\tcursor-agent\t' "collector emits no bundle row for missing cursor"
+
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "Toolchain" "doctor prints a toolchain section"
 assert_contains "$out" "+ fm-test-sandbox" "the sandbox tool checked is the one FM_SANDBOX_TOOL names, as fm-sandbox.sh uses"
@@ -182,6 +205,37 @@ assert_contains "$out" "x codex" "an unauthenticated vendor is reported x, not o
 assert_contains "$out" "codex login" "with codex's own fix"
 assert_eq "1" "$rc" "and it is what makes doctor's own exit code bad"
 missing codex
+
+# T-197: judge only supplied facts, including bundle observations.
+tool cursor-agent 2026.10.01
+fact probe cursor-agent authenticated "cursor-agent's model list confirms the crew Cursor API key" "登入已確認"
+# Regression guard: no bundle row from an older collector passes on base.
+out="$(run_doctor)"
+cursor_baseline="$(grep -E '^  [ +!x]+cursor-agent ' <<<"$out")"
+assert_contains "$cursor_baseline" '+ cursor-agent' "legacy facts still report the cursor login"
+assert_eq 1 "$(wc -l <<<"$cursor_baseline" | tr -d ' ')" "legacy facts add no bundle line"
+# Regression guard: names adds no diagnosis and passes on base.
+fact bundle cursor-agent names
+out="$(run_doctor)"
+assert_eq "$cursor_baseline" "$(grep -E '^  [ +!x]+cursor-agent ' <<<"$out")" "a supported bundle adds no line"
+fact bundle cursor-agent absent
+out="$(run_doctor)"; rc=$?
+assert_contains "$out" 'x cursor-agent' "an absent memory-store switch is bad"
+assert_contains "$out" 'installed cursor-agent 2026.10.01 no longer names AGENT_CLI_CREDENTIAL_STORE; crew rounds would stall on keychain writes, so the probe refuses it; pin or reinstall a version that has it' "doctor names the incompatible version and repair"
+assert_eq 1 "$rc" "an unsupported cursor bundle makes doctor bad"
+fact bundle cursor-agent unreadable
+out="$(run_doctor)"; rc=$?
+assert_contains "$out" '! cursor-agent' "an unreadable bundle is a warning"
+assert_contains "$out" 'could not read the installed cursor-agent bundle to check it still names AGENT_CLI_CREDENTIAL_STORE' "doctor explains an unreadable bundle"
+assert_eq 0 "$rc" "an unreadable bundle warning alone is not bad"
+# Regression guard: missing cursor has only its missing line, even with stale bundle data.
+fact bundle cursor-agent absent
+missing cursor-agent
+out="$(run_doctor)"
+cursor_missing="$(grep -E '^  [ +!x]+cursor-agent ' <<<"$out")"
+assert_contains "$cursor_missing" 'missing: not installed' "missing cursor retains its existing diagnosis"
+assert_eq 1 "$(wc -l <<<"$cursor_missing" | tr -d ' ')" "missing cursor adds no bundle diagnosis"
+assert_lacks "$out" 'AGENT_CLI_CREDENTIAL_STORE' "missing cursor ignores stale bundle facts"
 
 # --- too old: a vendor CLI older than the oldest version known to have the
 # status check the probe runs, and herdr older than 0.9.1 (T-078, folded in)
