@@ -115,11 +115,25 @@ A named worker vendor retains its existing chain; explicit `--vendor` selects
 that vendor alone. The reviewer remains explicitly `vendor: claude`.
 
 `fm-session.sh start` and `status` refresh `state/session/host.json` beside
-the other session records. External project records live under
+the other session records, except when `FM_IN_ROUND` or `FM_RUN_DIR` is non-empty:
+rounds never refresh it. Positive detection replaces the record with
+`confirmed: true`, including when firstmate switches harnesses. Unknown detection
+never replaces a known harness with null: the same known session leaves the file
+byte-identical; another or unknown session keeps the recorded facts and marks
+`confirmed: false`, retaining the first `unconfirmed_since` time. Collector
+failure also preserves an existing record. A legacy record without `confirmed`
+is treated as confirmed; no migration is needed.
+The record includes `session` (owner pid and process start time), detection
+`source` (`env`, `owner`, `claudecode`, or null), and `written_by` (writer pid and
+up to 200 characters of its parent's command). Unknown detection across sessions
+adds `last_unknown` without replacing the original provenance. Session start/status
+and `opposite-of-host` resolution warn on stderr about an unconfirmed known host;
+the board marks its vendor unconfirmed in both the crew card and roster. Routing
+still uses that recorded harness. External project records live under
 `FM_HOME/projects/<name>/state/session/host.json`, never in the target repository.
 Board launches use the board's owning session record across projects; other
 launches use their project's record, falling back to the engine session's.
-The collector reuses `fm_hooks.detect()` (`FM_HARNESS` overrides detection),
+The collector reuses `fm_hooks.detect_source()` (`FM_HARNESS` overrides detection),
 records the CLI's own version output, and reads models only from harness-owned
 settings with a `model_source`. Claude settings are read in user, project,
 then local order; Codex reads its own `CODEX_HOME/config.toml` (default
@@ -2800,7 +2814,13 @@ of delivery, `state/session/acknowledged/<id>.json`, written by
 below when it takes a wake, so a wake the hook delivered is neither listed
 nor returned by `wait` again, and one acknowledged here is not handed to
 the hook. Observations the
-retired watcher wrote under `state/session/observed/` are still read.
+retired watcher wrote under `state/session/observed/` are still read. Their current
+decision fields replace the frozen receipt fields when readable. A chosen decision
+is omitted when its merge is `merged` with `merge_settled`, or its task has a
+`merged`/`closed` event with no later captain `reopened` event carrying a non-empty
+reason. Unanswered or unsettled decisions stay listed; missing or unreadable
+decisions retain the receipt's fields. This read never writes acknowledgements or
+edits, moves or deletes observations. Wake-queue items are not filtered this way.
 
 *Waking the harness (T-137).* Every event that needs firstmate is pushed by
 its writer through `fm_lifeline.py push` (append, then ring): `fm-worker.sh`

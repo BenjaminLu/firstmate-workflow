@@ -2014,7 +2014,39 @@ def unacknowledged(root):
     for path in sorted((base / 'observed').glob('*.json')):
         if path.stem in latest: continue
         receipt = read(path)
-        latest[path.stem] = dict(id=receipt.get('id', path.stem), decision=receipt.get('decision') or {},
+        answer = receipt.get('decision') or {}
+        try:
+            current = read(record_root(root) / 'state/decisions' / path.name)
+        except (OSError, ValueError):
+            current = None
+        if isinstance(current, dict):
+            answer = current
+            settled = (answer.get('kind') == 'merge' and answer.get('merge') == 'merged'
+                       and answer.get('merge_settled'))
+            terminal = False
+            task = answer.get('task')
+            if task and answer.get('chosen') and not settled:
+                try:
+                    lines = (record_root(root) / 'state/events.jsonl').read_text().splitlines()
+                except OSError:
+                    lines = []
+                for line in lines:
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict) or event.get('task') != task:
+                        continue
+                    if event.get('type') in ('merged', 'closed'):
+                        terminal = True
+                    elif event.get('type') == 'reopened' and event.get('actor') == 'captain':
+                        data = event.get('data')
+                        reason = data.get('reason') if isinstance(data, dict) else None
+                        if isinstance(reason, str) and reason.strip():
+                            terminal = False
+            if answer.get('chosen') and (settled or terminal):
+                continue
+        latest[path.stem] = dict(id=receipt.get('id', path.stem), decision=answer,
                                  woken=receipt.get('observed'), reason='observed')
     found = []
     committed = lifeline().acknowledged_many(root, latest) if latest else {}
