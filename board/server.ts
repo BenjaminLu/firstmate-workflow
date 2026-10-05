@@ -798,6 +798,7 @@ const buildState = (only: string | null) => {
     taskIds.push({ project: list.project, id: String(d.id) });
   }
   const ek = (e: Event) => keyOf(projectOf(e), e.task);
+  const firstDecision = new Map<string, { en: string; tw: unknown }>();
   const stage = new Map<string, string>();
   const pr = new Map<string, number>();
   // merged and closed are where a task stops. Anything said about it
@@ -840,6 +841,10 @@ const buildState = (only: string | null) => {
     spokeAt.set(actor, index);
     if (!e.task) continue;
     const k = ek(e);
+    const summary = e.summary as { en?: unknown; "zh-TW"?: unknown } | undefined;
+    if (e.type === "decision_requested" && typeof summary?.en === "string" && !firstDecision.has(k)) {
+      firstDecision.set(k, { en: summary.en, tw: summary["zh-TW"] });
+    }
     const at = Date.parse(String(e.ts ?? ""));
     if (e.type === "review_opened" && Number.isFinite(at)) reviewFrom.set(actor, { k, ts: at });
     if (e.type === "approved" || e.type === "review_failed") {
@@ -974,6 +979,61 @@ const buildState = (only: string | null) => {
     if (s !== "untouched") return s;
     return blockersOf(id).length ? "backlog" : "ready";
   };
+  // Resolve once per task in this request, from its own project's records.
+  // Only the newest numeric pin is a source; a broken one advances to the
+  // proposal or decision, rather than reviving an older approved title.
+  const nonemptyTitle = (value: unknown): string | null =>
+    typeof value === "string" && value.trim() ? value : null;
+  const titleRecord = (file: string): any => {
+    try {
+      if (!lstatSync(file).isFile()) return null; // lstat never follows a symlink
+      return JSON.parse(readFileSync(file, "utf8"));
+    } catch { return null; }
+  };
+  const titleDirectory = (dir: string): boolean => {
+    try { return lstatSync(dir).isDirectory(); } catch { return false; }
+  };
+  const decisionTitle = (value: unknown, taskId: string): string | null => {
+    if (typeof value !== "string") return null;
+    let line = value.split(/\r?\n/, 1)[0].replace(/^(?:Dispatch |派工 )/, "");
+    for (const colon of [":", "："]) {
+      if (line.startsWith(taskId + colon)) {
+        line = line.slice(taskId.length + colon.length).trimStart();
+        break;
+      }
+    }
+    const chars = Array.from(line);
+    return nonemptyTitle(chars.length > 200 ? chars.slice(0, 200).join("") + "…" : line);
+  };
+  const taskTitle = (project: string, taskId: string, defined: unknown) => {
+    let title = nonemptyTitle(defined);
+    if (!title && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(taskId) && !taskId.includes("..")) {
+      const dir = stateDir(project);
+      const pins = join(dir, "pins"), taskPins = join(pins, taskId);
+      if (titleDirectory(pins) && titleDirectory(taskPins)) {
+        try {
+          const names = readdirSync(taskPins).filter(name => /^\d+\.json$/.test(name));
+          names.sort((a, b) => {
+            const av = BigInt(a.slice(0, -5)), bv = BigInt(b.slice(0, -5));
+            return av > bv ? -1 : av < bv ? 1 : a.localeCompare(b);
+          });
+          if (names.length) {
+            const pin = titleRecord(join(taskPins, names[0]));
+            const spec = pin?.snapshots?.spec?.text;
+            if (typeof spec === "string") title = nonemptyTitle(JSON.parse(spec)?.title);
+          }
+        } catch { /* missing, unreadable or malformed pins fall through */ }
+      }
+      const proposals = join(dir, "skill-updates");
+      if (!title && titleDirectory(proposals)) {
+        title = nonemptyTitle(titleRecord(join(proposals, `${taskId}.json`))?.title);
+      }
+    }
+    if (title) return { title, title_tw: null };
+    const decision = firstDecision.get(keyOf(project, taskId));
+    title = decisionTitle(decision?.en, taskId);
+    return { title, title_tw: title ? decisionTitle(decision?.tw, taskId) : null };
+  };
   const tasks = taskIds.map(({ project, id: taskId }) => {
     const id = keyOf(project, taskId);
     const d = definitions.get(id) || {};
@@ -985,7 +1045,7 @@ const buildState = (only: string | null) => {
     // whose task it is: a project's name is data, shown as it is written.
     // `key` is the one string that tells two projects' T-004 apart.
     project: project || null, key: `${project}/${taskId}`,
-    title: typeof d.title === 'string' ? d.title : null, milestone: d.milestone ?? null,
+    ...taskTitle(project, taskId, d.title), milestone: d.milestone ?? null,
     depends_on: depends.map(idOfKey),
     stage: at,
     pr: pr.get(id) ?? null,
@@ -996,12 +1056,12 @@ const buildState = (only: string | null) => {
     // the plan nor the log knows is unknown, not ready.
     blocked_by: blockedOn.map((dep) => ({ id: idOfKey(dep),
       stage: definitions.has(dep) || stage.has(dep) ? laneOf(dep) : "unknown" })),
-    // only work the plan lists can be set aside: a task the log alone knows
-    // about is not the captain's to park. Any final task can be reopened.
+    // A task the log alone knows can only be dropped, clearing stale work
+    // without a plan entry. Any final task can be reopened.
     // A parked task whose card is pending stays in the captain's lane, and
     // offers what a parked task offers: unpark, not a second park.
-    actions: FINAL.has(at) || definitions.has(id)
-      ? (ACTIONS[at === "captain" && parked.has(id) ? "parked" : at] ?? []) : [],
+    actions: FINAL.has(at) || definitions.has(id) || parked.has(id)
+      ? (ACTIONS[at === "captain" && parked.has(id) ? "parked" : at] ?? []) : ["drop"],
     // whether setting it aside asks first: crew aboard or an open pull
     // request, filled in once the crew is known below
     confirm: false,

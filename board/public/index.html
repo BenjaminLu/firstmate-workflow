@@ -503,9 +503,13 @@ function render(s) {
     : b.kind === 'decision' ? (b.options ? `${b.id} · ${t("optionsN").replace('{n}', b.options)}` : b.id)
     : b.kind === 'lost' ? t("lostCrew").replace('{name}', b.actor)
     : b.kind === 'parked' ? t("parkedPending") : '';
-  // a task the definitions do not list keeps its id and says the title is
-  // missing; it never borrows one
-  const title = task => `<div class="t${task.title ? '' : ' missing'}">${said(task.title || t("titleMissing"), task)}</div>`;
+  // The server supplies titles from the task's own definition, pin,
+  // skill-update proposal or first decision. The page never invents one.
+  const title = task => {
+    const text = (lang === 'zh-TW' || lang === 'zh-CN') && typeof task.title_tw === 'string' && task.title_tw.trim()
+      ? words(task.title_tw) : task.title;
+    return `<div class="t${text ? '' : ' missing'}">${said(text || t("titleMissing"), task)}</div>`;
+  };
   // a blocker the captain parked or dropped will not arrive by itself, so
   // the card says which it is
   const blocker = b => b.stage === 'parked' ? `${b.id} (${t('parked')})`

@@ -170,6 +170,21 @@ assert_eq "D-beta-T001-1|1" "$(jq -r '"\([.pending[].id]|join(" "))|\(.counts.wa
 assert_eq "4" "$(jq -r .counts.waiting <<<"$(sh_ '?project=alpha')")" "alpha's count is alpha's cards, the old ones included"
 assert_eq "5" "$(jq -r .counts.waiting <<<"$(sh_ '?project=..%2Fetc')")" "a filter that is no project's name filters nothing"
 
+# T-202: fallback titles stay inside the selected external project's view.
+emh --actor captain --task T-077 --type dispatched --project beta --en "pin task" --tw "釘選任務"
+mkdir -p "$private_state/pins/T-077"
+jq -cn '{snapshots:{spec:{text:({title:"beta pin title"}|tojson)}}}' > "$private_state/pins/T-077/1.json"
+emh --actor captain --task T-078 --type decision_requested --project beta --en "T-078: beta decided" --tw "T-078：beta 決定"
+aggregate_titles="$(sh_)"
+for id in T-077 T-078; do
+  assert_eq 'null|false' "$(jq -r --arg id "$id" '.tasks[]|select(.project=="beta" and .id==$id)|[.title,has("title_tw")]|map(tostring)|join("|")' <<<"$aggregate_titles")" "aggregate strips beta $id fallback titles"
+done
+assert_lacks "$aggregate_titles" 'beta pin title' "aggregate does not leak pin title"
+assert_lacks "$aggregate_titles" 'beta decided' "aggregate does not leak decision title"
+assert_eq 'beta pin title' "$(field_h beta T-077 .title)" "selected beta reads its pin title"
+assert_eq 'beta decided' "$(field_h beta T-078 .title)" "selected beta reads its decision title"
+assert_eq 'beta 決定' "$(field_h beta T-078 .title_tw)" "selected beta reads its Chinese decision title"
+
 # answering one project's card leaves every other card pending and in place
 assert_eq "200" "$(posth D-7 B)" "an old numeric card is answered"
 assert_eq "200" "$(posth D-SK-003 B)" "an old skill-update card is answered"

@@ -1621,15 +1621,22 @@ names, the pull request, `blocked on T-xxx` for a backlog task whose
 dependencies have not merged, and badges read only from events and pending
 records: the failed gate's number when the `gate_failed` event carries
 `data.gate`, an `ask_pass_criteria` not yet answered by `criteria_returned`,
-and a pending decision with the number of options it actually lists. A task
-absent from `design/tasks/` shows its id and an explicit missing-title
-label. The merged lane shows the latest few merges, newest first, and counts
-the rest into the history.
+and a pending decision with the number of options it actually lists. A task's
+title comes first from its `design/tasks/` definition, then its newest numeric
+dispatch pin, then its skill-update proposal, then the earliest
+`decision_requested` English summary (first line, dispatch and task-id prefixes
+removed, at most 200 characters plus an ellipsis), else the explicit missing-title
+label. Titles are read from the task's own project state; external project titles
+are sent only in that project's selected view, never in the engine-wide view.
+`title_tw` carries the Chinese summary when the title came from a decision,
+and is null for the other sources; the page converts it for zh-CN. The merged
+lane shows the latest few merges, newest first, and counts the rest into the
+history.
 
 **Park and drop (T-058, T-118).** The captain takes work they do not want run
-off the lanes on the board itself. Each unfinished card offers two
-actions, reachable both by dragging the card and by the `⋯` menu on it (the
-menu is also the keyboard path):
+off the lanes on the board itself. Each unfinished card listed in the plan
+offers two actions, reachable both by dragging the card and by the `⋯` menu
+on it (the menu is also the keyboard path):
 
 - **park** — reversible. The card moves to the collapsed *parked* group below
   the lanes. It comes back by the same two routes — *unpark* in its menu, or
@@ -1643,11 +1650,15 @@ menu is also the keyboard path):
 actor `captain`, like every other board write: park is `parked`, unpark is
 `unparked`, drop is the existing `closed`. The server says which actions each
 card offers (`actions`). Since T-118 the captain can set aside any unfinished
-task: `park`/`drop` in every lane but merged and closed (backlog, ready, work,
-gate, review and the captain's), `unpark`/`drop` for parked, and only
-`reopen` (below) for merged and closed. A task with crew aboard or a pull
-request open (`confirm: true` on the card) is set aside only once the
-captain has confirmed it in the page: the confirming step says whose crew is
+task listed in the plan: `park`/`drop` in every lane but merged and closed
+(backlog, ready, work, gate, review and the captain's), `unpark`/`drop` for
+parked, and only `reopen` (below) for merged and closed. A task the log knows but the plan does
+not list offers only `drop` (no park) in an active lane, `unpark` and `drop`
+if parked (for example by a card effect), and `reopen` once final, so the
+captain can clear stale definition-less work through the same confirmed path.
+A task with crew aboard or a pull request open (`confirm: true` on the card)
+is set aside only once the captain has confirmed it in the page: the confirming
+step says whose crew is
 stopped and that the pull request stays open, and the server refuses the
 request without `confirm: true` (409, `code: confirmRequired`); a reopening
 with no usable reason is 400, `code: reopenNeedsReason`. Every refusal code

@@ -141,6 +141,31 @@ assert_eq "403" "$(wcurl "$PORTF" -s -o /dev/null -w '%{http_code}' -X POST -H '
   "a body that is not declared JSON is refused, even with the credential, so a cross-site form cannot post it"
 assert_eq "$n5" "$(lines)" "and none of them writes anything"
 
+# T-202: log-only tasks use the same endpoint and confirmed stop path.
+emlog() { FM_ROOT="$f" "$f/bin/fm-emit.sh" --actor captain --task "$1" --type "$2" --en "Log-only task" --tw "只有紀錄的任務" "${@:3}" >/dev/null; }
+emlog T-LOGONLY decision_requested
+assert_eq "drop" "$(field T-LOGONLY '.actions|join(",")')" "log-only active task offers exactly drop"
+nlog="$(lines)"
+assert_eq "409" "$(act T-LOGONLY park)" "log-only task cannot be parked"
+assert_eq "$nlog" "$(lines)" "refused log-only park writes nothing"
+assert_eq "200" "$(act T-LOGONLY drop)" "log-only task can be dropped"
+assert_eq "closed" "$(field T-LOGONLY .stage)" "log-only drop closes task"
+assert_eq "closed captain T-LOGONLY" "$(jq -r '"\(.type) \(.actor) \(.task)"' <<<"$(last_event)")" "log-only drop records captain's closed event"
+assert_eq "reopen" "$(field T-LOGONLY '.actions|join(",")')" "closed log-only task offers reopen"
+emlog T-LOGPARK decision_requested
+emlog T-LOGPARK parked
+assert_eq "parked" "$(field T-LOGPARK .stage)" "log-only park event is retained"
+assert_eq "unpark,drop" "$(field T-LOGPARK '.actions|join(",")')" "parked log-only task offers unpark and drop"
+assert_eq "200" "$(act T-LOGPARK unpark)" "log-only task can be unparked"
+assert_eq "drop" "$(field T-LOGPARK '.actions|join(",")')" "unparked log-only task offers only drop"
+emlog T-LOGPR pr_opened --pr 71
+assert_eq "drop" "$(field T-LOGPR '.actions|join(",")')" "log-only task with PR offers drop"
+assert_eq "true" "$(field T-LOGPR .confirm)" "log-only open PR requires confirmation"
+nlog="$(lines)"
+assert_eq "409" "$(act T-LOGPR drop)" "log-only open PR drop without confirmation refused"
+assert_eq "confirmRequired" "$(jq -r .code "$f/resp")" "log-only refusal asks for confirmation"
+assert_eq "$nlog" "$(lines)" "refused log-only PR drop writes nothing"
+
 # the board never edits the plan
 assert_eq "$plan_before" "$(plan)" "design/tasks/ is untouched"
 
