@@ -5284,8 +5284,21 @@ authored details or merge-slot release reconsiders the head. An authoritative
 head race is re-read on the next poll, without a wake or retry. Gate-step
 failures retry at poll offsets 0, 1 and 3, then wake once with the error;
 a changed fingerprint starts a fresh retry series and wake identity.
-The remaining write-ahead classes are re-check, restack, review launch and PR
-events under `state/autopilot/`: completion marks them done; interruption or an
+PR events are decided by the event log alone: an event already in
+`events.jsonl` is never written again; a failed write retries at poll offsets
+0, 1 and 3, then wakes once. Terminal PRs are marked finished immediately;
+`event_pending` retains an unfinished event write until success or the third
+failure, including after the PR leaves the recent-closures list. Reviewer
+re-check requests are recorded per PR head in `rechecked` and completed when
+GitHub returns 201 or lists the reviewer as already requested, or the reviewer
+has reviewed that head. A 422 refusal wakes once with GitHub's message without
+retry; other failures retry at offsets 0, 1 and 3, then wake once.
+The one-time `migrated_t200` upgrade drops legacy pr-event, recheck and
+observed-merge actions with their undelivered wakes, marking a terminal PR
+whose pr-event action was not done as `event_pending` so its row is written by
+the normal retry series. Delivered wake files remain unchanged.
+The remaining write-ahead classes are restack and review launch under
+`state/autopilot/`: completion marks them done; interruption or an
 ambiguous result queues reconciliation rather than replaying the action.
 The one-time `migrated_t190` upgrade removes legacy update actions and their
 undelivered action wakes before recovery. `migrated_t193` similarly drops legacy
