@@ -35,7 +35,8 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 @media(max-width:1100px){.lanes{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:620px){.lanes{grid-template-columns:minmax(0,1fr)}}
 .lane.l-captain{border-color:#3a2a52}
-.card .hd{display:flex;justify-content:space-between;gap:6px}
+.card .hd{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px 6px}
+.card .hd .pchip{flex:0 1 auto;min-width:0;max-width:100%;align-self:center}
 .card .t.missing{color:var(--fg3);font-style:italic}
 .card .crew,.card .dep{font:13px var(--mono);color:var(--fg2);margin-top:4px}
 .card .dep{color:var(--warn)}
@@ -79,7 +80,7 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .lane h3 i{font-style:normal;background:var(--bg3);border-radius:99px;padding:0 7px;color:var(--fg2)}
 .card{background:var(--bg3);border:1px solid var(--line);border-left:3px solid var(--edge,#26323d);
   border-radius:8px;padding:8px 9px;margin-bottom:7px}
-.card .id{font:600 10.5px var(--mono);color:var(--fg3)}
+.card .id{font:600 10.5px var(--mono);color:var(--fg3);white-space:nowrap;flex:0 0 auto}
 .card .t{font-size:12px;line-height:1.35;margin-top:3px}
 .card .pr{font:600 10px var(--mono);color:var(--accent)}
 .s-working{--edge:#2f5478} .s-review{--edge:#5a3f7d} .s-gate{--edge:#7c322b}
