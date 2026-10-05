@@ -2742,6 +2742,12 @@ exits 1 when the timeout ends first. `watch` and `stop` are gone and say so.
 Board reuse is verified with a fresh random file under the requested root and
 the board's existing `/file?path=<relative-path>` endpoint. An HTTP response on
 the configured port is insufficient; a different or unverifiable root is refused.
+A verified board retains its recorded `board/` and `i18n/` tree identities on
+reuse. If the clean checkout differs, it is reused with an English and Chinese
+notice to stop the board process and run `fm board` by hand. Unknown or dirty
+checkout code produces no notice. Automatic board replacement, including safe
+handling of running merges, dispatches and send-back answers, is a separate
+follow-up.
 The bootstrap verifies HTTP page retrieval and reports whether `open` or
 `xdg-open` was invoked. It cannot verify browser navigation. Bun is required for
 the board. Nothing watches `state/decisions/`: the board pushes each wake as
@@ -5282,6 +5288,20 @@ project without an `autopilot/owner.json` receipt stays unstarted. Crew commands
 with `FM_IN_ROUND` start no service. Test sessions identified by
 `FIRSTMATE_CI_SESSION` skip automatic resume and startup unless the feature test
 sets `FM_AUTOPILOT_TEST_ENABLE=1`. Reviews still use visible Herdr dispatch.
+The service records its `bin/` and `skills/` tree identities. Once firstmate
+fast-forwards the engine checkout after a merge, the next `ensure` requests a
+reload when those committed trees differ. It drains running or consuming jobs,
+started actions, batches and unpushed wakes, then its old code hands off to a
+fresh snapshot without killing the service. If the new service cannot start,
+the old snapshot resumes and queues one bilingual failure wake; that failed
+code identity is never retried. Dirty code keeps the running snapshot, and the
+next operator `fm` command reports the reload outcome. Session startup uses the
+session's frozen copy, taken from the engine checkout moments earlier. HEAD
+can move between freezing and recording the identity; the next `ensure` detects
+subsequent differences and reloads. If committed autopilot code cannot import,
+`fm` reports autopilot unavailable and takes a fresh snapshot on each command,
+while the old service keeps serving. A pre-T-203 service needs one manual
+restart when no job is running or consuming; thereafter it reloads itself.
 
 Local event writers persist complete lines before ringing the service's own
 `state/session/autopilot.d/` FIFOs. These are separate from firstmate's

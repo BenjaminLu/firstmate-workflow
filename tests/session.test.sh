@@ -163,6 +163,72 @@ class Session(unittest.TestCase):
              patch.object(m.subprocess,'Popen') as spawn:
             with self.assertRaisesRegex(RuntimeError,'unverified root'): m.board_start(self.repo)
             self.assertFalse(spawn.called)
+    def test_board_code_notice_uses_its_own_git_fixture(self):
+        import contextlib, io
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary).resolve()
+            for folder in ('board', 'i18n'):
+                (repo / folder).mkdir()
+                (repo / folder / 'fixture').write_text('original')
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True,
+                                      capture_output=True, text=True)
+            git('init', '-q'); git('config', 'user.name', 'Board fixture')
+            git('config', 'user.email', 'board@example.invalid')
+            git('add', 'board', 'i18n'); git('commit', '-qm', 'initial')
+            with patch.object(m, 'configured_board_port', return_value=4173), \
+                 patch.object(m, 'board_open', return_value={}), \
+                 patch.object(m, 'board_matches', side_effect=[False, True, True]), \
+                 patch.object(m, 'http_get', side_effect=[OSError(), b'page']), \
+                 patch.object(m.shutil, 'which', return_value='/fixture/bun'), \
+                 patch.object(m, 'lifeline') as life:
+                life.return_value.session_owner.return_value = os.getpid()
+                life.return_value.start.return_value.poll.return_value = None
+                fresh = m.board_start(repo)
+                self.assertEqual(m.board_code_id(repo), fresh['code'])
+                self.assertEqual(life.return_value.start.call_count, 1)
+            original = fresh['code']
+            record_path = repo / 'state/session/board.json'
+            with patch.object(m, 'configured_board_port', return_value=4173), \
+                 patch.object(m, 'board_open', return_value={}), \
+                 patch.object(m, 'board_matches', return_value=True), \
+                 patch.object(m, 'http_get', return_value=b'page'), \
+                 patch.object(m, 'lifeline') as life, patch.object(m.os, 'kill') as kill:
+                for _ in range(2):
+                    reply = m.board_start(repo)
+                    self.assertEqual(original, reply['code'])
+                    self.assertNotIn('stale', reply)
+                (repo / 'board/fixture').write_text('changed')
+                git('add', 'board'); git('commit', '-qm', 'board changed')
+                reply = m.board_start(repo)
+                self.assertTrue(reply['reused']); self.assertTrue(reply['stale'])
+                self.assertEqual(original, reply['code'])
+                self.assertEqual({'en', 'zh-TW'}, set(reply['stale_reason']))
+                self.assertIn('restart it by hand', reply['stale_reason']['en'])
+                self.assertIn('請手動重啟', reply['stale_reason']['zh-TW'])
+                self.assertEqual(reply, json.loads(record_path.read_text()))
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    self.assertEqual(0, m.main(['board', str(repo)]))
+                self.assertEqual(['fm board: ' + reply['stale_reason'][lang] for lang in ('en', 'zh-TW')],
+                                 err.getvalue().splitlines())
+                git('revert', '--no-edit', 'HEAD')
+                reply = m.board_start(repo)
+                self.assertNotIn('stale', reply); self.assertNotIn('stale_reason', reply)
+                (repo / 'board/fixture').write_text('dirty')
+                self.assertNotIn('stale', m.board_start(repo))
+                git('checkout', '--', 'board')
+                record_path.write_text(json.dumps({'code': dict(original, dirty=True)}))
+                self.assertTrue(m.board_start(repo)['stale'])
+                for previous in (None, {'root': str(repo)}, {'code': None}):
+                    if previous is None: record_path.unlink()
+                    else: record_path.write_text(json.dumps(previous))
+                    self.assertNotIn('stale', m.board_start(repo))
+                self.assertNotIn('stale', m.board_start(self.repo))
+                self.assertEqual(life.return_value.start.call_count, 0)
+                self.assertEqual(kill.call_count, 0)
+
     def test_one_time_address_never_in_an_argument_list(self):
         # T-122: `ps` shows every process's arguments to every other; on macOS
         # the sign-in address goes to osascript on stdin, not in argv

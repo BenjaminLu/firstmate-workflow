@@ -224,7 +224,8 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   instead of duplicating it; only restart a stopped attempt with its review and
   current task context.
 - `bin/fm-autopilot.sh ensure --all --repo <root>` starts the session-owned
-  supervisor for each registered project. It observes PR events, runs gates on
+  supervisor for each registered project. A merged autopilot change reloads itself
+  after its running jobs finish, so firstmate never kills the service. It observes PR events, runs gates on
   worker heads, checks the standing-list protocol from round three, launches
   review after gate exit 7, and reruns gates when approval or CI changes.
   After all six gates pass it requests the merge card using your authored
