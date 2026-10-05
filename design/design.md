@@ -5111,7 +5111,14 @@ threads block readiness even after another reviewer approves. Confirmed optional
 Incomplete or unreadable collections remain unknown, never silently approved.
 
 The worker's bounded context pack supplements its approved local brief with these
-linked findings in every posting mode. External text cannot authorize a brief or
+linked findings in every posting mode. An approved brief is bound to project,
+task, round and head. The pack carries a firstmate brief to a later head in the
+same round only when the written head is an ancestor, no non-merge commits
+outside the base follow it, and the task's stable patch-id and file list are
+unchanged against their respective merge bases. This permits only merges of the
+base and states the head the brief was written for. Any other head change needs
+a new brief, as gate 7 needs a new review for a changed patch.
+External text cannot authorize a brief or
 waive coverage; firstmate verifies root causes before writing the approved brief.
 The reviewer gets the bounded external evidence without worker reasoning.
 `bin/fm-external.sh collect` exposes the same reader outside rounds, after

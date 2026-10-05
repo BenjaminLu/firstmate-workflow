@@ -224,11 +224,69 @@ class Collector:
         return failures, body + ('\nAssertion byte ranges:\n' + '\n'.join(evidence) if evidence else '')
 
 
+def brief_candidates(store, round_number, head):
+    return [r for r in reversed(store.records()) if r['kind'] == 'brief'
+            and r.get('authorized') is True and r['actor'] == 'firstmate'
+            and r['round'] == round_number and r['head'] != head]
+
+
+def brief_carry_failure(root, written_head, head, base):
+    """Return a fixed diagnostic, or None when the local history proves carry."""
+    base_ref = 'refs/remotes/origin/' + base
+    try:
+        from fm_binding import change, git
+
+        if written_head == head or any(not isinstance(value, str) or not re.fullmatch(
+                r'[0-9a-fA-F]{40}', value) for value in (written_head, head)):
+            return 'it could not be checked'
+        result = subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor',
+                                 written_head, head], capture_output=True, timeout=120)
+        if result.returncode == 1:
+            return 'it is not an ancestor of this head'
+        result.check_returncode()
+        result = subprocess.run(['git', '-C', str(root), 'rev-parse', '--verify', '--quiet',
+                                 base_ref + '^{commit}'], capture_output=True, timeout=120)
+        if result.returncode == 1:
+            return f'the base ref {base_ref} is unavailable'
+        result.check_returncode()
+        if git(root, 'rev-list', '--no-merges', head, '^' + written_head, '^' + base_ref):
+            return 'non-merge commits follow it'
+        before = change(root, written_head, git(root, 'merge-base', base_ref, written_head))
+        after = change(root, head, git(root, 'merge-base', base_ref, head))
+        if before['patch'] != after['patch'] or before['files'] != after['files']:
+            return "the task's change differs"
+    except (ImportError, ValueError, OSError, subprocess.SubprocessError):
+        return 'it could not be checked'
+    return None
+
+
+def carried_brief(store, root, round_number, head, base):
+    """Keep Store.brief exact; only the pack may carry across base merges."""
+    for record in brief_candidates(store, round_number, head):
+        if brief_carry_failure(root, record['head'], head, base) is None:
+            return record
+    return None
+
+
 def build(args):
     root = Path(args.root)
     store = Store(args.state, args.project, args.task)
     spec = json.loads(Path(args.spec).read_text())
     brief_record = store.brief(args.round, args.head)
+    carry_notice = ''
+    missing_brief = 'missing authorized local brief for exact project/task/round/head'
+    if brief_record is None:
+        brief_record = carried_brief(store, root, args.round, args.head, args.base)
+        if brief_record is not None:
+            carry_notice = (f"Written for head {brief_record['head']}; carried to {args.head} because "
+                            f"the branch only merged {args.base} since then and the task's change is unchanged.\n")
+        else:
+            candidates = brief_candidates(store, args.round, args.head)
+            if candidates:
+                written_head = candidates[0]['head']
+                reason = brief_carry_failure(root, written_head, args.head, args.base)
+                missing_brief += (f' (a brief for this round exists for head {written_head}, '
+                                  f"but {reason or 'it could not be checked'})")
     brief = brief_record['text'] if brief_record else ''
     external_supplement = ''
     collector = Collector(root, args.gh, args.head, getattr(args, 'log_error_file', None))
@@ -348,7 +406,7 @@ def build(args):
             situations.append('behind')
             brief = brief or 'no brief needed: branch only needs updating with its base'
         if not brief:
-            collector.gaps.append('missing authorized local brief for exact project/task/round/head')
+            collector.gaps.append(missing_brief)
     if 'red' in situations:
         items.insert(0, ('The required check is red' if any(
             j.get('name') in names and j.get('conclusion') in ('failure', 'timed_out')
@@ -390,7 +448,7 @@ def build(args):
         items.append(('Evidence gaps (warnings; round continues)', '\n'.join(collector.gaps)))
     pack = bounded(items)
     store.append('pack', args.round, args.actor, args.head, pack, items=items, coverage=reports)
-    Path(args.output).write_text('# Approved local brief\n\n' + (brief or 'Unavailable; see coverage warnings.') + external_supplement + '\n\n# Context pack\n\n' + pack + '\n\n# Local review history\n\n' + store.history())
+    Path(args.output).write_text('# Approved local brief\n\n' + carry_notice + (brief or 'Unavailable; see coverage warnings.') + external_supplement + '\n\n# Context pack\n\n' + pack + '\n\n# Local review history\n\n' + store.history())
     Path(args.coverage).write_text(json.dumps(reports))
 
 

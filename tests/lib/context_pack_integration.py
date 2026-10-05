@@ -1,4 +1,6 @@
 """Vendor-shaped pack evidence, collected against a real pinned git tree."""
+from contextlib import contextmanager
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -6,11 +8,25 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(sys.argv.pop()) / 'bin/lib'))
 from fm_context_pack import build
 from fm_evidence import Store
+
+
+@contextmanager
+def unavailable_binding(binding):
+    # Load afresh: replacing sys.modules alone would miss an eager import
+    # whose dependencies were already captured by the test runner.
+    with patch.dict(sys.modules, {'fm_binding': binding}):
+        spec = importlib.util.spec_from_file_location(
+            'context_pack_without_binding', sys.modules['fm_context_pack'].__file__)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch(__name__ + '.build', module.build):
+            yield
 
 
 class Integration(unittest.TestCase):
@@ -78,6 +94,150 @@ else:
               actor='worker-fixture', gh=str(self.gh), pr='9', base='main', required='',
               output=str(self.root / 'prompt.md'), coverage=str(self.root / 'coverage.json')))
         return (self.root / 'prompt.md').read_text(), json.loads((self.root / 'coverage.json').read_text())
+
+    def brief_branch(self, round_number=2, authorized=True, actor='firstmate'):
+        for path in self.store.directory.glob('*.json'):
+            if json.loads(path.read_text())['kind'] == 'brief':
+                path.unlink()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        self.git('checkout', '-qb', 'work')
+        (self.root / 'tests/feature.test.sh').write_text('task change\n')
+        self.git('commit', '-qam', 'task change')
+        self.written_head = self.git('rev-parse', 'HEAD').strip()
+        self.brief_text = '1. fix CARRIED_BRIEF_MUST_NOT_REACH_PROMPT_IF_REJECTED'
+        self.store.append('brief', round_number, actor, self.written_head,
+                          self.brief_text, authorized=authorized)
+
+    def advance_main(self):
+        self.git('checkout', '-q', 'main')
+        (self.root / 'unrelated.txt').write_text('base change\n')
+        self.git('add', 'unrelated.txt')
+        self.git('commit', '-qm', 'base change')
+        self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        self.git('checkout', '-q', 'work')
+
+    def merge_main(self, evil=False):
+        self.advance_main()
+        self.git('merge', '--no-ff', '--no-commit', 'main')
+        if evil:
+            (self.root / 'tests/feature.test.sh').write_text('changed by merge\n')
+            self.git('add', 'tests/feature.test.sh')
+        self.git('commit', '-qm', 'merge main')
+
+    def collect_branch(self):
+        self.head = self.git('rev-parse', 'HEAD').strip()
+        (self.root / 'head').write_text(self.head)
+        return self.collect('success')
+
+    def assert_brief_rejected(self, reason=None):
+        prompt, reports = self.collect_branch()
+        self.assertNotIn(self.brief_text, prompt)
+        gap = 'missing authorized local brief for exact project/task/round/head'
+        if reason:
+            gap += f' (a brief for this round exists for head {self.written_head}, but {reason})'
+        self.assertIn(gap, [g for report in reports for g in report['gaps']])
+
+    def test_brief_carries_across_unchanged_base_merge(self):
+        self.brief_branch()
+        self.merge_main()
+        prompt, reports = self.collect_branch()
+        self.assertIn(self.brief_text, prompt)
+        self.assertLess(prompt.index(self.brief_text), prompt.index('# Context pack'))
+        notice = (f'Written for head {self.written_head}; carried to {self.head} because '
+                  "the branch only merged main since then and the task's change is unchanged.")
+        self.assertIn('# Approved local brief\n\n' + notice + '\n' + self.brief_text, prompt)
+        self.assertFalse(any('missing authorized local brief' in gap
+                             for report in reports for gap in report['gaps']))
+        self.assertFalse(any('finding 1 has no fix' in gap
+                             for report in reports for gap in report['gaps']))
+
+    def test_exact_brief_and_standing_list_survive_unavailable_binding(self):
+        for binding in (None, ModuleType('fm_binding')):
+            with self.subTest(binding=binding), unavailable_binding(binding):
+                prompt, reports = self.collect('success')
+                self.assertIn('1. fix the assertion', prompt)
+                self.assertIn('1. open tests/feature.test.sh:1', prompt)
+                self.assertFalse(any('missing authorized local brief' in gap
+                                     for report in reports for gap in report['gaps']))
+
+    def test_carry_fails_closed_when_binding_is_unavailable(self):
+        self.brief_branch()
+        self.merge_main()
+        for binding in (None, ModuleType('fm_binding')):
+            with self.subTest(binding=binding), unavailable_binding(binding):
+                self.assert_brief_rejected('it could not be checked')
+
+    def test_brief_does_not_carry_after_non_merge_commit(self):
+        self.brief_branch()
+        self.git('commit', '--allow-empty', '-qm', 'ordinary commit')
+        self.assert_brief_rejected('non-merge commits follow it')
+
+    def test_brief_does_not_carry_after_evil_merge(self):
+        self.brief_branch()
+        self.merge_main(evil=True)
+        self.assert_brief_rejected("the task's change differs")
+
+    def test_brief_does_not_carry_after_rebase(self):
+        self.brief_branch()
+        self.advance_main()
+        self.git('rebase', 'main')
+        self.assert_brief_rejected('it is not an ancestor of this head')
+
+    def test_brief_does_not_carry_without_base_ref(self):
+        self.brief_branch()
+        self.merge_main()
+        self.git('update-ref', '-d', 'refs/remotes/origin/main')
+        self.assert_brief_rejected('the base ref refs/remotes/origin/main is unavailable')
+
+    def test_brief_does_not_carry_from_another_round(self):
+        self.brief_branch(round_number=1)
+        self.merge_main()
+        self.assert_brief_rejected()
+
+    def test_brief_does_not_carry_without_authorization(self):
+        self.brief_branch(authorized=False)
+        self.merge_main()
+        self.assert_brief_rejected()
+
+    def test_brief_does_not_carry_from_worker(self):
+        self.brief_branch(actor='worker-x')
+        self.merge_main()
+        self.assert_brief_rejected()
+
+    def test_exact_brief_wins_over_carried_brief(self):
+        self.brief_branch()
+        self.merge_main()
+        head = self.git('rev-parse', 'HEAD').strip()
+        self.store.append('brief', 2, 'firstmate', head, '1. fix EXACT_BRIEF', authorized=True)
+        prompt, _ = self.collect_branch()
+        self.assertIn('1. fix EXACT_BRIEF', prompt)
+        self.assertNotIn(self.brief_text, prompt)
+        self.assertNotIn('Written for head', prompt)
+
+    def test_carried_brief_uses_newest_eligible_record_after_git_error(self):
+        self.brief_branch()
+        self.store.append('brief', 2, 'firstmate', self.written_head,
+                          '1. fix NEWEST_ELIGIBLE_BRIEF', authorized=True)
+        self.store.append('brief', 2, 'firstmate', 'b' * 40,
+                          'MUST_NOT_REACH_PROMPT_BAD_COMMIT', authorized=True)
+        self.merge_main()
+        prompt, reports = self.collect_branch()
+        self.assertIn('1. fix NEWEST_ELIGIBLE_BRIEF', prompt)
+        self.assertNotIn(self.brief_text, prompt)
+        self.assertNotIn('MUST_NOT_REACH_PROMPT_BAD_COMMIT', prompt)
+        self.assertFalse(any('missing authorized local brief' in gap
+                             for report in reports for gap in report['gaps']))
+
+    def test_uncheckable_brief_has_fixed_diagnostic(self):
+        self.brief_branch()
+        for path in self.store.directory.glob('*.json'):
+            if json.loads(path.read_text())['kind'] == 'brief':
+                path.unlink()
+        self.written_head = 'b' * 40
+        self.store.append('brief', 2, 'firstmate', self.written_head,
+                          self.brief_text, authorized=True)
+        self.merge_main()
+        self.assert_brief_rejected('it could not be checked')
 
     def test_behind_only_build_records_reasoned_waiver(self):
         # No prior rejection or brief: only an update of the base is needed.
