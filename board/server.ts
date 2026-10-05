@@ -1818,6 +1818,13 @@ const githubState = async (project: string, pr: number): Promise<string | null> 
 // GitHub. If GitHub cannot be read the record stays running, marked unknown,
 // and the next poll tries again.
 let recovering = false;
+const recoveryErrors = new Set<string>();
+const logRecoveryError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (recoveryErrors.has(message)) return;
+  recoveryErrors.add(message);
+  console.error(`fm-board: merge recovery skipped a tick: ${message}`);
+};
 const recover = async () => {
   if (recovering) return;
   recovering = true;
@@ -1841,11 +1848,16 @@ const recover = async () => {
       else unknownOutcome.add(id);
       } catch { unknownOutcome.add(id); }
     }
-  } finally { recovering = false; }
+  } catch (error) { logRecoveryError(error); }
+  finally { recovering = false; }
 };
 const anyRunning = () => readResponses().some((d) => mergeOf(d) === "running" && !ours.has(String(d.id ?? "")));
-if (anyRunning()) void recover();
-setInterval(() => { if (anyRunning()) void recover(); }, 1000);
+const recoveryTick = () => {
+  try { if (anyRunning()) void recover(); }
+  catch (error) { logRecoveryError(error); }
+};
+recoveryTick();
+setInterval(recoveryTick, 1000);
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -2147,11 +2159,17 @@ const server = Bun.serve({
               if (now !== size) { send("state", state(only)); size = now; }
             } catch { /* unavailable this tick; the stream stays open */ }
           }, 500);
-          const beat = setInterval(() => c.enqueue(enc.encode(": beat\n\n")), 15000);
+          const beat = setInterval(() => {
+            try { c.enqueue(enc.encode(": beat\n\n")); }
+            catch { stop(); }
+          }, 15000);
           // a change to the page itself reloads every open board
           let w: ReturnType<typeof watch> | null = null;
           try {
-            w = watch(PUBLIC, () => send("reload", {}));
+            w = watch(PUBLIC, () => {
+              try { send("reload", {}); }
+              catch { stop(); }
+            });
             w.on("error", () => w?.close());
           }
           catch { /* the public directory may be replaced during startup */ }
