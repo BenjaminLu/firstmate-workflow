@@ -58,7 +58,6 @@ class MechanicalLoop:
     def pr_task(self, pr):
         # Call the canonical shell grammar, including legacy t004 branches,
         # title fallback and the deliberate exclusion of Revert titles.
-        # This local read must not enter the write-ahead operation channel.
         result = subprocess.run(['bash', '-c', '. "$1"; fm_task_of_pr "$2" "$3" || true',
                                  '_', str(BIN / 'fm-emit.sh'), pr['head']['ref'], pr.get('title', '')],
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True,
@@ -271,7 +270,8 @@ class MechanicalLoop:
         path.parent.mkdir(exist_ok=True)
         packet = dict(kind=kind, task=task, pr=pr, argv=argv, state=str(self.state), **extra)
         save_json(path, packet)
-        jobs[identity] = dict(task=task, state='running', path=str(path))
+        jobs[identity] = dict(kind=kind, task=task, number=pr['number'], head=pr['head']['sha'],
+                              state='running', path=str(path))
         self.save()
         with path.with_suffix('.log').open('ab') as log:
             child = life.start([sys.executable, str(BIN / 'lib/fm_autopilot_loop.py'), str(path)],
@@ -310,12 +310,43 @@ class MechanicalLoop:
         self.save()
         self.consume_jobs()
 
+    def job_for(self, kind, number, head):
+        for job in self.data.get('jobs', {}).values():
+            try:
+                if 'kind' in job:
+                    job_kind, job_number, job_head = job['kind'], job['number'], job['head']
+                else:
+                    packet = read_json(Path(job['path']))
+                    job_kind = packet['kind']
+                    job_number, job_head = packet['pr']['number'], packet['pr']['head']['sha']
+                if job_kind == kind and int(job_number) == int(number) and job_head == head:
+                    return job
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return None
+
     def launch_review(self, task, pr, round_number=1):
         from fm_autopilot import key
-        self.once(['launch-review', pr['number'], pr['head']['sha']], task,
-            lambda: self.start_job('review', task, pr,
+        number, head = pr['number'], pr['head']['sha']
+        if self.job_for('review', number, head) is not None:
+            return
+        try:
+            verdict_before = key(self.verdict(task))
+            self.start_job('review', task, pr,
                 self.script('fm-review.sh', '--task', task, '--branch', pr['head']['ref'],
-                            '--pr', pr['number'], '--round', round_number), verdict_before=key(self.verdict(task))))
+                            '--pr', number, '--round', round_number), verdict_before=verdict_before)
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+            job = self.job_for('review', number, head)
+            if job is None:
+                self.data.setdefault('jobs', {})[key(['review-launch', number, head])] = dict(
+                    kind='review', task=task, number=number, head=head, state='uncertain', path='')
+            elif (job['state'] == 'running' and job.get('path')
+                    and not Path(job['path']).with_suffix('.result.json').exists()):
+                job['state'] = 'uncertain'
+            self.queue(f'review-launch-{number}-{head}', task,
+                       f'Review launch failed at {head[:12]}: {error}; launch it by hand or fix the cause',
+                       f'審查啟動失敗：{error}；請手動啟動或排除原因')
+            self.save()
 
     def job_completed(self, result):
         task, pr, code = result['task'], result['pr'], result['code']

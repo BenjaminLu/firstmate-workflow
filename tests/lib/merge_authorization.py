@@ -102,7 +102,6 @@ class Authorization(unittest.TestCase):
         pr = dict(number=2, state='open', head=dict(sha='a', ref='task'),
                   base=dict(ref='main', sha='base'))
         self.p.task = lambda pr: 'T-002'
-        self.p.once = lambda *args: None
         self.p.verdict = lambda task: dict(verdict='APPROVE', head='a')
         self.p.settled_checks = lambda *args: [('ci', 'check', 1, 'success')]
         self.pull_at(pr)

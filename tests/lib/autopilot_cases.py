@@ -81,7 +81,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.pull_at(PR)
         self.assertEqual(len(self.puts()), 1)
         self.assertNotIn('merge', [word for x in self.puts() for word in x])
-        self.assertFalse(self.pilot.data['actions'])
+        self.assertNotIn('actions', self.pilot.data)
 
     # Review eligibility formerly compared base-only patch metadata here.
     # T-175 delegates all eligibility to the real gates; the replacement
@@ -167,7 +167,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
                          dict(head=HEAD, parent=9, task='T-001', outcome='done'))
         self.pilot.restack(pr, parent)
         self.assertEqual(len(self.restack_calls()), 1)
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
         pr['head']['sha'] = 'c' * 40
         self.pilot.prune_branches('12', pr['head']['sha'])
         self.assertNotIn('12', self.pilot.data['restacks'])
@@ -218,7 +218,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
                 self.assertEqual(len(self.pilot.data['wakes']), 1)
                 wake = next(iter(self.pilot.data['wakes'].values()))
                 self.assertEqual(wake['line'], 'T-001 #12 restack failed after 3 attempts: last refusal')
-                self.assertEqual(self.pilot.data['actions'], {})
+                self.assertNotIn('actions', self.pilot.data)
         self.pilot.data['retries'].clear()
         self.restack_answer = (67, '', 'last refusal')
         with patch.object(self.pilot, 'command', side_effect=OSError('offline')):
@@ -279,7 +279,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
                 self.assertEqual(len(self.pilot.data['wakes']), 1)
                 self.assertIn('outcome unknown', next(iter(self.pilot.data['wakes'].values()))['line'])
                 self.assertEqual(self.pilot.data['retries'], {})
-                self.assertEqual(self.pilot.data['actions'], {})
+                self.assertNotIn('actions', self.pilot.data)
 
     def test_restack_started_is_saved_before_probe_and_recovered_after_retarget(self):
         pr, parent = self.restack_inputs()
@@ -308,35 +308,6 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.pilot.data, first)
         self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 1)
 
-    def test_restack_migration_drops_all_legacy_states_once(self):
-        tokens = []
-        for status in ('started', 'done', 'uncertain'):
-            token = A.key(['restack', status]); tokens.append(token)
-            self.pilot.data['actions'][token] = dict(state=status, identity=['restack', status], task='T-001')
-            self.pilot.queue('action-' + token, 'T-001', 'legacy restack', '舊重新堆疊')
-        delivered = self.state / 'wake-queue'; delivered.mkdir()
-        path = delivered / ('autopilot-' + A.key(['self', 'action-' + tokens[0]]) + '.json')
-        payload = b'{"delivered":"unchanged"}\n'; path.write_bytes(payload)
-        self.pilot.data['wakes'][path.stem]['pushed'] = True
-        review = dict(state='done', identity=['launch-review', 12, HEAD], task='T-001')
-        self.pilot.data['actions']['review'] = review
-        self.pilot.data.pop('migrated_t204', None)
-        self.pilot.data.pop('restacks', None)
-        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
-        self.assertEqual(self.pilot.data['actions'], {'review': review})
-        self.assertEqual(self.pilot.data['restacks'], {})
-        self.assertTrue(self.pilot.data['migrated_t204'])
-        self.assertEqual(set(self.pilot.data['wakes']), {path.stem})
-        self.assertEqual(path.read_bytes(), payload)
-        first = copy.deepcopy(self.pilot.data)
-        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
-        self.assertEqual(self.pilot.data, first)
-        self.assertEqual(path.read_bytes(), payload)
-        self.assertFalse(any(c[0] == 'wake' for c in self.calls))
-        pr, parent = self.restack_inputs()
-        self.pilot.restack(pr, parent)
-        self.assertEqual(len(self.restack_calls()), 1)
-
     def test_failed_update_retries_at_one_and_three_then_wakes_once(self):
         self.put_answer = response('503 Service Unavailable', 'try later')
         for expected in (1, 2, 2, 3, 3, 3):
@@ -344,7 +315,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
             self.assertEqual(len(self.puts()), expected)
         self.assertEqual(len(self.pilot.data['wakes']), 1)
         self.assertIn('HTTP/2.0 503 Service Unavailable', str(self.pilot.data['wakes']))
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
 
     def test_task_lookup_and_observation_do_not_use_operation_channel(self):
         self.pilot.command = lambda *a, **kw: self.fail('task lookup used operation channel')
@@ -476,7 +447,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
         pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
         self.pull_at(pr, reviews); self.pull_at(pr, reviews)
         self.assertEqual(len(self.review_posts), 1)
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
 
     def test_recheck_head_record_completes_after_one_post(self):
         reviews = self.recheck_setup()
@@ -485,7 +456,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.review_posts[0][1], ['gh', 'api', '-X', 'POST',
             'repos/owner/repo/pulls/12/requested_reviewers', '-f', 'reviewers[]=alice', '--include'])
         self.assertEqual(self.pilot.data['rechecked']['12'], dict(head=HEAD, names=[]))
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
 
     def test_recheck_transient_failures_retry_at_zero_one_three(self):
         reviews = self.recheck_setup()
@@ -495,7 +466,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual([seq for seq, _ in self.review_posts], [1, 2, 4])
         self.assertEqual(len(self.pilot.data['wakes']), 1)
         self.assertIn('HTTP/2.0 503 Service Unavailable', str(self.pilot.data['wakes']))
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
 
     def test_recheck_transport_and_missing_status_failures_are_bounded(self):
         reviews = self.recheck_setup()
@@ -792,116 +763,170 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(len(self.pilot.data['wakes']), 2)
         self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 2)
 
-    def test_update_migration_preserves_delivered_files_across_two_startups(self):
-        tokens = [A.key(['update', '12', HEAD]), A.key(['update', '13', HEAD])]
-        for number, token in zip(('12', '13'), tokens):
-            self.pilot.data['actions'][token] = dict(state='started', identity=['update', number, HEAD], task='T-001')
-            self.pilot.queue('action-' + token, 'T-001', 'legacy update', '舊分支更新')
-        delivered = self.state / 'wake-queue'; delivered.mkdir()
-        path = delivered / ('autopilot-' + A.key(['self', 'action-' + tokens[0]]) + '.json')
-        path.write_bytes(b'{"delivered":"unchanged"}\n')
-        self.pilot.data['wakes'][path.stem]['pushed'] = True
-        advance = dict(state='uncertain', identity=['advance', '12', HEAD], task='T-001')
-        self.pilot.data['actions']['advance'] = advance
-        for name in ('poll_seq', 'retries', 'holds', 'updates', 'migrated_t190', 'migrated_t193'):
-            self.pilot.data.pop(name, None)
-        self.restart_branch_pilot()
-        self.pilot.recover(); self.pilot.flush()
-        for name, value in (('poll_seq', 0), ('retries', {}), ('holds', {}), ('updates', {})):
-            self.assertEqual(self.pilot.data[name], value)
-        self.assertTrue(self.pilot.data['migrated_t190'])
-        self.assertEqual(self.pilot.data['actions'], {})
-        self.assertFalse(any(not w['pushed'] for w in self.pilot.data['wakes'].values()))
-        self.assertEqual(path.read_bytes(), b'{"delivered":"unchanged"}\n')
-        first = copy.deepcopy(self.pilot.data)
-        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
-        self.assertEqual(self.pilot.data, first)
-        self.assertEqual(path.read_bytes(), b'{"delivered":"unchanged"}\n')
-        self.assertFalse(any(c[0] == 'wake' for c in self.calls))
-
-    def test_event_recheck_migration_removes_all_states_before_recovery_once(self):
-        removed = []
-        for kind in ('pr-event', 'recheck', 'observed-merge'):
+    def test_t205_migration_all_classes_and_defaults_once(self):
+        actions = self.pilot.data['actions'] = {}
+        removed, retained, delivered = set(), set(), {}
+        folder = self.state / 'wake-queue'; folder.mkdir()
+        classes = ('update', 'advance', 'restack', 'recheck', 'observed-merge',
+                   'pr-event', 'launch-review', 'unknown')
+        for kind in classes:
             for index, status in enumerate(('started', 'done', 'uncertain')):
-                identity = [kind, 12 + index, 'merged']
-                token = A.key(identity); removed.append(token)
-                self.pilot.data['actions'][token] = dict(state=status, identity=identity, task='T-001')
-                self.pilot.queue('action-' + token, 'T-001', 'legacy action', '舊步驟')
+                number = 12 + index
+                identity = [kind, number, 'merged' if kind == 'pr-event' else HEAD]
+                token = kind + '-' + status
+                actions[token] = dict(identity=identity, state=status, task='T-001')
+                wake = 'autopilot-' + A.key(['self', 'action-' + token])
+                # Started review/unknown actions had not yet queued recovery.
+                if kind not in ('launch-review', 'unknown') or status != 'started':
+                    self.pilot.queue('action-' + token, 'T-001', 'legacy', '舊步驟')
+                if status == 'done':
+                    path = folder / (wake + '.json')
+                    path.write_bytes(b'{"delivered":"unchanged"}\n')
+                    delivered[path] = path.read_bytes()
+                    self.pilot.data['wakes'][wake]['pushed'] = True
+                    retained.add(wake)
+                elif kind in ('launch-review', 'unknown'):
+                    retained.add(wake)
+                else:
+                    removed.add(wake)
         for number in ('12', '13', '14'):
             self.pilot.data['pulls'][number] = dict(terminal=True, head=HEAD, task='T-001')
         self.pilot.data['pulls']['99'] = dict(head=HEAD, task='T-001')
         for number in (98, 99):
-            identity = ['pr-event', number, 'closed']
-            token = A.key(identity); removed.append(token)
-            self.pilot.data['actions'][token] = dict(state='uncertain', identity=identity, task='T-001')
-            self.pilot.queue('action-' + token, 'T-001', 'legacy closure', '舊關閉事件')
-        for kind in ('launch-review',):
-            for status in ('started', 'done', 'uncertain'):
-                token = kind + status
-                self.pilot.data['actions'][token] = dict(state=status, identity=[kind, token], task='T-001')
-        expected = copy.deepcopy(self.pilot.data['actions'])
-        expected = {k: dict(v, state='uncertain' if v['state'] == 'started' else v['state'])
-                    for k, v in expected.items() if k not in removed}
-        delivered = self.state / 'wake-queue'; delivered.mkdir()
-        path = delivered / ('autopilot-' + A.key(['self', 'action-' + removed[0]]) + '.json')
-        payload = b'{"delivered":"unchanged"}\n'; path.write_bytes(payload)
-        self.pilot.data['wakes'][path.stem]['pushed'] = True
-        self.pilot.data.pop('migrated_t200', None)
-        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
-        self.assertEqual(self.pilot.data['actions'], expected)
-        self.assertTrue(self.pilot.data['migrated_t200'])
+            actions[str(number)] = dict(identity=['pr-event', number, 'closed'], state='uncertain', task='T-001')
+        # A done action with an undelivered wake is also discarded.
+        actions['done-review'] = dict(identity=['launch-review', 15, HEAD], state='done', task='T-001')
+        removed.add(self.pilot.queue('action-done-review', 'T-001', 'done', '完成'))
+        for flag in ('migrated_t190', 'migrated_t193', 'migrated_t200', 'migrated_t204'):
+            self.pilot.data[flag] = 'preserve old flag'
+        for name in ('poll_seq', 'retries', 'holds', 'updates', 'advanced', 'restacks', 'migrated_t205'):
+            self.pilot.data.pop(name, None)
+        self.restart_branch_pilot(); self.pilot.recover()
+        self.assertNotIn('actions', self.pilot.data)
+        self.assertTrue(self.pilot.data['migrated_t205'])
+        for name in ('retries', 'holds', 'updates', 'advanced', 'restacks'):
+            self.assertEqual(self.pilot.data[name], {})
+        self.assertEqual(self.pilot.data['poll_seq'], 0)
+        for flag in ('migrated_t190', 'migrated_t193', 'migrated_t200', 'migrated_t204'):
+            self.assertEqual(self.pilot.data[flag], 'preserve old flag')
         self.assertEqual(self.pilot.data['pulls']['12']['event_pending'], 'merged')
         self.assertEqual(self.pilot.data['pulls']['14']['event_pending'], 'merged')
         self.assertNotIn('event_pending', self.pilot.data['pulls']['13'])
-        self.assertNotIn('98', self.pilot.data['pulls'])
         self.assertNotIn('event_pending', self.pilot.data['pulls']['99'])
-        for token in removed[1:]:
-            ident = 'autopilot-' + A.key(['self', 'action-' + token])
-            self.assertNotIn(ident, self.pilot.data['wakes'])
-            self.assertFalse((delivered / (ident + '.json')).exists())
-        retained = {'autopilot-' + A.key(['self', 'action-' + kind + 'started'])
-                    for kind in ('launch-review',)}
-        self.assertEqual(set(self.pilot.data['wakes']), {path.stem} | retained)
-        for ident in retained:
-            self.assertIn('Autopilot stopped during an action', self.pilot.data['wakes'][ident]['line'])
-        self.assertEqual(path.read_bytes(), payload)
-        first = copy.deepcopy(self.pilot.data)
+        self.assertNotIn('98', self.pilot.data['pulls'])
+        self.assertEqual(set(self.pilot.data['wakes']), retained)
+        for kind in ('launch-review', 'unknown'):
+            wake = self.pilot.data['wakes']['autopilot-' + A.key(['self', 'action-' + kind + '-started'])]
+            self.assertEqual(wake['line'], 'Autopilot stopped during an action; reconcile its outcome')
+            self.assertEqual(wake['summary']['zh-TW'], '自動駕駛於步驟執行中停止；請核對結果')
+            uncertain = self.pilot.data['wakes']['autopilot-' + A.key(['self', 'action-' + kind + '-uncertain'])]
+            self.assertEqual(uncertain['line'], 'legacy')
+        self.assertEqual(len(self.pilot.data['jobs']), 2)
+        self.pilot.flush()
+        for path, payload in delivered.items(): self.assertEqual(path.read_bytes(), payload)
+        for wake in removed:
+            self.assertFalse((folder / (wake + '.json')).exists())
+        state = self.pilot.path.read_bytes()
+        queue = {p.name: p.read_bytes() for p in folder.iterdir()}
+        calls = len(self.calls)
         self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
-        self.assertEqual(self.pilot.data, first)
-        self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(self.pilot.path.read_bytes(), state)
+        self.assertEqual({p.name: p.read_bytes() for p in folder.iterdir()}, queue)
+        self.assertEqual(len(self.calls), calls)
 
-    def test_advance_migration_removes_all_states_before_recovery_once(self):
-        tokens = []
-        for status in ('started', 'done', 'uncertain'):
-            token = A.key(['advance', status]); tokens.append(token)
-            self.pilot.data['actions'][token] = dict(state=status,
-                identity=['advance', status], task='T-001')
-            self.pilot.queue('action-' + token, 'T-001', 'legacy advance', '舊關卡推進')
-        delivered = self.state / 'wake-queue'; delivered.mkdir()
-        path = delivered / ('autopilot-' + A.key(['self', 'action-' + tokens[0]]) + '.json')
-        payload = b'{"delivered":"unchanged"}\n'; path.write_bytes(payload)
-        self.pilot.data['wakes'][path.stem]['pushed'] = True
-        self.pilot.data['actions']['launch-review'] = dict(state='started', identity=['launch-review', 12], task='T-001')
-        self.pilot.data.pop('migrated_t193', None)
-        self.pilot.data.pop('advanced', None)
-        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
-        self.assertEqual(set(self.pilot.data['actions']), {'launch-review'})
-        self.assertEqual(self.pilot.data['actions']['launch-review']['state'], 'uncertain')
-        self.assertEqual(self.pilot.data['advanced'], {})
-        self.assertTrue(self.pilot.data['migrated_t193'])
-        for token in tokens[1:]:
-            ident = 'autopilot-' + A.key(['self', 'action-' + token])
-            self.assertNotIn(ident, self.pilot.data['wakes'])
-            self.assertFalse((delivered / (ident + '.json')).exists())
-        review = 'autopilot-' + A.key(['self', 'action-launch-review'])
-        self.assertEqual(set(self.pilot.data['wakes']), {path.stem, review})
-        self.assertIn('Autopilot stopped during an action', self.pilot.data['wakes'][review]['line'])
-        self.assertEqual(path.read_bytes(), payload)
-        first = copy.deepcopy(self.pilot.data)
-        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
-        self.assertEqual(self.pilot.data, first)
-        self.assertEqual(path.read_bytes(), payload)
-        self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 1)
+    def test_t205_no_conversion_creates_no_jobs(self):
+        for actions in (None, {}, {'old': dict(identity=['update', 12, HEAD], state='started')}):
+            with self.subTest(actions=actions):
+                self.pilot.data.pop('migrated_t205', None)
+                self.pilot.data.pop('actions', None)
+                self.pilot.data.pop('jobs', None)
+                expected = copy.deepcopy(self.pilot.data)
+                if actions is not None: self.pilot.data['actions'] = actions
+                self.restart_branch_pilot()
+                self.assertEqual(self.pilot.data, dict(expected, migrated_t205=True))
+                self.assertNotIn('jobs', self.pilot.data)
+
+    def test_t205_malformed_and_missing_identities_reconcile_without_jobs(self):
+        actions = self.pilot.data['actions'] = {}
+        expected = {}
+        identities = (['launch-review'], ['launch-review', 'x', 'short'], None, [],
+                      ['launch-review', '12', HEAD], ['launch-review', 12, 'z' * 40])
+        for index, identity in enumerate(identities):
+            for status in ('started', 'uncertain'):
+                token = str(index) + status
+                action = dict(state=status, task='T-001')
+                if identity is not None: action['identity'] = identity
+                actions[token] = action
+                wake = 'autopilot-' + A.key(['self', 'action-' + token])
+                if status == 'uncertain':
+                    self.pilot.queue('action-' + token, 'T-001', 'keep original', '保留')
+                    expected[wake] = copy.deepcopy(self.pilot.data['wakes'][wake])
+        self.pilot.data.pop('migrated_t205', None)
+        self.restart_branch_pilot(); self.pilot.recover()
+        self.assertNotIn('actions', self.pilot.data)
+        self.assertNotIn('jobs', self.pilot.data)
+        self.assertEqual(len(self.pilot.data['wakes']), len(identities) * 2)
+        for wake, record in expected.items(): self.assertEqual(self.pilot.data['wakes'][wake], record)
+        for wake, record in self.pilot.data['wakes'].items():
+            if wake not in expected:
+                self.assertEqual(record['line'], 'Autopilot stopped during an action; reconcile its outcome')
+        before = copy.deepcopy(self.pilot.data)
+        self.restart_branch_pilot(); self.pilot.recover()
+        self.assertEqual(self.pilot.data, before)
+
+    def test_t205_review_actions_block_gate7_without_second_job(self):
+        for status in ('started', 'uncertain'):
+            for existing in (False, True):
+                with self.subTest(status=status, existing=existing):
+                    self.pilot.data['wakes'] = {}
+                    self.pilot.data.pop('jobs', None)
+                    job = dict(kind='review', task='T-001', number=12, head=HEAD, state='done', path='')
+                    if existing: self.pilot.data['jobs'] = {'existing': job}
+                    self.pilot.data['actions'] = {'review': dict(identity=['launch-review', 12, HEAD],
+                                                                state=status, task='T-001')}
+                    if status == 'uncertain':
+                        self.pilot.queue('action-review', 'T-001', 'already reported', '已回報')
+                    self.pilot.data.pop('migrated_t205', None)
+                    self.restart_branch_pilot()
+                    jobs = self.pilot.data['jobs']
+                    self.assertEqual(len(jobs), 1)
+                    if existing:
+                        self.assertEqual(jobs, {'existing': job})
+                    else:
+                        self.assertEqual(jobs[A.key(['review-launch', 12, HEAD])], dict(job, state='uncertain'))
+                    before = copy.deepcopy(self.pilot.data)
+                    self.pilot.authoritative_head = lambda *args: HEAD
+                    with patch.object(self.pilot, 'start_job') as launch:
+                        for _ in range(2):
+                            self.pilot.job_completed(dict(kind='gate', task='T-001', pr=PR,
+                                                         code=7, round=1, base='b'*40))
+                        launch.assert_not_called()
+                    self.assertEqual(self.pilot.data, before)
+                    self.assertEqual(len(self.pilot.data['wakes']), 1)
+
+    def test_t205_existing_reconcile_wakes_are_preserved(self):
+        self.pilot.data['actions'] = {}
+        folder = self.state / 'wake-queue'; folder.mkdir()
+        delivered = {}
+        for status in ('started', 'uncertain'):
+            for pushed in (False, True):
+                token = status + str(pushed)
+                self.pilot.data['actions'][token] = dict(identity=['launch-review', 12, HEAD],
+                                                       task='T-001', state=status)
+                ident = self.pilot.queue('action-' + token, 'T-001', 'existing reconcile', '既有核對')
+                self.pilot.data['wakes'][ident]['pushed'] = pushed
+                if pushed:
+                    path = folder / (ident + '.json')
+                    path.write_bytes(b'{"already":"delivered"}\n')
+                    delivered[path] = path.read_bytes()
+        wakes = copy.deepcopy(self.pilot.data['wakes'])
+        self.pilot.data.pop('migrated_t205', None)
+        self.restart_branch_pilot(); self.pilot.recover()
+        self.assertEqual(self.pilot.data['wakes'], wakes)
+        self.assertEqual(len(self.pilot.data['jobs']), 1)
+        self.pilot.flush()
+        for path, payload in delivered.items(): self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 2)
 
     def test_probe_returns_nonzero_and_checked_raises_with_argv_and_last_line(self):
         result = subprocess.CompletedProcess(['git'], 128, 'body', 'noise\nfatal: last line\n\n')

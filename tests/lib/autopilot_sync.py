@@ -123,7 +123,7 @@ print(json.dumps(answer))
         self.assertEqual(attempts, [1, 2, 4])
         self.assertEqual(len(p.data['wakes']), 1)
         self.assertIn('T-001 #12 event-merged failed after 3 attempts: ' + error, str(p.data['wakes']))
-        self.assertEqual(p.data['actions'], {})
+        self.assertNotIn('actions', p.data)
 
     def test_failed_terminal_event_never_leaves_pr_in_merge_ready_inventory(self):
         p = self.pilot()
@@ -171,7 +171,7 @@ print(json.dumps(answer))
                 self.assertEqual([r['type'] for r in self.events(p)], ['merged'])
                 self.assertNotIn('event_pending', p.data['pulls']['12'])
                 self.assertEqual(p.data['retries'], {})
-                self.assertEqual(p.data['actions'], {})
+                self.assertNotIn('actions', p.data)
                 self.assertEqual(p.data['wakes'], {})
 
     def test_failed_open_event_is_pruned_when_pr_merges(self):
@@ -211,14 +211,14 @@ print(json.dumps(answer))
                 pr = pull(12, 't-001-work', 'T-001: work', 'closed', 'now')
                 p.data['pulls']['12'] = dict(terminal=True, head='a'*40)
                 token = A.key(['pr-event', 12, 'merged'])
-                p.data['actions'][token] = dict(identity=['pr-event', 12, 'merged'],
+                p.data.setdefault('actions', {})[token] = dict(identity=['pr-event', 12, 'merged'],
                                                state='uncertain', task='T-001')
                 p.queue('action-' + token, 'T-001', 'legacy', '舊步驟')
-                p.data.pop('migrated_t200', None)
+                p.data.pop('migrated_t205', None)
                 if existing: p.emit('merged', 'T-001', 'merged', '已合併', 12, actor='github')
                 p.save(); p = self.pilot(project)
                 self.assertEqual(p.data['pulls']['12']['event_pending'], 'merged')
-                self.assertNotIn(token, p.data['actions'])
+                self.assertNotIn('actions', p.data)
                 self.assertEqual(p.data['wakes'], {})
                 p.api = lambda endpoint: pr if endpoint == 'pulls/12' else []
                 p.poll(); p.poll()

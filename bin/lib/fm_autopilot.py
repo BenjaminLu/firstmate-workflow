@@ -6,8 +6,9 @@ and authored card details before advancing. Timers also close
 already observed reviewer batches and report overdue judgment; no idle timer
 starts a model. Branch updates re-decide GitHub state with REST compare-and-swap;
 local task refs fast-forward before advance when no round/job or dirty worktree
-holds them. Other side effects remain write-ahead until firstmate reconciles
-an ambiguous crash.
+holds them. No write-ahead action ledger remains: each step is re-decided from
+per-PR records and observed state, and only owned jobs interrupted mid-run are
+left for firstmate to reconcile.
 """
 import datetime
 import fcntl
@@ -60,51 +61,39 @@ class Pilot(BranchUpdates, MechanicalLoop):
         first_start = not self.path.exists()
         self.data = {} if first_start else json.loads(self.path.read_text())
         if not isinstance(self.data, dict): raise ValueError('invalid autopilot recovery state')
-        for name, default in dict(offset=0, wake_offset=0, actions={}, seen={}, batches={},
+        for name, default in dict(offset=0, wake_offset=0, seen={}, batches={},
                                   wakes={}, pulls={}, cache={}, failures=0, next_poll=0,
                                   poll_seq=0, retries={}, holds={}, updates={}, advanced={}, rechecked={}, restacks={}).items():
             self.data.setdefault(name, default)
-        if not self.data.get('migrated_t190'):
-            for token, action in list(self.data['actions'].items()):
+        if not self.data.get('migrated_t205'):
+            for token, action in self.data.get('actions', {}).items():
                 identity = action.get('identity') or []
-                if identity and identity[0] == 'update':
-                    del self.data['actions'][token]
-                    wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
+                kind = identity[0] if identity else None
+                status = action.get('state')
+                wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
+                if kind == 'pr-event' and status != 'done' and len(identity) == 3 and identity[2] in ('merged', 'closed'):
+                    previous = self.data['pulls'].get(str(identity[1]), {})
+                    if previous.get('terminal'):
+                        previous['event_pending'] = identity[2]
+                if kind in ('update', 'advance', 'restack', 'recheck', 'observed-merge', 'pr-event') or status == 'done':
                     if not self.data['wakes'].get(wake, {}).get('pushed'):
                         self.data['wakes'].pop(wake, None)
-            self.data['migrated_t190'] = True
-        if not self.data.get('migrated_t193'):
-            for token, action in list(self.data['actions'].items()):
-                identity = action.get('identity') or []
-                if identity and identity[0] == 'advance':
-                    del self.data['actions'][token]
-                    wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
-                    if not self.data['wakes'].get(wake, {}).get('pushed'):
-                        self.data['wakes'].pop(wake, None)
-            self.data['migrated_t193'] = True
-        if not self.data.get('migrated_t200'):
-            for token, action in list(self.data['actions'].items()):
-                identity = action.get('identity') or []
-                if identity and identity[0] in ('pr-event', 'recheck', 'observed-merge'):
-                    if (identity[0] == 'pr-event' and action.get('state') != 'done'
-                            and len(identity) == 3 and identity[2] in ('merged', 'closed')):
-                        previous = self.data['pulls'].get(str(identity[1]), {})
-                        if previous.get('terminal'):
-                            previous['event_pending'] = identity[2]
-                    del self.data['actions'][token]
-                    wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
-                    if not self.data['wakes'].get(wake, {}).get('pushed'):
-                        self.data['wakes'].pop(wake, None)
-            self.data['migrated_t200'] = True
-        if not self.data.get('migrated_t204'):
-            for token, action in list(self.data['actions'].items()):
-                identity = action.get('identity') or []
-                if identity and identity[0] == 'restack':
-                    del self.data['actions'][token]
-                    wake = 'autopilot-' + key([ctx['project'], 'action-' + token])
-                    if not self.data['wakes'].get(wake, {}).get('pushed'):
-                        self.data['wakes'].pop(wake, None)
-            self.data['migrated_t204'] = True
+                elif status == 'started' and wake not in self.data['wakes']:
+                    self.queue('action-' + token, action.get('task', ''),
+                               'Autopilot stopped during an action; reconcile its outcome',
+                               '自動駕駛於步驟執行中停止；請核對結果')
+                # Preserve the old one-review-per-head hold even if launch never
+                # reached start_job. Legacy jobs match through their packet.
+                if (kind == 'launch-review' and status in ('started', 'uncertain')
+                        and len(identity) == 3 and type(identity[1]) is int
+                        and isinstance(identity[2], str) and re.fullmatch(r'[0-9a-fA-F]{40}', identity[2])
+                        and self.job_for('review', identity[1], identity[2]) is None):
+                    number, head = identity[1:]
+                    self.data.setdefault('jobs', {})[key(['review-launch', number, head])] = dict(
+                        kind='review', task=action.get('task', ''), number=number, head=head,
+                        state='uncertain', path='')
+            self.data.pop('actions', None)
+            self.data['migrated_t205'] = True
         # Existing installations establish the remote boundary on upgrade.
         self.data.setdefault('tracking_started', self.clock())
         if 'legacy_ask_records' not in self.data:
@@ -230,27 +219,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 item['notified'] = True
         self.save()
 
-    def once(self, identity, task, action):
-        token = key(identity)
-        if token in self.data['actions']:
-            return
-        self.data['actions'][token] = dict(state='started', identity=identity, task=task)
-        self.save()
-        try:
-            action()
-            self.data['actions'][token]['state'] = 'done'
-        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
-            self.data['actions'][token]['state'] = 'uncertain'
-            self.queue('action-' + token, task, 'Mechanical action needs reconciliation: ' + str(error),
-                       '機械步驟結果不確定；請核對後再繼續')
-        self.save()
-
     def recover(self):
-        for token, action in self.data['actions'].items():
-            if action['state'] == 'started':
-                action['state'] = 'uncertain'
-                self.queue('action-' + token, action['task'], 'Autopilot stopped during an action; reconcile its outcome',
-                           '自動駕駛於步驟執行中停止；請核對結果')
         for number, record in self.data['restacks'].items():
             if record['outcome'] == 'started':
                 self.restack_interrupted(number, record)
@@ -857,7 +826,6 @@ def reload_due(pilot, own_code, reload):
     return bool(request and not same_code(request['to'], own_code)
                 and not failed_code(request['to'], reload)
                 and not any(j.get('state') in ('running', 'consuming') for j in pilot.data['jobs'].values())
-                and not any(a.get('state') == 'started' for a in pilot.data['actions'].values())
                 and not pilot.data['batches']
                 and all(w.get('pushed') for w in pilot.data['wakes'].values()))
 

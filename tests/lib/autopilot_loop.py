@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -36,7 +37,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.pilot = A.Pilot(self.ctx)
         self.pilot.api = lambda endpoint: dict(contexts=['ci'], checks=[])
         self.calls = []
-        self.pilot.start_job = lambda kind, task, pr, argv, **extra: self.calls.append((kind, task, pr, argv, extra))
+        self.pilot.start_job = self.record_job
         self.pilot.authoritative_head = lambda task, pr: pr['head']['sha']
         self.pilot.command = self.command
         self.branch_setup()
@@ -45,6 +46,112 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.pilot.emit = lambda *a, **kw: self.calls.append(('emit', a, kw))
         self.pilot.verdict = lambda task: {}
         self.pilot.busy = lambda task: False
+
+    def record_job(self, kind, task, pr, argv, **extra):
+        self.calls.append((kind, task, pr, argv, extra))
+        if kind == 'review':
+            self.pilot.data.setdefault('jobs', {})[str(len(self.calls))] = dict(
+                kind=kind, task=task, number=pr['number'], head=pr['head']['sha'],
+                state='running', path=str(self.state / 'review.json'))
+
+    def test_review_job_blocks_every_state_without_waking(self):
+        for state in ('running', 'consuming', 'done', 'uncertain'):
+            with self.subTest(state=state):
+                self.pilot.data['jobs'] = {'review': dict(kind='review', number='12', head=HEAD,
+                    task='T-001', state=state, path='')}
+                self.gate_result()
+                self.assertFalse(self.calls)
+                self.assertEqual(self.pilot.data['wakes'], {})
+
+    def test_review_job_at_other_head_does_not_block(self):
+        self.pilot.data['jobs'] = {'old': dict(kind='review', number=12, head=BASE,
+            state='done', path='')}
+        self.gate_result()
+        self.assertEqual([c[0] for c in self.calls], ['review'])
+
+    def test_legacy_review_job_matches_packet_and_missing_packet_does_not(self):
+        path = self.state / 'legacy.json'
+        path.write_text(json.dumps(dict(kind='review', pr=dict(PR, number='12'))))
+        job = dict(task='T-001', state='done', path=str(path))
+        self.pilot.data['jobs'] = {'legacy': job}
+        self.gate_result()
+        self.assertFalse(self.calls)
+        self.assertEqual(self.pilot.data['wakes'], {})
+        path.unlink()
+        self.gate_result()
+        self.assertEqual([c[0] for c in self.calls], ['review'])
+
+    def test_same_head_stale_verdict_still_launches_review(self):
+        self.pilot.verdict = lambda task: dict(verdict='APPROVE', head=HEAD, signature='stale')
+        self.gate_result()
+        self.assertEqual([c[0] for c in self.calls], ['review'])
+
+    def test_review_launch_failure_is_held_and_wakes_once(self):
+        for error_type in (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
+            for stage in ('before', 'after', 'verdict'):
+                with self.subTest(error=error_type, stage=stage):
+                    self.pilot.data['jobs'] = {}; self.pilot.data['wakes'] = {}; self.calls.clear()
+                    def fail(*args, **kwargs):
+                        if stage == 'after': self.record_job(*args, **kwargs)
+                        raise error_type('launch failed')
+                    with patch.object(self.pilot, 'verdict' if stage == 'verdict' else 'start_job', side_effect=fail) as launch:
+                        self.gate_result()
+                        self.gate_result()
+                        self.assertEqual(launch.call_count, 1)
+                    jobs = self.pilot.data['jobs']
+                    self.assertEqual(len(jobs), 1)
+                    job = next(iter(jobs.values()))
+                    self.assertEqual(job['state'], 'uncertain')
+                    self.assertEqual((job['kind'], job['number'], job['head']), ('review', 12, HEAD))
+                    if stage != 'after':
+                        self.assertEqual(jobs[A.key(['review-launch', 12, HEAD])]['path'], '')
+                    wake_id = 'autopilot-' + A.key(['alpha', 'review-launch-12-' + HEAD])
+                    self.assertEqual(set(self.pilot.data['wakes']), {wake_id})
+                    wake = self.pilot.data['wakes'][wake_id]
+                    self.assertEqual(wake['task'], 'T-001')
+                    self.assertEqual(wake['summary'], {
+                        'en': 'Review launch failed at ' + HEAD[:12] + ': launch failed; launch it by hand or fix the cause',
+                        'zh-TW': '審查啟動失敗：launch failed；請手動啟動或排除原因'})
+                    before = copy.deepcopy(self.pilot.data)
+                    self.pilot.consume_jobs(); self.pilot.recover_jobs()
+                    self.assertEqual(self.pilot.data, before)
+
+    def test_failed_review_launch_leaves_calling_gate_done(self):
+        path = self.state / 'gate.json'
+        path.with_suffix('.result.json').write_text(json.dumps(dict(kind='gate', task='T-001',
+            pr=PR, code=7, round=1, base=BASE)))
+        self.pilot.data['jobs'] = {'gate': dict(kind='gate', task='T-001', number=12,
+            head=HEAD, state='running', path=str(path))}
+        with patch.object(self.pilot, 'start_job', side_effect=OSError('cannot start')):
+            self.pilot.consume_jobs()
+        self.assertEqual(self.pilot.data['jobs']['gate']['state'], 'done')
+        self.assertEqual(self.pilot.data['jobs'][A.key(['review-launch', 12, HEAD])]['state'], 'uncertain')
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+
+    def test_review_launch_error_preserves_existing_receipt(self):
+        def start(*args, **kwargs):
+            self.record_job(*args, **kwargs)
+            (self.state / 'review.result.json').write_text('{}')
+            raise OSError('after receipt')
+        self.pilot.start_job = start
+        self.gate_result(); self.gate_result()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(next(iter(self.pilot.data['jobs'].values()))['state'], 'running')
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+
+    def test_job_lookup_uses_metadata_without_reading_packet(self):
+        job = dict(kind='review', number='12', head=HEAD, state='uncertain', path='')
+        self.pilot.data['jobs'] = {'job': job}
+        with patch('fm_autopilot_loop.read_json', side_effect=AssertionError('packet read')):
+            self.assertIs(self.pilot.job_for('review', 12, HEAD), job)
+            self.assertIsNone(self.pilot.job_for('gate', 12, HEAD))
+            self.assertIsNone(self.pilot.job_for('review', 13, HEAD))
+
+    def test_legacy_unreadable_packet_does_not_match(self):
+        path = self.state / 'invalid.json'; path.write_text('{broken')
+        self.pilot.data['jobs'] = {'legacy': dict(state='done', path=str(path))}
+        self.gate_result()
+        self.assertEqual([c[0] for c in self.calls], ['review'])
 
     def probe(self, argv):
         self.calls.append(('probe', argv))
@@ -162,7 +269,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
         restored.busy = lambda task: False
         restored.advance(PR, CHECKS, [])
         self.assertEqual(sum(c[0] == 'gate' for c in self.calls), 1)
-        self.assertEqual(restored.data['actions'], {})
+        self.assertNotIn('actions', restored.data)
         self.assertEqual(restored.data['advanced']['12']['head'], HEAD)
 
     def test_terminal_and_open_events_are_once_and_keep_task_grammar(self):
@@ -189,7 +296,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
         (self.state / 'events.jsonl').write_text(json.dumps(row) + '\n')
         self.pilot.observe_pr(PR)
         self.assertEqual(self.calls, [])
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
 
     def test_existing_event_clears_retry_without_emit(self):
         row = dict(type='pr_opened', pr=12, task='T-001')
@@ -205,7 +312,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.pilot.observe_pr(PR); self.pilot.observe_pr(PR)
         self.assertEqual(sum(c[0] == 'emit' for c in self.calls), 1)
         self.assertEqual(self.pilot._poll_rows, [dict(type='pr_opened', pr=12, task='T-001')])
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
 
     def test_pending_and_answered_cards_are_not_replaced(self):
         for folder in ('pending', 'decisions'):
@@ -413,7 +520,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
             self.sync_poll()
             self.assertEqual(len(self.pilot.data['wakes']), int(count >= 3))
         self.assertEqual(self.gates(), [])
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
         self.assertIn(self.worktree, str(self.pilot.data['wakes']))
         self.assertEqual(self.local_refs[self.branch], 'd' * 40)
 
@@ -489,7 +596,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.gates(), [])
         self.assertEqual(len(self.pilot.data['wakes']), 1)
         self.assertIn('fatal: Not a valid commit name', str(self.pilot.data['wakes']))
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
 
     def test_sync_errors_use_last_nonempty_stderr_and_keep_private_cleanup(self):
         self.lagging()
@@ -511,7 +618,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
             self.assertEqual(self.pilot.data['retries']['advance:12:' + HEAD]['count'], count)
         self.assertEqual(self.local_refs[self.branch], 'd' * 40)
         self.assertEqual(self.gates(), [])
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
         self.assertEqual(len(self.pilot.data['wakes']), 1)
         self.assertIn('authoritative PR head differs', str(self.pilot.data['wakes']))
 
@@ -551,16 +658,16 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(len(self.gates()), 1)
 
     def test_parked_advance_migrates_and_equal_ref_gates_once(self):
-        self.pilot.data['actions']['old'] = dict(state='uncertain',
+        self.pilot.data.setdefault('actions', {})['old'] = dict(state='uncertain',
             identity=['advance', 'opaque-fingerprint'], task='T-001')
-        self.pilot.data.pop('migrated_t193', None); self.pilot.save()
+        self.pilot.data.pop('migrated_t205', None); self.pilot.save()
         restored = A.Pilot(self.ctx)
-        self.assertEqual(restored.data['actions'], {})
+        self.assertNotIn('actions', restored.data)
         self.pilot.data = restored.data
         self.local_refs[PR['head']['ref']] = HEAD
         self.sync_poll(); self.sync_poll()
         self.assertEqual(len(self.gates()), 1)
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
         self.assertEqual(self.pilot.data['wakes'], {})
 
     def test_each_sync_command_error_defers_advance_and_retries(self):
@@ -573,7 +680,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
                 self.assertEqual(self.pilot.data['retries']['sync:12:' + HEAD]['count'], 1)
                 self.assertEqual(self.gates(), [])
                 self.assertEqual(self.pilot.data['wakes'], {})
-                self.assertEqual(self.pilot.data['actions'], {})
+                self.assertNotIn('actions', self.pilot.data)
 
     def test_exhausted_sync_checks_equal_ref_but_makes_no_more_attempts(self):
         self.lagging()
@@ -594,14 +701,15 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.pilot.advance(PR, CHECKS, [])
         self.pilot.advance(PR, CHECKS, [])
         self.assertEqual(len(self.gates()), 1)
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
         self.assertEqual(self.pilot.data['advanced']['12']['head'], HEAD)
 
     def test_authoritative_head_race_is_silent_and_next_observation_gates(self):
         self.pilot.authoritative_head = lambda *a: 'c' * 40
         self.pilot.advance(PR, CHECKS, [])
         self.assertEqual(self.gates(), [])
-        for name in ('advanced', 'retries', 'wakes', 'actions'):
+        self.assertNotIn('actions', self.pilot.data)
+        for name in ('advanced', 'retries', 'wakes'):
             self.assertEqual(self.pilot.data[name], {})
         pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
         self.pilot.advance(pr, [dict(CHECKS[0], head_sha='c' * 40)], [])
@@ -623,7 +731,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
                 self.assertIn(method + ' failed', str(self.pilot.data['wakes']))
                 self.assertNotIn('advancement needs reconciliation', str(self.pilot.data['wakes']))
                 self.assertEqual(self.pilot.data['advanced'], {})
-                self.assertEqual(self.pilot.data['actions'], {})
+                self.assertNotIn('actions', self.pilot.data)
         self.assertEqual(self.gates(), [])
 
     def test_success_clears_advance_retry(self):
@@ -649,7 +757,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
         for variant in variants:
             ident = 'autopilot-' + A.key(['alpha', f'advance-12-{HEAD}-{variant}'])
             self.assertIn(ident, self.pilot.data['wakes'])
-        self.assertEqual(self.pilot.data['actions'], {})
+        self.assertNotIn('actions', self.pilot.data)
 
     def test_fingerprint_change_while_counting_is_due_immediately(self):
         with patch.object(self.pilot, 'base_tip', side_effect=ValueError('base refused')):

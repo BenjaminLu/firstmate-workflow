@@ -324,16 +324,16 @@ class Rules(unittest.TestCase):
     def test_idle_and_identity(self):
         own = dict(bin='a'*40, skills='b'*40, dirty=False)
         target = dict(own, bin='c'*40)
-        pilot = types.SimpleNamespace(data=dict(jobs={}, actions={}, batches={}, wakes={}))
+        pilot = types.SimpleNamespace(data=dict(jobs={}, batches={}, wakes={}))
         reload = dict(request={'to': target}, failed_ids=[])
         self.assertTrue(A.reload_due(pilot, own, reload))
         for field, value in [('jobs', {'state':'running'}), ('jobs', {'state':'consuming'}),
-                             ('actions', {'state':'started'}), ('batches', {}), ('wakes', {'pushed':False})]:
+                             ('batches', {}), ('wakes', {'pushed':False})]:
             pilot.data[field]['one'] = value
             self.assertFalse(A.reload_due(pilot, own, reload), (field, value))
             pilot.data[field].clear()
         pilot.data.update(jobs={'a':{'state':'uncertain'}, 'b':{'state':'done'}},
-                          actions={'a':{'state':'done'}, 'b':{'state':'uncertain'}}, wakes={'a':{'pushed':True}})
+                          wakes={'a':{'pushed':True}})
         self.assertTrue(A.reload_due(pilot, own, reload))
         self.assertFalse(A.reload_due(pilot, own, dict(reload, failed_ids=[target])))
         self.assertFalse(A.reload_due(pilot, target, reload))
