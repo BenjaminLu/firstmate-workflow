@@ -314,6 +314,176 @@ assert_eq "64" "$rc" "--plan with FM_ROOT set but empty is refused, as the gate 
 rm -rf "$mr_dir"
 
 
+# T-196: the assignments, not just green shard exits, must cover the tree.
+cv_root="$(fixture)"
+cv_tmp="$(safe_tmpdir)"
+mkdir -p "$cv_tmp/shared" "$cv_tmp/mixed" "$cv_tmp/empty"
+for name in a b c d e f g; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$cv_root/tests/$name.test.sh"
+  printf 'tests/%s.test.sh 1\n' "$name" >> "$cv_tmp/a.timings"
+  printf 'tests/%s.test.sh 1\n' "$name" >> "$cv_tmp/b.timings"
+done
+# Shell suite discovery ignores dotfiles and nested suites.
+printf 'exit 99\n' > "$cv_root/tests/.hidden.test.sh"
+mkdir -p "$cv_root/tests/nested"
+printf 'exit 99\n' > "$cv_root/tests/nested/ignored.test.sh"
+# A assigns a,d,g to shard 1; B makes b the longest and alone in shard 1.
+printf 'tests/b.test.sh 100\n' >> "$cv_tmp/b.timings"
+for i in 1 2 3; do
+  rc=0
+  out="$(FM_ROOT="$cv_root" FM_CI_TIMINGS_IN="$cv_tmp/a.timings" \
+    FM_CI_ASSIGNED_OUT="$cv_tmp/shared/$i.txt" \
+    bash "$ROOT/bin/ci.sh" --stage bash --shard "$i/3" 2>&1)" || rc=$?
+  assert_eq "0" "$rc" "shared timings: shard $i succeeds"
+  assert_eq "# shard $i/3" "$(head -1 "$cv_tmp/shared/$i.txt" 2>/dev/null)" \
+    "assignment records shard $i/3 before its suites run"
+  assert_eq "$(shard_ran "$out" | sort)" "$(sed '1d' "$cv_tmp/shared/$i.txt" 2>/dev/null | sort)" \
+    "assignment names exactly the suites shard $i ran"
+done
+coverage() {
+  rc=0
+  out="$(FM_ROOT="$cv_root" bash "$ROOT/bin/ci.sh" --coverage "$1" 2>&1)" || rc=$?
+}
+coverage "$cv_tmp/shared"
+assert_eq "0" "$rc" "shared timings cover the tree exactly once"
+assert_eq "ci: coverage: 7 suites, each in exactly one of 3 shards" "$out" \
+  "coverage reports all seven suites and three shards without running a stage"
+for i in 1 2 3; do
+  FM_ROOT="$cv_root" FM_CI_TIMINGS_IN="$cv_tmp/b.timings" \
+    FM_CI_ASSIGNED_OUT="$cv_tmp/mixed/$i.txt" \
+    bash "$ROOT/bin/ci.sh" --stage bash --shard "$i/3" >/dev/null 2>&1
+done
+assert_ne "$(cat "$cv_tmp/shared/1.txt" 2>/dev/null)" "$(cat "$cv_tmp/mixed/1.txt" 2>/dev/null)" \
+  "mixed timings precondition: shard 1 receives different suites under A and B"
+cp "$cv_tmp/shared/1.txt" "$cv_tmp/mixed/1.txt"
+coverage "$cv_tmp/mixed"
+assert_eq "1" "$rc" "mixed timings fail coverage despite passing suites"
+assert_matches "$out" 'ci: coverage: suite in (no shard|2 shards): tests/[a-g]\.test\.sh' \
+  "mixed timings name a real skipped or repeated fixture suite"
+
+cp -R "$cv_tmp/shared" "$cv_tmp/missing"
+rm -f "$cv_tmp/missing/2.txt"
+coverage "$cv_tmp/missing"
+assert_eq "1" "$rc" "a missing shard fails"
+assert_contains "$out" 'ci: coverage: missing shard 2' "the missing shard is named"
+coverage "$cv_tmp/empty"
+assert_eq "1" "$rc" "no assignments fails"
+assert_contains "$out" "ci: coverage: no assignment files in $cv_tmp/empty" "the empty directory is named"
+assert_contains "$out" 'ci: coverage: suite in no shard: tests/a.test.sh' "empty assignments also report missing suites"
+
+# Hand-authored assignments isolate each validation rule from bin packing.
+mkdir -p "$cv_tmp/rules"
+{ printf '# shard 1/3\n'; printf 'tests/%s.test.sh\n' a b c d; } > "$cv_tmp/rules/1.txt"
+{ printf '# shard 2/3\n'; printf 'tests/%s.test.sh\n' e f g; } > "$cv_tmp/rules/2.txt"
+printf '# shard 3/3\n' > "$cv_tmp/rules/3.txt"
+printf '# shard 3/3\n' > "$cv_tmp/rules/4.txt"
+coverage "$cv_tmp/rules"
+assert_eq "1" "$rc" "duplicate empty shards still fail"
+assert_eq "ci: coverage: duplicate shard 3: $cv_tmp/rules/4.txt" "$out" "the later sorted file owns the duplicate diagnostic"
+for header in 'shard 2/3' '# shard x/3' '# shard 4/3'; do
+  printf '%s\ntests/a.test.sh\ntests/gone.test.sh\n' "$header" > "$cv_tmp/rules/4.txt"
+  coverage "$cv_tmp/rules"
+  assert_eq "1" "$rc" "invalid header $header fails"
+  if [ "$header" = '# shard 4/3' ]; then
+    assert_eq "ci: coverage: shard out of range: $cv_tmp/rules/4.txt" "$out" \
+      "out-of-range header is excluded entirely, with no bad-header diagnostic"
+  else
+    assert_eq "ci: coverage: bad header: $cv_tmp/rules/4.txt" "$out" \
+      "bad-header file is excluded entirely, with no duplicate or unknown suite counted"
+  fi
+done
+# Invalid files cannot supply a missing slot or change the reference count.
+printf '# shard 4/3\ntests/e.test.sh\n' > "$cv_tmp/rules/2.txt"
+rm -f "$cv_tmp/rules/4.txt"
+coverage "$cv_tmp/rules"
+assert_contains "$out" 'ci: coverage: missing shard 2' "invalid shard supplies no slot"
+assert_contains "$out" 'ci: coverage: suite in no shard: tests/e.test.sh' "invalid shard supplies no suite"
+{ printf '# shard 2/4\n'; printf 'tests/%s.test.sh\n' e f g; } > "$cv_tmp/rules/2.txt"
+coverage "$cv_tmp/rules"
+assert_eq "1" "$rc" "disagreeing shard count fails"
+assert_eq "ci: coverage: shard count disagrees: $cv_tmp/rules/2.txt" "$out" "the first valid sorted header supplies n"
+{ printf '# shard 2/3\n'; printf 'tests/%s.test.sh\n' e f g; } > "$cv_tmp/rules/2.txt"
+printf 'tests/gone.test.sh\n' >> "$cv_tmp/rules/3.txt"
+coverage "$cv_tmp/rules"
+assert_eq "1" "$rc" "unknown suite fails"
+assert_eq 'ci: coverage: unknown suite: tests/gone.test.sh' "$out" "unknown suite is named"
+printf '# shard 3/3\n\n' > "$cv_tmp/rules/3.txt"
+coverage "$cv_tmp/rules"
+assert_eq "0" "$rc" "empty suite lines are ignored"
+printf 'tests/a.test.sh\n' >> "$cv_tmp/rules/1.txt"
+coverage "$cv_tmp/rules"
+assert_eq "1" "$rc" "a repeated suite in one file also fails the multiset check"
+assert_eq 'ci: coverage: suite in 2 shards: tests/a.test.sh' "$out" "every occurrence is counted"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$cv_root/tests/new.test.sh"
+coverage "$cv_tmp/shared"
+assert_eq "1" "$rc" "a suite added after assignments fails"
+assert_eq 'ci: coverage: suite in no shard: tests/new.test.sh' "$out" "coverage reads the current tree"
+rm -f "$cv_root/tests/new.test.sh"
+
+# A plain run writes nothing new into its root or caller-owned temp directory.
+cv_before="$(find "$cv_root" "$cv_tmp" -type f | sort)"
+rc=0
+out="$(unset FM_CI_ASSIGNED_OUT; FM_ROOT="$cv_root" TMPDIR="$cv_tmp" \
+  bash "$ROOT/bin/ci.sh" --stage bash --shard 1/3 2>&1)" || rc=$?
+assert_eq "0" "$rc" "assignment output remains optional"
+assert_eq "$cv_before" "$(find "$cv_root" "$cv_tmp" -type f | sort)" "unset assignment output creates no persistent file"
+FM_ROOT="$cv_root" FM_CI_ASSIGNED_OUT="$cv_tmp/unsharded/all.txt" \
+  bash "$ROOT/bin/ci.sh" --stage bash >/dev/null 2>&1
+assert_eq '# shard 1/1' "$(head -1 "$cv_tmp/unsharded/all.txt" 2>/dev/null)" "no --shard records 1/1 and creates its directory"
+assert_eq "$(printf 'tests/%s.test.sh\n' a b c d e f g)" \
+  "$(sed '1d' "$cv_tmp/unsharded/all.txt" 2>/dev/null)" "unsharded assignment lists every suite in order"
+rc=0
+out="$(cd "$cv_tmp" && FM_ROOT="$cv_root" FM_CI_ASSIGNED_OUT=relative/all.txt \
+  bash "$ROOT/bin/ci.sh" --stage bash 2>&1)" || rc=$?
+assert_eq "0" "$rc" "a relative assignment path succeeds"
+assert_eq '# shard 1/1' "$(head -1 "$cv_tmp/relative/all.txt" 2>/dev/null)" "relative assignment stays at the caller path"
+assert_ok "test ! -e '$cv_root/relative'" "relative assignment does not leak into FM_ROOT"
+# Empty shards still publish a header, and non-bash stages publish nothing.
+FM_ROOT="$cv_root" FM_CI_ASSIGNED_OUT="$cv_tmp/empty-shard.txt" \
+  bash "$ROOT/bin/ci.sh" --stage bash --shard 8/8 >/dev/null 2>&1
+assert_eq '# shard 8/8' "$(cat "$cv_tmp/empty-shard.txt" 2>/dev/null)" "empty shard publishes its assignment"
+FM_ROOT="$cv_root" FM_CI_ASSIGNED_OUT="$cv_tmp/non-bash.txt" \
+  bash "$ROOT/bin/ci.sh" --stage bun >/dev/null 2>&1
+assert_ok "test ! -e '$cv_tmp/non-bash.txt'" "non-bash stage writes no assignment"
+# A failing suite can inspect its assignment: it must already exist.
+printf 'test -s "$CV_EXPECTED_ASSIGNMENT" || exit 23\necho "assignment present before suite"\nexit 7\n' > "$cv_root/tests/a.test.sh"
+rc=0
+out="$(CV_EXPECTED_ASSIGNMENT="$cv_tmp/failing.txt" FM_ROOT="$cv_root" FM_CI_ASSIGNED_OUT="$cv_tmp/failing.txt" \
+  bash "$ROOT/bin/ci.sh" --stage bash 2>&1)" || rc=$?
+assert_eq "1" "$rc" "recording assignments does not hide a failing suite"
+assert_contains "$out" 'assignment present before suite' "the suite saw its assignment before running"
+assert_contains "$(cat "$cv_tmp/failing.txt" 2>/dev/null)" 'tests/a.test.sh' "failed suite remains assigned"
+
+# Suites that invoke ci.sh on a fixture must not overwrite the parent shard.
+cv_nested="$(fixture)"
+printf 'exit 0\n' > "$cv_nested/tests/inner.test.sh"
+cat > "$cv_root/tests/a.test.sh" <<'NESTED'
+FM_ROOT="$CV_NESTED_ROOT" bash "$CV_CI_SCRIPT" --stage bash >/dev/null 2>&1
+NESTED
+rc=0
+out="$(CV_NESTED_ROOT="$cv_nested" CV_CI_SCRIPT="$ROOT/bin/ci.sh" \
+  FM_ROOT="$cv_root" FM_CI_ASSIGNED_OUT="$cv_tmp/parent.txt" \
+  bash "$ROOT/bin/ci.sh" --stage bash 2>&1)" || rc=$?
+assert_eq "0" "$rc" "a suite can run nested fixture CI"
+assert_eq "$(printf '# shard 1/1\n'; printf 'tests/%s.test.sh\n' a b c d e f g)" \
+  "$(cat "$cv_tmp/parent.txt" 2>/dev/null)" "nested fixture CI cannot overwrite its parent assignment"
+safe_rm_rf "$cv_nested"
+
+for flag in --stage --shard --plan; do
+  case "$flag" in --stage) value=bash ;; *) value=1/3 ;; esac
+  rc=0; out="$(FM_ROOT="$cv_root" bash "$ROOT/bin/ci.sh" --coverage "$cv_tmp/shared" "$flag" "$value" 2>&1)" || rc=$?
+  assert_eq "64" "$rc" "--coverage refuses $flag"
+done
+rc=0; out="$(FM_ROOT="$cv_root" bash "$ROOT/bin/ci.sh" --coverage 2>&1)" || rc=$?
+assert_eq "64" "$rc" "--coverage needs a directory value"
+rc=0; out="$(FM_ROOT="$cv_root" bash "$ROOT/bin/ci.sh" --coverage "$cv_tmp/absent" 2>&1)" || rc=$?
+assert_eq "64" "$rc" "--coverage refuses a missing directory"
+rc=0; out="$(FM_ROOT='' bash "$ROOT/bin/ci.sh" --coverage "$cv_tmp/shared" 2>&1)" || rc=$?
+assert_eq "64" "$rc" "--coverage refuses FM_ROOT set but empty"
+rc=0; out="$(FM_ROOT="$cv_tmp/no-tree" bash "$ROOT/bin/ci.sh" --coverage "$cv_tmp/shared" 2>&1)" || rc=$?
+assert_eq "2" "$rc" "coverage refuses a nonexistent FM_ROOT like --plan"
+safe_rm_rf "$cv_root" "$cv_tmp"
+
 PATH="$suite_original_path"; export PATH
 safe_rm_rf "$suite_tools"
 finish

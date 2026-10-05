@@ -20,6 +20,10 @@
 #                        in seconds from its byte size and the recorded rate
 #   FM_CI_TIMINGS_OUT=path the bash stage writes the durations it observed
 #                        here, in the same format, to the millisecond
+#   FM_CI_ASSIGNED_OUT=path writes the bash assignment before any suite runs:
+#                        "# shard i/n", then one suite path per line
+#   --coverage <dir>     run no stage: require the *.txt assignments to cover
+#                        tests/*.test.sh exactly once across all shards
 #   --plan i/n -- <suite>...  run nothing: print which of the given suites
 #                        the i-th of n shards takes, by the same split
 #                        --shard makes of the bash suites (T-158: the
@@ -47,8 +51,12 @@ _fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
 ci_stage=''
 ci_shard=''
 ci_plan=''
+ci_coverage=''
+ci_coverage_set=0
+ci_run_option=0
 ci_plan_suites=()
 while [ $# -gt 0 ]; do
+  case "$1" in --stage|--stage=*|--shard|--shard=*|--plan) ci_run_option=1 ;; esac
   case "$1" in
     --stage) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
              ci_stage="$2"; shift 2 ;;
@@ -56,6 +64,8 @@ while [ $# -gt 0 ]; do
     --shard) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
              ci_shard="$2"; shift 2 ;;
     --shard=*) ci_shard="${1#--shard=}"; shift ;;
+    --coverage) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
+                ci_coverage="$2"; ci_coverage_set=1; shift 2 ;;
     --plan) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
             ci_plan="$2"; shift 2
             if [ "${1-}" = -- ]; then
@@ -66,6 +76,78 @@ while [ $# -gt 0 ]; do
     *) printf 'ci: unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
 done
+# Coverage runs before budget, temporary directories, or any stage setup.
+# Keep the supplied directory relative to the caller, as an output path is.
+if [ "$ci_coverage_set" = 1 ]; then
+  if [ "$ci_run_option" = 1 ]; then
+    echo 'ci: --coverage takes no --stage, --shard or --plan' >&2
+    exit 64
+  fi
+  if [ ! -d "$ci_coverage" ]; then
+    echo 'ci: --coverage needs an existing directory' >&2
+    exit 64
+  fi
+  if [ "${FM_ROOT+set}" = set ] && [ -z "$FM_ROOT" ]; then
+    echo 'ci: FM_ROOT is set but empty; unset it to run against this tree' >&2
+    exit 64
+  fi
+  ci_coverage_root="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  [ -d "$ci_coverage_root" ] || exit 2
+  python3 - "$ci_coverage" "$ci_coverage_root" <<'PYCOVERAGE'
+from collections import Counter
+from glob import escape, glob
+from pathlib import Path
+import re
+import sys
+
+directory, root = map(Path, sys.argv[1:])
+files = sorted(Path(path) for path in glob(escape(str(directory)) + "/*.txt") if Path(path).is_file())
+expected = {Path(path).relative_to(root).as_posix()
+            for path in glob(escape(str(root)) + "/tests/*.test.sh")}
+counts = Counter()
+shards = set()
+total = None
+errors = []
+if not files:
+    errors.append(f"no assignment files in {sys.argv[1]}")
+for path in files:
+    with path.open(newline="") as stream:
+        lines = stream.read().split("\n")
+    match = re.fullmatch(r"# shard ([1-9][0-9]*)/([1-9][0-9]*)", lines[0])
+    if not match:
+        errors.append(f"bad header: {path}")
+        continue
+    index, size = map(int, match.groups())
+    if index > size:
+        errors.append(f"shard out of range: {path}")
+        continue
+    if total is None:
+        total = size
+    if size != total:
+        errors.append(f"shard count disagrees: {path}")
+    if index in shards:
+        errors.append(f"duplicate shard {index}: {path}")
+    shards.add(index)
+    counts.update(line for line in lines[1:] if line)
+if total is not None:
+    for index in range(1, total + 1):
+        if index not in shards:
+            errors.append(f"missing shard {index}")
+for path in sorted(expected | counts.keys()):
+    if path not in expected:
+        errors.append(f"unknown suite: {path}")
+    if counts[path] == 0:
+        errors.append(f"suite in no shard: {path}")
+    elif counts[path] > 1:
+        errors.append(f"suite in {counts[path]} shards: {path}")
+if errors:
+    for error in errors:
+        print(f"ci: coverage: {error}")
+    sys.exit(1)
+print(f"ci: coverage: {len(expected)} suites, each in exactly one of {total} shards")
+PYCOVERAGE
+  exit $?
+fi
 case "$ci_stage" in
   ''|fast|bash|bun|e2e) : ;;
   *) printf 'ci: --stage must be one of: fast, bash, bun, e2e\n' >&2; exit 64 ;;
@@ -264,6 +346,15 @@ if [ "${FM_ROOT+set}" = set ] && [ -z "$FM_ROOT" ]; then
   echo "ci: FM_ROOT is set but empty; unset it to run against this tree" >&2
   exit 64
 fi
+# Resolve a relative assignment output before changing to the tested tree.
+ci_assigned_out="${FM_CI_ASSIGNED_OUT-}"
+# This output belongs to this invocation. A suite may run ci.sh on its own
+# fixture; it must opt in to a separate output, not overwrite this shard.
+[ "${FM_CI_ASSIGNED_OUT+set}" != set ] || export -n FM_CI_ASSIGNED_OUT
+case "$ci_assigned_out" in
+  ''|/*) : ;;
+  *) ci_assigned_out="$PWD/$ci_assigned_out" ;;
+esac
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 2
 shopt -s nullglob
@@ -424,6 +515,15 @@ if [ -n "$ci_shard_n" ]; then
   done < <(shard_suites "$ci_shard_i" "$ci_shard_n")
 else
   for i in "${!suites[@]}"; do shard_indices+=("$i"); done
+fi
+# Record the complete assignment before the pool can start, including an
+# empty shard. Outcomes remain the pool/status check's responsibility.
+if want_stage bash && [ "${FM_CI_ASSIGNED_OUT+set}" = set ]; then
+  mkdir -p "$(dirname "$ci_assigned_out")" || exit 1
+  {
+    printf '# shard %s/%s\n' "${ci_shard_i:-1}" "${ci_shard_n:-1}"
+    for i in ${shard_indices[@]+"${shard_indices[@]}"}; do printf '%s\n' "${suites[$i]}"; done
+  } > "$ci_assigned_out" || exit 1
 fi
 # Slowest first, so the long ones are not the last to start. The families the
 # gate has always spent longest on lead by name; the rest follow by size,
