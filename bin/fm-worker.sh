@@ -1518,6 +1518,16 @@ spoke=0
 # request to find out - no permission, rate limited, locked, wrong
 # number. The run said where the text is and not what went wrong.
 say_err=''
+note_marker=''
+unsent_note=''
+note_settled=0
+note_landed() {   # note_landed <pr> <sha256>: found=0, absent=1, lookup failed=2
+  local endpoint bodies
+  endpoint="repos/{owner}/{repo}/issues/$1/comments"
+  [ "${FM_EXTERNAL:-0}" != 1 ] || endpoint="repos/$GH_REPO/issues/$1/comments"
+  bodies="$(cd "$tree" && "${GH:-${FM_GH:-gh}}" api "$endpoint" --paginate --jq '.[].body')" || return 2
+  grep -Fq -- "<!-- fm-note sha256=$2 -->" <<<"$bodies"
+}
 post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
@@ -1538,7 +1548,37 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
     fi
   fi
   [ "$projection" = comments ] || return 0
-  if fm_comment_projection "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
+  local body="$1" landed=0 retries=0 lookup_rc delay marker_hex
+  local retry_delays=()
+  if [ "$FM_EXTERNAL" = 0 ]; then
+    marker_hex="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1")" || return 1
+    body="$(scratch_new)" || return 1
+    scratch_add "$body"
+    { cat "$1" && printf '\n<!-- fm-note sha256=%s -->\n' "$marker_hex"; } > "$body" || return 1
+    read -r -a retry_delays <<<"${FM_NOTE_RETRY_DELAYS:-2 5}"
+  fi
+  while :; do
+    [ "$FM_EXTERNAL" != 0 ] || note_marker="$marker_hex"
+    if fm_comment_projection "$2" --body-file "$body" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
+      landed=1
+      break
+    fi
+    [ "$FM_EXTERNAL" = 0 ] && [ "$retries" -lt 2 ] && [ "$retries" -lt "${#retry_delays[@]}" ] || break
+    [ -n "$say_err" ] && grep -Eq 'GraphQL: Something went wrong while executing your query|HTTP 50[0234]' "$say_err" || break
+    delay="${retry_delays[$retries]}"
+    # Invalid configuration cannot turn the bound into an uncontrolled retry.
+    [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || break
+    sleep "$delay"
+    if note_landed "$2" "$note_marker"; then
+      landed=1
+      break
+    else
+      lookup_rc=$?
+    fi
+    [ "$lookup_rc" = 1 ] || break
+    retries=$((retries + 1))
+  done
+  if [ "$landed" = 1 ]; then
     spoke=1
     emit --type ask_pass_criteria --pr "$2" --en "the worker spoke on #$2" \
          --tw "工人在 #$2 上發言"
@@ -1546,23 +1586,13 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
     echo 'fm-worker: optional comment projection failed; local record retained' >&2
     FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional comment publication failed; local record retained' \
          --tw '選用的留言發布失敗；本機紀錄已保留'
-    # Only the external path retained this note through fm_private_note.
-    # Self-project refusals still need keep_unsent and exit 73.
+    # External recovery remains the private note's responsibility.
     if [ "$FM_EXTERNAL" = 1 ]; then spoke=1; fi
   fi
 }
-# A question that went nowhere used to be a line on standard error and
-# an exit 0: the run reported a complete round, the log said nothing,
-# and the next round asked the same question again. This does not
-# UNSTICK the task - nothing reads worker_crashed and acts on it, and a
-# task with an open pull request is not one the dispatcher restarts -
-# but it stops the run lying about what happened, and it keeps what the
-# worker wrote so a human can post it.
-#
-# So the file is kept, not removed, and the event carries the number:
-# a failed round that cannot be linked to the pull request it failed on
-# is a card the captain cannot act on.
-save_unsent() {   # save_unsent <file>; copies it under state/unsent/ and says where
+# Retain original bytes outside the disposable worktree. Known PRs carry
+# recovery metadata; a report saved before its push has no published head.
+save_unsent() {   # save_unsent <file> [pr] [head]; null head means publication pending
   # Out of the worktree, which is removed and recreated on the next
   # round: keeping the file where it was written is not keeping it, and
   # the design says the text survives so a human can post it. Beside
@@ -1584,17 +1614,29 @@ save_unsent() {   # save_unsent <file>; copies it under state/unsent/ and says w
   echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
   if cp "$1" "$kept" 2>/dev/null; then
     echo "fm-worker: it is at ${kept#"$REPO"/}" >&2
+    if [ -n "${2:-}" ]; then
+      if ! jq -n --arg task "$TASK" --argjson pr "$2" --argjson round "${round_number:-1}" \
+          --arg actor "${NAME:-}" --arg marker "${note_marker:-}" \
+          --arg saved_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg head "${3:-$round_head}" \
+          '{task:$task,pr:$pr,round:$round,actor:$actor,saved_at:$saved_at,
+            head:(if $head=="null" then null else $head end)} +
+           (if $marker=="" then {} else {marker:$marker} end)' > "$kept.json"; then
+        echo "fm-worker: could not record the pull request beside $kept" >&2
+      fi
+    fi
   else
     echo "fm-worker: and it could not be kept either - ${kept#"$REPO"/} is not writable" >&2
-    if [ "$1" = "$say" ]; then
+    if [ "$1" = "$say" ] && [ "${3:-}" != null ]; then
       echo "fm-worker: the text is in $say until the next round recreates that worktree" >&2
     else
-      # a scratch copy is removed on exit, so print it rather than
-      # naming a file that will not be there to read
+      # Scratch and publication-pending copies are removed, so print the
+      # text rather than naming a file that will not be there to read.
       echo "fm-worker: the text was:" >&2
       sed 's/^/fm-worker: | /' "$1" >&2
     fi
+    return 1
   fi
+  return 0
 }
 keep_unsent() {   # keep_unsent <file>; reads $PR, never returns
   note_refused "$1"
@@ -1604,7 +1646,7 @@ note_refused() {   # note_refused <file>; keeps it and says why, and returns
   # the held note included: this is its keeping, and the EXIT trap
   # must not keep it a second time
   held_settled=1
-  save_unsent "$1"
+  save_unsent "$1" "${PR:-}" || true
   # Two causes, because there are two. The middle one - "or a gh that
   # did not answer" - is gone: the lookup keeps its exit status now and
   # stops the run before this point, so an empty $PR here means the
@@ -1619,6 +1661,34 @@ note_refused() {   # note_refused <file>; keeps it and says why, and returns
     emit --type worker_crashed --en "the worker asked before there was a pull request" \
          --tw "工人在還沒有 PR 的時候提問"
   fi
+}
+note_unsent() {   # save now, then note_unsent_published only after a successful push
+  held_settled=1
+  note_settled=1
+  echo "fm-worker: #$PR would not take the comment" >&2
+  [ -z "$say_err" ] || sed 's/^/fm-worker: gh: /' "$say_err" >&2
+  if save_unsent "$1" "$PR" null; then
+    unsent_note="$kept"
+  else
+    refused=1
+    emit --type worker_crashed --pr "$PR" \
+      --en "the worker's note could not be posted to #$PR or kept" \
+      --tw "工人的留言貼不上 #${PR}，也無法保存"
+  fi
+}
+note_unsent_published() {
+  [ -n "$unsent_note" ] || return 0
+  local metadata
+  metadata="$(scratch_new)" || metadata=''
+  [ -z "$metadata" ] || scratch_add "$metadata"
+  if [ -z "$metadata" ] || ! jq --arg head "$(git -C "$tree" rev-parse HEAD)" \
+       '.head=$head' "$unsent_note.json" > "$metadata" || ! mv "$metadata" "$unsent_note.json"; then
+    echo "fm-worker: could not record the pull request beside $unsent_note" >&2
+  fi
+  emit --type worker_note_unsent --pr "$PR" \
+    --en "the worker's note could not be posted to #$PR; the work is published and the note is kept in state/unsent" \
+    --tw "工人的留言貼不上 #${PR}；工作已發布，留言保存在 state/unsent"
+  unsent_note=''
 }
 # A note is not only a question. An adapter that may edit but not execute
 # finishes the work and says which checks it could not run, and on a
@@ -1667,10 +1737,11 @@ if [ "$FM_EXTERNAL" = 1 ] && [ "$asked" = 1 ] && [ -z "$PR" ] && ! worker_change
 fi
 held=''
 held_settled=0
+held_has_work=0
 lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
   held_settled=1
   echo "fm-worker: the run ended (exit $1) before the worker's note reached a pull request" >&2
-  save_unsent "$held"
+  save_unsent "$held" "${PR:-}" || true
   emit --type worker_crashed ${PR:+--pr "$PR"} \
        --en "the worker's note was not posted: the run ended (exit $1) before it reached a pull request" \
        --tw "工人的留言沒有貼出：執行在送到 PR 之前就結束了（exit ${1}）"
@@ -1681,26 +1752,23 @@ if [ "$projection" = comments ] && [ "$asked" = 1 ] && [ -z "$PR" ] && { worker_
   scratch_add "$_held"
   cp "$say" "$_held" || { echo "fm-worker: could not set the worker's note aside" >&2; exit 70; }
   held="$_held"
+  worker_changed_files && held_has_work=1
 fi
 if [ "$asked" = 1 ] && [ -n "$PR" ]; then
   post_note "$say" "$PR"
 fi
-# A note the pull request refused ends the round with 73, but not before a
-# rebuild the round can commit is published: exiting here would leave the
-# branch on its old head, the way the asking exit did (T-098). The note is
-# kept now, once, and never posted again - a refusal gh reported after
-# GitHub stored the comment would be a second copy - so no exit on the
-# way to the push can lose it. A later failure there ends the round with
-# its own code instead.
+# Reports beside worker changes are retained now but only announced after
+# publication. Question-only and rebuild-only refusals retain exit 73.
 refused=0
-if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ] && [ -n "$PR" ] && [ "$rebuilt" = 1 ] \
-   && { worker_changed_files || rebuild_publishes; }; then
-  note_refused "$say"
-  refused=1
+if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ] && [ -n "$PR" ]; then
+  if [ "$FM_EXTERNAL" = 0 ] && worker_changed_files; then
+    note_unsent "$say"
+  elif [ "$rebuilt" = 1 ] && { worker_changed_files || rebuild_publishes; }; then
+    note_refused "$say"
+    refused=1
+  fi
 fi
-# held means the note waits for the pull request opened below: the only
-# case where the note not landing yet is not the end of the round
-if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ] && [ "$refused" = 0 ]; then
+if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ] && [ "$refused" = 0 ] && [ "${note_settled:-0}" = 0 ]; then
   keep_unsent "$say"
 fi
 rm -f "$say"
@@ -1959,6 +2027,7 @@ fi
 # a commit that is not on origin, and the log must not say it was pushed.
 emit_status "Commit pushed on $branch" "已在 $branch 上推送 commit"
 emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"
+note_unsent_published
 rebuild_args=()
 if [ "$rebuilt" = 1 ]; then
   rebuild_args=(--data "$(jq -cn --arg prev "$rebuild_prev" --arg base "$BASE" \
@@ -2026,14 +2095,20 @@ if [ "$rebuilt" = 1 ]; then
     echo "fm-worker: could not note the rebuild on #$num; the previous head was ${rebuild_prev}" >&2
   fi
 fi
-# the note that waited for a pull request has one now. Refused, it is
-# kept and the run fails the way a refused note on an existing pull
-# request does - the work and the pull request stand either way.
+# The held note now has a PR. Use the pre-commit work observation: a clean
+# worktree after publication no longer tells us whether this worker changed it.
 if [ -n "$held" ]; then
   PR="$num"
   post_note "$held" "$num"
   [ "$spoke" = 1 ] && held_settled=1
-  [ "$spoke" = 1 ] || keep_unsent "$held"
+  if [ "$spoke" != 1 ]; then
+    if [ "$FM_EXTERNAL" = 0 ] && [ "$held_has_work" = 1 ] && ! first_round_question; then
+      note_unsent "$held"
+      note_unsent_published
+    else
+      keep_unsent "$held"
+    fi
+  fi
 fi
 # Publication is complete: bind the optional progress projection to this head.
 if [ "$FM_EXTERNAL" = 1 ] && [ "$projection" != comments ]; then
@@ -2043,8 +2118,7 @@ if [ "$FM_EXTERNAL" = 1 ] && [ "$projection" != comments ]; then
       --tw '選用的工作投影發布失敗；本機報告已保留'
   fi
 fi
-# the note refused above was kept there; the rebuild is out, and the round
-# ends the way a refused note ends it
+# the note refused above still requires 73 for a question-only round or failed retention.
 [ "$refused" = 0 ] || exit 73
 printf '%s\n' "$branch"
 [ "${rc:-1}" = "0" ] || exit 1

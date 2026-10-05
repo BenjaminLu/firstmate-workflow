@@ -207,7 +207,12 @@ draft and posts the note, with a scoped question record when required.
 An ordinary note with no changed files and no PR is premature: it is kept under
 `state/unsent/` and the round fails. Inspect its reported publication result;
 writing the file alone does not establish that the reviewer received it.
-Preserve any reported recovery copy on failure.
+For the self project, a note beside changed files that cannot be posted is
+kept with a pull request sidecar in `state/unsent/`; once the work is pushed,
+`worker_note_unsent` is emitted and the round still completes. Firstmate can
+list and recover these notes with `bin/fm.sh unsent [--post]`. Questions that
+cannot be posted still fail, as does a note that cannot be kept. Preserve any
+reported recovery copy; keeping it does not establish publication.
 
 A round in which you only ask is a complete round. Do not change files as
 well as asking: the point of asking is that you do not yet know what would

@@ -199,7 +199,7 @@ lock — `flock(1)` does not ship on macOS. `bin/ci.sh` fails if anything under
 Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
 `gate_failed` `review_opened` `review_failed` `ask_pass_criteria`
 `criteria_returned` `protocol_violation` `approved` `merged` `closed`
-`decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
+`decision_requested` `decision_made` `worker_crashed` `worker_note_unsent` `vendor_unavailable`
 `agent_finished` `crew_status` `parked` `unparked` `spec_pinned`
 `spec_repinned` `autopilot_waiting` `conventions_drift`.
 
@@ -818,13 +818,29 @@ from an earlier failure.) It used to be a line on standard error and an
 exit 0: the reviewer waited for a question it would never see, the next
 round asked it again, and the board showed a round that went fine.
 
-This does not unstick the task, and the design should not claim it
-does. Nothing reads `worker_crashed` and acts on it, and a task whose
-pull request is open is not one the dispatcher restarts, so the round
-still ends with a reviewer waiting. What changes is that the run no
-longer says it went well: the failure is on the board, under the pull
-request it happened on, with the text kept where the next round will
-not delete it. Something that picks it up is its own task.
+For the self project, a note beside worker changes that are published is a
+recoverable side issue: its original bytes are kept under `state/unsent/`,
+with a `.md.json` sidecar recording task, PR, round, actor, marker and saved time.
+The sidecar's `head` stays null until the push succeeds. Only then is it updated
+to the pushed head and `worker_note_unsent` emitted with the PR and bilingual
+summary; the round ends successfully. A failed push keeps its own exit code and emits
+no unsent-note event. A copy that cannot be kept emits `worker_crashed`; the
+work still publishes and the round ends `73`. Sidecar-writing failures warn
+without changing the outcome. Known-PR question failures also get a sidecar;
+notes never offered have no marker. External private recovery is unchanged.
+
+`bin/fm.sh unsent` lists kept notes in name order, including old files with
+no PR recorded and unpublished notes. `bin/fm.sh unsent --post` resolves the
+installation's default self project, requires comments projection, and uses
+that repository as cwd. It skips legacy files without a PR and null heads,
+looks up the marker before posting, and moves delivered `.md`/`.json` pairs to
+`state/unsent/posted/`; it deletes nothing. A failed lookup or post leaves the
+copy for recovery. An external default lists nothing and refuses `--post`.
+The autopilot persists one judgment wake for `worker_note_unsent`, even while
+the task is busy, naming `bin/fm.sh unsent --post`; restart does not repeat it.
+Failed rounds also enter the autopilot's judgment path. Neither event itself
+restarts a worker or establishes delivery to firstmate. The new note event
+changes neither the board lane nor the voyage's crash state.
 
 Nothing reads the worker's exit status either. `fm-dispatch` starts it
 through a session-owned lifeline keeper and does not wait for completion,
@@ -843,7 +859,9 @@ script whose executable bit could not be set before it, or a
 rebuild on the base that could not be made —
 `71` the push failed — a rebuilt branch's lease refused included — `72` no
 pull request number came back, `73` the worker had
-something to say and there was nowhere to put it, `74` GitHub could not
+a question that could not be posted, a refused rebuild-only note, or a note
+that could neither be posted nor kept (a kept note beside published worker
+changes ends successfully), `74` GitHub could not
 say which pull request the branch has, `75` a rebuilt round was refused
 before its commit — a conflict marker left, a conflict with no markers left
 exactly as the merge left it, a HEAD no longer on the rebuild base, or the
@@ -912,10 +930,21 @@ the commit is the rebuild alone; otherwise the worker's changes are in it
 on top. An asking round is still reported as asked, and its question
 still goes on the pull request: the one there is, or the one the push
 opens. A note the pull request refuses is kept under `state/unsent/` at
-once, and only once: it is never offered again, since a refusal can come
-back for a comment GitHub stored. The rebuild is still pushed, and the
-round then fails with `73`; a failure on the way to the push ends it with
-that failure's own code instead, the note already kept. Such a round used
+once, and only once. For self-project comments, the posted body ends with
+`<!-- fm-note sha256=<hex> -->`, hashing the original file bytes without changing
+the kept file. Only GitHub's transient GraphQL execution error and HTTP
+500/502/503/504 are retried, at most twice (default delays 2 and 5 seconds).
+Each retry follows a marker lookup: found means delivered; lookup failure
+stops; absent permits retry. A lookup may lag GitHub's store, so this narrows
+duplicate risk rather than proving no copy exists. Other refusals and external
+comments are never retried.
+
+The rebuild is still pushed. With worker changes, a kept note gets its sidecar
+and `worker_note_unsent` only after publication, and the round ends successfully. With
+no worker changes, the refused note still ends `73`, including a note held
+for the PR this rebuild opens. A failure on the way to the push keeps its own
+code and the already-kept note; a changed-work note's sidecar still has
+`head: null` and emits no unsent-note wake. A refused rebuild-only round used
 to publish nothing, and the branch stayed on its old head, `DIRTY` on
 GitHub, until the captain pushed it by hand (T-089, T-086).
 
@@ -5307,7 +5336,7 @@ delivered wake files or requeueing anything. Because legacy fingerprints cannot
 identify a PR, the new advance map starts empty: eligible open PRs gate once
 more after upgrade, subject to busy jobs and existing merge-card deduplication.
 Jobs and their recovery remain unchanged. CI
-failures, findings, failed/lost rounds, B/C answers, readiness and conventions
+failures, findings, failed/lost rounds, unsent worker notes, B/C answers, readiness and conventions
 drift persist reason lines under `state/wake-queue/` and enter the T-137 bridge.
 `autopilot_waiting` reports overdue judgment bilingually to the board and desktop;
 `conventions_drift` denotes policy requiring judgment. External records and FIFOs

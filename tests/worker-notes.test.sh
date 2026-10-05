@@ -3,6 +3,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/worker.sh
 . "$ROOT/tests/lib/worker.sh"
+# shellcheck source=tests/lib/worker-note.sh
+. "$ROOT/tests/lib/worker-note.sh"
 # The worker cannot run gh, so the only way its question reaches the
 # reviewer is this file. Without it the round-three protocol cannot happen:
 # ASK-PASS-CRITERIA sits in a log nobody reads while fm-protocol reports a
@@ -162,8 +164,9 @@ assert_contains "$calls8w" "pr comment 42" "and the note goes to the pull reques
 # has nowhere to land
 assert_eq "pr create" "$(grep -o 'pr create\|pr comment' "$d8w/ghcalls" 2>/dev/null | head -1)" \
   "the pull request is opened before the note is posted"
-assert_eq "COULD NOT RUN: tests/worker.test.sh" "$(cat "$d8w/commented" 2>/dev/null)" \
+assert_eq "COULD NOT RUN: tests/worker.test.sh" "$(sed '/^[<]!-- fm-note sha256=/d; /^$/d' "$d8w/commented" 2>/dev/null)" \
   "with the worker's own words as the comment body"
+assert_contains "$(tail -1 "$d8w/commented")" '<!-- fm-note sha256=' "the posted body ends with its marker"
 b8w="$(cd "$r8w" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
 assert_ok "cd '$ROOT' && git --git-dir='$d8w/remote.git' cat-file -e '$b8w:src/done.txt'" \
   "the work was committed and pushed"
@@ -202,15 +205,17 @@ echo "https://example.invalid/pull/42"
 G
 chmod +x "$d8x/stub/gh"
 out8x="$(cd "$r8x" && FM_ROOT="$r8x" FM_GH="$d8x/stub/gh" bin/fm-worker.sh --task T-Z 2>&1)"; rc8x=$?
-assert_eq "73" "$rc8x" "a note the new pull request refused still fails the run"
+assert_eq "0" "$rc8x" "a refused note beside published work completes the run"
 assert_contains "$(cat "$d8x/ghcalls" 2>/dev/null)" "pr create" "after the pull request was opened"
 assert_contains "$out8x" "#42 would not take the comment" "naming the pull request that refused it"
 assert_contains "$out8x" "refused by the stub" "and passing on what gh said"
 unsent8x=("$r8x"/state/unsent/T-Z-*.md)
 assert_eq "COULD NOT RUN: anything" "$(cat "${unsent8x[0]}" 2>/dev/null)" \
   "and the note is kept outside the worktree"
-assert_eq "42" "$(jq -r 'select(.type=="worker_crashed")|.pr' < "$r8x/state/events.jsonl" | tail -1)" \
-  "the crash event carries the number"
+assert_eq "42" "$(jq -r 'select(.type=="worker_note_unsent")|.pr' < "$r8x/state/events.jsonl" | tail -1)" \
+  "the unsent event carries the number"
+assert_eq 42 "$(jq -r .pr "${unsent8x[0]}.json")" "the held note sidecar records its new PR"
+assert_lacks "$(cat "$r8x/state/events.jsonl")" worker_crashed "held refusal is not a crash"
 rm -rf "$d8x"
 
 # Every other way out between setting the note aside and posting it. The
@@ -355,6 +360,66 @@ assert_contains "$outEvidence" 'local report retention failed' 'record failure w
 assert_ok "grep -l 'recover this report' '$rEvidence/state/unsent/'*.md" 'failed local report has an unsent recovery copy'
 rm -rf "$dEvidence"
 
+
+# T-199: refuse reports beside real work, with bounded, lookup-first retries.
+for mode in once landed always lookup-fails question push-fails copy-fails; do
+  dn="$(fixture)"; rn="$dn/repo"; note_gh "$dn"
+  cat > "$rn/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+if [ "${NOTE_MODE:-}" != question ]; then
+  mkdir -p "$3/src"; echo implemented > "$3/src/note-work"
+fi
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+  if [ "$mode" = push-fails ]; then
+    printf '#!/bin/sh\nexit 1\n' > "$dn/remote.git/hooks/pre-receive"
+    chmod +x "$dn/remote.git/hooks/pre-receive"
+  fi
+  [ "$mode" != copy-fails ] || touch "$rn/state/unsent"
+  outn="$(cd "$rn" && NOTE_MODE="$mode" FM_NOTE_RETRY_DELAYS='0 0' FM_ROOT="$rn" FM_GH="$dn/stub/gh" bin/fm-worker.sh --task T-Z --pr 9 2>&1)"; rcn=$?
+  want=0; calls=3
+  case "$mode" in once) calls=2 ;; landed|lookup-fails) calls=1 ;; question|copy-fails) want=73 ;; push-fails) want=71 ;; esac
+  assert_eq "$want" "$rcn" "$mode: note outcome preserves the work outcome"
+  assert_eq "$calls" "$(grep -c '^pr comment .*--body-file' "$dn/ghcalls")" "$mode: bounded comment attempts"
+  lookups=2
+  case "$mode" in once|landed|lookup-fails) lookups=1 ;; esac
+  assert_eq "$lookups" "$(grep -c '^api repos/{owner}/{repo}/issues/9/comments ' "$dn/ghcalls")" "$mode: lookup before every retry"
+  assert_eq post "$(awk '/^pr comment 9 --body-file / {print "post"; exit} /^api repos\/{owner}\/{repo}\/issues\/9\/comments / {print "lookup"; exit}' "$dn/ghcalls")" "$mode: first lookup follows the refused post"
+  events="$(cat "$rn/state/events.jsonl")"
+  case "$mode" in
+    once|landed)
+      assert_eq 1 "$(jq -s '[.[]|select(.type=="ask_pass_criteria")]|length' "$rn/state/events.jsonl")" "$mode: spoke once"
+      assert_fail "ls '$rn'/state/unsent/T-Z-*.md" "$mode: nothing kept" ;;
+    copy-fails)
+      assert_contains "$events" worker_crashed "$mode: failed storage reported"
+      assert_lacks "$outn" 'it is at' "$mode: never claims retention"
+      assert_lacks "$events" worker_note_unsent "$mode: no recovery wake" ;;
+    *)
+      notes=("$rn"/state/unsent/T-Z-*.md)
+      assert_eq 1 "${#notes[@]}" "$mode: exactly one retained note"
+      assert_eq 9 "$(jq -r .pr "${notes[0]}.json")" "$mode: sidecar names PR"
+      assert_eq 1 "$(jq -r .round "${notes[0]}.json")" "$mode: sidecar names round"
+      assert_eq "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "${notes[0]}")" \
+        "$(jq -r .marker "${notes[0]}.json")" "$mode: marker hashes original bytes"
+      if [ "$mode" = question ]; then
+        assert_contains "$events" worker_crashed "$mode: question still fails"
+      elif [ "$mode" = push-fails ]; then
+        assert_eq null "$(jq -r .head "${notes[0]}.json")" "$mode: no published head"
+        assert_lacks "$events" worker_note_unsent "$mode: no wake before push"
+        assert_lacks "$events" worker_crashed "$mode: note does not crash the round"
+      else
+        pushed="$(git --git-dir="$dn/remote.git" rev-parse refs/heads/t-z-a-mock-task)"
+        assert_eq "$pushed" "$(jq -r .head "${notes[0]}.json")" "$mode: sidecar binds pushed head"
+        assert_eq true "$(jq -s '([.[].type]|index("commit_pushed")) < ([.[].type]|index("worker_note_unsent"))' "$rn/state/events.jsonl")" "$mode: wake follows publication"
+        assert_eq 1 "$(jq -s '[.[]|select(.type=="worker_note_unsent" and .pr==9)]|length' "$rn/state/events.jsonl")" "$mode: one recovery wake"
+        assert_lacks "$events" worker_crashed "$mode: no crash"
+      fi ;;
+  esac
+  if [ "$want" = 0 ] || [ "$mode" = copy-fails ]; then
+    assert_eq 'T-Z: a mock task' "$(git --git-dir="$dn/remote.git" log -1 --format=%s refs/heads/t-z-a-mock-task)" "$mode: normal commit published"
+  fi
+  safe_rm_rf "$dn"
+done
 
 cd "$ROOT" || exit 1
 PATH="$suite_original_path"; export PATH
