@@ -1142,7 +1142,7 @@ external_catch_up() {
     echo "fm-worker: HEAD is not attached to $branch / HEAD 不在 $branch 分支上" >&2; exit 65
   fi
   git -C "$tree" fetch -q origin "+refs/heads/$BASE:$base_ref" 2>/dev/null || {
-    echo "fm-worker: could not fetch $BASE; $branch is not caught up / 無法擷取 $BASE；不更新 $branch" >&2
+    echo "fm-worker: could not fetch $BASE; $branch is not caught up / 無法擷取 ${BASE}；不更新 $branch" >&2
     return 0; }
   git -C "$tree" merge-base --is-ancestor "$base_ref" HEAD && return 0
   catchup_prev="$bound_head"; catchup_base="$(git -C "$tree" rev-parse "$base_ref")"
@@ -2060,7 +2060,7 @@ rebuild_refuse() {   # rebuild_refuse <what, en> <what, zh-TW>
   echo "fm-worker: $1" >&2
   echo "fm-worker: nothing is committed or pushed; the branch stays at ${catchup_prev:-$rebuild_prev}" >&2
   if [ "${caught_up:-0}" = 1 ]; then
-    echo "fm-worker: the worktree is left at $tree; the next round rescues it and merges the base again / 工作樹保留於 $tree；下一輪將救回並重新合併基底" >&2
+    echo "fm-worker: the worktree is left at $tree; the next round rescues it and merges the base again / 工作樹保留於 ${tree}；下一輪將救回並重新合併基底" >&2
   else
     echo "fm-worker: the worktree is left at $tree; the next round rescues it and rebuilds from the branch" >&2
   fi
@@ -2291,7 +2291,7 @@ else
       if git -C "$tree" update-ref "refs/heads/$branch" "$catchup_prev" "$catchup_head"; then
         git -C "$tree" update-ref -d "refs/fm-caughtup/$branch" "$catchup_head" || true
       fi
-      echo "fm-worker: could not push merge commit $catchup_head; local $branch is at $(git -C "$tree" rev-parse "refs/heads/$branch") / 無法推送合併 $catchup_head；已保留本機分支狀態" >&2
+      echo "fm-worker: could not push merge commit $catchup_head; local $branch is at $(git -C "$tree" rev-parse "refs/heads/$branch") / 無法推送合併 ${catchup_head}；已保留本機分支狀態" >&2
     else
       echo "fm-worker: could not push $branch" >&2
     fi
@@ -2304,16 +2304,15 @@ fi
 # Only now: a push that was refused - a lease above, or a plain one - left
 # a commit that is not on origin, and the log must not say it was pushed.
 emit_status "Commit pushed on $branch" "已在 $branch 上推送 commit"
-catchup_args=()
+emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"
+note_unsent_published
+rebuild_args=()
 if [ "${caught_up:-0}" = 1 ]; then
-  catchup_args=(--data "$(jq -cn --arg prev "$catchup_prev" --arg base "$BASE" \
+  rebuild_args=(--data "$(jq -cn --arg prev "$catchup_prev" --arg base "$BASE" \
     --arg base_head "$catchup_base" --arg head "$catchup_head" \
     '{caught_up:{previous_head:$prev,base:$base,base_head:$base_head,head:$head,
       conflicts:$ARGS.positional}}' --args ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"})")
 fi
-emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit" ${catchup_args[@]+"${catchup_args[@]}"}
-note_unsent_published
-rebuild_args=(${catchup_args[@]+"${catchup_args[@]}"})
 if [ "$rebuilt" = 1 ]; then
   rebuild_args=(--data "$(jq -cn --arg prev "$rebuild_prev" --arg base "$BASE" \
     --arg base_head "$rebuild_base" --arg head "$(git -C "$tree" rev-parse HEAD)" \

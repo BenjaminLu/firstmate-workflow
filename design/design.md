@@ -959,40 +959,6 @@ put markers into — a binary file, or one side deleted what the other
 changed — is listed apart, with which side the merge left in the worktree,
 because that side looks resolved and is not.
 
-An external project's branch is never rebuilt (T-223). With an open PR and
-confirmed `squash` or `merge` landing, a later round instead merges the
-fetched `origin/<base>` into the attached task branch using `--no-ff
---no-commit`. Both the local HEAD and origin's task head must equal the PR
-head the round was bound to; a mismatch refuses with `65`. A rebase landing
-keeps the replay requirement and skips this catch-up, since landing would
-discard the merge's conflict resolution. A dirty tree, missing PR or failed
-base fetch skips the merge with an explanation; unreadable policy refuses.
-The merge stays in progress until the round's commit. Conflicts are handed
-to the worker by name as above, with the task/base sides named in the merge's
-direction. The worker must keep both intentions and must not commit, abort
-or restart the merge. `fm-checkpoint.sh` refuses while it is in progress.
-Before committing, HEAD must still be attached on the bound branch at its
-previous head, and MERGE_HEAD must still name the fetched base (`75` otherwise).
-The same marker and untouched unmarked-conflict checks apply, reading the
-staged change against the fetched base, so unchanged base files are excluded.
-A clean catch-up is always published, even when the worker only asks or adds
-nothing; an unresolved merge is never an exit checkpoint.
-
-Publication policy is checked before constructing this merge commit. Its
-parents are exactly the previous branch head and fetched base, written with
-`commit-tree` and the normal identity/signing rule. The commit is recorded
-at `refs/fm-caughtup/<branch>` before a compare-and-swap moves the local task
-ref; `merge --quit` concludes the merge state. Publication is a plain
-fast-forward push, never forced. A refused push restores the local ref to
-its previous head by compare-and-swap, deletes the recovery ref and reports
-the unpushed commit's id. Successful pushes clear the recovery ref too.
-After interruption, the exit path or next round asks origin: if its head
-contains the recorded merge, keep the branch; otherwise restore the local
-ref if it still points to that merge. Then delete the recovery ref. An
-unreachable origin retains both for the next round. These local ref repairs
-never rewrite the published branch. External report projections occur after
-publication at the merge head, under the project's existing post policy.
-
 The rebuild is not attempted, and the round goes on with the branch as it
 is, when the worktree is not clean (the rebuild's failure path is a hard
 reset), the base cannot be fetched, the replay failed without stopping on
@@ -1090,6 +1056,40 @@ push has landed, on every round. The pull request is updated in place; the previ
 goes into the round's `commit_pushed` (or `pr_opened`) event as
 `data.rebuilt.previous_head`, and onto the pull request as a comment for
 the reviewer, whose last reading of the branch no longer exists on it.
+
+An external project's branch is never rebuilt (T-223). With an open PR and
+confirmed `squash` or `merge` landing, a later round instead merges the
+fetched `origin/<base>` into the attached task branch using `--no-ff
+--no-commit`. Both the local HEAD and origin's task head must equal the PR
+head the round was bound to; a mismatch refuses with `65`. A rebase landing
+keeps the replay requirement and skips this catch-up, since landing would
+discard the merge's conflict resolution. A dirty tree, missing PR or failed
+base fetch skips the merge with an explanation; unreadable policy refuses.
+The merge stays in progress until the round's commit. Conflicts are handed
+to the worker by name as above, with the task/base sides named in the merge's
+direction. The worker must keep both intentions and must not commit, abort
+or restart the merge. `fm-checkpoint.sh` refuses while it is in progress.
+Before committing, HEAD must still be attached on the bound branch at its
+previous head, and MERGE_HEAD must still name the fetched base (`75` otherwise).
+The same marker and untouched unmarked-conflict checks apply, reading the
+staged change against the fetched base, so unchanged base files are excluded.
+A clean catch-up is always published, even when the worker only asks or adds
+nothing; an unresolved merge is never an exit checkpoint.
+
+Publication policy is checked before constructing this merge commit. Its
+parents are exactly the previous branch head and fetched base, written with
+`commit-tree` and the normal identity/signing rule. The commit is recorded
+at `refs/fm-caughtup/<branch>` before a compare-and-swap moves the local task
+ref; `merge --quit` concludes the merge state. Publication is a plain
+fast-forward push, never forced. A refused push restores the local ref to
+its previous head by compare-and-swap, deletes the recovery ref and reports
+the unpushed commit's id. Successful pushes clear the recovery ref too.
+After interruption, the exit path or next round asks origin: if its head
+contains the recorded merge, keep the branch; otherwise restore the local
+ref if it still points to that merge. Then delete the recovery ref. An
+unreachable origin retains both for the next round. These local ref repairs
+never rewrite the published branch. External report projections occur after
+publication at the merge head, under the project's existing post policy.
 
 ### 5.3.4 A new script is committed executable
 

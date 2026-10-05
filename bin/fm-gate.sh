@@ -184,7 +184,7 @@ gate1() {
 gate2() {
   local w rc method
   if [ "$FM_EXTERNAL" = 1 ]; then
-    method="$(fm_stack_policy merge_method)" || return 1
+    method="$(fm_stack_policy merge_method)" || method=
     case "$method" in
       squash|merge)
         if git merge-base --is-ancestor "$BASE" "$BRANCH"; then return 0; fi ;;

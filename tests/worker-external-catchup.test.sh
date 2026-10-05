@@ -6,9 +6,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 python3 - "$ROOT" <<'PY'
+import json
 import os
 from pathlib import Path
 import subprocess
+import shlex
 import sys
 import tempfile
 import unittest
@@ -224,6 +226,46 @@ git() { printf '%s\\n' "$*" >> "$work/gitcalls"; command git "$@"; }
         self.assertEqual(p.returncode, 71, p.stderr)
         self.assertEqual(self.head(), self.prev)
         self.assertEqual(self.head('MERGE_HEAD'), self.base)
+
+    def test_gate_unreadable_policy_replays_clean_branch(self):
+        self.base_moves()
+        self.assert_gate_unreadable_policy_replays(True)
+
+    def test_gate_unreadable_policy_replays_conflicting_merge(self):
+        self.base_moves('conflict')
+        self.git('merge', '--no-ff', '--no-commit', 'main', check=False)
+        (self.tree / 'app').write_text('both intentions\n')
+        self.commit('resolved merge')
+        self.assert_gate_unreadable_policy_replays(False)
+
+    def assert_gate_unreadable_policy_replays(self, success):
+        gate = function(root / 'bin/fm-gate.sh', 'gate2')
+        # Even a failed reader that printed a recognized method cannot shortcut.
+        p = self.run_body(gate + '\nBRANCH=task; gate2',
+                          'fm_stack_policy() { echo squash; return 1; }\n')
+        self.assertEqual(p.returncode == 0, success, p.stderr)
+        self.assertIn('rebase main', (self.home / 'gitcalls').read_text().splitlines())
+
+    def test_catchup_event_data_is_emitted_once_on_pr_event(self):
+        self.base_moves()
+        events = section(worker, '# Only now: a push', '# The reviewer reads the pull request')
+        p = self.run_body('external_catch_up\n' + self.precommit() +
+                          self.commit_block() + self.publication() + events,
+                          'note_unsent_published() { :; }\n'
+                          'emit() { printf "%s\\n" "$*" >> "$work/pushed-events"; }\n')
+        self.assert_ok(p)
+        records = []
+        for line in (self.home / 'pushed-events').read_text().splitlines():
+            # JSON stays intact after --data; parse it before the summary flags.
+            if '--data ' in line:
+                data, _ = json.JSONDecoder().raw_decode(line.split('--data ', 1)[1])
+                if 'caught_up' in data:
+                    records.append((shlex.split(line.split('--data ', 1)[0]), data['caught_up']))
+        self.assertEqual(len(records), 1, records)
+        args, data = records[0]
+        self.assertEqual(args[args.index('--pr') + 1], '9')
+        self.assertEqual(data, dict(previous_head=self.prev, base='main',
+                                   base_head=self.base, head=self.head(), conflicts=[]))
 
     def test_policy_refusal_leaves_no_commit(self):
         self.base_moves()
