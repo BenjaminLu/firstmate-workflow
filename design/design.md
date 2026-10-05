@@ -2001,8 +2001,10 @@ CLI cells. Known roles have distinct marks; an unknown role has a warning mark.
 **The roster shows separate columns** under one header. The project column
 appears with one project as with several, using `SHIP.projectColor` consistently
 with card project chips; only a multi-project board adds the project-chip frame
-and title. Header buttons sort the sortable columns; CLI is a non-sortable
-header. A toggle groups rows by project. Both choices survive reload through
+and title. A card header stays one line high: the task id never wraps or
+shrinks, and the project chip is a one-line pill that truncates, or moves to
+its own line in a narrow card. Header buttons sort the sortable columns; CLI
+is a non-sortable header. A toggle groups rows by project. Both choices survive reload through
 `board.rosterSort` and `board.rosterGroup`. On phones the same labelled cells
 wrap across three lines. Task cards keep their separate name, role and round
 chips. There are no deck tags, detail cards, hover, tap or figure-drag controls.
