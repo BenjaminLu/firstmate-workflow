@@ -223,7 +223,15 @@ unknown="unterminated shell word
                             with self.subTest(role=role, vendor=vendor, platform=platform,
                                               listeners=listeners, pinned=grant):
                                 self.assertEqual(0, before.returncode, before.stderr)
-                                self.assertEqual((before.returncode, before.stdout, before.stderr),
+                                expected = before.stdout
+                                if role == 'worker' and platform == 'darwin' and listeners == 'unknown':
+                                    sub = lambda paths: ' '.join('(subpath "' + str(p) + '")' for p in paths)
+                                    deny = '(deny file-read* file-write* ' + sub([home]) + ')\n'
+                                    allow = '(allow file-read* ' + sub([gitdir, home / 'git']) + ')\n'
+                                    self.assertEqual(1, expected.count(deny.encode()))
+                                    expected = expected.replace(deny.encode(), (deny + allow).encode())
+                                    self.assertEqual(1, after.stdout.count(allow.encode()))
+                                self.assertEqual((before.returncode, expected, before.stderr),
                                                  (after.returncode, after.stdout, after.stderr))
 
 
