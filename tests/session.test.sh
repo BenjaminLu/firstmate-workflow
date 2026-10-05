@@ -187,7 +187,7 @@ class Session(unittest.TestCase):
                 life.return_value.start.return_value.poll.return_value = None
                 fresh = m.board_start(repo)
                 self.assertEqual(m.board_code_id(repo), fresh['code'])
-                life.return_value.start.assert_called_once()
+                self.assertEqual(life.return_value.start.call_count, 1)
             original = fresh['code']
             record_path = repo / 'state/session/board.json'
             with patch.object(m, 'configured_board_port', return_value=4173), \
@@ -226,7 +226,8 @@ class Session(unittest.TestCase):
                     else: record_path.write_text(json.dumps(previous))
                     self.assertNotIn('stale', m.board_start(repo))
                 self.assertNotIn('stale', m.board_start(self.repo))
-                life.return_value.start.assert_not_called(); kill.assert_not_called()
+                self.assertEqual(life.return_value.start.call_count, 0)
+                self.assertEqual(kill.call_count, 0)
 
     def test_one_time_address_never_in_an_argument_list(self):
         # T-122: `ps` shows every process's arguments to every other; on macOS

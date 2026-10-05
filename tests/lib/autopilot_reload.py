@@ -17,6 +17,8 @@ import types
 import unittest
 from unittest.mock import patch
 
+# Disable inherited Herdr routing before imports or fixtures can reach fm.
+os.environ['HERDR_ENV'] = '0'
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1)).resolve()
 sys.path.insert(0, str(ROOT / 'bin/lib'))
@@ -165,7 +167,8 @@ class Reload(unittest.TestCase):
         self.assertEqual('', self.shell().stderr)
         self.assertIsNone(self.read('reload')['request'])
         dirty.unlink()
-        record = dict(old); record.pop('code')
+        # The pre-T-203 writer emitted exactly these three fields.
+        record = {key: old[key] for key in ('pid', 'owner', 'started')}
         A.save_json(self.directory / 'owner.json', record)
         def legacy():
             return subprocess.run([sys.executable, str(self.root / 'bin/lib/fm_autopilot.py'), 'running'],
@@ -173,7 +176,8 @@ class Reload(unittest.TestCase):
         self.assertIn('predates self-reload', legacy())
         self.assertEqual('', legacy())
         self.assertIsNone(self.read('reload')['request'])
-        record['code'] = None
+        self.assertEqual(old['pid'], self.read('reload')['legacy_seen'])
+        record = dict(old, code=None)
         A.save_json(self.directory / 'owner.json', record)
         self.assertIn('reload requested', self.shell().stderr)
         # The real running code is still old['code']; make the checkout newer

@@ -817,8 +817,9 @@ def running(ctx):
     current = code_id(ctx['engine'], ('bin', 'skills'))
     with Locked(directory / 'start.lock'):
         owner = read_json(directory / 'owner.json')
+        # New records always carry code; legacy holders never wrote started_ok.
         # A new holder must finish recovery before any operator changes its request.
-        if owner.get('pid') is None or not owner.get('started_ok'): return 0
+        if owner.get('pid') is None or ('code' in owner and not owner.get('started_ok')): return 0
         reload = read_reload(directory)
         old = owner.get('code')
         if current is None or same_code(current, old):
