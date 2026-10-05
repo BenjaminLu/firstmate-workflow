@@ -936,7 +936,6 @@ PYLIST
     fi
     if ! grep -Fq -- "<!-- fm-note sha256=$marker -->" <<<"$bodies"; then
       body="$(mktemp)" || { failed=1; continue; }
-      trap 'rm -f "${body:-}"' EXIT
       if ! { cat "$file" && printf '\n<!-- fm-note sha256=%s -->\n' "$marker"; } > "$body" ||
          ! fm_comment_projection "$pr" --body-file "$body"; then
         echo "fm: unsent: could not post to #$pr; kept $file" >&2

@@ -823,7 +823,7 @@ recoverable side issue: its original bytes are kept under `state/unsent/`,
 with a `.md.json` sidecar recording task, PR, round, actor, marker and saved time.
 The sidecar's `head` stays null until the push succeeds. Only then is it updated
 to the pushed head and `worker_note_unsent` emitted with the PR and bilingual
-summary; the round ends `0`. A failed push keeps its own exit code and emits
+summary; the round ends successfully. A failed push keeps its own exit code and emits
 no unsent-note event. A copy that cannot be kept emits `worker_crashed`; the
 work still publishes and the round ends `73`. Sidecar-writing failures warn
 without changing the outcome. Known-PR question failures also get a sidecar;
@@ -861,7 +861,7 @@ rebuild on the base that could not be made —
 pull request number came back, `73` the worker had
 a question that could not be posted, a refused rebuild-only note, or a note
 that could neither be posted nor kept (a kept note beside published worker
-changes ends `0`), `74` GitHub could not
+changes ends successfully), `74` GitHub could not
 say which pull request the branch has, `75` a rebuilt round was refused
 before its commit — a conflict marker left, a conflict with no markers left
 exactly as the merge left it, a HEAD no longer on the rebuild base, or the
@@ -940,7 +940,7 @@ duplicate risk rather than proving no copy exists. Other refusals and external
 comments are never retried.
 
 The rebuild is still pushed. With worker changes, a kept note gets its sidecar
-and `worker_note_unsent` only after publication, and the round ends `0`. With
+and `worker_note_unsent` only after publication, and the round ends successfully. With
 no worker changes, the refused note still ends `73`, including a note held
 for the PR this rebuild opens. A failure on the way to the push keeps its own
 code and the already-kept note; a changed-work note's sidecar still has

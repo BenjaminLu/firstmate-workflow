@@ -1673,7 +1673,7 @@ note_unsent() {   # save now, then note_unsent_published only after a successful
     refused=1
     emit --type worker_crashed --pr "$PR" \
       --en "the worker's note could not be posted to #$PR or kept" \
-      --tw "工人的留言貼不上 #$PR，也無法保存"
+      --tw "工人的留言貼不上 #${PR}，也無法保存"
   fi
 }
 note_unsent_published() {
@@ -1687,7 +1687,7 @@ note_unsent_published() {
   fi
   emit --type worker_note_unsent --pr "$PR" \
     --en "the worker's note could not be posted to #$PR; the work is published and the note is kept in state/unsent" \
-    --tw "工人的留言貼不上 #$PR；工作已發布，留言保存在 state/unsent"
+    --tw "工人的留言貼不上 #${PR}；工作已發布，留言保存在 state/unsent"
   unsent_note=''
 }
 # A note is not only a question. An adapter that may edit but not execute

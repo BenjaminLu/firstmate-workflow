@@ -13,14 +13,15 @@ cat > "$d/gh" <<'G'
 [ -z "${GH_REPO:-}" ] || exit 64
 printf '%s\n' "$PWD" >> "$FM_ROOT/../cwd"
 printf '%s\n' "$*" >> "$FM_ROOT/../calls"
-case "$1" in
-  api)
+case "$1 $2" in
+  'api repos/{owner}/{repo}/issues/9/comments')
     [ "$*" = 'api repos/{owner}/{repo}/issues/9/comments --paginate --jq .[].body' ] || exit 64
     case "${UNSENT_MODE:-new}" in
       landed) cat "$FM_ROOT/../marker" ;;
       lookup-fails) exit 1 ;;
     esac ;;
-  pr)
+  'api '*) echo '{}'; exit 0 ;;
+  'pr comment')
     [ "$1 $2 $3 $4" = 'pr comment 9 --body-file' ] || exit 64
     cat "$5" > "$FM_ROOT/../body"
     [ "${UNSENT_MODE:-new}" != fails ] || exit 1 ;;

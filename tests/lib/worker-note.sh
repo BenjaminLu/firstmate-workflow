@@ -7,13 +7,14 @@ note_gh() {
 place="$(dirname "$0")/.."
 printf '%s\n' "$*" >> "$place/ghcalls"
 case "$1 $2" in
-  'api '*)
+  "api repos/{owner}/{repo}/issues/${NOTE_PR:-9}/comments")
     [ "$*" = "api repos/{owner}/{repo}/issues/${NOTE_PR:-9}/comments --paginate --jq .[].body" ] || exit 64
     case "${NOTE_MODE:-always}" in
       lookup-fails) exit 1 ;;
       landed) tail -1 "$place/body" ;;
     esac
     exit 0 ;;
+  'api '*) echo '{}'; exit 0 ;;
   'pr comment')
     if [ "${4:-}" != --body-file ]; then exit 0; fi
     cp "$5" "$place/body"

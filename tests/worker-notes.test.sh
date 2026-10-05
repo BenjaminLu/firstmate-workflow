@@ -383,8 +383,8 @@ M
   assert_eq "$calls" "$(grep -c '^pr comment .*--body-file' "$dn/ghcalls")" "$mode: bounded comment attempts"
   lookups=2
   case "$mode" in once|landed|lookup-fails) lookups=1 ;; esac
-  assert_eq "$lookups" "$(grep -c '^api ' "$dn/ghcalls")" "$mode: lookup before every retry"
-  assert_eq post "$(awk '/^pr comment / {print "post"; exit} /^api / {print "lookup"; exit}' "$dn/ghcalls")" "$mode: first lookup follows the refused post"
+  assert_eq "$lookups" "$(grep -c '^api repos/{owner}/{repo}/issues/9/comments ' "$dn/ghcalls")" "$mode: lookup before every retry"
+  assert_eq post "$(awk '/^pr comment 9 --body-file / {print "post"; exit} /^api repos\/{owner}\/{repo}\/issues\/9\/comments / {print "lookup"; exit}' "$dn/ghcalls")" "$mode: first lookup follows the refused post"
   events="$(cat "$rn/state/events.jsonl")"
   case "$mode" in
     once|landed)
