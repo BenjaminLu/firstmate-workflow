@@ -100,6 +100,11 @@ if [ -f "$(dirname "${BASH_SOURCE[0]}")/fm-guard.sh" ]; then
   fm_guard_branch "$tree" || exit 71
 fi
 
+if git -C "$tree" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  echo "fm-checkpoint: a merge is in progress on $branch; fm-worker.sh commits it / $branch 正在合併中；由 fm-worker.sh 提交" >&2
+  exit 71
+fi
+
 # Ephemeral harness notes must never land as content. A deletion of a
 # previously mistaken tip copy is the one exception that must still commit,
 # otherwise a REJECT for a tracked .fm-say.md can never clear via checkpoint.

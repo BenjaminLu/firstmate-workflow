@@ -182,7 +182,14 @@ gate1() {
 
 # ---- 2. it rebases onto the base cleanly ---------------------------------
 gate2() {
-  local w rc
+  local w rc method
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    method="$(fm_stack_policy merge_method)" || return 1
+    case "$method" in
+      squash|merge)
+        if git merge-base --is-ancestor "$BASE" "$BRANCH"; then return 0; fi ;;
+    esac
+  fi
   if [ "$FM_EXTERNAL" = 1 ]; then
     mkdir -p "$FM_STATE_DIR/gate-worktrees" || return 1
     w="$(mktemp -d "$FM_STATE_DIR/gate-worktrees/check.XXXXXX")" || return 1

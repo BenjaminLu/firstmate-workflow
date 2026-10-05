@@ -897,13 +897,15 @@ second `worker_crashed` from a caller noticing the code. The codes a
 worker can exit with are `1` a failed attempt, `2` no vendor was
 available, `64` it was called wrong, `65` no such task in
 `design/tasks/`, an unknown configured adapter, refused external routing or
-policy, an unverifiable external PR head, or staged private artifacts,
+policy, an unverifiable external PR head, an external branch that is not the
+head the round was bound to, or staged private artifacts,
 `70` something the run
 needs and cannot have — no library, no worktree, nowhere to put a scratch file,
 identity/snapshot failure, a live task lock, failed managed transport, a
 round's commit that failed (nothing is pushed or reported after it), a new
 script whose executable bit could not be set before it, or a
-rebuild on the base that could not be made —
+rebuild on the base or a merge of the base into an external branch that
+could not be made —
 `71` the push failed — a rebuilt branch's lease refused included — `72` no
 pull request number came back, `73` the worker had
 a question that could not be posted, a refused rebuild-only note, or a note
@@ -913,7 +915,10 @@ say which pull request the branch has, `75` a rebuilt round was refused
 before its commit — a conflict marker left, a conflict with no markers left
 exactly as the merge left it, a HEAD no longer on the rebuild base, or the
 task's own entry not as the pin has it (the previous head for an unpinned
-round) — and nothing was published, and `130`, `143` — a signal, 128
+round), or a caught-up external round whose merge was aborted, committed or
+restarted, whose HEAD left the bound head or task branch, or that left a
+conflict marker or an unmarked conflict as the merge left it — and nothing
+was published, and `130`, `143` — a signal, 128
 plus its number, from the INT/TERM traps that make a killed run stop
 rather than carry on. `SIGHUP` is ignored (same as `fm-config.sh`) so a
 managed transport wait and PR publish survive a launching agent shell
@@ -953,6 +958,40 @@ change and the task's intent, never a whole side. A conflict git cannot
 put markers into — a binary file, or one side deleted what the other
 changed — is listed apart, with which side the merge left in the worktree,
 because that side looks resolved and is not.
+
+An external project's branch is never rebuilt (T-223). With an open PR and
+confirmed `squash` or `merge` landing, a later round instead merges the
+fetched `origin/<base>` into the attached task branch using `--no-ff
+--no-commit`. Both the local HEAD and origin's task head must equal the PR
+head the round was bound to; a mismatch refuses with `65`. A rebase landing
+keeps the replay requirement and skips this catch-up, since landing would
+discard the merge's conflict resolution. A dirty tree, missing PR or failed
+base fetch skips the merge with an explanation; unreadable policy refuses.
+The merge stays in progress until the round's commit. Conflicts are handed
+to the worker by name as above, with the task/base sides named in the merge's
+direction. The worker must keep both intentions and must not commit, abort
+or restart the merge. `fm-checkpoint.sh` refuses while it is in progress.
+Before committing, HEAD must still be attached on the bound branch at its
+previous head, and MERGE_HEAD must still name the fetched base (`75` otherwise).
+The same marker and untouched unmarked-conflict checks apply, reading the
+staged change against the fetched base, so unchanged base files are excluded.
+A clean catch-up is always published, even when the worker only asks or adds
+nothing; an unresolved merge is never an exit checkpoint.
+
+Publication policy is checked before constructing this merge commit. Its
+parents are exactly the previous branch head and fetched base, written with
+`commit-tree` and the normal identity/signing rule. The commit is recorded
+at `refs/fm-caughtup/<branch>` before a compare-and-swap moves the local task
+ref; `merge --quit` concludes the merge state. Publication is a plain
+fast-forward push, never forced. A refused push restores the local ref to
+its previous head by compare-and-swap, deletes the recovery ref and reports
+the unpushed commit's id. Successful pushes clear the recovery ref too.
+After interruption, the exit path or next round asks origin: if its head
+contains the recorded merge, keep the branch; otherwise restore the local
+ref if it still points to that merge. Then delete the recovery ref. An
+unreachable origin retains both for the next round. These local ref repairs
+never rewrite the published branch. External report projections occur after
+publication at the merge head, under the project's existing post policy.
 
 The rebuild is not attempted, and the round goes on with the branch as it
 is, when the worktree is not clean (the rebuild's failure path is a hard
@@ -1204,7 +1243,7 @@ concurrency limit still hold, and it says which one held the task.
 | # | Gate | How it is checked |
 |---|---|---|
 | 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
-| 2 | rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
+| 2 | rebase onto main is clean | attempt it in a scratch worktree; non-zero fails. External branches with confirmed squash/merge landing also pass when they already contain the base tip; rebase landing and self projects retain the replay |
 | 3 | *retired (T-114)* | ran the whole `project.check` locally; gate 6 reads the required GitHub check, which runs it on the same head |
 | 4 | the diff stays in approved scope | shared verified pin resolver; changed files within pinned `scope`, unchanged self task entry, no `.fm-*` paths |
 | 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
@@ -4881,7 +4920,9 @@ invalid or unconfirmed policy refuses external publication; self defaults stay
 unchanged. Merge methods and retention follow the contract; land: handoff
 refuses engine merge. No path enables auto-merge or protected-base publication.
 T-143 enables policy-authorized stacking and explicit expected-head restacking
-through the operator helper documented below. Summary/check/threads projections are retained locally
+through the operator helper documented below. External later rounds catch up
+by merging their fetched base without rewriting the branch, as described in
+section 5.3.3. Summary/check/threads projections are retained locally
 pending T-140; they never fall back to exposing private acceptance as comments.
 
 Inspection covers the last 30 updated PRs and up to 100 reviews/comments/checks

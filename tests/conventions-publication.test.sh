@@ -46,6 +46,7 @@ FM_CODE_ROOT="$ROOT"
 tree="$home/worktrees/T-001"; branch=t-001-work; TASK=T-001
 _fm_wip_done=0
 rebuild_settle() { :; }
+catchup_settle() { :; }
 fm_record_end() { :; }
 clean_scratch() { :; }
 emit() { printf '%s\n' "$*" >> "$EXIT_EVENTS"; }

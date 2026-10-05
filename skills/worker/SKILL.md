@@ -99,7 +99,10 @@ the restore.
 
 On a later round `fm-worker.sh` may rebuild your branch as one change on the
 current base before you start, and the prompt then says so and lists every
-file it could not merge. Those files carry standard conflict markers
+file it could not merge. On an external project with squash or merge landing,
+it instead merges the fetched base into your branch and leaves the merge in
+progress. The prompt identifies the previous head and merged base. Resolve
+its listed files under the same rules below. Those files carry standard conflict markers
 (`<<<<<<<`, `=======`, `>>>>>>>`). Resolve every listed file before any other
 work:
 
@@ -116,7 +119,11 @@ work:
 The rebuild leaves the worktree detached until the script commits, so
 `fm-checkpoint.sh` refuses that round; `fm-worker.sh` pushes it. Do not
 commit in it yourself: a round whose HEAD moved off the rebuild base is
-refused.
+refused. An external catch-up stays attached on your task branch. Do not
+commit, abort or restart that merge, or run git history commands: a changed
+HEAD or MERGE_HEAD refuses the round. `fm-checkpoint.sh` refuses while the
+merge is in progress; `fm-worker.sh` commits it with the round and pushes it
+fast-forward.
 
 In a rebuilt self-project round your own task entry is frozen: your file
 `design/tasks/<id>.json` (T-090). The script carries it through exactly as

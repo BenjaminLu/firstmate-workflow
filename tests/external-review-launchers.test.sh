@@ -46,7 +46,7 @@ class LauncherProjection(unittest.TestCase):
         for mode in ('summary','check','threads','comments'):
             with self.subTest(mode=mode):
                 p=self.run_block(function(worker,'note_landed')+function(worker,'post_note')+'post_note "$work/note" 9; result=$?; echo "$result:$spoke"',
-                    'projection='+mode+'; spoke=0;\n'+self.recorder(True)+
+                    'projection='+mode+'; spoke=0; rebuild_publishes() { return 1; };\n'+self.recorder(True)+
                     'fm_comment_projection() { echo comment >> "$work/calls"; return 1; };\n')
                 self.assertEqual(p.stdout.strip().splitlines()[-1],'0:1')
                 self.assertIn('projection_failed',(self.home/'events').read_text())

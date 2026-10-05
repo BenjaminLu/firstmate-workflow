@@ -96,7 +96,7 @@ else: sys.exit(2)
         for projection in ('local','summary','check','threads'):
             with self.subTest(projection=projection):
                 (self.home/'projections').unlink(missing_ok=True)
-                out=self.run_block(function(worker,'post_note')+'post_note "$work/note" 9; echo "$spoke"',f'projection={projection}; spoke=0; fm_external() {{ printf \"%s\\n\" \"$*\" >> \"$work/projections\"; }}')
+                out=self.run_block(function(worker,'post_note')+'post_note "$work/note" 9; echo "$spoke"',f'projection={projection}; spoke=0; rebuild_publishes() {{ return 1; }}; fm_external() {{ printf \"%s\\n\" \"$*\" >> \"$work/projections\"; }}')
                 self.assertEqual(out.strip().splitlines()[-1],'1')
                 self.assertIn('project --pr 9 --head abc --stage worker',(self.home/'projections').read_text())
                 self.assertIn('Private worker report',self.notes())
@@ -151,8 +151,14 @@ else: sys.exit(2)
         self.assertFalse((self.home/'tree').exists())
     def test_external_rebuild_is_held_and_never_reads_public_spec(self):
         body=function(worker,'bring_up_to_date')+'bring_up_to_date'
-        self.run_block(body,'git() { echo git >> "$work/gitcalls"; return 1; }')
+        out=self.run_block(body, 'external_catch_up() { echo catchup; }; '
+            'fm_task() { echo private-read >> "$work/gitcalls"; return 1; }; '
+            'git() { echo "$*" >> "$work/gitcalls"; return 1; }')
+        self.assertEqual(out.strip(), 'catchup')
         self.assertFalse((self.home/'gitcalls').exists())
+        catchup=function(worker,'external_catch_up')
+        for prohibited in ('rebase \"', '--squash', ' reset ', '--force', 'fm_task '):
+            self.assertNotIn(prohibited, catchup)
         # The defence remains even if a caller hands publication a rebuilt tree.
         block=section(worker,'_fm_wip_done=1\nif [ "$rebuilt" = 1 ]; then','# Only now: a push')
         p=shell(root,self.home,block,'rebuilt=1; FM_TARGET_ROOT="$work/tree"; rebuilt_head=abc; git() { echo "$*" >> "$work/gitcalls"; }')
