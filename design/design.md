@@ -1313,7 +1313,9 @@ mirror, fixture and test; existing ids, formats, paths and interfaces; and an
 explicit, tested migration for validation, lint, gate, schema or record changes.
 Check 5 (T-189): when the scope lists design/design.md, the acceptance names the
 numbered section (§N or §N.M) it edits and adds nothing after the last one.
-Its numbered final ends in `SPEC-OK:<task>` or `SPEC-GAPS:<task>`.
+Its numbered final may use bold or heading markup around an item's number
+(T-206). The closing line must be exactly `SPEC-OK:<task>` or `SPEC-GAPS:<task>`,
+unquoted, unfenced and last.
 
 The launcher retains signed `spec-preflight` evidence in the same project-local
 store as briefs and verdicts, bound to the spec SHA-256 and observed base. Managed

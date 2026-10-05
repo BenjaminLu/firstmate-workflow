@@ -10,13 +10,15 @@ import sys
 
 from fm_evidence import Store, unquoted
 
+NUMBERED = re.compile(r'^ {0,3}(?:#{1,6} )?(?:\*\*|__)?\d+[.)](?:\*\*|__)?\s+\S')
+
 
 def decision(answer, task):
     lines = answer.strip().splitlines()
     visible = list(unquoted(answer))
     markers = [line for line in visible if re.fullmatch(r'SPEC-(?:OK|GAPS):\S+', line)]
     if (len(markers) != 1 or not lines or lines[-1] != markers[0]
-            or not any(re.match(r'^\d+\.\s+\S', line) for line in visible)):
+            or not any(NUMBERED.match(line) for line in visible)):
         return None
     for verdict in ('SPEC-OK', 'SPEC-GAPS'):
         if markers[0] == verdict + ':' + task:
@@ -45,7 +47,7 @@ For EVERY acceptance line, report numbered evidence with file:line references:
    section (§N or §N.M) it edits? A spec that lists design/design.md without
    naming one, or that adds a section after the last numbered section, is a
    spec gap.
-Give a numbered list of findings (or checked evidence when there are no gaps).
+Give a numbered list of findings (or checked evidence when there are no gaps); start each item with its plain number, `1.`, `2.` and so on, at the start of the line.
 End the final assistant answer with exactly one standalone closing line:
 SPEC-OK:{task}
 or

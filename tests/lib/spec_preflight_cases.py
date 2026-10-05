@@ -121,6 +121,64 @@ class Preflight(unittest.TestCase):
                       '   section (§N or §N.M) it edits?', body)
         self.assertIn('adds a section after the last numbered section, is a\n   spec gap.', body)
 
+    def bold_final(self, verdict='SPEC-OK'):
+        # T-206: supplied excerpt of a real reviewer final, with its layout intact.
+        fixture = (ROOT / 'tests/fixtures/spec-preflight/bold-headings.final.txt').read_text()
+        return fixture.replace('SPEC-OK:T-X\n', verdict + ':T-X\n')
+
+    def test_bold_heading_final_decisions(self):
+        for verdict in ('SPEC-OK', 'SPEC-GAPS'):
+            with self.subTest(verdict=verdict):
+                self.assertEqual(verdict, decision(self.bold_final(verdict), 'T-X'))
+
+    def assert_bold_heading_retained(self, verdict):
+        answer = self.bold_final(verdict)
+        retained = retain(self.store, self.spec, 'a' * 40, 'reviewer-noah-tx-r1', 1,
+                          answer, {'level': 'legacy', 'vendor': 'claude'})
+        records = self.store.records()  # Also exercises fm_evidence re-validation.
+        self.assertEqual(1, len(records))
+        self.assertEqual(retained, records[0])
+        self.assertEqual('spec-preflight', records[0]['kind'])
+        self.assertEqual(verdict, records[0]['verdict'])
+        self.assertEqual(answer, records[0]['text'])
+
+    def test_bold_heading_ok_is_retained(self):
+        self.assert_bold_heading_retained('SPEC-OK')
+
+    def test_bold_heading_gaps_is_retained(self):
+        self.assert_bold_heading_retained('SPEC-GAPS')
+
+    def test_numbered_item_markup_shapes(self):
+        accepted = ('1) x', '   2. x', '**1. Why**', '**1.** Why', '__3. x__',
+                    '### 4. x', '1. x', '1. **Why**', '# 1. x',
+                    '   ###### __12)__ Why', '1.\tx')
+        rejected = ('**Why**', '- 1. x', '1.x', '1.', '```\n1. x\n```', '> 1. x',
+                    '    1. x', '\t1. x', '####### 1. x', '###1. x')
+        for item in accepted:
+            with self.subTest(accepted=item):
+                self.assertEqual('SPEC-OK', decision(item + '\nSPEC-OK:T-X', 'T-X'))
+        for item in rejected:
+            with self.subTest(rejected=item):
+                self.assertIsNone(decision(item + '\nSPEC-OK:T-X', 'T-X'))
+
+    def test_bold_heading_final_keeps_exact_marker_rule(self):
+        body = self.bold_final().removesuffix('SPEC-OK:T-X\n')
+        invalid = ('> SPEC-OK:T-X', '```\nSPEC-OK:T-X\n```', '**SPEC-OK:T-X**',
+                   'SPEC-OK:T-Y', 'SPEC-OK:T-X\nafter', ' SPEC-OK:T-X',
+                   'SPEC-OK:T-X\nSPEC-OK:T-X', 'SPEC-GAPS:T-X\nSPEC-OK:T-X')
+        for marker in invalid:
+            with self.subTest(marker=marker):
+                self.assertIsNone(decision(body + marker + '\n', 'T-X'))
+
+    def test_bold_heading_final_completes_preflight(self):
+        self.assertEqual('completed', managed.completion(
+            'reviewer', 'T-X', self.bold_final(), self.sha))
+
+    def test_prompt_requests_plain_numbers_at_line_start(self):
+        self.assertIn('Give a numbered list of findings (or checked evidence when there are no gaps); '
+                      'start each item with its plain number, `1.`, `2.` and so on, '
+                      'at the start of the line.', prompt('T-X', self.spec, 'a' * 40))
+
     def test_vendor_final_and_strict_mode_separation(self):
         final = '1. Covered.\nSPEC-OK:T-X'
         transcript = self.root / 'cli.log'
