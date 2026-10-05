@@ -57,6 +57,24 @@ assert_ok "test -f '$home/repo/app'" "sync populates legacy checkout"
 assert_eq master "$(git -C "$home/repo" config firstmate.base)" "sync installs protected base guard"
 assert_eq "$eng/.githooks" "$(git -C "$home/repo" config core.hooksPath)" "sync installs engine hooks"
 assert_contains "$(cat "$home/repo/.git/info/exclude")" '.fm-*' "sync installs scratch excludes"
+# The managed clone keeps its configured identity under a user's rewrite.
+export GIT_CONFIG_GLOBAL="$t/gitconfig" GIT_CONFIG_NOSYSTEM=1
+ln -s "$t/host" "$t/alias"
+git config --global "url.file://$t/alias/.insteadOf" "file://$t/host/"
+"$ROOT/bin/fm-onboard.sh" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" > "$t/out" 2>&1
+assert_eq 0 "$?" "onboard accepts correct configured origin under global rewrite"
+unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
+# Onboarding must also refuse unsafe push routing, without a global rewrite.
+git -C "$home/repo" config --local remote.origin.pushurl "$t/wrong.git"
+"$P" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" > "$t/out" 2>&1
+assert_eq 65 "$?" "onboard refuses managed pushurl elsewhere"
+assert_contains "$(cat "$t/out")" 'origin does not match' "pushurl refusal keeps onboard wording"
+git -C "$home/repo" config --unset remote.origin.pushurl
+git -C "$home/repo" config --local "url.$t/elsewhere/.insteadOf" "file://$t/host/"
+"$P" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" > "$t/out" 2>&1
+assert_eq 65 "$?" "onboard refuses local transport rewrite"
+assert_contains "$(cat "$t/out")" 'origin does not match' "local rewrite refusal keeps onboard wording"
+git -C "$home/repo" config --unset "url.$t/elsewhere/.insteadOf"
 # An empty remote is a legitimate managed clone, not a legacy checkout to repair.
 mkdir -p "$t/host/owner"
 git init -q --bare -b trunk "$t/host/owner/empty.git"

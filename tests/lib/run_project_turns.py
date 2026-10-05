@@ -44,6 +44,12 @@ root="$2"; shift 2
 case "$1 $2" in
   'rev-parse --show-toplevel') printf '%s\\n' "$root" ;;
   'rev-parse main^{commit}') cat "$root/base" ;;
+  'config --includes')
+    case "$*" in
+      *'--get-all remote.origin.url') printf 'local\\thttps://github.com/owner/%s.git\\n' "$(basename "$(dirname "$root")")" ;;
+      *'--get-all remote.origin.pushurl'|*'--get-regexp '*) exit 1 ;;
+      *) exit 1 ;;
+    esac ;;
   'remote get-url') printf 'https://github.com/owner/%s.git\\n' "$(basename "$(dirname "$root")")" ;;
   'branch --list') echo "${3%\\*}fixture" ;;
   *) exit 1 ;;

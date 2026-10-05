@@ -337,6 +337,30 @@ assert_contains "$(cat "$t/err")" "origin" "and the origin is named"
 assert_eq "" "$(git -C "$FM_HOME/projects/other-app/repo" config --local --get core.hooksPath)" "and that clone is not hooked"
 rm -rf "$FM_HOME/projects/other-app"
 
+# A user's global transport rewrite does not change the configured identity.
+export GIT_CONFIG_GLOBAL="$t/gitconfig" GIT_CONFIG_NOSYSTEM=1
+ln -s "$remotes" "$t/alias"
+git config --global "url.$t/alias/.insteadOf" "$remotes/"
+assert_eq 0 "$(run sync example-app --repo "$eng")" "sync accepts global transport rewrite"
+assert_eq 0 "$(run verify example-app --repo "$eng")" "verify accepts global transport rewrite"
+assert_lacks "$(cat "$t/err")" 'origin' "verify reports no origin miss under rewrite"
+FM_PROJECT=example-app bash -c '. "$1/bin/fm-config.sh"; fm_storage_init "$2" && fm_target_validate' _ "$ROOT" "$eng" > "$t/out" 2> "$t/err"
+assert_eq 0 "$?" "direct target validation accepts global rewrite"
+git -C "$clone" remote set-url origin "$remotes/example-org/not-this.git"
+assert_eq 70 "$(run sync example-app --repo "$eng")" "wrong configured url still exits 70 under rewrite"
+assert_contains "$(cat "$t/err")" "its origin is '$remotes/example-org/not-this.git'" "wrong origin diagnostic uses raw url"
+assert_lacks "$(cat "$t/err")" "$t/alias" "wrong origin diagnostic never reveals global rewrite target"
+git -C "$clone" remote set-url origin "$bare"
+git -C "$clone" config --local remote.origin.pushurl "$t/wrong.git"
+assert_eq 65 "$(run sync example-app --repo "$eng")" "wrong pushurl exits 65 under global rewrite"
+assert_contains "$(cat "$t/err")" "its push origin is '$t/wrong.git'" "wrong pushurl names configured push origin"
+git -C "$clone" config --unset remote.origin.pushurl
+git -C "$clone" config --local "url.$t/elsewhere/.insteadOf" "$remotes/"
+assert_eq 65 "$(run sync example-app --repo "$eng")" "local rewrite exits 65 even with global rewrite"
+assert_contains "$(cat "$t/err")" 'its local config rewrites' "local rewrite refusal names cause"
+git -C "$clone" config --unset "url.$t/elsewhere/.insteadOf"
+unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
+
 # A symlink out of state/projects/ is refused, and what it points at untouched.
 # Each case below is one that only its own symlink check stops: nothing else
 # in sync would refuse it before git writes through the link.

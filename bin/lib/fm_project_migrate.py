@@ -6,6 +6,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
+import fm_origin
+
 
 def migrate(source, target, origin):
     source, target = Path(source), Path(target)
@@ -30,7 +32,7 @@ def migrate(source, target, origin):
 
     if git('rev-parse', '--show-toplevel') != str(repo):
         raise ValueError('legacy clone root mismatch')
-    if git('remote', 'get-url', 'origin') != origin or git('remote', 'get-url', '--push', 'origin') != origin:
+    if fm_origin.check(repo, origin) is not None:
         raise ValueError('legacy origin mismatch')
     if len([line for line in git('worktree', 'list', '--porcelain').splitlines()
             if line.startswith('worktree ')]) != 1:
