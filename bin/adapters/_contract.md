@@ -184,14 +184,16 @@ win silently. An adapter reached with no `FM_MODEL` passes none, and the CLI
 runs on whatever it defaults to.
 
 **Before the round, where the CLI can list its models.** cursor-agent is the
-one vendor of the four that can (`cursor-agent --list-models`, once it holds
-a real login): `fm_adapter_model_listcheck` in `_lib.sh` runs the list
+one vendor of the four that can (`cursor-agent --list-models`, once it is given
+a `CURSOR_API_KEY`): `fm_adapter_model_listcheck` in `_lib.sh` runs the list
 command, parses the first column of each line (`id - Name`), and refuses the
 round (64) when `FM_MODEL` names none of them. It is silent - the round
 starts, unrefused - when the list command cannot be run, exits non-zero, or
-prints nothing (no login yet); the CLI's own answer below, at round time,
-stays the final word. codex and gemini document no listing command of their
-own and get no such preflight.
+prints nothing; the CLI's own answer below, at round time,
+stays the final word. With `AGENT_CLI_CREDENTIAL_STORE=memory`, run before
+the round's key is handed in, this check is normally silent: Cursor keeps
+no login of its own and answers only when a key is already in its environment.
+codex and gemini document no listing command of their own and get no such preflight.
 
 After the round, a model the vendor does not recognise refuses it with a
 usage error, loudly, rather than running on the CLI's default:

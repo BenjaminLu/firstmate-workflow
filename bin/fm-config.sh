@@ -631,14 +631,13 @@ fm_vendor_model() {
 # it already says so of a model left unset. Not exhaustive by design: a name
 # added upstream and not yet here is still caught by the CLI at round time.
 _FM_CLAUDE_MODELS="claude-opus-5-5 opus claude-sonnet-5 sonnet claude-haiku-4-5-20251001 haiku claude-fable-5-1 fable"
-# cursor-agent has no offline list of its own - it can only name its models
-# by asking `cursor-agent --list-models`, which needs the operator's own
-# login (design/design.md, "the configured model" section) and so cannot run
-# from this config check, which runs with no CLI session at all. Its own
-# round-time preflight (bin/adapters/cursor-agent.sh,
-# fm_adapter_model_listcheck) asks the CLI directly, once it is authenticated;
-# this offline check stays uncatalogued (2) for it, the same as codex and
-# gemini, which document no listing command at all.
+# cursor-agent can name its models only by asking cursor-agent --list-models,
+# which needs a CURSOR_API_KEY: under AGENT_CLI_CREDENTIAL_STORE=memory it
+# keeps no login of its own. The adapter's fm_adapter_model_listcheck
+# answers only when a key is already in its environment, otherwise silently
+# deferring to the round's own answer. This offline config check stays
+# uncatalogued (2) for cursor-agent, as for codex and gemini, which document
+# no listing command at all.
 fm_model_known() {   # fm_model_known <vendor> <model> -> 0 known, 1 not, 2 no catalogue for this vendor
   local vendor="$1" model="$2" m
   [ -n "$model" ] || return 1

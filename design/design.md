@@ -2982,15 +2982,17 @@ non-empty `modelUsage` as a turn that happened, as it reads a `"model"`.
 Two checks, one before the round starts and one after:
 
 `cursor-agent` is the one vendor of the four whose CLI can list its own
-models offline (`cursor-agent --list-models`, once it holds a real login);
+models offline (`cursor-agent --list-models`, once it is given a `CURSOR_API_KEY`);
 `fm_adapter_model_listcheck` in `bin/adapters/_lib.sh` runs it before the
 round, and `bin/adapters/cursor-agent.sh` calls it right after the
 `FM_ADAPTER_ARGS` model-flag check, before `fm_adapter_policy`: a lightweight
 call that touches no worktree and needs no confinement of its own, the same
 way `command -v cursor-agent` above it is unconfined. When the list command
-itself cannot be run, exits non-zero, or says nothing - no login yet - the
+itself cannot be run, exits non-zero, or says nothing, the
 check is silent and the round starts anyway; the CLI's own answer at round
-time, below, stays the final word. codex and gemini document no listing
+time, below, stays the final word. With `AGENT_CLI_CREDENTIAL_STORE=memory`,
+run before the round's key is handed in, this check is normally silent.
+codex and gemini document no listing
 command of their own, so they get no preflight, and this is stated here
 rather than left for a reader to wonder whether one was missed.
 
@@ -3707,7 +3709,7 @@ in `bin/fm-config.sh`:
 | vendor | its login, read by fm outside the round | handed in as | what of its own the round opens | temp | mach services |
 |---|---|---|---|---|---|
 | claude | a `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is; else the crew's own long-lived token (T-126), made once with `claude setup-token`: macOS keychain item `firstmate-claude-token`, account the operator's user; else, when `secret-tool` is on the operator's PATH, the libsecret item `firstmate-claude-token`/account the operator's user (T-126 round 2, Linux's rough equivalent of the keychain; its absence is skipped, not refused); else `~/.config/firstmate/claude-token`, refused unless its mode is the operator's alone (600). Only with none of those does it fall back to the operator's own interactive login as before T-126 - macOS keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json` - field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`; that fallback warns, in the round's log and on the board, that the round can die when that login refreshes | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
-| cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
+| cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message; with `AGENT_CLI_CREDENTIAL_STORE=memory`, so cursor keeps the login in memory and never in the keychain (plan B, 2026-10-05) | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
 | codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is only when `config.yaml`'s `billing:` chose api-key for codex; otherwise the round sheds it (T-121) | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
 | gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is only when `config.yaml`'s `billing:` chose api-key for gemini; otherwise the round sheds it (T-121) | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
 
@@ -4419,9 +4421,12 @@ classification checks quota exhaustion, expiry, exit 0 with a line exactly
 `indeterminate`. The model-list success wins over the recorded keychain-save
 warning. Neither `Logged in`, exit 0 alone, nor a nonzero model list confirms
 the key. A nonzero keychain error remains `keychain-blocked`, with reasons
-"cursor-agent needs keychain storage, which crew rounds deny" and
-"cursor-agent 需要鑰匙圈儲存，而 crew 回合禁止存取鑰匙圈". Other vendors' ordering is unchanged.
-The separate adapter model-list check still uses the operator's real HOME.
+"cursor-agent tried to store its login in the keychain, which crew rounds deny; this cursor-agent version may no longer honour AGENT_CLI_CREDENTIAL_STORE=memory; run fm doctor" and
+"cursor-agent 試圖把登入存進鑰匙圈，而 crew 回合禁止存取鑰匙圈；此版本的 cursor-agent 可能已不支援 AGENT_CLI_CREDENTIAL_STORE=memory；請執行 fm doctor". Other vendors' ordering is unchanged.
+Cursor rounds, the probe and the adapter's model-list check run with
+`AGENT_CLI_CREDENTIAL_STORE=memory`, so cursor never stores or reads a login
+in the keychain, the adapter check is silent without a `CURSOR_API_KEY`, and
+fm doctor checks the installed bundle still names the variable.
 
 Cursor's reasons distinguish three failures, in English and Traditional Chinese:
 
@@ -4616,7 +4621,10 @@ an empty temporary HOME and the auth-probe sandbox profile. `status` ignored
 operator's keychain session. `--list-models` reads the key: no key returned
 `Authentication required`, exit 1; the placeholder returned
 `The provided API key is invalid`, exit 1; the working key returned
-`Available models`, exit 0, after a keychain-save warning. The suite checks the fixed
+`Available models`, exit 0, after a keychain-save warning. The fourth Cursor
+recording, with the working key and `AGENT_CLI_CREDENTIAL_STORE=memory`,
+returned `Available models`, exit 0, with no keychain-save warning.
+The suite checks the fixed
 argv, the closed stdin, the scrubbed environment, the timeout, and that
 nothing of the vendor's own output or a secret reaches this script's own
 stdout. The operator's home and keychain are stand-ins, and each fake
@@ -4653,7 +4661,9 @@ judging the host. `--facts <file>` judges supplied observations against that
 repository's pins. The file is tab-separated data: tool rows carry name,
 path (empty means missing), numeric version, raw version line and optional
 xcrun-shim path; host rows carry `os` and `sandbox`; probe rows carry vendor,
-status, English explanation and Traditional Chinese explanation. The collector
+status, English explanation and Traditional Chinese explanation; bundle rows
+carry `cursor-agent` and `names`, `absent` or `unreadable`, emitted only for
+an installed cursor-agent. The collector
 does not run login probes in `--collect` mode. Normal doctor runs collect
 tools and obtain login probes before judging each usable vendor. Environment,
 repository hygiene, approved installs and an explicitly requested canary keep

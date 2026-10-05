@@ -261,6 +261,31 @@ $refusal_line" 1
       "$adapter" run "$d/prompt" "$d/tree" "$d/model-nousage.log" >/dev/null 2>"$d/model-nousage.err"
     assert_eq "64" "$?" "$name still refuses when modelUsage is empty"
 
+    # T-197: both the unconfined preflight and confined round use memory.
+    if [ "$name" = cursor-agent ]; then
+      {
+        printf '#!/usr/bin/env bash\n'
+        # shellcheck disable=SC2016  # expanded by the stub on each invocation
+        printf 'printf "%%s\\n" "${AGENT_CLI_CREDENTIAL_STORE-unset}" >> %q\n' "$d/credential-stores"
+        printf 'if [ "$1" = --list-models ]; then exec %q %q; fi\n' \
+          "$ROOT/tests/fixtures/auth-status/replay.sh" "$ROOT/tests/fixtures/auth-status/cursor-agent-signed-in-memory.txt"
+        printf 'cat >/dev/null\nprintf "ran\\n"\n'
+      } > "$d/fakebin/cursor-agent"
+      chmod +x "$d/fakebin/cursor-agent"
+      for caller_store in unset default; do
+        : > "$d/credential-stores"
+        : > "$d/memory.log"
+        (
+          unset AGENT_CLI_CREDENTIAL_STORE
+          [ "$caller_store" = unset ] || export AGENT_CLI_CREDENTIAL_STORE="$caller_store"
+          FM_MODEL=auto PATH="$d/fakebin:$closed_path" \
+            "$adapter" run "$d/prompt" "$d/tree" "$d/memory.log"
+        ) >/dev/null 2>"$d/memory.err"
+        assert_eq 0 "$?" "cursor round succeeds with caller store $caller_store"
+        assert_eq $'memory\nmemory' "$(cat "$d/credential-stores")" "cursor preflight and round override caller store $caller_store with memory"
+      done
+    fi
+
     # --- cursor-agent can list its own models, before the round (T-127) ---
     if [ "$name" = "cursor-agent" ]; then
       # a stub that answers --list-models differently from a real round, the
