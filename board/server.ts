@@ -18,6 +18,19 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 // path check that compares a resolved path against an unresolved root refuses
 // every legitimate file in the repository
 const ROOT = realpathSync(resolve(process.env.FM_ROOT ?? "."));
+// Read the checker's display contract once. A missing checker leaves usable cards.
+const steRules: { id: string; en: string; "zh-TW": string }[] = (() => {
+  try {
+    const result = Bun.spawnSync(["python3", join(ROOT, "bin/lib/fm_ste.py"), "rules"], { stdin: "ignore" });
+    if (result.exitCode !== 0) return [];
+    const rules = JSON.parse(result.stdout.toString()).rules;
+    if (!Array.isArray(rules)) return [];
+    return rules.filter(r => typeof r?.id === "string" && typeof r?.text?.en === "string"
+      && typeof r?.text?.["zh-TW"] === "string")
+      .map(r => ({ id: r.id, en: r.text.en, "zh-TW": r.text["zh-TW"] }));
+  } catch { return []; }
+})();
+
 // A variable as the process was given it. Bun leaves a variable that is set
 // but empty out of process.env altogether, so `FM_PORT=` reads there exactly
 // as unset; libc's own environment still holds it. Where libc cannot be
@@ -302,6 +315,23 @@ type Effect = typeof EFFECTS[number];
 // the words the decision_made summary uses, in the second language it carries
 const EFFECT_TW: Record<Effect, string> = { merge: "合併", hold: "暫緩", park: "擱置", drop: "不做", dispatch: "派工", send_back: "退回重做" };
 const OUTCOME_TW: Record<string, string> = { done: "已完成", failed: "失敗", recorded: "已記錄", running: "進行中" };
+const validCaptainText = (text: unknown): text is string => typeof text === "string" && !!text.trim()
+  && [...text].length <= 1000 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text);
+type ConfirmAnswer = { index: number; ok: true } | { index: number; ok: false; text: string };
+// Normalize key order for idempotency, but refuse extra or malformed fields.
+const confirmAnswers = (value: unknown, count: number | undefined): ConfirmAnswer[] | null => {
+  if (count === undefined) return value === undefined || (Array.isArray(value) && value.length === 0) ? [] : null;
+  if (!Array.isArray(value) || value.length !== count) return null;
+  const out: ConfirmAnswer[] = [];
+  for (let index = 0; index < count; index++) {
+    const a = value[index];
+    if (!a || typeof a !== "object" || Array.isArray(a) || a.index !== index || typeof a.ok !== "boolean") return null;
+    if (a.ok === true && Object.keys(a).length === 2) out.push({ index, ok: true });
+    else if (a.ok === false && Object.keys(a).length === 3 && validCaptainText(a.text)) out.push({ index, ok: false, text: a.text });
+    else return null;
+  }
+  return out;
+};
 const effectOf = (p: Record<string, any>, chosen: string): Effect | null => {
   if (chosen === "custom") return null;
   const named = p?.details?.effect?.[chosen];
@@ -1391,6 +1421,7 @@ const buildState = (only: string | null) => {
       // every project's or only the filtered one's
       waiting: shownPending.length,
     },
+    ste_rules: steRules,
     tasks: shownTasks,
     // design.md is linked from a card only when there is one to open
     designDoc: existsSync(only && registry().projects.has(only) && stateDir(only) !== join(ROOT, "state")
@@ -1400,8 +1431,8 @@ const buildState = (only: string | null) => {
     responses: reviewed.filter(mine).map(linked),
     handoffs: handoffs.filter((h) => !("project" in h) || mine(h)),
     outcomes: [...events.filter(e => (e.type === "merged" || e.type === "decision_made") && mine(e))
-      .map(e => linked({ ...e, identity: outcomeOf(e) })),
-      ...responses.filter(d => d.identity && mine(d)).map(d => ({type:'decision_made',identity:d.identity,data:{decision:d.id,chosen:d.chosen}}))],
+      .map(e => linked({ ...e, chosen: (e.data as { chosen?: unknown } | undefined)?.chosen, identity: outcomeOf(e) })),
+      ...responses.filter(d => d.identity && mine(d)).map(d => ({type:'decision_made',identity:d.identity,project:d.project,chosen:d.chosen,data:{decision:d.id,chosen:d.chosen}}))],
     // a lost run shows once: its agent_lost, not also the agent_finished the
     // deck reconcile closes it with
     recent: events.filter((e) => mine(e) && !closesLoss.has(e)).slice(-40).reverse().map(e => linked({ ...e, evidence_warning: evidenceWarning(e) })),
@@ -2221,8 +2252,7 @@ const server = Bun.serve({
         if (!["A", "B", "C", "D", "custom"].includes(chosen)) return json({ error: "bad choice" }, 400);
         // Count Unicode code points, preserving the literal text including spaces.
         const text = body?.text;
-        if (chosen === "custom" && (typeof text !== "string" || !text.trim()
-          || [...text].length > 1000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text))) {
+        if (chosen === "custom" && !validCaptainText(text)) {
           return json({ error: "invalid custom text", code: "customInvalid" }, 400);
         }
 
@@ -2233,11 +2263,20 @@ const server = Bun.serve({
         if (existsSync(file)) {
           // the stored record, with whatever merge it holds by now
           const decision = JSON.parse(readFileSync(file, "utf8"));
-          if (decision.chosen !== chosen || (chosen === "custom" && decision.text !== text))
+          const repeated = confirmAnswers(body?.answers, decision.answers?.length);
+          const storedAnswers = confirmAnswers(decision.answers, decision.answers?.length);
+          if ((decision.chosen === "change" ? decision.picked : decision.chosen) !== chosen
+            || (chosen === "custom" && decision.text !== text) || repeated === null
+            || JSON.stringify(storedAnswers) !== JSON.stringify(repeated))
             return json({ error: "decision already recorded differently" }, 409);
           return json({ ok: true, already: true, decision, merge: mergeOf(decision) });
         }
         if (!p) return json({ error: "no pending decision" }, 404);
+        const questions = p.details?.en?.questions;
+        const answers = confirmAnswers(body?.answers, Array.isArray(questions) ? questions.length : undefined);
+        if (answers === null) return json({ error: "every question needs an answer and every No needs text", code: "answersInvalid" }, 400);
+        const changeRequested = answers.some(a => !a.ok);
+        const recordedChoice = changeRequested ? "change" : chosen;
         // D exists only on a card that offers it: a readiness card's drop (T-059)
         if (chosen === "D" && !p.details?.en?.options?.D) return json({ error: "bad choice" }, 400);
         // the card's project is what its request recorded. A card recording
@@ -2253,7 +2292,7 @@ const server = Bun.serve({
         // the pull request is that task's. What the answer does (T-118) is
         // carried out below by the script that owns it.
         const untracked = p.kind === "merge-untracked";
-        const effect = effectOf(p, chosen);
+        const effect = changeRequested ? null : effectOf(p, chosen);
         const merging = effect === "merge" && (p.kind === "merge" || untracked) && prNumber(p.pr) !== null && typeof p.pr === "number";
         const mergeTask = untracked ? null : taskKey(p.task) !== null ? String(p.task) : null;
         if (merging && !untracked && p.task != null && mergeTask === null)
@@ -2265,7 +2304,10 @@ const server = Bun.serve({
         if (merging && mergeRunningIn(projectOf(p)))
           return json({ error: "a merge is already running in this project", code: "mergeBusy", project: projectOf(p) || null }, 409);
         const decision: Record<string, unknown> = {
-          id, chosen, expected_head: p.expected_head ?? null, binding: p.binding ?? null, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
+          id, chosen: recordedChoice,
+          ...(changeRequested ? { picked: chosen } : {}),
+          ...(Array.isArray(questions) ? { answers } : {}),
+          expected_head: p.expected_head ?? null, binding: p.binding ?? null, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
           ...(project ? { project } : {}),
           ...(chosen === "custom" ? { text } : {}),
           note: typeof body?.note === "string" ? body.note.slice(0, 500) : "",
@@ -2310,7 +2352,7 @@ const server = Bun.serve({
             ...(carried.stopped ? { stopped: carried.stopped } : {}) });
         }
         let eventRecorded = false;
-        const said = effect
+        const said = changeRequested ? { en: `${id} change requested`, tw: `${id} 要求修改` } : effect
           ? { en: `${id}: ${chosen}, ${effect.replace("_", " ")} ${carried.outcome}${carried.reason ? `: ${carried.reason}` : ""}`,
               tw: `${id}：${chosen}，${EFFECT_TW[effect]}${OUTCOME_TW[carried.outcome]}${carried.reason ? `：${carried.reason}` : ""}` }
           : { en: `${id} recorded ${chosen}`, tw: `${id} 已記錄 ${chosen}` };
@@ -2318,7 +2360,7 @@ const server = Bun.serve({
           const emitted = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"),
           "--actor", "captain", "--type", "decision_made",
           ...(p.task ? ["--task", p.task] : []), ...onProject,
-          "--data", JSON.stringify({ decision: id, chosen, outcome: carried.outcome,
+          "--data", JSON.stringify({ decision: id, chosen: recordedChoice, ...(changeRequested ? { picked: chosen } : {}), outcome: carried.outcome,
             ...(effect ? { effect } : {}), ...(carried.reason ? { reason: carried.reason } : {}) }),
           "--en", said.en, "--tw", said.tw],
           { env: childEnv() });

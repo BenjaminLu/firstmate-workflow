@@ -701,6 +701,8 @@ current-change review remain required; mocks do not prove real window visibility
 
 ## Author and verify captain decisions
 
+An answer with `chosen: "change"` means revise the spec from the captain's answers, re-run preflight and raise a new card; never act on `picked`.
+
 Prepare complete authored content and a bespoke before/after/options diagram
 before exposing any pending card. Never publish an empty/title-only card to patch
 later. Author English and Traditional Chinese independently and derive Simplified

@@ -488,6 +488,80 @@ stop_pids "$y/pids"
 wait "$pidy" 2>/dev/null || true
 safe_rm_rf "$y"
 
+# T-211: answers are validated before effects; a No is a spec-change request.
+answer_questions() {
+  wcurl "$PORTX" -s -m 30 -o "$x/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+    -d "$1" "http://127.0.0.1:$PORTX/decisions"
+}
+question_card() {
+  card "$1" T-033 choice '{"A":"dispatch","B":"park","C":"drop"}'
+  jq '.details.en.intent=[{kind:"step",text:"Check the scope."}] | .details["zh-TW"].intent=.details.en.intent | .details.en.questions=[{kind:"fact",text:"The scope is correct."},{kind:"fact",text:"The result is correct."}] |
+      .details["zh-TW"].questions=.details.en.questions' "$x/state/pending/$1.json" > "$x/question-card"
+  mv "$x/question-card" "$x/state/pending/$1.json"
+}
+question_card D-2110
+for answers in 'null' '[]' '[{"index":0,"ok":true}]' \
+  '[{"index":1,"ok":true},{"index":0,"ok":true}]' \
+  '[{"index":0,"ok":false,"text":" "},{"index":1,"ok":true}]' \
+  '[{"index":0,"ok":"true"},{"index":1,"ok":true}]' \
+  '[{"index":0,"ok":true,"text":"extra"},{"index":1,"ok":true}]' \
+  '[{"index":0,"ok":false,"text":"bad\u0001"},{"index":1,"ok":true}]' \
+  "$(jq -cn '[{index:0,ok:false,text:("🚢" * 1001)},{index:1,ok:true}]')"; do
+  body="$(jq -cn --argjson a "$answers" '{id:"D-2110",chosen:"A",answers:$a}')"
+  assert_eq 400 "$(answer_questions "$body")" 'invalid question answers are refused'
+  assert_eq answersInvalid "$(jq -r .code "$x/post")" 'question refusal has its own code'
+done
+assert_eq 400 "$(answer D-2110 A)" 'missing answers are refused'
+card D-2111 T-033 choice null
+assert_eq 400 "$(answer_questions '{"id":"D-2111","chosen":"A","answers":[{"index":0,"ok":true}]}')" 'legacy cards refuse nonempty answers'
+assert_eq 200 "$(answer_questions '{"id":"D-2111","chosen":"A","answers":[]}')" 'legacy cards accept empty answers'
+old_calls="$(cat "$x/dispatch-calls")"
+no='{"id":"D-2110","chosen":"A","answers":[{"index":0,"ok":true},{"index":1,"ok":false,"text":"Change the scope 🚢"}]}'
+assert_eq 200 "$(answer_questions "$no")" 'No records a change request'
+assert_eq 'change A null recorded null' "$(record D-2110 '"\(.chosen) \(.picked) \(.effect) \(.effect_outcome) \(.merge)"')" 'change requests carry no approval or effect'
+assert_eq "$old_calls" "$(cat "$x/dispatch-calls")" 'a No never calls the dispatcher'
+assert_eq 'Change the scope 🚢' "$(record D-2110 '.answers[1].text')" 'the captain correction stays literal'
+assert_eq 'change A recorded' "$(made D-2110 '"\(.data.chosen) \(.data.picked) \(.data.outcome)"')" 'change event records pick and outcome'
+assert_eq 'D-2110 change requested' "$(made D-2110 '.summary.en')" 'change event has an English summary'
+assert_eq 'D-2110 要求修改' "$(made D-2110 '.summary["zh-TW"]')" 'change event has a Traditional Chinese summary'
+assert_eq 200 "$(answer_questions "$no")" 'identical change post is idempotent'
+assert_eq true "$(jq -r .already "$x/post")" 'the repeated answer reads the stored decision'
+assert_eq 409 "$(answer_questions "$(jq '.answers[1].text="Different"' <<<"$no")")" 'different correction conflicts'
+assert_eq 409 "$(answer_questions "$(jq '.chosen="B"' <<<"$no")")" 'different pick conflicts'
+question_card D-2112
+yes='{"id":"D-2112","chosen":"A","answers":[{"index":0,"ok":true},{"index":1,"ok":true}]}'
+assert_eq 200 "$(answer_questions "$yes")" 'all Yes keeps the existing dispatch effect'
+assert_eq 'A dispatch done 2' "$(record D-2112 '"\(.chosen) \(.effect) \(.effect_outcome) \(.answers|length)"')" 'all Yes stores answers and carries the effect'
+assert_ne "$old_calls" "$(cat "$x/dispatch-calls")" 'all Yes calls the dispatcher'
+assert_eq 200 "$(answer_questions "$yes")" 'identical all Yes is idempotent'
+assert_eq 409 "$(answer_questions "$(jq '.answers[1]={index:1,ok:false,text:"Change"}' <<<"$yes")")" 'a later No cannot change an approval'
+question_card D-2113
+custom='{"id":"D-2113","chosen":"custom","text":"  My option 🚢  ","answers":[{"index":0,"ok":false,"text":"Revise"},{"index":1,"ok":true}]}'
+assert_eq 200 "$(answer_questions "$custom")" 'custom picks can request changes'
+assert_eq 'change custom   My option 🚢  ' "$(record D-2113 '"\(.chosen) \(.picked) \(.text)"')" 'custom text remains literal on a change request'
+assert_eq 409 "$(answer_questions "$(jq '.text="another option"' <<<"$custom")")" 'a different custom text conflicts'
+for pick in B C; do
+  id="D-211$([ "$pick" = B ] && echo 4 || echo 5)"
+  question_card "$id"
+  count="$(wc -l < "$x/state/events.jsonl")"
+  assert_eq 200 "$(answer_questions "$(jq -cn --arg id "$id" --arg c "$pick" '{id:$id,chosen:$c,answers:[{index:0,ok:false,text:"Revise"},{index:1,ok:true}]}')")" 'No bypasses park and drop'
+  assert_eq 0 "$(tail -n +$((count + 1)) "$x/state/events.jsonl" | jq -s '[.[]|select(.type=="parked" or .type=="closed")]|length')" 'No writes no park or drop event'
+done
+# Merge and send-back are also skipped before a helper can start.
+for effect in merge send_back; do
+  id="D-211$([ "$effect" = merge ] && echo 6 || echo 7)"
+  question_card "$id"
+  jq --arg effect "$effect" '.kind="merge" | .pr=31 | .task="T-031" | .details.effect.A=$effect' "$x/state/pending/$id.json" > "$x/merge-question"
+  mv "$x/merge-question" "$x/state/pending/$id.json"
+  merges="$(cat "$x/merge-calls")"; workers="$(cat "$x/worker-calls")"
+  body="$(jq -cn --arg id "$id" '{id:$id,chosen:"A",answers:[{index:0,ok:false,text:("🚢" * 1000)},{index:1,ok:true}]}')"
+  assert_eq 200 "$(answer_questions "$body")" 'No accepts 1000 Unicode code points'
+  assert_eq 'change null null' "$(record "$id" '"\(.chosen) \(.effect) \(.merge)"')" "No bypasses $effect"
+  assert_eq "$merges" "$(cat "$x/merge-calls")" 'No starts no merge'
+  assert_eq "$workers" "$(cat "$x/worker-calls")" 'No starts no send-back worker'
+done
+assert_ok "jq -e '.ste_rules[]|select(.id==\"R1\" and .en==\"Limit a step to 20 words.\" and .[\"zh-TW\"]==\"指令最多 20 個字詞。\")' <<<\"\$(sx)\" >/dev/null" 'state exposes rules from the real STE module'
+
 kill "$pidx" 2>/dev/null
 wait "$pidx" 2>/dev/null || true
 # every round a send back started here, stopped and gone (T-151)
