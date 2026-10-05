@@ -38,6 +38,12 @@ with (root / 'state/runs/.worker-T-902.lock').open('a') as lock:
     sys.exit(result.returncode)
 PY
 )"; code=$?
-assert_eq 65 "$code" 'restack entrypoint refuses live worker lock'
+assert_eq 75 "$code" 'restack entrypoint refuses live worker lock'
 assert_contains "$out" 'task has a live worker; restack held' 'restack lock refusal names active owner'
+# No worker owns the lock now; GitHub reports a different authoritative head.
+sed 's/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccc/g' "$d/gh" > "$d/gh-moved"
+chmod +x "$d/gh-moved"
+out="$(GH_REPO=fixture/project FM_ROOT="$d" FM_GH="$d/gh-moved" bash "$d/bin/lib/fm-restack.sh" --repo "$d" --pr 2 --parent 1 --expected-head bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 2>&1)"; code=$?
+assert_eq 67 "$code" 'restack entrypoint distinguishes GitHub head movement'
+assert_contains "$out" 'task head changed on GitHub' 'restack names authoritative head movement'
 finish

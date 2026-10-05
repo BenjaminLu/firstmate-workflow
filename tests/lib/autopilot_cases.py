@@ -146,10 +146,196 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertFalse(any(isinstance(x,list) for x in self.calls))
         self.pilot.policy.update(stacking='allowed', force_with_lease=True)
         self.pilot.restack(pr, parent)
-        argv = [x for x in self.calls if isinstance(x,list)][-1]
+        argv = [x for x in self.calls if isinstance(x, list) and x[0].endswith('lib/fm-restack.sh')][-1]
         self.assertIn('--expected-head', argv)
         self.assertIn(HEAD, argv)
         self.assertIn('--project', argv)
+
+    def restack_inputs(self):
+        self.pilot.policy.update(stacking='allowed', force_with_lease=True)
+        pr = copy.deepcopy(PR)
+        pr['base']['ref'] = 't-002-parent'
+        return pr, dict(number=9, merged_at='now', head=dict(ref='t-002-parent'))
+
+    def restack_calls(self):
+        return [c for c in self.calls if isinstance(c, list) and c[0].endswith('lib/fm-restack.sh')]
+
+    def test_restack_done_is_per_head_without_ledger(self):
+        pr, parent = self.restack_inputs()
+        self.pilot.restack(pr, parent)
+        self.assertEqual(self.pilot.data['restacks']['12'],
+                         dict(head=HEAD, parent=9, task='T-001', outcome='done'))
+        self.pilot.restack(pr, parent)
+        self.assertEqual(len(self.restack_calls()), 1)
+        self.assertEqual(self.pilot.data['actions'], {})
+        pr['head']['sha'] = 'c' * 40
+        self.pilot.prune_branches('12', pr['head']['sha'])
+        self.assertNotIn('12', self.pilot.data['restacks'])
+        self.pilot.restack(pr, parent)
+        self.assertEqual(len(self.restack_calls()), 2)
+
+    def test_restack_active_work_and_helper_lock_hold_silently(self):
+        pr, parent = self.restack_inputs()
+        for name in ('round_live', 'busy'):
+            with patch.object(self.pilot, name, return_value=True):
+                self.pilot.restack(pr, parent)
+            self.assertEqual(self.restack_calls(), [])
+            self.assertEqual(self.pilot.data['restacks'], {})
+            self.assertEqual(self.pilot.data['retries'], {})
+            self.assertEqual(self.pilot.data['wakes'], {})
+        self.restack_answer = (75, '', 'task has a live worker; restack held')
+        for count in (1, 2):
+            self.pilot.restack(pr, parent)
+            self.assertEqual(len(self.restack_calls()), count)
+            self.assertEqual(self.pilot.data['restacks'], {})
+            self.assertEqual(self.pilot.data['retries'], {})
+            self.assertEqual(self.pilot.data['wakes'], {})
+
+    def test_restack_moved_requires_fresh_confirmation(self):
+        pr, parent = self.restack_inputs()
+        self.restack_answer = (67, '', 'head moved')
+        with patch.object(self.pilot, 'command', return_value=json.dumps(dict(headRefOid='c' * 40))) as command:
+            self.pilot.restack(pr, parent)
+        command.assert_called_once_with(['gh', 'pr', 'view', '12', '--repo', 'owner/repo', '--json', 'headRefOid'])
+        self.assertEqual(self.pilot.data['restacks']['12'],
+                         dict(head=HEAD, parent=9, task='T-001', outcome='moved'))
+        self.assertEqual(self.pilot.data['retries'], {})
+        self.assertEqual(self.pilot.data['wakes'], {})
+
+    def test_restack_generic_failures_retry_offsets_and_last_line(self):
+        for answer in ((68, '', 'noise\nlast refusal\n\n'), (65, '', 'last refusal'),
+                       (64, '', 'last refusal'), (70, '', 'last refusal'),
+                       (67, '', 'last refusal'), OSError('last refusal')):
+            with self.subTest(answer=answer):
+                pr, parent = self.restack_inputs()
+                for name in ('restacks', 'retries', 'wakes'): self.pilot.data[name].clear()
+                self.calls.clear(); self.restack_answer = answer
+                for seq, count in enumerate((1, 2, 2, 3, 3, 3)):
+                    self.pilot.data['poll_seq'] = seq
+                    self.pilot.restack(pr, parent)
+                    self.assertEqual(len(self.restack_calls()), count)
+                    self.assertEqual(self.pilot.data['restacks'], {})
+                self.assertEqual(len(self.pilot.data['wakes']), 1)
+                wake = next(iter(self.pilot.data['wakes'].values()))
+                self.assertEqual(wake['line'], 'T-001 #12 restack failed after 3 attempts: last refusal')
+                self.assertEqual(self.pilot.data['actions'], {})
+        self.pilot.data['retries'].clear()
+        self.restack_answer = (67, '', 'last refusal')
+        with patch.object(self.pilot, 'command', side_effect=OSError('offline')):
+            self.pilot.restack(pr, parent)
+        self.assertEqual(self.pilot.data['retries']['restack:12:' + HEAD]['count'], 1)
+        for payload in ('null', '[]', '{}', 'not json'):
+            self.pilot.data['retries'].clear()
+            with patch.object(self.pilot, 'command', return_value=payload):
+                self.pilot.restack(pr, parent)
+            self.assertEqual(self.pilot.data['retries']['restack:12:' + HEAD]['count'], 1)
+            self.assertEqual(self.pilot.data['restacks'], {})
+
+    def test_restack_conflict_and_published_wake_once(self):
+        for rc, outcome, reason in ((66, 'conflict', 'rebase conflict'),
+                                    (69, 'published', 'published but did not finish')):
+            with self.subTest(rc=rc):
+                pr, parent = self.restack_inputs()
+                self.calls.clear()
+                for name in ('restacks', 'retries', 'wakes'): self.pilot.data[name].clear()
+                self.restack_answer = (rc, '', 'noise\nlast line\n')
+                self.pilot.restack(pr, parent)
+                self.assertEqual(self.pilot.data['restacks']['12'],
+                                 dict(head=HEAD, parent=9, task='T-001', outcome=outcome))
+                self.pilot.restack(pr, parent)
+                if rc == 69:
+                    pr['head']['sha'] = 'c' * 40
+                    for synced in (True, False):
+                        with patch.object(self.pilot, 'sync_branch', return_value=synced):
+                            self.pull_at(pr)
+                            self.pilot.restack(pr, parent)
+                        self.assertEqual(self.pilot.data['restacks']['12']['outcome'], 'published')
+                self.assertEqual(len(self.restack_calls()), 1)
+                self.assertEqual(len(self.pilot.data['wakes']), 1)
+                wake = next(iter(self.pilot.data['wakes'].values()))
+                self.assertIn(reason, wake['line']); self.assertTrue(wake['line'].endswith('last line'))
+                self.assertTrue(wake['summary']['zh-TW'])
+                self.assertEqual(self.pilot.data['retries'], {})
+                self.pilot.prune_branches('12')
+                self.assertEqual(self.pilot.data['restacks'], {})
+
+    def test_restack_unknown_outcomes_hold_across_heads(self):
+        for answer in (subprocess.TimeoutExpired('restack', 120), (71, '', 'push unknown'),
+                       (1, '', 'traceback'), (-9, '', ''), (137, '', 'killed')):
+            with self.subTest(answer=answer):
+                pr, parent = self.restack_inputs()
+                self.calls.clear()
+                for name in ('restacks', 'retries', 'wakes'): self.pilot.data[name].clear()
+                self.restack_answer = answer
+                self.pilot.restack(pr, parent)
+                expected = dict(head=HEAD, parent=9, task='T-001', outcome='started')
+                self.assertEqual(self.pilot.data['restacks']['12'], expected)
+                self.pilot.restack(pr, parent)
+                pr['head']['sha'] = 'c' * 40
+                self.pilot.prune_branches('12', pr['head']['sha'])
+                self.pilot.restack(pr, parent)
+                self.assertEqual(self.pilot.data['restacks']['12'], expected)
+                self.assertEqual(len(self.restack_calls()), 1)
+                self.assertEqual(len(self.pilot.data['wakes']), 1)
+                self.assertIn('outcome unknown', next(iter(self.pilot.data['wakes'].values()))['line'])
+                self.assertEqual(self.pilot.data['retries'], {})
+                self.assertEqual(self.pilot.data['actions'], {})
+
+    def test_restack_started_is_saved_before_probe_and_recovered_after_retarget(self):
+        pr, parent = self.restack_inputs()
+        def killed(argv):
+            record = json.loads(self.pilot.path.read_text())['restacks']['12']
+            self.assertEqual(record, dict(head=HEAD, parent=9, task='T-001', outcome='started'))
+            raise KeyboardInterrupt()
+        with patch.object(self.pilot, 'probe', side_effect=killed):
+            with self.assertRaises(KeyboardInterrupt): self.pilot.restack(pr, parent)
+        self.restart_branch_pilot()
+        self.restack_inputs()
+        self.pilot.restack(pr, parent)
+        self.assertEqual(self.restack_calls(), [])
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        # Recovery must not depend on pull() reaching the merged-parent path.
+        self.pilot.data['wakes'].clear()
+        self.pilot.data['restacks']['12']['task'] = 'T-099'
+        pr['base']['ref'] = 'main'
+        self.pilot.data['pulls']['12'] = pr
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        wake = next(iter(self.pilot.data['wakes'].values()))
+        self.assertEqual(wake['task'], 'T-099')
+        self.assertEqual(wake['line'], 'T-099 #12 restack outcome unknown (timed out or interrupted); reconcile before review')
+        first = copy.deepcopy(self.pilot.data)
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        self.assertEqual(self.pilot.data, first)
+        self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 1)
+
+    def test_restack_migration_drops_all_legacy_states_once(self):
+        tokens = []
+        for status in ('started', 'done', 'uncertain'):
+            token = A.key(['restack', status]); tokens.append(token)
+            self.pilot.data['actions'][token] = dict(state=status, identity=['restack', status], task='T-001')
+            self.pilot.queue('action-' + token, 'T-001', 'legacy restack', '舊重新堆疊')
+        delivered = self.state / 'wake-queue'; delivered.mkdir()
+        path = delivered / ('autopilot-' + A.key(['self', 'action-' + tokens[0]]) + '.json')
+        payload = b'{"delivered":"unchanged"}\n'; path.write_bytes(payload)
+        self.pilot.data['wakes'][path.stem]['pushed'] = True
+        review = dict(state='done', identity=['launch-review', 12, HEAD], task='T-001')
+        self.pilot.data['actions']['review'] = review
+        self.pilot.data.pop('migrated_t204', None)
+        self.pilot.data.pop('restacks', None)
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        self.assertEqual(self.pilot.data['actions'], {'review': review})
+        self.assertEqual(self.pilot.data['restacks'], {})
+        self.assertTrue(self.pilot.data['migrated_t204'])
+        self.assertEqual(set(self.pilot.data['wakes']), {path.stem})
+        self.assertEqual(path.read_bytes(), payload)
+        first = copy.deepcopy(self.pilot.data)
+        self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
+        self.assertEqual(self.pilot.data, first)
+        self.assertEqual(path.read_bytes(), payload)
+        self.assertFalse(any(c[0] == 'wake' for c in self.calls))
+        pr, parent = self.restack_inputs()
+        self.pilot.restack(pr, parent)
+        self.assertEqual(len(self.restack_calls()), 1)
 
     def test_failed_update_retries_at_one_and_three_then_wakes_once(self):
         self.put_answer = response('503 Service Unavailable', 'try later')
@@ -649,7 +835,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
             token = A.key(identity); removed.append(token)
             self.pilot.data['actions'][token] = dict(state='uncertain', identity=identity, task='T-001')
             self.pilot.queue('action-' + token, 'T-001', 'legacy closure', '舊關閉事件')
-        for kind in ('restack', 'launch-review'):
+        for kind in ('launch-review',):
             for status in ('started', 'done', 'uncertain'):
                 token = kind + status
                 self.pilot.data['actions'][token] = dict(state=status, identity=[kind, token], task='T-001')
@@ -674,7 +860,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
             self.assertNotIn(ident, self.pilot.data['wakes'])
             self.assertFalse((delivered / (ident + '.json')).exists())
         retained = {'autopilot-' + A.key(['self', 'action-' + kind + 'started'])
-                    for kind in ('restack', 'launch-review')}
+                    for kind in ('launch-review',)}
         self.assertEqual(set(self.pilot.data['wakes']), {path.stem} | retained)
         for ident in retained:
             self.assertIn('Autopilot stopped during an action', self.pilot.data['wakes'][ident]['line'])
@@ -695,21 +881,21 @@ class PilotTests(BranchFixture, unittest.TestCase):
         path = delivered / ('autopilot-' + A.key(['self', 'action-' + tokens[0]]) + '.json')
         payload = b'{"delivered":"unchanged"}\n'; path.write_bytes(payload)
         self.pilot.data['wakes'][path.stem]['pushed'] = True
-        self.pilot.data['actions']['restack'] = dict(state='started', identity=['restack', 12], task='T-001')
+        self.pilot.data['actions']['launch-review'] = dict(state='started', identity=['launch-review', 12], task='T-001')
         self.pilot.data.pop('migrated_t193', None)
         self.pilot.data.pop('advanced', None)
         self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
-        self.assertEqual(set(self.pilot.data['actions']), {'restack'})
-        self.assertEqual(self.pilot.data['actions']['restack']['state'], 'uncertain')
+        self.assertEqual(set(self.pilot.data['actions']), {'launch-review'})
+        self.assertEqual(self.pilot.data['actions']['launch-review']['state'], 'uncertain')
         self.assertEqual(self.pilot.data['advanced'], {})
         self.assertTrue(self.pilot.data['migrated_t193'])
         for token in tokens[1:]:
             ident = 'autopilot-' + A.key(['self', 'action-' + token])
             self.assertNotIn(ident, self.pilot.data['wakes'])
             self.assertFalse((delivered / (ident + '.json')).exists())
-        restack = 'autopilot-' + A.key(['self', 'action-restack'])
-        self.assertEqual(set(self.pilot.data['wakes']), {path.stem, restack})
-        self.assertIn('Autopilot stopped during an action', self.pilot.data['wakes'][restack]['line'])
+        review = 'autopilot-' + A.key(['self', 'action-launch-review'])
+        self.assertEqual(set(self.pilot.data['wakes']), {path.stem, review})
+        self.assertIn('Autopilot stopped during an action', self.pilot.data['wakes'][review]['line'])
         self.assertEqual(path.read_bytes(), payload)
         first = copy.deepcopy(self.pilot.data)
         self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()

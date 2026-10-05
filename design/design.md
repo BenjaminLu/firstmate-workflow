@@ -5337,9 +5337,14 @@ The one-time `migrated_t200` upgrade drops legacy pr-event, recheck and
 observed-merge actions with their undelivered wakes, marking a terminal PR
 whose pr-event action was not done as `event_pending` so its row is written by
 the normal retry series. Delivered wake files remain unchanged.
-The remaining write-ahead classes are restack and review launch under
-`state/autopilot/`: completion marks them done; interruption or an
-ambiguous result queues reconciliation rather than replaying the action.
+Review launch is the remaining write-ahead action class under
+`state/autopilot/`: completion marks it done; interruption or an ambiguous
+result queues reconciliation rather than replaying the action. Restack keeps
+one per-PR-head record in `restacks`, with `head`, `parent`, `task` and an
+outcome of `started`, `done`, `moved`, `conflict` or `published`. The one-time
+`migrated_t204` upgrade drops legacy restack actions in every state and their
+undelivered wakes; delivered wake files remain unchanged. Eligible children
+are reconsidered under the expected-head lease and worker exclusion.
 The one-time `migrated_t190` upgrade removes legacy update actions and their
 undelivered action wakes before recovery. `migrated_t193` similarly drops legacy
 advance actions in every state and their undelivered wakes, without rewriting
@@ -5385,6 +5390,25 @@ task worktree is reattached to that verified head.
 Remote push and retarget cannot be atomic: a retarget failure reports the
 published SHA and requires synchronization and completion of that retarget
 before any review. No result is approval or gate evidence.
+
+The restack helper returns 0 for completion, 65 for a refusal, 66 for a rebase
+conflict, 67 when GitHub's child head moved, 68 for a stale local task ref,
+69 when published but unfinished, 71 when the push outcome is unknown, and
+75 for a live worker. Autopilot records completion and silently holds active
+work; 75 tries again next poll without a retry or wake. A 67 result settles
+silently only after a fresh GitHub read confirms the head moved; disagreement
+or a failed read retries. A 66 or 69 result wakes firstmate immediately once.
+Pre-push failures 64, 65, 68 and 70 retry at poll offsets 0, 1 and 3, then wake
+once with the last stderr line. Local synchronization can heal a stale ref
+between attempts. Exit 71, a timeout, a kill or any unlisted status keeps the
+`started` record, wakes once with “outcome unknown”, and holds for reconciliation.
+Startup recovery also wakes once for every unfinished `started` restack,
+even when the child's base has already been retargeted. A `published` or
+`started` hold survives changes to the child head until the PR closes or
+firstmate finishes the restack by hand: moving its base off the merged parent
+removes it from the restack path. Other records clear on a new head. Cleanup
+cannot hide a published or unknown push: its failure is attached to the error,
+or returned as `tree_cleanup` after success.
 
 Synchronize the local base without overwriting unpublished work, then obtain
 fresh current-head CI, six gates and authoritative review/patch binding before
