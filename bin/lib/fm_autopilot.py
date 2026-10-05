@@ -763,12 +763,108 @@ class Pilot(BranchUpdates, MechanicalLoop):
         return max(0.1, min(deadlines) - self.clock())
 
 
+def code_id(path, folders):
+    """Identify only committed code trees; ignored runtime files are irrelevant."""
+    path = Path(path).resolve()
+    if not (path / '.git').exists(): return None
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS='0')
+    try:
+        trees = subprocess.run(['git', '--no-optional-locks', '-C', str(path),
+                                'rev-parse', '--show-toplevel',
+                                *('HEAD:' + folder for folder in folders)],
+                               env=env, capture_output=True, text=True, check=True).stdout.splitlines()
+        if len(trees) != len(folders) + 1 or Path(trees[0]).resolve() != path: return None
+        status = subprocess.run(['git', '--no-optional-locks', '-C', str(path),
+                                 'status', '--porcelain', '--untracked-files=all', '--', *folders],
+                                env=env, capture_output=True, text=True, check=True)
+        return dict(zip(folders, trees[1:]), dirty=bool(status.stdout))
+    except (OSError, subprocess.SubprocessError): return None
+
+
+def same_code(left, right):
+    return bool(left and right and not left.get('dirty') and not right.get('dirty')
+                and {k:v for k,v in left.items() if k != 'dirty'} ==
+                    {k:v for k,v in right.items() if k != 'dirty'})
+
+
+def short_code(code):
+    if not code: return 'unknown'
+    return '/'.join(str(v)[:7] for k,v in code.items() if k != 'dirty') + ('+dirty' if code.get('dirty') else '')
+
+
+def read_reload(directory):
+    record = read_json(directory / 'reload.json')
+    for field, default in dict(request=None, outcome=None, failed_ids=[], dirty_seen=None, legacy_seen=None).items():
+        record.setdefault(field, default)
+    return record
+
+
+def failed_code(code, reload):
+    return any(same_code(code, failed) for failed in reload['failed_ids'])
+
+
 def live(directory):
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / 'service.lock').open('a') as lock:
-        try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try: fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError: return True
     return False
+
+
+def running(ctx):
+    directory = Path(ctx['state']) / 'autopilot'
+    if not live(directory): return 1
+    current = code_id(ctx['engine'], ('bin', 'skills'))
+    with Locked(directory / 'start.lock'):
+        owner = read_json(directory / 'owner.json')
+        # A new holder must finish recovery before any operator changes its request.
+        if owner.get('pid') is None or not owner.get('started_ok'): return 0
+        reload = read_reload(directory)
+        old = owner.get('code')
+        if current is None or same_code(current, old):
+            reload['request'] = None
+        elif current['dirty']:
+            reload['request'] = None
+            if reload['dirty_seen'] != current:
+                print('fm-autopilot: bin/ or skills/ has uncommitted changes; keeping the running code ' + short_code(old), file=sys.stderr)
+                reload['dirty_seen'] = current
+        elif 'code' not in owner:
+            reload['request'] = None
+            if reload['legacy_seen'] != owner['pid']:
+                print('fm-autopilot: the running service predates self-reload (T-203); restart it by hand once, when no job is running', file=sys.stderr)
+                reload['legacy_seen'] = owner['pid']
+        elif not failed_code(current, reload):
+            if not same_code((reload['request'] or {}).get('to'), current):
+                reload['request'] = dict(to=current, **{'from':old}, requested=time.time())
+                save_json(directory / 'reload.json', reload)
+                life.ring_events(ctx['state'], 'autopilot reload requested')
+                print(f'fm-autopilot: reload requested: {short_code(old)}->{short_code(current)}; it restarts when its running jobs finish', file=sys.stderr)
+        outcome = reload['outcome']
+        if outcome and not outcome.get('reported') and not os.environ.get('FM_AUTOPILOT_HANDOFF'):
+            before, after = short_code(outcome['from']), short_code(outcome['to'])
+            if outcome['kind'] == 'reloaded':
+                print(f'fm-autopilot: reloaded: {before}->{after}', file=sys.stderr)
+            else:
+                print(f"fm-autopilot: reload to {after} failed ({outcome['error']}); running the previous code {before}; inspect service.log", file=sys.stderr)
+            outcome['reported'] = True
+        save_json(directory / 'reload.json', reload)
+    return 0
+
+
+def reload_due(pilot, own_code, reload):
+    request = reload.get('request')
+    return bool(request and not same_code(request['to'], own_code)
+                and not failed_code(request['to'], reload)
+                and not any(j.get('state') in ('running', 'consuming') for j in pilot.data['jobs'].values())
+                and not any(a.get('state') == 'started' for a in pilot.data['actions'].values())
+                and not pilot.data['batches']
+                and all(w.get('pushed') for w in pilot.data['wakes'].values()))
+
+
+def handoff_target(ctx, own_code, reload):
+    current = code_id(ctx['engine'], ('bin', 'skills'))
+    if current is None or current['dirty'] or same_code(current, own_code): return None
+    return current
 
 
 def ensure(ctx, owner):
@@ -776,11 +872,14 @@ def ensure(ctx, owner):
     directory.mkdir(parents=True, exist_ok=True)
     with Locked(directory / 'start.lock'):
         if live(directory): return
-        save_json(directory / 'owner.json', dict(owner=owner, requested=time.time(), pid=None))
+        code = code_id(ctx['engine'], ('bin', 'skills'))
+        env = dict(os.environ, FM_AUTOPILOT_OWNED='1')
+        env.pop('FM_AUTOPILOT_CODE', None)
+        if code is not None: env['FM_AUTOPILOT_CODE'] = json.dumps(code)
+        save_json(directory / 'owner.json', dict(owner=owner, requested=time.time(), pid=None, code=code))
         with (directory / 'service.log').open('ab') as log:
             child = life.start([sys.executable, str(Path(__file__).resolve()), 'serve'], owner=owner,
-                               env={**os.environ, 'FM_AUTOPILOT_OWNED':'1'},
-                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=log)
+                               env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=log)
         threading.Thread(target=child.wait, daemon=True).start()
         ready, _, _ = select.select([child.stdout], [], [], 30)
         line = child.stdout.readline() if ready else b''
@@ -788,20 +887,116 @@ def ensure(ctx, owner):
         if line != b'ready\n': raise RuntimeError('autopilot did not become ready; inspect service.log')
 
 
+def reload_outcome(kind, before, after, error=None):
+    return dict(kind=kind, **{'from':before}, to=after, at=time.time(), error=error,
+                reported=False, woken=False)
+
+
+def started(pilot, record):
+    """Only the exclusive service holder publishes recovery and failure wakes."""
+    with Locked(pilot.directory / 'start.lock'):
+        record['started_ok'] = True
+        save_json(pilot.directory / 'owner.json', record)
+        reload = read_reload(pilot.directory)
+        request = reload['request']
+        if request and not same_code(record['code'], request['from']):
+            reload['outcome'] = reload_outcome('reloaded', request['from'], record['code'])
+            reload['request'] = None
+        outcome = reload['outcome']
+        if outcome and outcome['kind'] == 'failed' and not outcome.get('woken'):
+            before, after = short_code(outcome['from']), short_code(outcome['to'])
+            pilot.queue('reload-failed-' + after, '',
+                        f'Autopilot reload to {after} failed; running the previous code {before}; inspect service.log',
+                        f'自動駕駛重載到 {after} 失敗；仍執行先前的程式 {before}；請檢查 service.log')
+            outcome['woken'] = True
+        save_json(pilot.directory / 'reload.json', reload)
+
+
+def replacement(directory, own_code):
+    record = read_json(directory / 'owner.json')
+    if (record.get('pid') not in (None, os.getpid()) and live(directory)
+            and not same_code(record.get('code'), own_code)):
+        return record
+    return None
+
+
+def handoff(ctx, owner, own_code, target):
+    """The old snapshot owns fallback; the candidate never owns our recovery."""
+    directory = Path(ctx['state']) / 'autopilot'
+    wait = float(os.environ.get('FM_AUTOPILOT_RELOAD_WAIT', '60'))
+    deadline = time.monotonic() + wait
+    env = dict(os.environ, FM_SESSION_PID=str(owner), FM_AUTOPILOT_HANDOFF='1')
+    for name in ('FM_CODE_ROOT', 'FM_ENTRY_PID', 'FM_ENTRY_SCRIPT'): env.pop(name, None)
+    argv = [str(Path(ctx['engine']) / 'bin/fm-autopilot.sh'), 'ensure', '--repo', ctx['engine']]
+    if ctx.get('project'): argv += ['--project', ctx['project']]
+    log_path = directory / 'service.log'
+    offset = log_path.stat().st_size if log_path.exists() else 0
+    child = None
+    try:
+        with log_path.open('ab') as log:
+            child = life.start(argv, owner=owner, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+        # Never compete for service.lock while ensure is still starting its child.
+        child.wait(timeout=max(0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        # Keep reaping this session-owned child without terminating it.
+        threading.Thread(target=child.wait, daemon=True).start()
+    except (OSError, RuntimeError):
+        pass
+    else:
+        while time.monotonic() < deadline:
+            record = replacement(directory, own_code)
+            if record and record.get('started_ok'): return 0
+            time.sleep(.1)
+    # Re-read under start.lock before deciding failure. A slow live candidate
+    # gets a second bound and can retain its request beyond that bound.
+    with Locked(directory / 'start.lock'):
+        record = replacement(directory, own_code)
+    if record:
+        pending_deadline = time.monotonic() + wait
+        while time.monotonic() < pending_deadline:
+            record = replacement(directory, own_code)
+            if not record: break
+            if record.get('started_ok'): return 0
+            time.sleep(.1)
+    with Locked(directory / 'start.lock'):
+        if replacement(directory, own_code): return 0
+        reload = read_reload(directory)
+        target = (reload['request'] or {}).get('to', target)
+        with log_path.open('rb') as log:
+            log.seek(offset)
+            lines = [line.strip() for line in log.read().decode(errors='replace').splitlines() if line.strip()]
+        error = lines[-1] if lines else f'no new service within {wait:g} s'
+        reload['outcome'] = reload_outcome('failed', own_code, target, error)
+        if not failed_code(target, reload): reload['failed_ids'].append(target)
+        reload['request'] = None
+        save_json(directory / 'reload.json', reload)
+    os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), 'serve'])
+
+
 def serve(ctx):
     if os.environ.get('FM_AUTOPILOT_OWNED') != '1':
         raise ValueError('use ensure to start autopilot through the session lifeline')
     owner = life.session_owner()
+    own_code = json.loads(os.environ.get('FM_AUTOPILOT_CODE', 'null'))
     pilot = Pilot(ctx)
     with (pilot.directory / 'service.lock').open('a') as lock:
-        try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError: return 0
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline: return 0
+                time.sleep(.1)
         with life.Doorbell(pilot.root, channel='autopilot.d') as bell:
-            save_json(pilot.directory / 'owner.json', dict(pid=os.getpid(), owner=owner, started=time.time()))
+            record = dict(pid=os.getpid(), owner=owner, started=time.time(), code=own_code,
+                          snapshot=os.environ.get('FM_CODE_ROOT'))
+            save_json(pilot.directory / 'owner.json', record)
             print('ready', flush=True)
             os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
             pilot.recover()
             pilot.recover_jobs()
+            started(pilot, record)
             pushed = True
             while True:
                 if pushed:
@@ -811,17 +1006,30 @@ def serve(ctx):
                         pilot.queue('ready-error', '', 'Intent card needs attention: ' + str(error), '意圖卡需要處理')
                 if pilot.clock() >= pilot.data['next_poll']: pilot.poll()
                 pilot.flush()
+                with Locked(pilot.directory / 'start.lock'):
+                    reload = read_reload(pilot.directory)
+                    if reload_due(pilot, own_code, reload):
+                        target = handoff_target(ctx, own_code, reload)
+                        if target is None or failed_code(target, reload):
+                            reload['request'] = None
+                        else:
+                            reload['request']['to'] = target
+                        save_json(pilot.directory / 'reload.json', reload)
+                        if reload['request']: break
                 pushed = bell.wait(pilot.delay())
+    return handoff(ctx, owner, own_code, target)
 
 
 def main():
     ctx = context()
     mode = sys.argv[1]
     if mode == 'context': print(json.dumps(ctx))
-    elif mode == 'running': return 0 if live(Path(ctx['state']) / 'autopilot') else 1
+    elif mode == 'running': return running(ctx)
     elif mode == 'status':
         directory = Path(ctx['state']) / 'autopilot'
-        print(json.dumps(dict(running=live(directory), **read_json(directory / 'owner.json'))))
+        reload = read_reload(directory)
+        print(json.dumps(dict(running=live(directory), **read_json(directory / 'owner.json'),
+                              reload={k:reload[k] for k in ('request', 'outcome', 'failed_ids')})))
     elif mode == 'ensure': ensure(ctx, life.session_owner())
     elif mode == 'serve': return serve(ctx)
     else: raise ValueError('unknown autopilot mode')

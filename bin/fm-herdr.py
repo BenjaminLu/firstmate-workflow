@@ -2337,11 +2337,38 @@ def configured_board_port(root):
     return port
 
 
+def board_code_id(root):
+    root = Path(root).resolve()
+    if not (root / '.git').exists(): return None
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS='0')
+    try:
+        trees = subprocess.run(['git', '--no-optional-locks', '-C', str(root),
+                                'rev-parse', '--show-toplevel', 'HEAD:board', 'HEAD:i18n'],
+                               env=env, capture_output=True, text=True, check=True).stdout.splitlines()
+        if len(trees) != 3 or Path(trees[0]).resolve() != root: return None
+        status = subprocess.run(['git', '--no-optional-locks', '-C', str(root),
+                                 'status', '--porcelain', '--untracked-files=all', '--', 'board', 'i18n'],
+                                env=env, capture_output=True, text=True, check=True)
+        return dict(board=trees[1], i18n=trees[2], dirty=bool(status.stdout))
+    except (OSError, subprocess.SubprocessError): return None
+
+
+def board_same_code(left, right):
+    return bool(left and right and not left.get('dirty') and not right.get('dirty')
+                and all(left.get(folder) == right.get(folder) for folder in ('board', 'i18n')))
+
+
+def board_short_code(code):
+    return '/'.join(code[folder][:7] for folder in ('board', 'i18n')) + ('+dirty' if code.get('dirty') else '')
+
+
 def board_start(root):
     root = Path(root).resolve(); port = configured_board_port(root)
     url = f'http://127.0.0.1:{port}'
     base = record_root(root) / 'state/session'; base.mkdir(parents=True, exist_ok=True)
     with locked(base / '.board.lock'):
+        previous = read(base / 'board.json') if (base / 'board.json').exists() else {}
+        current = board_code_id(root)
         reused = board_matches(root, url)
         if not reused:
             # Any response means a different/unverifiable listener, never reuse it.
@@ -2375,7 +2402,18 @@ def board_start(root):
         # (T-145), so the captain keeps one tab and it is the one that writes.
         record = dict(root=str(root), url=url, reused=reused, page_http_verified=page,
                       browser_navigation_verified=False, **board_open(url, port))
-        if not reused: record['owner'] = owner
+        if not reused:
+            record['owner'] = owner
+            record['code'] = current
+        elif 'code' in previous:
+            record['code'] = previous['code']
+        old = record.get('code')
+        if reused and old and current and not current['dirty'] and not board_same_code(old, current):
+            before, after = board_short_code(old), board_short_code(current)
+            record['stale'] = True
+            record['stale_reason'] = {
+                'en': f'the board runs older code ({before} -> {after}); restart it by hand: stop the board process and run fm board',
+                'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}）；請手動重啟：停止看板程序後執行 fm board'}
         save(base / 'board.json', record)
         return record
 
@@ -2734,6 +2772,8 @@ def main(args):
         except (OSError, RuntimeError) as error:
             print('fm board: ' + str(error), file=sys.stderr); return 70
         print(json.dumps(record, indent=2))
+        for reason in record.get('stale_reason', {}).values():
+            print('fm board: ' + reason, file=sys.stderr)
         if record.get('sign_in_error'):
             print('fm board: ' + record['sign_in_error'], file=sys.stderr); return 69
         return 0

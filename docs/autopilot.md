@@ -12,6 +12,20 @@ Crew rounds never start supervision. Test sessions carrying
 `FIRSTMATE_CI_SESSION` skip startup and automatic resume unless a feature test
 explicitly sets `FM_AUTOPILOT_TEST_ENABLE=1`. Resume without an owner receipt
 does not start a service or acquire service locks.
+The service records its `bin/` and `skills/` tree identities. Once firstmate
+fast-forwards the engine checkout after a merge, the next `ensure` requests a
+reload when those committed trees differ. It drains running or consuming jobs,
+started actions, batches and unpushed wakes, then its old code hands off to a
+fresh snapshot without killing the service. If the new service cannot start,
+the old snapshot resumes and queues one bilingual failure wake; that failed
+code identity is never retried. Dirty code keeps the running snapshot, and the
+next operator `fm` command reports the reload outcome. Session startup uses the
+session's frozen copy, taken from the engine checkout moments earlier. HEAD
+can move between freezing and recording the identity; the next `ensure` detects
+subsequent differences and reloads. If committed autopilot code cannot import,
+`fm` reports autopilot unavailable and takes a fresh snapshot on each command,
+while the old service keeps serving. A pre-T-203 service needs one manual
+restart when no job is running or consuming; thereafter it reloads itself.
 
 Local event writers append first and ring owned FIFOs under
 `state/session/autopilot.d/`. Firstmate retains `session/wake.d/`; semantic
