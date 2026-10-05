@@ -230,12 +230,13 @@ publish_wip_if_dirty() {
   [ -n "${tree:-}" ] && [ -d "$tree" ] && [ -n "${branch:-}" ] && [ -n "${TASK:-}" ] || return 0
   case "$branch" in main|master|HEAD|'') return 0 ;; esac
   fm_publication_policy "$tree" || return 1
-  if [ "$pin_post_adapter" = 0 ] && { [ "$pin_synced" = 1 ] || [ "$pin_start_copy" = 1 ]; }; then
-    if git -C "$tree" cat-file -e "HEAD:$pinned_path" 2>/dev/null; then
-      git -C "$tree" checkout HEAD -- "$pinned_path" || return 1
+  if [ "${pin_post_adapter:-0}" = 0 ] && [ -n "${pinned_path:-}" ] \
+      && { [ "${pin_synced:-0}" = 1 ] || [ "${pin_start_copy:-0}" = 1 ]; }; then
+    if git -C "$tree" cat-file -e "HEAD:${pinned_path:-}" 2>/dev/null; then
+      git -C "$tree" checkout HEAD -- "${pinned_path:-}" || return 1
     else
-      git -C "$tree" rm -q --cached --ignore-unmatch -- "$pinned_path" || return 1
-      rm -f "$tree/$pinned_path" || return 1
+      git -C "$tree" rm -q --cached --ignore-unmatch -- "${pinned_path:-}" || return 1
+      rm -f "$tree/${pinned_path:-}" || return 1
     fi
   fi
   dirty="$(git -C "$tree" status --porcelain -- . \
