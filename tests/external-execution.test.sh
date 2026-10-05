@@ -243,6 +243,22 @@ fm_binding() { printf reviewed; }
 ''' + body + '\nverify_review_head')
         self.assertEqual(p.returncode, 0, p.stderr)
 
+    def test_settled_review_binds_reviewed_head_and_base_name(self):
+        body = function(root / 'bin/fm-review.sh', 'verify_review_head')
+        for answer in ('reviewed', 'stale'):
+            p = self.shell('''
+FM_EXTERNAL=1; TASK=T-051; PR=9; BRANCH=t-051-work; R_HEAD=reviewed
+REVIEW_PR_BASE=main; CALLS="$2/calls"
+fm_binding() { printf '%s\\n' "$*" > "$CALLS"; printf ''' + answer + '''; }
+''' + body + '\nverify_review_head settled')
+            if answer == 'reviewed':
+                self.assertEqual(p.returncode, 0, p.stderr)
+            else:
+                self.assertNotEqual(p.returncode, 0, p.stderr)
+            calls = (self.path / 'calls').read_text().strip()
+            self.assertTrue(calls.startswith('review-final '), calls)
+            self.assertIn('--head reviewed --base-name main', calls)
+
     def test_external_branch_and_pr_title_do_not_publish_private_spec(self):
         worker = root / 'bin/fm-worker.sh'
         branch = section(worker, 'if [ -n "$branch_guess" ]; then\n  branch=',
