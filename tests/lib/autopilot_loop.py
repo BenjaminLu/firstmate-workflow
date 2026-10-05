@@ -166,6 +166,11 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(restored.data['advanced']['12']['head'], HEAD)
 
     def test_terminal_and_open_events_are_once_and_keep_task_grammar(self):
+        def emit(kind, task, en, tw, pr=None, actor='autopilot'):
+            self.calls.append(('emit', (kind, task, en, tw, pr), dict(actor=actor)))
+            with (self.state / 'events.jsonl').open('a') as log:
+                log.write(json.dumps(dict(type=kind, task=task, pr=pr, actor=actor)) + '\n')
+        self.pilot.emit = emit
         for ref, title, task in [('sk-001-update','other','SK-001'), ('unrelated','T-116: title','T-116'),
                                  ('t1170-old','other','T-1170'), ('revert-5','Revert "T-005: task"','')]:
             pr = copy.deepcopy(PR); pr['number'] += len(self.calls); pr['head']['ref'] = ref; pr['title'] = title
@@ -178,6 +183,29 @@ class LoopTests(BranchFixture, unittest.TestCase):
                 self.assertEqual(len(emitted), 1)
                 self.assertEqual(emitted[0][1][0:2], (expected, task))
                 self.assertEqual(emitted[0][2]['actor'], 'github')
+
+    def test_existing_event_does_not_emit_again(self):
+        row = dict(type='pr_opened', pr=12, task='T-001')
+        (self.state / 'events.jsonl').write_text(json.dumps(row) + '\n')
+        self.pilot.observe_pr(PR)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.pilot.data['actions'], {})
+
+    def test_existing_event_clears_retry_without_emit(self):
+        row = dict(type='pr_opened', pr=12, task='T-001')
+        (self.state / 'events.jsonl').write_text(json.dumps(row) + '\n')
+        token = 'event-pr_opened:12:' + HEAD
+        self.pilot.data['retries'][token] = dict(count=1, due_seq=100)
+        self.pilot.observe_pr(PR)
+        self.assertEqual(self.calls, [])
+        self.assertNotIn(token, self.pilot.data['retries'])
+
+    def test_successful_event_updates_poll_snapshot(self):
+        self.pilot._poll_rows = []
+        self.pilot.observe_pr(PR); self.pilot.observe_pr(PR)
+        self.assertEqual(sum(c[0] == 'emit' for c in self.calls), 1)
+        self.assertEqual(self.pilot._poll_rows, [dict(type='pr_opened', pr=12, task='T-001')])
+        self.assertEqual(self.pilot.data['actions'], {})
 
     def test_pending_and_answered_cards_are_not_replaced(self):
         for folder in ('pending', 'decisions'):
