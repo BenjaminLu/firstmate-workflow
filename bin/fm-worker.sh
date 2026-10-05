@@ -221,12 +221,23 @@ clean_scratch() { [ ${#scratch[@]} -eq 0 ] || rm -f "${scratch[@]}"; }
 # EXIT before the final git block). Publish once on the way out so a PR
 # always sees a remote checkpoint when the worktree had real changes.
 _fm_wip_done=0
+# A launcher-only spec sync becomes publishable only after an adapter ran.
+pin_synced=0; pin_counts=0; pin_start_copy=0; pin_post_adapter=0
+pinned_path=''; pinned_bytes=''; pinned_version=''; pinned_ready=0
 publish_wip_if_dirty() {
   local reason="${1:-exit}" dirty
   [ "${_fm_wip_done}" = 1 ] && return 0
   [ -n "${tree:-}" ] && [ -d "$tree" ] && [ -n "${branch:-}" ] && [ -n "${TASK:-}" ] || return 0
   case "$branch" in main|master|HEAD|'') return 0 ;; esac
   fm_publication_policy "$tree" || return 1
+  if [ "$pin_post_adapter" = 0 ] && { [ "$pin_synced" = 1 ] || [ "$pin_start_copy" = 1 ]; }; then
+    if git -C "$tree" cat-file -e "HEAD:$pinned_path" 2>/dev/null; then
+      git -C "$tree" checkout HEAD -- "$pinned_path" || return 1
+    else
+      git -C "$tree" rm -q --cached --ignore-unmatch -- "$pinned_path" || return 1
+      rm -f "$tree/$pinned_path" || return 1
+    fi
+  fi
   dirty="$(git -C "$tree" status --porcelain -- . \
     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" 2>/dev/null || true)"
   [ -n "$dirty" ] || return 0
@@ -365,6 +376,27 @@ trap '' HUP
 FM_SPEC_PIN_JSON=''
 FM_SPEC_PIN_JSON="$(fm_pin_existing "$TASK")"; pin_rc=$?
 case "$pin_rc" in 0|3) ;; *) exit "$pin_rc" ;; esac
+# Only verified self pins own a file in the target checkout.
+pin_self_metadata() {
+  [ "$FM_EXTERNAL" = 0 ] && [ -n "$FM_SPEC_PIN_JSON" ] || return 0
+  pinned_path="$(jq -r '.snapshots.spec.path' <<<"$FM_SPEC_PIN_JSON")" || return 65
+  if [ "$pinned_path" != "design/tasks/$TASK.json" ]; then
+    echo "fm-worker: pinned path $pinned_path does not match design/tasks/$TASK.json" >&2
+    return 65
+  fi
+  pinned_version="$(jq -r .version <<<"$FM_SPEC_PIN_JSON")" || return 65
+}
+pin_read_bytes() {
+  [ "$pinned_ready" = 0 ] || return 0
+  if [ -z "$pinned_bytes" ]; then
+    pinned_bytes="$(scratch_new)" || return 1
+    scratch_add "$pinned_bytes"
+  fi
+  # Keep trailing newlines, and keep this argv stable for fault injection.
+  jq -j .snapshots.spec.text <<<"$FM_SPEC_PIN_JSON" > "$pinned_bytes" || return 1
+  pinned_ready=1
+}
+pin_self_metadata || exit 65
 # Only an unpinned legacy round uses the branch lookup below. It supplies
 # context, never gate authority; a corrupt existing pin cannot take this path.
 task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.json
@@ -602,7 +634,7 @@ rm -f "$tree/.fm-say.md" "$tree/.fm-prompt.md"
 # Firstmate may revise a new task before any implementation exists.
 # Trust that copy only when every branch commit touches its own spec alone,
 # and never overwrite an uncommitted file. Once implementation exists the
-# branch remains authoritative, including its frozen spec during rebuilds.
+# branch remains authoritative in unpinned rounds. Pinned rounds sync below.
 own_spec="design/tasks/$TASK.json"; spec_copied=0; spec_copy=''
 refresh_spec=0
 spec_only=0
@@ -956,17 +988,36 @@ rebuild_fingerprint() {
 rebuild_unmerged() { [ -n "$(git -C "$tree" ls-files -u -- "$1" 2>/dev/null)" ]; }
 # The frozen task file must survive in both the worktree and the index.
 rebuild_lost() {   # rebuild_lost worktree|index
-  local tj own="design/tasks/$TASK.json"
+  local tj own="design/tasks/$TASK.json" same=0
+  if [ -n "$pinned_path" ]; then
+    if [ "$pinned_ready" = 1 ]; then
+      if [ "$1" = index ]; then
+        tj="$(scratch_new)" || { echo "$own"; return 0; }
+        if git -C "$tree" show ":$own" > "$tj" 2>/dev/null && cmp -s "$pinned_bytes" "$tj"; then same=1; fi
+        rm -f "$tj"
+      elif cmp -s "$pinned_bytes" "$tree/$own"; then same=1
+      fi
+    fi
+    [ "$same" = 1 ] || echo "$own"
+    return 0
+  fi
   if [ "$1" = index ]; then tj="$(git -C "$tree" show ":$own" 2>/dev/null)"
   else tj="$(cat "$tree/$own" 2>/dev/null)"; fi
   [ -z "$rebuild_entry" ] || [ "$rebuild_entry" = "$(jq -cS . <<<"$tj" 2>/dev/null)" ] || echo "$own"
   return 0
 }
-# The task's own file on a base that keeps one file per task, exactly as the
-# branch had it: main may have edited it, cleanly or in a conflict. Byte for
-# byte as the branch had the file.
+# Main may have edited the task file, cleanly or in a conflict. Freeze it
+# to the pin's exact bytes when pinned, otherwise to the previous branch.
 rebuild_own_file_restore() {   # <old head>
   local own="design/tasks/$TASK.json"
+  if [ -n "$pinned_path" ]; then
+    pin_read_bytes || return 1
+    if ! cmp -s "$pinned_bytes" "$tree/$own"; then
+      mkdir -p "$tree/design/tasks" && cp "$pinned_bytes" "$tree/$own" || return 1
+    fi
+    git -C "$tree" add -- "$own"
+    return
+  fi
   [ -n "$rebuild_entry" ] || return 0
   [ "$(jq -cS . < "$tree/$own" 2>/dev/null)" != "$rebuild_entry" ] || return 0
   mkdir -p "$tree/design/tasks" || return 1
@@ -1124,6 +1175,31 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
   esac
 fi
 
+# T-207: the self branch carries the pin verbatim. Rebuilds already restored
+# their frozen entry before taking the rebuild fingerprint.
+pin_self_metadata || exit 65
+if [ -n "$pinned_path" ] && [ "$rebuilt" = 1 ] && [ -z "$pinned_bytes" ]; then
+  # A legacy resume may create its first pin only after the rebuild. That
+  # pin holds the same approved branch bytes the rebuild already restored.
+  pin_read_bytes || true
+fi
+if [ -n "$pinned_path" ] && [ "$rebuilt" = 0 ]; then
+  pin_read_bytes || { echo "fm-worker: could not read pinned bytes for $pinned_path" >&2; exit 65; }
+  if ! git -C "$tree" cat-file -e "HEAD:$pinned_path" 2>/dev/null; then
+    # Preserve T-147's no-work behavior. Its existing copy is not a new sync.
+    if ! cmp -s "$pinned_bytes" "$tree/$pinned_path"; then
+      pin_start_copy=1
+      mkdir -p "$tree/design/tasks" && cp "$pinned_bytes" "$tree/$pinned_path" || exit 70
+    fi
+    spec_copied=1
+    spec_copy="$pinned_bytes"
+  elif ! cmp -s "$pinned_bytes" "$tree/$pinned_path"; then
+    pin_synced=1
+    mkdir -p "$tree/design/tasks" && cp "$pinned_bytes" "$tree/$pinned_path" || exit 70
+    echo "fm-worker: $pinned_path follows pin v$pinned_version; written into the worktree for this round to commit" >&2
+  fi
+fi
+
 # T-185 migration: old pins remain immutable, but every new invocation must
 # have a signed preflight for the exact snapshot. No grandfathered dispatch.
 preflight_args=(require --task "$TASK" --state "$FM_STATE_DIR" --project "$(fm_evidence_project)")
@@ -1204,6 +1280,18 @@ fm_round_pinned worker "$spec" || exit 65
     printf 'uncommitted, and commits it with your work when the round ends. It is\n'
     printf 'there already; do not write it again, and leave it as it is.\n'
   fi
+  if [ "$pin_synced" = 1 ]; then
+    printf '\nFirstmate\047s approved spec changed (pin v%s). The launcher wrote %s into\n' "$pinned_version" "$pinned_path"
+    printf 'your worktree; it is committed with this round. Leave it as it is.\n'
+  fi
+  if [ -n "$pinned_path" ]; then
+    printf '\nYour task file %s follows pin v%s. ' "$pinned_path" "$pinned_version"
+    if [ "$rebuilt" = 1 ]; then
+      printf 'An edit holds this rebuilt round; leave the pinned bytes as they are.\n'
+    else
+      printf 'If edited, it is restored to the pin before publishing.\n'
+    fi
+  fi
   if [ "$round_two" = 0 ] && [ -z "$PR" ]; then
     printf '\nIf this round needs firstmate before implementation, write a standalone\n'
     printf '`SCOPE-BLOCKED:%s` or `ASK-<reason>:%s` marker and the question to `.fm-say.md`.\n' "$TASK" "$TASK"
@@ -1266,11 +1354,19 @@ fm_round_pinned worker "$spec" || exit 65
     if [ "${#rebuild_restore[@]}" -gt 0 ]; then
       printf '\nThe rebuild could not keep your task'"'"'s own entry in:\n\n'
       printf -- '- `%s`\n' "${rebuild_restore[@]}"
-      printf '\nPut it back exactly as it is at %s, keeping %s'"'"'s other changes.\n' "$rebuild_prev" "$BASE"
+      if [ -n "$pinned_path" ]; then
+        printf '\nPut it back exactly as pin v%s has it (the approved spec at %s/spec.json), keeping %s\047s other changes.\n' "$pinned_version" "$FM_PINNED_DIR" "$BASE"
+      else
+        printf '\nPut it back exactly as it is at %s, keeping %s'"'"'s other changes.\n' "$rebuild_prev" "$BASE"
+      fi
     fi
-    printf '\nYour task file design/tasks/%s.json must come through exactly as it\n' "$TASK"
-    printf 'is at %s; a rebuilt round that changes it is refused, like one\n' "$rebuild_prev"
-    printf 'that leaves a conflict marker.\n'
+    if [ -n "$pinned_path" ]; then
+      printf '\nYour task file design/tasks/%s.json must come through exactly as pin v%s has it; a rebuilt round that changes it is refused, like one that leaves a conflict marker.\n' "$TASK" "$pinned_version"
+    else
+      printf '\nYour task file design/tasks/%s.json must come through exactly as it\n' "$TASK"
+      printf 'is at %s; a rebuilt round that changes it is refused, like one\n' "$rebuild_prev"
+      printf 'that leaves a conflict marker.\n'
+    fi
     printf '\nThe worktree is detached until fm-worker.sh commits; fm-worker.sh pushes the\n'
     printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
     printf 'is refused.\n'
@@ -1305,6 +1401,12 @@ worker_changed_files() {
   fi
   # the spec this script copied in (T-147) is not the round's work; a
   # change the round made to it is
+  if [ "$pin_synced" = 1 ] && [ "$pin_counts" = 0 ]; then
+    [ -n "$(git -C "$tree" status --porcelain -- . \
+        ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" ":(exclude)$pinned_path")" ] \
+      || ! cmp -s "$pinned_bytes" "$tree/$pinned_path"
+    return
+  fi
   if [ "$spec_copied" = 1 ]; then
     [ -n "$(git -C "$tree" status --porcelain -- . \
         ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" ":(exclude)$own_spec")" ] \
@@ -1458,6 +1560,17 @@ for v in $FM_VENDOR_SKIPPED; do
 done
 report_blocked_hosts worker "$blocked_file"
 [ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
+
+# All early adapter exits above leave the sync unpublishable. Repair after
+# mirror recovery too: its baseline predates the start-of-round sync.
+if [ -n "$pinned_path" ] && [ "$rebuilt" = 0 ]; then
+  if ! cmp -s "$pinned_bytes" "$tree/$pinned_path"; then
+    mkdir -p "$tree/design/tasks" && cp "$pinned_bytes" "$tree/$pinned_path" || exit 70
+    echo "fm-worker: $pinned_path restored to pin v$pinned_version; a task file changes only by repin" >&2
+  fi
+  [ "$pin_synced" = 0 ] || pin_counts=1
+fi
+pin_post_adapter=1
 
 # What the round actually ran on, read from the run itself (T-127): recorded
 # in identity.json beside name/role/project/task/round/attempt, and carried
@@ -1893,8 +2006,13 @@ if [ "$rebuilt" = 1 ]; then
   while IFS= read -r f; do [ -n "$f" ] && lost+=("$f"); done < <(rebuild_lost index)
   if [ ${#lost[@]} -gt 0 ]; then
     listed="$(printf '%s, ' "${lost[@]}")"; listed="${listed%, }"
-    rebuild_refuse "the task's own entry is not as ${rebuild_prev} had it in: ${listed}" \
-      "任務自己的條目跟 ${rebuild_prev} 不一樣：${listed}"
+    if [ -n "$pinned_path" ]; then
+      rebuild_refuse "the task's own entry is not as pin v${pinned_version} has it in: ${listed}" \
+        "任務自己的條目跟 pin v${pinned_version} 不一樣：${listed}"
+    else
+      rebuild_refuse "the task's own entry is not as ${rebuild_prev} had it in: ${listed}" \
+        "任務自己的條目跟 ${rebuild_prev} 不一樣：${listed}"
+    fi
   fi
 fi
 # A script the round adds keeps its executable bit. The claude worker's
