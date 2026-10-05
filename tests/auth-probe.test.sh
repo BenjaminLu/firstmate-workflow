@@ -73,6 +73,9 @@ recorded() {  # recorded <vendor> <fixture>: answers exactly as the recorded CLI
     [ "$v" != cursor-agent ] || printf '[ "$#" -eq 1 ] || exit 64\n'
     printf 'if [ "$1" = --version ]; then exec %q %q --version; fi\n' "$FIX/replay.sh" "$f"
     [ "$v" != cursor-agent ] || printf '[ "$#" -eq 1 ] && [ "$1" = --list-models ] || exit 64\n'
+    if [ "$v" = cursor-agent ]; then
+      printf 'env > %q\n' "$d/cursor-agent-env"
+    fi
     printf 'exec %q %q\n' "$FIX/replay.sh" "$f"
   } > "$bin/$v"
   chmod +x "$bin/$v"
@@ -85,7 +88,7 @@ for f in "$FIX"/*.txt; do
     assert_ne "" "$(sed -n "s/^# $key: //p" "$f" | head -1)" "fixture $n names its $key"
   done
 done
-for n in claude-signed-in claude-signed-out codex-signed-in codex-signed-out cursor-agent-signed-in cursor-agent-signed-out cursor-agent-key-rejected; do
+for n in claude-signed-in claude-signed-out codex-signed-in codex-signed-out cursor-agent-signed-in cursor-agent-signed-in-memory cursor-agent-signed-out cursor-agent-key-rejected; do
   assert_eq "yes" "$(sed -n 's/^# recorded: //p' "$FIX/$n.txt" | head -1)" "$n is a recording of the real CLI"
 done
 run() { PATH="$bin:$PATH" "$PROBE" "$@"; }
@@ -125,6 +128,15 @@ recorded cursor-agent cursor-agent-signed-in
 out="$(run cursor-agent)"
 assert_eq "authenticated" "$(field "$out" status)" "cursor-agent's recorded model list is authenticated despite keychain-save warnings"
 assert_eq "2026.10.01-e373342" "$(field "$out" version)" "and its version matches the 2026-10-05 recording"
+
+# T-197: replay the memory recording unchanged and verify its required environment.
+# The environment assertion is red on base; model-list decoding is a regression guard.
+recorded cursor-agent cursor-agent-signed-in-memory
+out="$(AGENT_CLI_CREDENTIAL_STORE=default run cursor-agent)"
+assert_eq authenticated "$(field "$out" status)" "cursor's memory-store recording authenticates"
+assert_eq "cursor-agent's model list confirms the crew Cursor API key" "$(field "$out" en)" "memory recording retains the model-list reason"
+assert_eq 'cursor-agent 的模型清單確認 crew 的 Cursor API key 有效' "$(field "$out" tw)" "memory recording retains the Traditional Chinese reason"
+assert_contains "$(cat "$d/cursor-agent-env")" 'AGENT_CLI_CREDENTIAL_STORE=memory' "memory recording is requested with the memory store, overriding the caller"
 
 # --- unauthenticated, per vendor's own recorded wording --------------------
 recorded claude claude-signed-out
@@ -166,6 +178,8 @@ assert_eq "authenticated" "$(field "$out" status)" "cursor-agent with the crew k
 assert_contains "$(cat "$d/cursor-agent-env" 2>/dev/null)" "CURSOR_API_KEY=crew-cursor-key" \
   "and the probe hands it the keychain item as CURSOR_API_KEY, as the round gets it"
 
+assert_contains "$(cat "$d/cursor-agent-env")" 'AGENT_CLI_CREDENTIAL_STORE=memory' "the crew-key probe keeps cursor credentials in memory"
+
 # Scratch notes are replaced, and the key is checked afresh (T-188).
 t="$d"
 printf 'cursor-agent|unauthenticated|historical refusal|歷史拒絕\n' > "$t/auth-notes"
@@ -199,8 +213,8 @@ assert_contains "$(cat "$d/sandbox-argv" 2>/dev/null)" '/bin/sh' "the sandbox st
 fake cursor-agent 2026.10.01-e373342 'A Keychain cannot be found to store "cursor-user"; not logged in' 1
 out="$(run cursor-agent)"
 assert_eq keychain-blocked "$(field "$out" status)" "a confined keychain failure has its own status"
-assert_eq 'cursor-agent needs keychain storage, which crew rounds deny' "$(field "$out" en)" "keychain refusal explains the crew policy in English"
-assert_eq 'cursor-agent 需要鑰匙圈儲存，而 crew 回合禁止存取鑰匙圈' "$(field "$out" tw)" "keychain refusal explains the crew policy in Traditional Chinese"
+assert_eq 'cursor-agent tried to store its login in the keychain, which crew rounds deny; this cursor-agent version may no longer honour AGENT_CLI_CREDENTIAL_STORE=memory; run fm doctor' "$(field "$out" en)" "keychain refusal explains the crew policy in English"
+assert_eq 'cursor-agent 試圖把登入存進鑰匙圈，而 crew 回合禁止存取鑰匙圈；此版本的 cursor-agent 可能已不支援 AGENT_CLI_CREDENTIAL_STORE=memory；請執行 fm doctor' "$(field "$out" tw)" "keychain refusal explains the crew policy in Traditional Chinese"
 recorded cursor-agent cursor-agent-signed-in
 out="$(run cursor-agent)"
 assert_eq authenticated "$(field "$out" status)" "a working key wins over recorded keychain-save warnings"
@@ -237,6 +251,7 @@ for reply in '✓ Logged in' 'keychain warning' 'noise' 'prefix Available models
 done
 
 fake_checks cursor-agent 'true' cursor-agent-signed-in cursor-agent-key-rejected
+# Regression guard: confinement reasons pass on base by design.
 # Fail only profile generation; policy and login resolution still use Python.
 mkdir -p "$d/profile-failure-bin"
 {
@@ -274,6 +289,7 @@ out="$(FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$d/missing-sandbox-tool" run cursor-
 assert_eq authenticated "$(field "$out" status)" "Linux checks the key without a sandbox tool or started marker"
 assert_ok "[ -s '$d/cursor-agent-status' ]" "Linux actually asks cursor check"
 
+# Regression guard: missing-key reasons pass on base by design.
 # cursor-agent: the operator's own `agent login` works, but there is no crew
 # key - a round would have no login, so the probe refuses before asking
 no_logins
@@ -315,6 +331,7 @@ fake_checks claude '[ "${CLAUDE_CODE_OAUTH_TOKEN:-}" = crew-claude-token ] && [ 
   claude-signed-in claude-signed-out
 out="$(ANTHROPIC_API_KEY=personal-key run claude)"
 assert_eq "authenticated" "$(field "$out" status)" "claude with a crew token and an ambient API key probes the crew token"
+assert_lacks "$(cat "$d/claude-env")" "AGENT_CLI_CREDENTIAL_STORE=" "claude receives no cursor credential-store setting"
 assert_lacks "$(cat "$d/claude-env" 2>/dev/null)" "ANTHROPIC_API_KEY" "the ambient key the round sheds never reaches the probe"
 assert_contains "$(cat "$d/claude-env" 2>/dev/null)" "CLAUDE_CONFIG_DIR=" "claude reads a config directory of the probe's own"
 assert_lacks "$(cat "$d/claude-env" 2>/dev/null)" "CLAUDE_CONFIG_DIR=$home" "never one under the operator's home"
@@ -360,6 +377,7 @@ fake_checks codex \
   codex-signed-in codex-signed-out
 out="$(OPENAI_API_KEY=personal-key run codex)"
 assert_eq "authenticated" "$(field "$out" status)" "codex probes the round's copy of auth.json, less its refresh token"
+assert_lacks "$(cat "$d/codex-env")" "AGENT_CLI_CREDENTIAL_STORE=" "codex receives no cursor credential-store setting"
 assert_lacks "$(cat "$d/codex-env" 2>/dev/null)" "OPENAI_API_KEY" "and never the ambient OPENAI_API_KEY the round sheds"
 
 # codex: no auth.json, only an ambient key - refused before codex is asked

@@ -1,0 +1,12 @@
+# recorded: yes
+# command: cursor-agent --list-models
+# cli: 2026.10.01-e373342
+# date: 2026-10-05
+# host: macOS, Darwin 24.6.0, outside any round, env -i with an empty temp HOME, under the auth-probe sandbox profile
+# setup: the crew key as CURSOR_API_KEY, AGENT_CLI_CREDENTIAL_STORE=memory
+# redacted: the model list after its first two entries
+# exit: 0
+Available models
+
+auto - Auto (default)
+gpt-5.3-codex-low - Codex 5.3 Low
