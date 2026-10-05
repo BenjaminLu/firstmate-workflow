@@ -1162,6 +1162,9 @@ fi
 # Optional diagnostic capture must not prevent a round when scratch space is unavailable.
 log_err="$(scratch_new)" || log_err=''
 [ -z "$log_err" ] || scratch_add "$log_err"
+if [ -n "$PR" ]; then
+  git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null || true
+fi
 if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_context_pack.py" \
     --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" --task "$TASK" \
     --round "$round_number" --actor "$NAME" --head "$round_head" --root "$tree" \

@@ -491,7 +491,11 @@ set by the captain.
    workers still do not run the suites. Under T-135, keep the approved
    brief in project-local evidence and supply it to the worker; GitHub is an
    optional projection controlled by the project comments/local setting (self defaults
-   to comments). Non-comment modes must not depend on a PR brief or publish one
+   to comments). A brief recorded for a round still applies after the autopilot
+   merges the base into the branch with the task's change unchanged, so firstmate
+   does not re-record it for that head; record a new brief when the round number
+   changes or the branch changes in any other way. Non-comment modes must not
+   depend on a PR brief or publish one
    implicitly. T-135 stores brief, pack, worker-report, ask and authenticated verdict
    records append-only under state/evidence/<project>/<task>/; gate 7 and the
    protocol reader consume local verdicts and standing lists. T-138 extends
