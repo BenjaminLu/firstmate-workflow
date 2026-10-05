@@ -4968,8 +4968,11 @@ protection. `fm project add` records a bounded inspection privately, offers at
 most three missing-contract question groups, then writes CONVENTIONS.md only
 with explicit captain-confirmed checks, policy, product intent and commands.
 The public engine registry carries routing only; command configuration is
-`FM_HOME/projects/<name>/state/config.yaml`. Existing explicit-name and self
-routing remain supported.
+`FM_HOME/projects/<name>/state/config.yaml`. Onboarding inserts the routing entry
+into the existing `projects:` block, allowing a trailing comment on its header
+and refusing a second block. The entry is a working-tree change to the tracked
+`config.yaml` that reaches main only through a captain-approved pull request.
+Existing explicit-name and self routing remain supported.
 
 The conventions front matter uses data-only fields (strings quoted as JSON;
 arrays and objects as JSON; named policy enums may be bare). Mandatory policy
