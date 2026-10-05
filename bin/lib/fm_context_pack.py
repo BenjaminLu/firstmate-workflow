@@ -12,7 +12,6 @@ import sys
 import tempfile
 
 from fm_evidence import Store, criteria
-from fm_binding import change, git
 
 CAP = 48000
 
@@ -235,6 +234,8 @@ def brief_carry_failure(root, written_head, head, base):
     """Return a fixed diagnostic, or None when the local history proves carry."""
     base_ref = 'refs/remotes/origin/' + base
     try:
+        from fm_binding import change, git
+
         if written_head == head or any(not isinstance(value, str) or not re.fullmatch(
                 r'[0-9a-fA-F]{40}', value) for value in (written_head, head)):
             return 'it could not be checked'
@@ -254,7 +255,7 @@ def brief_carry_failure(root, written_head, head, base):
         after = change(root, head, git(root, 'merge-base', base_ref, head))
         if before['patch'] != after['patch'] or before['files'] != after['files']:
             return "the task's change differs"
-    except (ValueError, OSError, subprocess.SubprocessError):
+    except (ImportError, ValueError, OSError, subprocess.SubprocessError):
         return 'it could not be checked'
     return None
 

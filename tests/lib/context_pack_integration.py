@@ -1,4 +1,6 @@
 """Vendor-shaped pack evidence, collected against a real pinned git tree."""
+from contextlib import contextmanager
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -6,11 +8,25 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(sys.argv.pop()) / 'bin/lib'))
 from fm_context_pack import build
 from fm_evidence import Store
+
+
+@contextmanager
+def unavailable_binding(binding):
+    # Load afresh: replacing sys.modules alone would miss an eager import
+    # whose dependencies were already captured by the test runner.
+    with patch.dict(sys.modules, {'fm_binding': binding}):
+        spec = importlib.util.spec_from_file_location(
+            'context_pack_without_binding', sys.modules['fm_context_pack'].__file__)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch(__name__ + '.build', module.build):
+            yield
 
 
 class Integration(unittest.TestCase):
@@ -134,6 +150,22 @@ else:
                              for report in reports for gap in report['gaps']))
         self.assertFalse(any('finding 1 has no fix' in gap
                              for report in reports for gap in report['gaps']))
+
+    def test_exact_brief_and_standing_list_survive_unavailable_binding(self):
+        for binding in (None, ModuleType('fm_binding')):
+            with self.subTest(binding=binding), unavailable_binding(binding):
+                prompt, reports = self.collect('success')
+                self.assertIn('1. fix the assertion', prompt)
+                self.assertIn('1. open tests/feature.test.sh:1', prompt)
+                self.assertFalse(any('missing authorized local brief' in gap
+                                     for report in reports for gap in report['gaps']))
+
+    def test_carry_fails_closed_when_binding_is_unavailable(self):
+        self.brief_branch()
+        self.merge_main()
+        for binding in (None, ModuleType('fm_binding')):
+            with self.subTest(binding=binding), unavailable_binding(binding):
+                self.assert_brief_rejected('it could not be checked')
 
     def test_brief_does_not_carry_after_non_merge_commit(self):
         self.brief_branch()
