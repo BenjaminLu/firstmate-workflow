@@ -135,11 +135,14 @@ sync_clone() {
   [ -d "$hooks" ] || { echo "fm-project: the engine has no .githooks/ at $hooks" >&2; exit 70; }
   if [ -e "$clone" ]; then
     is_clone || { echo "fm-project: refusing $clone - it is not a clone of its own" >&2; exit 70; }
-    have="$(git -C "$clone" remote get-url origin 2>/dev/null || true)"
-    [ "$have" = "$origin" ] || {
-      echo "fm-project: refusing $clone - its origin is '$have', not $origin" >&2; exit 70; }
-    [ "$(git -C "$clone" remote get-url --push origin 2>/dev/null)" = "$origin" ] || {
-      echo 'fm-project: refusing mismatched push origin' >&2; exit 65; }
+    local reason
+    if ! reason="$(python3 "$_fm_code_dir/lib/fm_origin.py" check "$clone" "$origin" 2>&1)"; then
+      reason="${reason#fm-origin: }"
+      case "$reason" in
+        'its origin is '*) echo "fm-project: refusing $clone - $reason" >&2; exit 70 ;;
+        *) echo "fm-project: refusing mismatched push origin - $reason" >&2; exit 65 ;;
+      esac
+    fi
     local deepen=()
     if [ "$(git -C "$clone" rev-parse --is-shallow-repository)" = true ]; then deepen=(--unshallow); fi
     git -C "$clone" fetch -q --prune ${deepen[@]+"${deepen[@]}"} origin || {
@@ -234,10 +237,10 @@ verify_target() {
   elif ! is_clone; then
     miss "no managed clone at $clone; run fm-project.sh sync $NAME"
   else
-    local hp gb og want
-    og="$(git -C "$clone" remote get-url origin 2>/dev/null || true)"
-    [ "$og" = "$origin" ] && [ "$(git -C "$clone" remote get-url --push origin 2>/dev/null)" = "$origin" ] \
-      || miss "the clone's origin is '${og}', not $origin"
+    local hp gb reason want
+    if ! reason="$(python3 "$_fm_code_dir/lib/fm_origin.py" check "$clone" "$origin" 2>&1)"; then
+      miss "${reason#fm-origin: }"
+    fi
     hp="$(git -C "$clone" config --local --get core.hooksPath 2>/dev/null || true)"
     want="$(cd "$hooks" 2>/dev/null && pwd -P)"
     [ -n "$hp" ] && [ -n "$want" ] && [ "$(clone_hooks)" = "$want" ] \

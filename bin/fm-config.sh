@@ -997,8 +997,7 @@ fm_target_validate() {
   actual="$(git -C "$FM_TARGET_ROOT" rev-parse --show-toplevel 2>/dev/null)" || return 65
   [ "$actual" = "$FM_TARGET_ROOT" ] || return 65
   expected="${FM_GITHUB_URL:-https://github.com}/$GH_REPO.git"
-  actual="$(git -C "$FM_TARGET_ROOT" remote get-url origin 2>/dev/null)" || return 65
-  [ "$actual" = "$expected" ] && [ "$(git -C "$FM_TARGET_ROOT" remote get-url --push origin 2>/dev/null)" = "$expected" ] || {
+  python3 "$_fm_code_dir/lib/fm_origin.py" check "$FM_TARGET_ROOT" "$expected" || {
     echo "fm-config: managed clone origin does not match project $FM_PROJECT" >&2; return 65; }
 }
 
