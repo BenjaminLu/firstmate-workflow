@@ -2250,7 +2250,7 @@ web page open in the captain's browser; neither can write.
   narrows loopback, and a round's own test servers need arbitrary loopback
   ports. So the board refuses the round itself.
 - *Who may write.* Every route that changes state or starts a process -
-  `POST /decisions`, `POST /tasks`, `POST /open`, and any writing route added
+  `POST /decisions`, `POST /tasks`, `POST /open`, `POST /drain`, and any writing route added
   later - requires, all three: an `Authorization: Bearer` holding either the
   captain's tab token or the secret itself; an `Origin` equal to the board's
   own (`http://127.0.0.1:<port>`, or `http://localhost:<port>`); and a body
@@ -2258,6 +2258,7 @@ web page open in the captain's browser; neither can write.
   the page translates (`writeCredential`, `writeOrigin`, `writeJson`), and
   nothing is written, emitted, merged or spawned. The Origin refuses a page
   served by a crew round's test server, and the JSON rule refuses a form.
+  `POST /drain` alone also requires the secret itself, never the tab token.
 - *Why there is no cookie.* Browsers do not keep cookies apart by port: a
   cookie set by `127.0.0.1:4173` goes with every request the browser makes to
   any `127.0.0.1:<port>`, and `SameSite=Strict` does not help, because every
@@ -2791,11 +2792,24 @@ Board reuse is verified with a fresh random file under the requested root and
 the board's existing `/file?path=<relative-path>` endpoint. An HTTP response on
 the configured port is insufficient; a different or unverifiable root is refused.
 A verified board retains its recorded `board/` and `i18n/` tree identities on
-reuse. If the clean checkout differs, it is reused with an English and Chinese
-notice to stop the board process and run `fm board` by hand. Unknown or dirty
-checkout code produces no notice. Automatic board replacement, including safe
-handling of running merges, dispatches and send-back answers, is a separate
-follow-up.
+reuse. If the clean checkout differs, `fm board` or session start asks the
+verified board to drain through secret-only `POST /drain`. A running merge in
+any project or an answer in flight refuses with `409 drainBusy`; the answer
+counter spans dispatch completion and the send-back start check. While draining,
+`/decisions`, `/tasks` and `/open` refuse with `503 boardRestarting` before any
+effect. Only a session-owned board is stopped, and its replacement retains the
+same live session owner, falling back to the caller's session only if that owner
+is gone. The port must stop answering before the replacement starts; even an
+HTTP error means it is still occupied. Replacement and browser sign-in run under
+the board lock, with one browser open against the surviving board. A hand-started
+board, or an older board without `/drain`, keeps the English and Chinese notice
+to restart by hand. A board that will not stop within ten seconds is released
+and named in the notice. A drain also releases itself after 30 seconds if its
+caller disappears. Unknown, dirty or equal checkout code triggers no drain.
+`board.json` retains the board's owner and code; a successful replacement adds
+`replaced` (old and new short code) and bilingual `replaced_reason`, with no
+stale notice. No stored record is migrated, and autopilot never starts or
+replaces the board.
 The bootstrap verifies HTTP page retrieval and reports whether `open` or
 `xdg-open` was invoked. It cannot verify browser navigation. Bun is required for
 the board. Nothing watches `state/decisions/`: the board pushes each wake as
@@ -2839,7 +2853,7 @@ starts nothing, and says so.
 |---|---|
 | `bin/fm-herdr.py` board start (`fm-session.sh start`, `fm.sh board`) | the session: it outlives the command on purpose |
 | the pane-child's closer (`close_from_child`) | the pane-child, by a forked lifeline; it closes once that exits |
-| `board/server.ts`'s `fm-merge.sh` (a merge the captain clicked) and `fm-worker.sh` (send back) | the session the board belongs to; the board itself when it was started by hand |
+| `board/server.ts`'s `fm-merge.sh` (a merge the captain clicked) and `fm-worker.sh` (send back); `fm-dispatch.sh` (dispatch answer) | merges and send-backs: the session the board belongs to; the board itself when it was started by hand. Dispatch: the board's own process group, which is why the board drains before it is replaced |
 | firstmate's stock crew launch (`dispatch-crew`) | the session, through `bin/lib/fm-lifeline.sh --session` |
 | T-144's round runner (`spawn_runner`, the `pane-child`) | the session: a round outlives the fm-worker.sh that launched it on purpose (retained, to be stopped or resumed) |
 

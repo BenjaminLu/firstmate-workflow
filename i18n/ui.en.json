@@ -113,6 +113,8 @@
   "projectChip": "Project",
   "mergeRunning": "merge running",
   "mergeUnknown": "merge outcome unknown: GitHub could not be read, this project's next merge waits",
+  "boardRestarting": "not sent: the board is restarting with new code; send it again in a moment",
+  "drainBusy": "the board was not restarted: a merge or an answer is in progress",
   "mergeBusy": "not sent: a merge is already running in this project; the card stays pending",
   "roleWorker": "Worker",
   "roleReviewer": "Reviewer",

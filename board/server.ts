@@ -1913,6 +1913,15 @@ const loadSecret = (port: number): string => {
 };
 // set once the port is known, before the first request is served
 let SECRET = "", ORIGINS: string[] = [], STARTED = 0;
+let draining = 0;
+let effectsInFlight = 0;
+const DRAIN_TTL = Math.max(1, Math.min(30_000, Number(process.env.FM_BOARD_DRAIN_TTL_MS) || 30_000));
+const releaseExpiredDrain = () => {
+  if (draining && Date.now() - draining >= DRAIN_TTL) draining = 0;
+};
+setInterval(releaseExpiredDrain, 1_000);
+const restarting = () => json({ error: "the board is restarting; send it again in a moment", code: "boardRestarting" }, 503);
+
 const mac = (message: string) => createHmac("sha256", SECRET).update(message).digest("hex");
 const same = (a: string, b: string) => {
   const x = Buffer.from(a), y = Buffer.from(b);
@@ -2060,6 +2069,7 @@ const server = Bun.serve({
   port: PORT,
   error() { return json({ error: "project storage is unavailable" }, 503); },
   fetch(req, server) {
+    releaseExpiredDrain();
     return withStorage(() => {
     const url = new URL(req.url);
     // ?project= shows one project; without it, or with no project's name,
@@ -2172,11 +2182,38 @@ const server = Bun.serve({
       });
     }
 
+    // Only the local secret holder can drain; a signed-in tab cannot stop the board.
+    if (url.pathname === "/drain" && req.method === "POST") {
+      const refused = writeRefusal(req);
+      if (refused) return refused;
+      const m = /^Bearer ([^\s]+)$/.exec(req.headers.get("authorization") ?? "");
+      if (!m || !same(m[1], SECRET)) return refuse("writeCredential", "draining requires the board secret");
+      return req.json().then((body: any) => {
+        if (body?.release === true) {
+          draining = 0;
+          return json({ draining: false });
+        }
+        // No await between these checks and setting the drain: an answer
+        // either holds the counter already, or sees the drain before writing.
+        if (readResponses().some(d => mergeOf(d) === "running"))
+          return json({ error: "a merge is in progress", code: "drainBusy", busy: "merge" }, 409);
+        if (effectsInFlight > 0)
+          return json({ error: "an answer is in progress", code: "drainBusy", busy: "answer" }, 409);
+        draining = Date.now();
+        const sessionOwned = /^[1-9][0-9]{0,9}$/.test(process.env.FM_SESSION_PID ?? "");
+        return json({ draining: true, pid: process.pid, session_owned: sessionOwned,
+          owner: sessionOwned ? Number(process.env.FM_SESSION_PID) : null, started: STARTED });
+      }).catch((e) => json({ error: e instanceof StorageError ? "project storage is unavailable" : "bad request" },
+        e instanceof StorageError ? 503 : 400));
+    }
+
     // The captain answers. The board writes the answer down and, for a merge,
     // calls the one script allowed to merge - it never shells out ad hoc.
     if (url.pathname === "/decisions" && req.method === "POST") {
       const refused = writeRefusal(req);
       if (refused) return refused;
+      if (draining) return restarting();
+      effectsInFlight++;
       return req.json().then(async (body: any) => {
         const id = String(body?.id ?? "");
         const chosen = typeof body?.chosen === "string" ? body.chosen : "";
@@ -2296,7 +2333,7 @@ const server = Bun.serve({
         return json({ ok: true, decision: stored, merge: mergeOf(stored), eventRecorded,
           effect, outcome: carried.outcome, ...(carried.reason ? { reason: carried.reason } : {}) });
       }).catch((e) => json({ error: e instanceof StorageError ? "project storage is unavailable" : "bad request" },
-        e instanceof StorageError ? 503 : 400));
+        e instanceof StorageError ? 503 : 400)).finally(() => { effectsInFlight--; });
     }
 
     // The captain parks, unparks or drops a task (T-058). Written as a captain
@@ -2308,6 +2345,8 @@ const server = Bun.serve({
     if (url.pathname === "/tasks" && req.method === "POST") {
       const refused = writeRefusal(req);
       if (refused) return refused;
+      if (draining) return restarting();
+      effectsInFlight++;
       return req.json().then((body: any) => {
         const id = typeof body?.task === "string" ? body.task : "";
         const action = typeof body?.action === "string" ? body.action : "";
@@ -2352,7 +2391,7 @@ const server = Bun.serve({
         if (!r.ok) return json({ error: "the event was not written", out: r.error }, 500);
         return json({ ok: true, task: id, action, event: spec.type });
       }).catch((e) => json({ error: e instanceof StorageError ? "project storage is unavailable" : "bad request" },
-        e instanceof StorageError ? 503 : 400));
+        e instanceof StorageError ? 503 : 400)).finally(() => { effectsInFlight--; });
     }
 
     // Hand a file to the editor, or show it. Both refuse anything that does
@@ -2382,7 +2421,9 @@ const server = Bun.serve({
       if (req.method !== "POST") return json({ error: "POST only" }, 405, { allow: "POST" });
       const refused = writeRefusal(req);
       if (refused) return refused;
+      if (draining) return restarting();
       if (!localOnly(req)) return json({ error: "localhost only" }, 403);
+      effectsInFlight++;
       return req.json().then((body: any) => {
         const abs = inside(typeof body?.path === "string" ? body.path : "", typeof body?.project === "string" && body.project ? body.project : only);
         if (!abs) return json({ error: "outside the repository" }, 403);
@@ -2391,7 +2432,7 @@ const server = Bun.serve({
         Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore", env: childEnv() });
         return json({ ok: true, opened: abs, editor });
       }).catch((e) => json({ error: e instanceof StorageError ? "project storage is unavailable" : "bad request" },
-        e instanceof StorageError ? 503 : 400));
+        e instanceof StorageError ? 503 : 400)).finally(() => { effectsInFlight--; });
     }
 
     if (url.pathname === "/file") {
