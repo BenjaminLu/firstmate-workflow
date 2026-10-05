@@ -40,67 +40,88 @@ git -C "$repo" config remote.origin.url "$t/other.git"
 check_origin 65 'wrong url' "its origin is '$t/other.git', not $expected"
 reset_config
 git -C "$repo" config remote.origin.pushurl "$t/other.git"
+assert_eq "$t/other.git" "$(git -C "$repo" config --includes --get-all remote.origin.pushurl)" 'wrong pushurl setup loaded'
 check_origin 65 'wrong pushurl' "its push origin is '$t/other.git', not $expected"
 reset_config
 git -C "$repo" config --add remote.origin.pushurl "$expected"
 git -C "$repo" config --add remote.origin.pushurl "$t/other.git"
+assert_eq "$expected"$'\n'"$t/other.git" "$(git -C "$repo" config --includes --get-all remote.origin.pushurl)" 'both differing pushurls loaded'
 check_origin 65 'second pushurl differs' 'its push origin is'
 reset_config
 git -C "$repo" config --add remote.origin.pushurl "$expected"
 git -C "$repo" config --add remote.origin.pushurl "$expected"
+assert_eq "$expected"$'\n'"$expected" "$(git -C "$repo" config --includes --get-all remote.origin.pushurl)" 'both matching pushurls loaded'
 check_origin 0 'all pushurls match'
 for kind in insteadOf pushInsteadOf; do
   reset_config
   git -C "$repo" config "url.$t/elsewhere/.$kind" "$t/remotes/"
+  if [ "$kind" = pushInsteadOf ]; then
+    assert_eq "$t/elsewhere/project.git" "$(git -C "$repo" remote get-url --push origin)" "local $kind setup loaded"
+  else
+    assert_eq "$t/elsewhere/project.git" "$(git -C "$repo" remote get-url origin)" "local $kind setup loaded"
+  fi
   check_origin 65 "local $kind" "its local config rewrites $t/remotes/ to $t/elsewhere/"
 done
-# Rewrite targets can themselves contain spaces or newlines; neither may
-# disguise a matching prefix or create extra diagnostic lines.
-for target in "$t/with space/" "$t/with"$'\n'"newline/"; do
-  reset_config
-  git -C "$repo" config "url.$target.insteadOf" "$t/remotes/"
-  check_origin 65 'rewrite target with whitespace' 'its local config rewrites'
-done
+# A space in a valid rewrite target must not disguise a matching prefix.
+reset_config
+target="$t/with space/"
+git -C "$repo" config "url.$target.insteadOf" "$t/remotes/"
+assert_eq 0 "$?" 'whitespace rewrite setup succeeds'
+assert_eq "${target}project.git" "$(git -C "$repo" remote get-url origin)" 'whitespace rewrite setup loaded'
+check_origin 65 'rewrite target with whitespace' 'its local config rewrites'
 reset_config
 git config --file "$t/included" "url.$t/elsewhere/.insteadOf" "$t/remotes/"
 git -C "$repo" config include.path "$t/included"
+assert_eq "$t/elsewhere/project.git" "$(git -C "$repo" remote get-url origin)" 'included local rewrite setup loaded'
 check_origin 65 'included local rewrite' 'its local config rewrites'
 reset_config
 : > "$t/included"
 git config --file "$t/included" remote.origin.pushurl "$t/other.git"
 git -C "$repo" config include.path "$t/included"
+assert_eq "$t/other.git" "$(git -C "$repo" config --includes --get-all remote.origin.pushurl)" 'included pushurl setup loaded'
 check_origin 65 'included pushurl' 'its push origin is'
 reset_config
 git config --global remote.origin.pushurl "$t/other.git"
+assert_eq "global"$'\t'"$t/other.git" "$(git -C "$repo" config --includes --show-scope --get-all remote.origin.pushurl)" 'global pushurl setup loaded'
 check_origin 65 'global pushurl' 'its push origin is'
 reset_config
 git config --global remote.origin.url "$expected"
+assert_eq "global"$'\t'"$expected"$'\n'"local"$'\t'"$expected" "$(git -C "$repo" config --includes --show-scope --get-all remote.origin.url)" 'global and local urls loaded'
 check_origin 65 'second url in global config' 'its origin is'
 reset_config
 git -C "$repo" config "url.$t/elsewhere/.insteadOf" 'https://unrelated.example/'
+assert_eq 'https://unrelated.example/' "$(git -C "$repo" config --includes --get "url.$t/elsewhere/.insteadOf")" 'unrelated rewrite setup loaded'
+assert_eq "$expected" "$(git -C "$repo" remote get-url origin)" 'unrelated rewrite leaves origin unchanged'
 check_origin 0 'unrelated local rewrite'
 reset_config
 : > "$t/included"
 git config --file "$t/included" "url.$t/elsewhere/.insteadOf" "$t/remotes/"
-git -C "$repo" config "includeIf.gitdir:$repo/.git/.path" "$t/included"
+git -C "$repo" config "includeIf.gitdir:$(cd "$repo" && pwd -P)/.git.path" "$t/included"
+assert_eq "$t/elsewhere/project.git" "$(git -C "$repo" remote get-url origin)" 'conditional local include setup loaded'
 check_origin 65 'conditional local include rewrite' 'its local config rewrites'
 reset_config
 git -C "$repo" config extensions.worktreeConfig true
 git -C "$repo" config --worktree "url.$t/elsewhere/.insteadOf" "$t/remotes/"
+assert_eq "$t/elsewhere/project.git" "$(git -C "$repo" remote get-url origin)" 'worktree rewrite setup loaded'
 check_origin 65 'worktree rewrite' 'its local config rewrites'
 rm "$repo/.git/config.worktree"
 reset_config
-GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$t/elsewhere/.insteadOf" GIT_CONFIG_VALUE_0="$t/remotes/" \
-  check_origin 65 'command scope rewrite' 'its local config rewrites'
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$t/elsewhere/.insteadOf" GIT_CONFIG_VALUE_0="$t/remotes/"
+assert_eq "$t/elsewhere/project.git" "$(git -C "$repo" remote get-url origin)" 'command scope rewrite setup loaded'
+check_origin 65 'command scope rewrite' 'its local config rewrites'
+unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
 reset_config
 git config --global "url.$t/global-push/.pushInsteadOf" "$t/remotes/"
+assert_eq "$t/global-push/project.git" "$(git -C "$repo" remote get-url --push origin)" 'global push rewrite setup loaded'
 check_origin 0 'global push transport rewrite'
 reset_config
 export GIT_CONFIG_SYSTEM="$t/system-config"
 git config --file "$GIT_CONFIG_SYSTEM" "url.$t/system-alias/.insteadOf" "$t/remotes/"
 unset GIT_CONFIG_NOSYSTEM
+assert_eq "$t/system-alias/project.git" "$(git -C "$repo" remote get-url origin)" 'system rewrite setup loaded'
 check_origin 0 'system transport rewrite'
 git config --file "$GIT_CONFIG_SYSTEM" remote.origin.pushurl "$t/other.git"
+assert_eq "system"$'\t'"$t/other.git" "$(git -C "$repo" config --includes --show-scope --get-all remote.origin.pushurl)" 'system pushurl setup loaded'
 check_origin 65 'system pushurl elsewhere' 'its push origin is'
 unset GIT_CONFIG_SYSTEM
 export GIT_CONFIG_NOSYSTEM=1
@@ -122,6 +143,7 @@ assert_lacks "$(cat "$t/err")" 'its origin is' 'bad config is not missing url'
 reset_config
 ln -s "$t/remotes" "$t/alias"
 git config --global "url.$t/alias/.insteadOf" "$t/remotes/"
+assert_eq "$t/alias/project.git" "$(git -C "$repo" remote get-url origin)" 'global rewrite setup loaded'
 check_origin 0 'global transport rewrite'
 git -C "$repo" config remote.origin.url "$t/other.git"
 check_origin 65 'wrong url under global rewrite' 'its origin is'

@@ -121,6 +121,8 @@ for name in ('accepted', 'wrong'):
     source.mkdir(parents=True)
     repo = source / 'repo'
     subprocess.run(['git', 'clone', '-q', origin, str(repo)], check=True)
+    loaded = subprocess.check_output(['git', '-C', str(repo), 'remote', 'get-url', 'origin'], text=True)
+    assert loaded == str(root / 'alias/owner/private-app.git') + '\n', 'migration global rewrite setup loaded'
     target = root / 'rewrite-home/projects' / name
     if name == 'accepted':
         fm_project_migrate.migrate(source, target, origin)

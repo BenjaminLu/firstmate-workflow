@@ -341,6 +341,7 @@ rm -rf "$FM_HOME/projects/other-app"
 export GIT_CONFIG_GLOBAL="$t/gitconfig" GIT_CONFIG_NOSYSTEM=1
 ln -s "$remotes" "$t/alias"
 git config --global "url.$t/alias/.insteadOf" "$remotes/"
+assert_eq "$t/alias/example-org/example-app.git" "$(git -C "$clone" remote get-url origin)" "global rewrite setup loaded"
 assert_eq 0 "$(run sync example-app --repo "$eng")" "sync accepts global transport rewrite"
 assert_eq 0 "$(run verify example-app --repo "$eng")" "verify accepts global transport rewrite"
 assert_lacks "$(cat "$t/err")" 'origin' "verify reports no origin miss under rewrite"
@@ -352,10 +353,13 @@ assert_contains "$(cat "$t/err")" "its origin is '$remotes/example-org/not-this.
 assert_lacks "$(cat "$t/err")" "$t/alias" "wrong origin diagnostic never reveals global rewrite target"
 git -C "$clone" remote set-url origin "$bare"
 git -C "$clone" config --local remote.origin.pushurl "$t/wrong.git"
+assert_eq "$t/wrong.git" "$(git -C "$clone" config --includes --get-all remote.origin.pushurl)" "wrong pushurl setup loaded"
 assert_eq 65 "$(run sync example-app --repo "$eng")" "wrong pushurl exits 65 under global rewrite"
 assert_contains "$(cat "$t/err")" "its push origin is '$t/wrong.git'" "wrong pushurl names configured push origin"
 git -C "$clone" config --unset remote.origin.pushurl
 git -C "$clone" config --local "url.$t/elsewhere/.insteadOf" "$remotes/"
+# Check the local transport separately: equal-length global prefixes can win.
+assert_eq "$t/elsewhere/example-org/example-app.git" "$(GIT_CONFIG_GLOBAL=/dev/null git -C "$clone" remote get-url origin)" "local rewrite setup loaded"
 assert_eq 65 "$(run sync example-app --repo "$eng")" "local rewrite exits 65 even with global rewrite"
 assert_contains "$(cat "$t/err")" 'its local config rewrites' "local rewrite refusal names cause"
 git -C "$clone" config --unset "url.$t/elsewhere/.insteadOf"
