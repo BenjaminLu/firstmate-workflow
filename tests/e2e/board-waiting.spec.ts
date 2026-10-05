@@ -8,7 +8,7 @@ import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimes
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { EN, TW, CN, T040_KEYS, T057_KEYS, CN_ACTIVITY, CN_DETAILS, CREW, emitFixture, emit, CN_T058, useBoard } from "./lib/board";
-test('T-159: CI waiting is distinct on the card, roster and ship until review starts', async ({page}) => {
+test('T-159: CI waiting is distinct in the roster until review starts', async ({page}) => {
   const root = makeRoot(['review'], false);
   const task = readTasks(root)[0].id;
   const actor = 'reviewer-ci';
@@ -22,11 +22,10 @@ test('T-159: CI waiting is distinct on the card, roster and ship until review st
     for (const [lang, label] of [['en','Waiting for CI'], ['zh-TW','等待 CI']]) {
       await page.goto(`${b.url}/?lang=${lang}`);
       await expect(page.locator(`[data-roster="${actor}"] .st`)).toHaveText(label);
-      await expect(page.locator(`[data-bubble="${actor}"] .cstate`)).toHaveText(label);
-      await expect(page.locator(`[data-bubble="${actor}"] .cwindow`)).toContainText(lang === 'en' ? 'No window' : '尚無視窗');
-      await expect(page.locator(`[data-bubble="${actor}"] .cwindow a`)).toHaveCount(0);
-      await expect(page.locator('.fig.s-waiting_ci')).toHaveCount(1);
-      await expect(page.locator(`[data-bubble="${actor}"]`)).toContainText('ci, lint');
+      await expect(page.locator(`[data-roster="${actor}"] .cwindow`)).toContainText(lang === 'en' ? 'No window' : '尚無視窗');
+      await expect(page.locator(`[data-roster="${actor}"] .cwindow a`)).toHaveCount(0);
+      await expect(page.locator('.rrow.st-waiting_ci')).toHaveCount(1);
+      await expect(page.locator(`[data-roster="${actor}"]`)).toContainText('ci, lint');
       const crew = (await (await page.request.get(`${b.url}/api/state`)).json()).crew.find(c => c.id === actor);
       expect(crew.window_expected).toBe(false);
     }
@@ -35,10 +34,9 @@ test('T-159: CI waiting is distinct on the card, roster and ship until review st
       activity:{en:'Review adapter starting', 'zh-TW':'開始審核'}
     });
     await expect(page.locator(`[data-roster="${actor}"] .st`)).toHaveText(TW.laneReview);
-    await expect(page.locator(`[data-bubble="${actor}"] .cstate`)).toHaveText(TW.laneReview);
-    await expect(page.locator(`[data-bubble="${actor}"] .cwindow`)).toHaveCount(0);
-    await expect(page.locator('.fig.s-waiting_ci')).toHaveCount(0);
-    await expect(page.locator(`[data-crew="${actor}"] .fig`)).toHaveClass(/s-review/);
+    await expect(page.locator(`[data-roster="${actor}"] .cwindow`)).toHaveCount(0);
+    await expect(page.locator('.rrow.st-waiting_ci')).toHaveCount(0);
+    await expect(page.locator(`[data-roster="${actor}"]`)).toHaveClass(/st-review/);
     const resumed = (await (await page.request.get(`${b.url}/api/state`)).json()).crew.find(c => c.id === actor);
     expect(resumed.window_expected).toBe(true);
   } finally { await stopBoard(b); }

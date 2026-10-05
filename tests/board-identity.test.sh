@@ -61,7 +61,7 @@ assert_eq '[{"name":"quinn","role":"reviewer","round":3},{"name":"shira","role":
   "a task card's crew are separate chips of name, role and round, not a joined string"
 kill "$pidq" 2>/dev/null; wait "$pidq" 2>/dev/null || true
 
-# The page, through ship.js itself: the tag, the card, the roster, the deck.
+# The page, through ship.js itself: every identity field in the roster.
 t116="$(cd "$q" && bun -e '
 const SHIP = require("./board/public/ship.js");
 const T = (k) => k, L = (a) => a && a.en;
@@ -84,57 +84,21 @@ const state = (projects) => ({ greenlit: true, deckLimit: 24, projects, default_
       project: projects[projects.length - 1], name: "mira", round: null, attempt: null,
       activity: { en: "Reading" } }] });
 const h = host();
-const crew = SHIP.render(h, state(["alpha"]), T, L);
-const tag = (id) => (h.innerHTML.match(new RegExp(`<div class="bub[^"]*" data-bubble="${id}"[^>]*>([\\s\\S]*?)<div class="crewcard`)) || [])[1];
-// the tag: the name and a pennant in the project colour, and nothing else
-const shira = tag("worker-shira-tq1-r3b");
-if (!shira) fail("no tag for shira");
-const pennant = shira.match(/<i class="pennant"[^>]*style="--pc:([^"]*)"[^>]*data-project="alpha"/);
-if (!pennant) fail("no alpha pennant on the tag: " + shira);
-if (pennant[1] !== SHIP.projectColor("alpha")) fail("pennant colour is not the project colour");
-const said = shira.replace(/<[^>]*>/g, "");
-if (said !== "shira") fail("the tag says more than the name: [" + said + "]");
-for (const extra of ["T-Q1", "#41", "Writing", "structured", "crewRound"]) if (shira.includes(extra)) fail("tag carries " + extra);
-if (tag("worker-mira-tq2-r465").replace(/<[^>]*>/g, "") !== "mira") fail("an old run is not named on its tag");
-// a board of one project has no .pchip (T-054); with two the pennant is the
-// chip of the tag, naming its project in hidden text and drawing only the name
-if (/pchip/.test(h.innerHTML)) fail("a one-project board draws a project chip");
-const h3 = host(); SHIP.render(h3, state(["alpha", "beta"]), T, L);
-const tag2 = (id) => (h3.innerHTML.match(new RegExp(`<div class="bub[^"]*" data-bubble="${id}"[^>]*>([\\s\\S]*?)<div class="crewcard`)) || [])[1] || "";
-for (const [id, p, n] of [["worker-shira-tq1-r3b", "alpha", "shira"], ["worker-mira-tq2-r465", "beta", "mira"]]) {
-  const chips = tag2(id).match(/<i class="pennant pchip"[^>]*>[\s\S]*?<\/i>/g) || [];
-  if (chips.length !== 1) fail(`${id} has ${chips.length} project chips on its tag`);
-  if (chips[0].replace(/<[^>]*>/g, "") !== p || !/<span class="sr">/.test(chips[0])) fail(`${id} chip says [${chips[0]}]`);
-  if (tag2(id).replace(/<span class="sr">[^<]*<\/span>/g, "").replace(/<[^>]*>/g, "") !== n) fail(`${id} tag draws more than its name`);
+SHIP.roster(h, SHIP.crewOf(state(["alpha"]), T, L), T);
+const row = (id) => (h.innerHTML.match(new RegExp(`<li[^>]*data-roster="${id}"[^>]*>([\\s\\S]*?)</li>`)) || [])[1] || "";
+const shira = row("worker-shira-tq1-r3b");
+for (const [cls, label, value] of [
+  ["nm", "crewName", "shira"], ["rl", "crewRole", "roleWorker"], ["pj", "projectChip", "alpha"],
+  ["rd", "crewRound", "3 crewAttempt 2"], ["rpr", "crewPr", "#41"],
+  ["st", "crewState", "laneWorking"], ["rv", "crewVendor", "claude"], ["rc", "crewCli", "2.1.0"]
+]) {
+  const cell = shira.match(new RegExp(`<span class="${cls}" data-label="${label}">([\\s\\S]*?)</span>(?=<span|</div>)`));
+  if (!cell || cell[1].replace(/<[^>]*>/g, "").trim() !== value) fail(`roster ${cls}: ${cell}`);
 }
-const card2 = (h3.innerHTML.match(/<div class="crewcard" id="crewcard-worker-shira-tq1-r3b"[\s\S]*?<\/dl><\/div>/) || [])[0];
-if (/pchip/.test(card2)) fail("the card carries a second project chip inside the bubble");
-// the card: one labelled line per field, each on its own
-const card = (h.innerHTML.match(/<div class="crewcard" id="crewcard-worker-shira-tq1-r3b"[\s\S]*?<\/dl><\/div>/) || [])[0];
-if (!card) fail("no card for shira");
-if (!/ hidden[ >]/.test(card.slice(0, card.indexOf(">") + 1))) fail("a card is open before anyone asked");
-const dd = (cls) => ((card.match(new RegExp(`<dt>([^<]*)</dt><dd class="${cls}">([\\s\\S]*?)</dd>`)) || []).slice(1));
-const want = { cname: ["crewName", "shira"], crole: ["crewRole", "roleWorker"], cproject: ["projectChip", "alpha"],
-  ctask: ["crewTask", "T-Q1 structured crew"], cround: ["crewRound", "3 crewAttempt 2"], cpr: ["crewPr", "#41"],
-  cstate: ["crewState", "laneWorking"], job: ["crewActivity", "Writing the roster"],
-  cvendor: ["crewVendor", "claude"], ccli: ["crewCli", "2.1.0"] };
-for (const [cls, [label, value]] of Object.entries(want)) {
-  const [dt, body] = dd(cls);
-  if (dt !== label) fail(`card line ${cls} is labelled ${dt}`);
-  if ((body || "").replace(/<[^>]*>/g, "").trim() !== value) fail(`card line ${cls} says [${body}]`);
-}
-// T-127: a model other than the one requested is the warning class, naming both
-const modelLine = (card.match(/<dt>crewModel<\/dt><dd class="cmodel warn">([\s\S]*?)<\/dd>/) || [])[1];
-if ((modelLine || "").trim() !== "modelMismatch") fail(`card model line is [${modelLine}]`);
-if (!card.includes(`href="${url}"`)) fail("the card does not link the pull request");
-const old = (h.innerHTML.match(/<div class="crewcard" id="crewcard-worker-mira-tq2-r465"[\s\S]*?<\/dl><\/div>/) || [])[0];
-if (!old || !/<dd class="cround">crewUnknown<\/dd>/.test(old)) fail("the round of an old run is not shown as unknown");
-// one card at a time: the open one is the one SHIP names, and only it
-SHIP.openCard = "worker-mira-tq2-r465";
-const h2 = host(); SHIP.render(h2, state(["alpha"]), T, L);
-const shown = [...h2.innerHTML.matchAll(/<div class="crewcard" id="crewcard-([^"]*)"[^>]*>/g)].filter((m) => !/ hidden/.test(m[0])).map((m) => m[1]);
-if (shown.join() !== "worker-mira-tq2-r465") fail("open cards: " + shown.join());
-SHIP.openCard = null;
+for (const value of ["T-Q1", "structured crew", "Writing the roster", `href="${url}"`])
+  if (!shira.includes(value)) fail("roster omitted " + value);
+if (!/class="rm warn"[^>]*>modelMismatch</.test(shira)) fail("model mismatch missing");
+if (!/class="rd"[^>]*>crewUnknown</.test(row("worker-mira-tq2-r465"))) fail("old round is not unknown");
 // the roster: a project column with one project and with two
 for (const projects of [["alpha"], ["alpha", "beta"]]) {
   const r = { innerHTML: "", ownerDocument: null };
@@ -142,11 +106,13 @@ for (const projects of [["alpha"], ["alpha", "beta"]]) {
   if (!/<div class="rhead"[\s\S]*data-sort="project"/.test(r.innerHTML)) fail("no project column header with " + projects.length);
   const rows = [...r.innerHTML.matchAll(/<li class="rrow [^"]*"[\s\S]*?<\/li>/g)].map((m) => m[0]);
   if (rows.length !== 3) fail("roster rows " + rows.length);
-  for (const row of rows.slice(1)) for (const cls of ["nm", "rl", "pj", "rv", "rd", "st", "rpr", "jb"])
+  for (const row of rows.slice(1)) for (const cls of ["nm", "rl", "rv", "rc", "rd", "st", "rpr", "jb"])
     if (!row.includes(`class="${cls}"`)) fail(`roster row lacks its ${cls} cell`);
   // rm is checked apart: a mismatched model carries an extra "warn" class
   for (const row of rows.slice(1)) if (!/class="rm( warn)?"/.test(row)) fail("roster row lacks its rm cell");
-  const pj = rows.slice(1).map((row) => (row.match(/<span class="pj"[^>]*>([\s\S]*?)<\/span>/) || [])[1].replace(/<[^>]*>/g, ""));
+  if (/class="pj pchip"/.test(r.innerHTML) !== (projects.length > 1)) fail("project chip visibility");
+  for (const row of rows) if (!/class="pj( pchip)?"/.test(row)) fail("missing project cell");
+  const pj = rows.slice(1).map((row) => (row.match(/<span class="pj(?: pchip)?"[^>]*>([\s\S]*?)<\/span>/) || [])[1].replace(/<[^>]*>/g, ""));
   if (pj.join() !== [projects[0], projects[projects.length - 1]].join()) fail("project column says " + pj.join());
   // T-127: the roster own vendor and model columns, sortable and groupable
   // like the others; the model of shira is the warning class since it mismatches
@@ -171,18 +137,9 @@ for (const projects of [["alpha"], ["alpha", "beta"]]) {
   if (!s.innerHTML.includes(`data-sort="project" aria-pressed="true"`)) fail("sorting by project is not shown");
   SHIP.rosterSort = null;
 }
-// 24 aboard: no two tags on one deck and one level can reach each other
-const full = { greenlit: true, deckLimit: 24, tasks: [], crew: Array.from({ length: 24 }, (_, i) =>
-  ({ id: i ? "worker-" + i : "firstmate", role: i ? "worker" : "firstmate", state: "working", task: i ? "T-" + i : null,
-     name: "abcdefghijkl".slice(0, 1 + (i % 12)) })) };
-const deck = SHIP.render(host(), full, T, L);
-for (const a of deck) for (const b of deck) {
-  if (a === b || a.row !== b.row || !!a.alt !== !!b.alt) continue;
-  if (Math.abs(a.x - b.x) < (a.tagW + b.tagW) / 2 - 1e-6) fail(`tags ${a.id} and ${b.id} overlap`);
-}
 console.log("ok");
 ')"
-assert_eq "ok" "$t116" "the ship tag holds the name and project pennant only, the card and the roster hold every field apart, and 24 tags do not overlap"
+assert_eq "ok" "$t116" "the roster holds every identity field separately and preserves sorting and project grouping"
 
 # the card's crew chips, as index.html draws them
 chips="$(cd "$q" && bun -e '

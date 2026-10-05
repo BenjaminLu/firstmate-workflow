@@ -8,7 +8,7 @@ import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimes
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { EN, TW, CN, T040_KEYS, T057_KEYS, CN_ACTIVITY, CN_DETAILS, CREW, emitFixture, emit, CN_T058, useBoard } from "./lib/board";
-test('the prototype layout: engine badge, six lanes, portrait and strips, roster rows and demonstrations', async ({page}) => {
+test('the prototype layout: engine badge, six lanes, portrait and strips, roster rows', async ({page}) => {
   test.setTimeout(90_000);
   const root = makeRoot(['working','gate','review']);
   // names nothing could have hard-coded
@@ -29,7 +29,9 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   try {
     await page.setViewportSize({width:1280,height:900});
     await page.goto(`${b.url}/?lang=en`);
-    await expect(page.locator('.scene .pivot').first()).toBeVisible();
+    await expect(page.locator('#roster .rrow').first()).toBeVisible();
+    await expect(page.locator('#scene, #captain')).toHaveCount(0);
+    await expect(page.locator('.rosterbar #rosterBtn')).toHaveCount(1);
 
     // V7: the engine from config.yaml, marked when review runs elsewhere
     await expect(page.locator('#engine')).toHaveText('vendor-alpha ⇄ vendor-beta');
@@ -83,13 +85,16 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     const portrait = (await page.locator('#capstage').boundingBox())!, card = (await page.locator('#card-D-1').boundingBox())!;
     expect(portrait.x + portrait.width).toBeLessThanOrEqual(card.x);
     await expect(page.locator('#capstage .lbl')).toContainText(EN.roleCaptain);
-    await expect(page.locator('.scene .fig.r-cap')).toHaveCount(1);
+    await expect(page.locator('#capstage .capimg')).toHaveAttribute('src', '/voyage2d/captain.webp');
+    await expect(page.locator('#capstage .fig')).toHaveCount(0);
     await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', false);
     await expect(page.locator('#card-D-2 .confirm')).toBeHidden();
     await page.locator('#strip-D-2 > summary').click();
     await expect(page.locator('#card-D-2 .confirm')).toBeVisible();
     await expect(page.locator('#card-D-2 .confirm')).toBeDisabled();
     await page.locator('#card-D-2 [data-c="B"]').click();
+    await expect(page.locator('#card-D-2 .opt[data-c="B"]')).toHaveCSS('outline-style', 'solid');
+    await expect(page.locator('#card-D-2 .opt[data-c="B"]')).toHaveCSS('outline-width', '2px');
     await expect(page.locator('#card-D-2 .confirm')).toBeEnabled();
     await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', true);
     await expect(page.locator('#card-D-1 .links')).toContainText(`${EN.viewPr} #99`);
@@ -98,19 +103,15 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     await expect(page.locator('.roster li.rrow')).toHaveCount(4 + 1);
     await expect(page.locator('.roster .pb')).toHaveCount(1);
     await expect(page.locator('.roster [data-roster="worker-1"] .pb')).toHaveAttribute('aria-valuemax','5');
-    await expect(page.locator('.scene .bub .pb')).toHaveCount(0);
     expect(await page.locator('#shipregion').innerText()).not.toMatch(/\d+\s*%/);
     await page.locator('#rosterBtn').click();
     await expect(page.locator('#roster')).toBeHidden();
     await expect(page.locator('#rosterBtn')).toHaveAttribute('aria-pressed','false');
+    expect(await page.evaluate(() => localStorage.getItem('board.roster'))).toBe('hidden');
+    await page.reload();
+    await expect(page.locator('#roster')).toBeHidden();
     await page.locator('#rosterBtn').click();
     await expect(page.locator('#roster')).toBeVisible();
-
-    // the demonstration plays locally and records nothing
-    await page.locator('#ahoyDemo').click();
-    await expect(page.locator('.scene')).toHaveAttribute('data-effect', /^demo:merge:/);
-    await expect(page.locator('#salvo')).toHaveClass(/fire/);
-    expect(posts).toBe(0);
 
     // the live log is the full-width panel at the bottom
     const log = (await page.locator('.logwrap').boundingBox())!, lanesBox = (await page.locator('#lanes').boundingBox())!;
@@ -164,3 +165,45 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
 });
 
 // T-058: park, unpark and drop, each by the card's menu and by drag and drop
+
+test('a missing captain image leaves only the portrait label', async ({page}) => {
+  const root = makeRoot(['working']);
+  const b = await startBoard(root);
+  try {
+    await page.route('**/voyage2d/captain.webp', route => route.fulfill({status:404, body:''}));
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('#capstage .capimg')).toBeHidden();
+    await expect(page.locator('#capstage .lbl')).toContainText(EN.roleCaptain);
+    await expect(page.locator('#capstage .fig')).toHaveCount(0);
+  } finally { await stopBoard(b); }
+});
+
+test('a closed voyage keeps the roster and captain portrait synchronized', async ({page}) => {
+  const root = makeRoot(['working'], false);
+  const task = readTasks(root)[0].id;
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('#voyage-stage')).toHaveCount(1);
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+    await expect(page.locator('#voyage-stage')).toHaveCount(0);
+    await expect(page.locator('#capstage')).toBeHidden();
+    emitFixture(root, 'worker-hidden', task, 'dispatched', 'Still working with voyage closed', '航程關閉時繼續工作', {role:'worker'});
+    writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',kind:'choice',task,details}));
+    await expect(page.locator('[data-roster="worker-hidden"] .act')).toHaveText('Still working with voyage closed');
+    await expect(page.locator('#card-D-2')).toBeVisible();
+    await expect(page.locator('#capstage .capimg')).toHaveCount(1);
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose','idle');
+    await page.locator('#card-D-2 [data-c="B"]').click();
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose','ready');
+    await expect(page.locator('#capstage .lbl span')).toHaveText(EN.capReady);
+    await page.locator('[data-l="zh-TW"]').click();
+    await expect(page.locator('#capstage .lbl span')).toHaveText(TW.capReady);
+    await expect(page.locator('[data-roster="worker-hidden"] .act')).toHaveText('航程關閉時繼續工作');
+    await page.locator('#card-D-2 .confirm').click();
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose','order');
+    await expect(page.locator('#capstage .capimg')).toHaveCount(0);
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose','idle');
+    await expect(page.locator('#scene, #captain')).toHaveCount(0);
+  } finally { await stopBoard(b); }
+});

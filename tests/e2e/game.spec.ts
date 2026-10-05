@@ -23,7 +23,7 @@ test('voyage is one live stage, persists its size, and Esc Esc unloads it', asyn
     await expect(page.locator('body')).not.toHaveClass(/voyage-full/);
     await page.keyboard.press('Escape');
     await expect(stage).toHaveCount(0);
-    await expect(page.locator('#scene')).toBeHidden();
+    await expect(page.locator('#scene')).toHaveCount(0);
     await page.reload(); await expect(stage).toHaveCount(0);
     await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
     await expect(stage).toHaveCount(1);
@@ -111,7 +111,7 @@ test('voyage cancels its animation loop while hidden and resumes only one loop',
   } finally {await stopBoard(b);}
 });
 
-test('board refresh defers voyage subscribers and retains both animations and stage', async ({page}) => {
+test('board refresh defers voyage subscribers and retains the stage', async ({page}) => {
   const b=await startBoard(makeRoot(['working']));
   try {
     await page.goto(b.url+'/?lang=en');
@@ -122,31 +122,19 @@ test('board refresh defers voyage subscribers and retains both animations and st
       const stage=document.querySelector<HTMLIFrameElement>('#voyage-stage')!;
       const stageWindow=stage.contentWindow;
       const stageDocument=stage.contentDocument;
-      const scene=document.querySelector('#scene');
-      // A real board effect, measured in one turn so elapsed browser transport
-      // time cannot masquerade as an animation reset.
-      w.eval('SHIP').enqueue(scene,'merge','merge:refresh-regression');
-      const vessel=document.querySelector('#vessel')!;
-      const animation=vessel.getAnimations()[0];
       const delivered:number[]=[];
       const off=w.VOYAGE.subscribe((s:any)=>{if(s.refreshProbe)delivered.push(s.refreshProbe);});
       w.render({...state,refreshProbe:1});
       w.render({...state,refreshProbe:2});
       w.__refreshDelivery={delivered,off,stage,stageWindow,stageDocument};
-      return {synchronous:delivered.slice(),hasAnimation:!!animation,sameStage:stage===document.querySelector('#voyage-stage'),
+      return {synchronous:delivered.slice(),sameStage:stage===document.querySelector('#voyage-stage'),
         sameWindow:stageWindow===document.querySelector<HTMLIFrameElement>('#voyage-stage')!.contentWindow,
-        sameDocument:stageDocument===document.querySelector<HTMLIFrameElement>('#voyage-stage')!.contentDocument,
-        sameVessel:vessel===document.querySelector('#vessel'),sameAnimation:animation===vessel.getAnimations()[0],
-        delay:(vessel as HTMLElement).style.animationDelay};
+        sameDocument:stageDocument===document.querySelector<HTMLIFrameElement>('#voyage-stage')!.contentDocument};
     });
     expect(result.synchronous).toEqual([]);
     expect(result.sameStage).toBe(true);
     expect(result.sameWindow).toBe(true);
     expect(result.sameDocument).toBe(true);
-    expect(result.sameVessel).toBe(true);
-    expect(result.hasAnimation).toBe(true);
-    expect(result.sameAnimation).toBe(true);
-    expect(result.delay).toBe('0s');
     await expect.poll(()=>page.evaluate(()=>(window as any).__refreshDelivery.delivered)).toEqual([1,2]);
     expect(await page.evaluate(()=>{
       const probe=(window as any).__refreshDelivery;
@@ -207,7 +195,7 @@ for (const project of [null, 'beta']) test('Live commands use only authenticated
     // Drain requests already scheduled by the completed commands before auditing.
     await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
     const reads=new Set(['/', '/ship.css', '/ship.js', '/diagram.js', '/watch.js', '/game.js',
-      '/api/i18n', '/api/session', '/api/state', '/events']);
+      '/api/i18n', '/api/session', '/api/state', '/events', '/voyage2d/captain.webp']);
     // Only the fixture's own diagrams are expected. HEAD belongs to the board;
     // GET belongs to its diagram iframe, never to the voyage frame.
     const diagrams=new Set(['/diagrams/D-1.en.html', ...(project ? ['/diagrams/D-beta-T001-1.en.html'] : [])]);
@@ -326,6 +314,7 @@ test('a missing Live build leaves the working board without a game panel', async
     await page.keyboard.press('f');
     await page.keyboard.press('Escape');await page.keyboard.press('Escape');
     await expect(page.locator('#voyage-stage')).toHaveCount(0);
+    await expect(page.locator('#capstage .capimg')).toHaveCount(0);
     expect(requested.some(u=>u.includes('/voyage2d/') || u.endsWith('/game.js'))).toBe(false);
     expect(errors).toEqual([]);
   } finally {await stopBoard(b);}

@@ -38,11 +38,11 @@ test('continuation history, readable mobile content and persistent controls', as
     await page.goto(b.url+'/?lang=en');
     await expect(page.locator('#history')).toHaveJSProperty('open',false);
     await expect(page.locator('#history summary')).toContainText('31');
-    await expect(page.locator('[data-crew="worker-ghost"]')).toHaveCount(0);
+    await expect(page.locator('[data-roster="worker-ghost"]')).toHaveCount(0);
     // a pending card under a merged task is shown, not hidden, and says the task is final (T-118)
     await expect(page.locator('#card-D-999 .final-note')).toContainText(
       EN.finalNote.replace('{task}','T-999').replace('{stage}',EN.laneMerged));
-    for(const selector of ['.bub .who','.bub .job','.shipbar button','.roster .nm','.roster .st'])
+    for(const selector of ['.roster .jb','.rosterbar button','.roster .nm','.roster .st'])
       expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(13);
     await expect(page.locator('#history .card').first()).not.toBeVisible();
     expect((await page.locator('.dcard').first().boundingBox())!.y).toBeLessThan(844);
@@ -79,9 +79,7 @@ test('continuation history, readable mobile content and persistent controls', as
     await expect(page.locator('#history summary')).toContainText('32');
     await expect(page.locator('#history')).toHaveJSProperty('open',false);
     await expect(page.locator('#card-D-1 textarea')).toBeFocused();
-    const effect=await page.locator('.scene').getAttribute('data-effect');expect(effect).toBeTruthy();
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
-    expect(await page.locator('.scene').getAttribute('data-effect')).toBe(effect);
     await page.locator('#history summary').focus();await page.keyboard.press('Enter');
     await expect(page.locator('#history')).toHaveJSProperty('open',true);
     for (const locale of ['en','zh-TW','zh-CN']) {
@@ -106,11 +104,17 @@ test('continuation history, readable mobile content and persistent controls', as
     }
     await page.setViewportSize({width:1280,height:900});await page.evaluate(()=>scrollTo(0,0));
     await page.screenshot({path:testInfo.outputPath('desktop-decisions.png')});
-    await page.locator('.scene').screenshot({path:testInfo.outputPath('desktop-ship.png')});
+    await page.locator('#roster').screenshot({path:testInfo.outputPath('desktop-roster.png')});
     await page.setViewportSize({width:320,height:844});
     await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:testInfo.outputPath('mobile-decisions.png')});
-    await page.locator('.scene').screenshot({path:testInfo.outputPath('mobile-ship.png')});
+    await page.locator('#roster').screenshot({path:testInfo.outputPath('mobile-roster.png')});
     await page.addStyleTag({content:'body{font-size:32px} .dcard h3{font-size:44px} .explanation,.tradeoffs,.acts button,.acts label,.acts textarea{font-size:32px}'});
+    await expect(page.locator('#card-D-1 textarea')).toHaveCSS('display','block');
+    const textareaSize = await page.locator('#card-D-1 textarea').evaluate(el => ({
+      width: el.getBoundingClientRect().width,
+      labelWidth: el.parentElement!.getBoundingClientRect().width,
+    }));
+    expect(Math.abs(textareaSize.width - textareaSize.labelWidth)).toBeLessThanOrEqual(1);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=320)).toBe(true);
     await expect(page.locator('#card-D-1 textarea')).toHaveValue('Literal 船長');
     expect(posts).toBe(0);

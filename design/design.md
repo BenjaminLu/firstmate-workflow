@@ -128,7 +128,7 @@ The record includes `session` (owner pid and process start time), detection
 up to 200 characters of its parent's command). Unknown detection across sessions
 adds `last_unknown` without replacing the original provenance. Session start/status
 and `opposite-of-host` resolution warn on stderr about an unconfirmed known host;
-the board marks its vendor unconfirmed in both the crew card and roster. Routing
+the board marks its vendor unconfirmed in the roster. Routing
 still uses that recorded harness. External project records live under
 `FM_HOME/projects/<name>/state/session/host.json`, never in the target repository.
 Board launches use the board's owning session record across projects; other
@@ -1676,9 +1676,8 @@ percentages. The regions below are that layout.
 | Header | brand, the engine badge, green-light state and the language switch |
 | Sea header | merged / in flight / waiting on you / blocked / ready / backlog; waiting on you is the number of pending decisions |
 | Decision deck | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place |
-| The ship | a two-mast pirate vessel (three on the tallest rates) whose beam and decks track the crew |
-| Deck | crew stand on the ship with name tags over their heads, poses driven by state, handoffs fly between them |
-| Crew roster | two-column rows, shown by default and toggled from the ship's bar |
+| Voyage | the 2.5D stage (T-125) is the only ship view; crew, captain, handoffs and merge salvos live there |
+| Crew roster | separate field columns, shown by default and toggled from its own bar |
 | Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
 | Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl` |
 
@@ -1955,56 +1954,18 @@ Chinese:
   (T-117, merged by the card for #96 while its own #97 was open): it writes
   the captain's `reopened`, with the reason.
 
-**Roster and tags.** Roster rows carry a status dot, the crew name, a stage
-pill and the pull request, over the task id and title and the authored
-activity. A bar appears only for bounded `{done,total}` progress; no
-percentage is shown anywhere. The prototype's crew percentages and its random
-progress tick were demonstration only and do not ship. The ship's bar carries
-the roster toggle and the AHOY and order demonstrations, which play the
-effect locally and record nothing.
+**Roster.** Each row carries the crew name, role, project, vendor, model,
+CLI version, round and attempt, state and pull request, with the task id,
+title and authored activity. A bar appears only for bounded `{done,total}`
+progress; no percentage is shown. The roster has its own bar with the crew
+count against the server's deck limit and a toggle. Its visibility remains
+in `board.roster`; there are no AHOY or order demonstrations.
 
 ### The ship
 
-Decks and hull come out of **one lens curve in one SVG** — the deck is the
-foreshortened plan, the hull is that same curve extruded down — in the same
-projection as the voxel crew. Mixing an elevation with perspective decks was
-what made earlier versions read as a drawing of a ship next to some slabs.
-
-The hull is a warm-black silhouette and **brass is the only accent in the whole
-scene**, so the crew are the brightest layer. That is the hierarchy the board
-wants.
-
-| Crew | Rate | Masts | Decks | Beam |
-|---|---|---|---|---|
-| ≤3 | cutter | 1 | 1 | 42% |
-| 4–5 | schooner | 2 | 1 | 54% |
-| 6–8 | frigate | 3 | 2 | 66% |
-| 9–12 | ship of the line | 4 | 2 | 74% |
-| 13–18 | flagship | 5 | 3 | 82% |
-| 19–24 | man-o'-war | 6 | 4 | 90% |
-
-**A crowd goes up, not lengthwise.** Upper decks are shorter; firstmate always
-holds the topmost deck and the reviewer the one below. Hull, decks, crew and
-bubbles all align to `--deckY0 + row * --rowStep`, and every deck plate is the
-same height or the crew plant to different depths on each level. Each deck
-carries a bulwark and a riser wall down to the deck below, which is what makes
-a level read as a level.
-
-Mast height and scene height derive from `headroom()` so the **whole sail hangs
-above the tallest crewman's head** — otherwise the crew stand inside the
-canvas. Mast spacing is a fraction of the **topmost** deck's width, since that
-is what they are stepped on; using the hull's widest point puts the outer masts
-off the edge.
-
-**The bow faces left**, the end firstmate stands on. That is a narrative choice,
-not a nautical one — the helm belongs aft on a real ship — but the person
-leading should be at the head of it. Gilded figurehead and bowsprit to port,
-stern lantern to starboard. **The whole broadside points one way**, toward the
-bow: barrel, port lid, muzzle flash and smoke all agree.
-
-Gun ports and the figurehead are drawn in **HTML at fixed pixel sizes, not
-SVG** — the hull's viewBox stretches horizontally with beam and not vertically,
-which flattened a cutter's ports into slots.
+The board draws no ship. The 2.5D voyage is its only ship view, with its own
+crew, human captain, handoffs and merge salvos. Closing the voyage leaves no
+ship, salute or audio. The board retains the crew roster and decision deck.
 
 ### The crew
 
@@ -2012,7 +1973,7 @@ which flattened a cutter's ports into slots.
 phase `review`, using neutral `crew_status` events with `mode: spec-preflight`.
 Its first event carries its recorded name, vendor and requested model; each
 vendor attempt refreshes these through the chain's prepare callback. Every
-payload reads the run's identity afresh. The roster, crew detail card and task
+payload reads the run's identity afresh. The roster and task
 card crew chip show `spec preflight` (`預檢`, derived `预检`) in place of the
 round and attempt; round sorting treats it as no round (-1). Aggregation keeps
 `mode`. The crewman carries its task id as text even when that task has no card.
@@ -2031,56 +1992,20 @@ exits are `failed`, all with `result: failed`. No `review_opened` is emitted:
 review counters, gate 7 and a task's first real review round remain unchanged.
 The watch counts a live preflight as in-flight crew until its closing event.
 
-Twelve actions, pooled by deck and chosen by a hash of the crew id so they stay
-put: helm, lookout, signal, point and log on the quarterdeck; haul, capstan,
-carry and climb amidships; hammer, saw, swab and carry on the main deck. **Idle
-crew get their own pool** — with a concurrency of three, most of a large crew
-has no task, and one shared idle pose turns them into a row of broken statues.
+Crew figures and their animations belong only to the voyage. The board's
+roster carries every crew fact formerly shown in deck detail cards, including
+the CLI version and the no-window explanation while `waiting_ci`. Unknown
+fields say unknown. Firstmate without a host record has no vendor, model or
+CLI cells. Known roles have distinct marks; an unknown role has a warning mark.
 
-**Every action holds or stands at something**; nobody mimes. Tools follow the
-job, not the role. State still wins over action: a worker stopped at the gate
-slumps, a reviewer raises a spyglass.
-
-Legs alternate a weight shift at a per-crewman cadence, and each hops every
-7–15 seconds on its own offset. The hop animates the `translate` property
-rather than `transform`, so it composes with the pose animations instead of
-replacing them. **Shoes animate with their leg** — otherwise the leg turns
-while the shoe stays nailed to the deck and all you see is a bobbing body.
-
-**Each crewman carries a quiet name tag above his head (T-116)**: his name and
-a small pennant in his project's colour, and nothing else - never the task,
-round, pull request or activity text. A project's colour is derived from its
-name (`SHIP.projectColor`) and is the same on the pennant, the roster's project
-column and a card's project chip. A tag is never wider than the gap to its
-neighbour, and a longer name ends in an ellipsis, so 24 tags do not overlap;
-firstmate, standing off the deck's spacing at the helm, has its tag one line
-up; on a narrow screen the far decks of a crowded ship keep only the pennant.
-The tag carries no progress and no percentage. A landing handoff pulses the
-recipient's tag. Deck spacing must exceed body height plus tag height or a tag
-covers the crew on the deck above. **A small vendor mark joins the tag
-(T-127)**: a dot in the vendor's own colour, named for a screen reader, and
-nothing more - never the model string, which stays in the card and the
-roster; the tag stays as quiet as T-116 made it.
-
-**The details are in a card on demand.** Hovering or focusing a figure, or
-tapping it on a phone (a touch that did not turn him), opens a small card in
-that figure's tag, with one labelled line per field: name, role, project, task
-id and title, round (and attempt, for a retry), pull request (linked), state,
-**vendor, model and CLI version (T-127, below)**, and current activity. An
-unknown field says unknown. Esc (focus returns to the
-figure), a second tap, a tap elsewhere or moving away closes it; one card is
-open at a time and stays open across re-renders. The figure is focusable,
-names the crew member and state in its label, and is described by and
-controls its card (`aria-describedby`, `aria-controls`, `aria-expanded`).
-
-**The roster shows the same fields in separate columns**: name, role, project,
-**vendor, model**, task (id and title, with the authored activity and any
-bounded progress bar), round, pull request and state, under one header. The
-project column is shown with one project as with several. A header click
-sorts by that column, and a toggle groups the rows by project; both choices
-survive a reload. On a phone each row folds into two lines of the same
-cells, each labelled. A task card lists its crew as separate chips of name,
-role and round, never a string joined from actors.
+**The roster shows separate columns** under one header. The project column
+appears with one project as with several, using `SHIP.projectColor` consistently
+with card project chips; only a multi-project board adds the project-chip frame
+and title. Header buttons sort the sortable columns; CLI is a non-sortable
+header. A toggle groups rows by project. Both choices survive reload through
+`board.rosterSort` and `board.rosterGroup`. On phones the same labelled cells
+wrap across three lines. Task cards keep their separate name, role and round
+chips. There are no deck tags, detail cards, hover, tap or figure-drag controls.
 
 **What the round actually ran on, read from the run itself, never guessed
 (T-127).** `vendor` is the adapter; `model` is what the vendor's own CLI
@@ -2110,7 +2035,7 @@ another vendor's model, requested model, CLI version or mismatch. A vendor
 of `unknown` is sent to the page as null, shown as unknown, and not counted
 by the engine badge. A new `dispatched` still starts a crewman afresh.
 When `model` differs from `model_requested`, `model_mismatch` is `true` and
-the card's and the roster's Model field carry the warning colour, with both
+the roster's Model field carries the warning colour, with both
 names in the text (`modelMismatch`, en and zh-TW).
 
 **The header's engine badge shows the vendors actually running now**, such as
@@ -2121,23 +2046,26 @@ T-127) only when no crew is aboard whose vendor is known.
 
 The new labels (`roleWorker`, `roleReviewer`, `crewName`, `crewRole`,
 `crewTask`, `crewRound`, `crewAttempt`, `crewPr`, `crewState`,
-`crewActivity`, `crewUnknown`, `crewCard`, `rosterSort`, `rosterGroup`,
+`crewActivity`, `crewUnknown`, `rosterSort`, `rosterGroup`,
 `crewVendor`, `crewModel`, `crewCli`, `modelMismatch`, `engineLive`) come
 from the board's dictionaries in English and 繁體中文, like every other label.
 
 ### The captain
 
-The human captain is always visible on the ship's top deck, including startup
-with zero pending decisions and after the final acknowledgement. There is one
-captain aboard. While a decision is pending, the decision deck also shows his
-portrait beside the first card (D-047); it is a picture of the same captain in
-the same pose, not a second figure aboard, and it disappears with the last
-card. He is excluded from agent counts.
-The shared deck coordinate system anchors his feet; firstmate and the helm
-remain at the original left/bow anchor, with the stern on the right. Three
-poses remain: sheathed without a choice, half drawn on local selection, raised
-on explicit confirmation and through recorded acknowledgement, then idle.
-He is draggable like the crew; orientation does not replace sword poses.
+The human captain belongs to the 2.5D voyage and is excluded from agent
+counts. While a decision is pending, his portrait sits beside the first card
+(D-047). It is a picture of that same captain, using `/voyage2d/captain.webp`
+from the Live build, and disappears with the last card. The board commits no
+second copy of the art. Without a Live build it renders only the localized
+label and requests no voyage asset; a failed image load also leaves the label.
+
+`#capstage[data-pose]` is the single portrait pose signal: idle is plain,
+ready has a brass glow when a local choice is selected, and order adds a 6px
+lift while an answer is posting and for 3.2 seconds after recorded, custom
+recorded, effect-done or merge-running feedback. A change request or refused
+merge/effect gives no order acknowledgement. Reduced motion removes the lift.
+The label remains capDeciding, capReady or capOrder. Hiding the voyage hides
+the portrait as before; its DOM and pose still follow board state.
 
 Primary task, decision, tradeoff and event text is at least 16 CSS pixels;
 secondary labels are at least 13 pixels and decision titles at least 20 pixels.
@@ -2160,35 +2088,11 @@ coordination with the owning task, not fabricated board descriptions.
 
 ### Ahoy
 
-| Trigger | Response |
-|---|---|
-| A merge | the broadside fires gun by gun with cannon reports, the ship heels, every crewman's arms go up, `AHOY! / MERGED INTO MAIN` |
-| An order | the helm spins twice and the visible crew acknowledges, `AYE, CAPTAIN! / ORDERS AWAY` |
-
-The later captain override disables Ahoy-related speech, bell and whistle
-audio. No substitute cue or global mute implements that choice. Confirmed
-merges retain their synthesised lowpassed-noise cannon reports; there are no
-audio files or network requests. Persistent mute silences those reports,
-browsers may require a gesture, initial history is silent and event identities
-deduplicate playback. The board never touches the browser speech queue.
-
-The full outcome stream supplies stable decision IDs and merge identities
-(PR, or task/event fallback). Initial history is silent, new outcomes queue,
-and refreshes/reconnects cannot replay handled identities. The 3.2-second
-effect deadline survives ordinary state rendering; retained animations keep
-their running timeline while elapsed offsets apply only to newly mounted effect
-nodes. Crew data continues updating, and the captain persists with feedback
-after the last card disappears. Reduced motion keeps static acknowledgement
-and independently honors audio preference. Only confirmed `merged` events
-fire the merge salute; recording an order or a failed helper cannot do so.
-
-**One gun list** (`portList()`) drives the ports, the flash positions and the
-sound schedule: one gun, one flash, one report, the same `GUN_DELAY` apart.
-**The shout stays in English in every
-locale** — it is a cry, not a label.
-
-Celebration must not hide what is being celebrated: the banner sits clear of
-the ship.
+The board plays no audio and draws no salute. The voyage owns handoffs,
+merge salvos and their audio; closing it leaves no salute or sound. The board
+keeps decision feedback, including the English order cry for accepted orders,
+and the portrait's timed acknowledgement. The old `board.muted` preference is
+harmless and unused; no stored records need migration.
 
 ### Interaction
 
@@ -2212,41 +2116,17 @@ shows no order cry or authored outcome, and queues no order animation in any
 tab or project view. All-Yes answers retain existing effects. Cards already
 pending without intent fields keep their current rendering and answer behavior.
 
-Drag a figure to turn it, drag the deck to turn the whole crew, double-click to
-reset. Every pose is a `.fig.s-<state>` class, so **e2e asserts classes rather
-than diffing screenshots**.
+Hand-offs are drawn only by the voyage. The board has no handoff flights,
+on-deck stations, receiving pulses or `handoffUnavailable` notice.
 
-The renderer patches existing figures, preserving pointer capture and rotation.
-Full event replay supplies directed `handoffs` with event identities: dispatch
-or recorded order from firstmate to a worker, PR/review handoff to a reviewer,
-approval to firstmate and rejection to the worker. Peer resolution requires
-one known active participant on the same task, and names none otherwise.
-**An end off the deck is quiet (T-145).** A reviewer posts its verdict and
-leaves the deck in the same moment, and a worker has often left before the
-reviewer rejects, so an end that is not on deck is the normal end of a round,
-not a fault. The kind fixes each end's role (order: firstmate to worker; work:
-worker to reviewer; reject: reviewer to worker; approve: reviewer to
-firstmate), so such an end - a crewman who left, or one the server left
-unnamed - is drawn at its station, which is where firstmate stands (its
-figure, else the helm): the deck has no post of its own per role, and
-firstmate sends every order and takes every verdict. The cue travels as
-usual, names the role where it has no name, and no one reacts at a station.
-The notice (`handoffUnavailable`, "participant unknown to the board") is left
-only for an actor the board cannot place at all. Each hand-off carries
-`from_role` and `to_role`, the role the server knows each named end by:
-`firstmate`, the role the crewman said (`data.role`) or was dispatched as,
-or, for a run recorded before T-116, the one its canonical actor
-(`<role>-<name>-<task>-r<n>`) names. The page never reads a role from an
-actor's name. A named end with no role that is not on deck is the one case
-said, whatever its name, so `secondmate` dispatched as a worker is quiet
-and a `reviewer-x` that never said what it is is not. It is shown once per
-actor for the life of the page, not once per event; its cue carries
-`data-unknown`. Initial history is silent and duplicate
-snapshots do not replay cues. Travel uses current rendered anchors for 1.4
-seconds, then a receiving reaction and bubble pulse, with cleanup at 2.3 seconds.
-Reduced motion retains localized directed text. Handoffs emit no events, POSTs
-or success audio. Browser checks measure travel, endpoints and drag ownership,
-in addition to pose classes; source text alone does not establish behavior.
+Full event replay still supplies directed `handoffs` with stable event
+identities: dispatch or recorded order from firstmate to a worker, PR/review
+handoff to a reviewer, approval to firstmate and rejection to the worker.
+Peer resolution requires one known active participant on the same task and
+names none otherwise. Each handoff retains `from_role` and `to_role`: firstmate,
+the role recorded in `data.role` or at dispatch, or the canonical actor role
+for legacy runs. These server payloads are unchanged and consumed by the
+voyage; the board does not infer a role from an actor name.
 
 **Hot reload:** a change under `board/public/**` pushes `reload` over SSE; a
 change to `board/server.ts` restarts under `bun --watch` and the client
@@ -2417,16 +2297,13 @@ web page open in the captain's browser; neither can write.
   other web pages out now, and keeps crew rounds out once T-117 lands and
   names this path in its never-readable list.
 
-**One source for shared numbers.** CSS custom properties are written from the
-JavaScript constants. `--rowStep` once drifted from `ROWSTEP` and the decks were
-drawn on one grid while the crew stood on another — by the fourth level they
-were 102px below their own deck.
-
 The production board is **rewritten** from the prototype in
 `design/proposals/`, not promoted from it: that prototype was written with no
 tests and no error handling.
 
 ### T-125: Live voyage seam
+
+The flat 2D ship was removed in T-215; this is the board's only ship view.
 
 The v2d-15 2.5D stage is a panel above v1's workflow, or the same iframe enlarged
 with the existing workflow DOM in a drawer. F toggles size; Esc returns to the
@@ -2452,7 +2329,10 @@ suppresses the shared monster’s fight prompt and target without releasing its 
 it never interprets an option letter as an effect. Live bundles have no remote
 fonts or other third-party requests. Playground builds refuse network code.
 
-`tools/build.py --live` generates the gitignored `board/public/voyage2d/index.html`.
+`tools/build.py --live` generates the gitignored `board/public/voyage2d/index.html`
+and atomically writes `captain.webp` beside it from the baked front-facing whole
+captain sprite. Playground builds write no portrait. A failed preparation removes
+both files. The static route serves WebP as `image/webp`.
 The existing static-file route serves it. CI builds Live before starting browser
 workers or game tests, then builds Playground and runs the vendored node tests.
 Session startup builds Live before starting the board; failure is reported and

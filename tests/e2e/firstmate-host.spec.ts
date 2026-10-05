@@ -17,8 +17,8 @@ for (const lang of ['en', 'zh-TW']) {
       await expect(row.locator('.rv')).toHaveText('codex');
       await expect(row.locator('.rv')).not.toHaveClass(/warn/);
       await expect(row.locator('.rm')).toHaveText('gpt-6-astra');
-      const card = page.locator('[data-bubble="firstmate"] .crewcard');
-      await expect(card.locator('.ccli')).toHaveText('codex-cli 0.116.0');
+      const card = page.locator('[data-roster="firstmate"]');
+      await expect(card.locator('.rc')).toHaveText('codex-cli 0.116.0');
       const state = await (await page.request.get(`${b.url}/api/state`)).json();
       expect(state.crew.find((c: any) => c.id === 'firstmate').model_source)
         .toBe('/fixture/.codex/config.toml:model');
@@ -26,21 +26,21 @@ for (const lang of ['en', 'zh-TW']) {
       await page.reload();
       await expect(row.locator('.rv')).toHaveText('claude');
       await expect(row.locator('.rm')).toHaveText(lang === 'en' ? 'unknown' : '未知');
-      await expect(card.locator('.cvendor')).not.toHaveClass(/warn/);
+      await expect(card.locator('.rv')).not.toHaveClass(/warn/);
       writeFileSync(file, JSON.stringify({ harness: 'claude', confirmed: false }));
       await page.reload();
       const warning = lang === 'en' ? 'claude (unconfirmed)' : 'claude（未確認）';
       await expect(row.locator('.rv')).toHaveText(warning);
       await expect(row.locator('.rv')).toHaveClass(/warn/);
-      await expect(card.locator('.cvendor')).toHaveText(warning);
-      await expect(card.locator('.cvendor')).toHaveClass(/warn/);
+      await expect(card.locator('.rv')).toHaveText(warning);
+      await expect(card.locator('.rv')).toHaveClass(/warn/);
       const unconfirmed = await (await page.request.get(`${b.url}/api/state`)).json();
       expect(unconfirmed.crew.find((c: any) => c.id === 'firstmate').host_confirmed).toBe(false);
       unlinkSync(file);
       await page.reload();
       await expect(row.locator('.rv')).toHaveCount(0);
       await expect(row.locator('.rm')).toHaveCount(0);
-      await expect(card.locator('.ccli')).toHaveCount(0);
+      await expect(card.locator('.rc')).toHaveCount(0);
     } finally { await stopBoard(b); }
   });
 }

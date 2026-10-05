@@ -16,7 +16,7 @@ test("the captain merges from the board", async ({ page }) => {
   const b = await startBoard(makeRoot([...CREW]));
   try {
   await page.goto(`${b.url}/?lang=zh-TW`);
-  await expect(page.locator(".scene .pivot").first()).toBeVisible();
+  await expect(page.locator("#roster .rrow").first()).toBeVisible();
   const card = page.locator(".dcard").first();
   await expect(card).toBeVisible();
   await expect(card.locator(".gates li")).toHaveCount(6);   // gates 1, 2, 4, 5, 6, 7
@@ -25,8 +25,8 @@ test("the captain merges from the board", async ({ page }) => {
   await expect(card.locator("button.confirm")).toBeDisabled();
   await card.locator('[data-c="A"]').click();
   expect(existsSync(join(b.root, "state/decisions/D-1.json"))).toBe(false);
-  await expect(page.locator('#captain')).toHaveAttribute('data-pose', 'ready');
-  await expect(page.locator('#captain .fig')).toHaveClass(/c-ready/);
+  await expect(page.locator('#capstage')).toHaveAttribute('data-pose', 'ready');
+  await expect(page.locator('#capstage .lbl span')).toHaveText(TW.capReady);
   await card.locator("button.confirm").click();
 
   // the card going away is the visible half; the decision on disk and the
@@ -48,18 +48,22 @@ test("the captain merges from the board", async ({ page }) => {
 });
 
 test("custom selection is local, literal and never merges", async ({ page }) => {
-  const b = await startBoard(makeRoot(["working"]));
+  const root = makeRoot(["working"]);
+  writeFileSync(join(root,'state/pending/D-2.json'), JSON.stringify({id:'D-2',kind:'choice',details}));
+  const b = await startBoard(root);
   try {
     let posts = 0;
     // the fixture's one-time sign-in POSTs /login on the first visit; that
     // exchange answers nothing, so only every other POST counts
     page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname !== '/login') posts++; });
     await page.goto(`${b.url}/?lang=en`);
-    const card = page.locator('.dcard');
-    expect(await page.locator('#captain .tool').evaluate(el=>({height:getComputedStyle(el).height,background:getComputedStyle(el).backgroundColor,opacity:getComputedStyle(el).opacity})))
-      .toEqual({height:'10px',background:'rgb(59, 38, 23)',opacity:'0.45'});
+    const card = page.locator('#card-D-1');
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose', 'idle');
+    await expect(page.locator('#capstage .capimg')).toHaveCSS('filter','none');
     await card.locator('[data-c="custom"]').click();
-    expect(await page.locator('#captain .tool').evaluate(el=>getComputedStyle(el).height)).toBe('38px');
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose', 'ready');
+    await expect(page.locator('#capstage .capimg')).toHaveCSS('filter', /drop-shadow/);
+    await expect(page.locator('#capstage .lbl span')).toHaveText(EN.capReady);
     await expect(card.locator('.confirm')).toBeDisabled();
     await card.locator('textarea').fill('🚢'.repeat(1001));
     await expect(card.locator('.confirm')).toBeDisabled();
@@ -69,27 +73,23 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
     expect(existsSync(join(b.root, 'state/decisions/D-1.json'))).toBe(false);
     await card.locator('.confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
-    await expect(page.locator('#captain')).toBeVisible();
-    await expect(page.locator('#captain')).toHaveAttribute('data-pose', 'order');
-    expect(await page.locator('#captain .tool').evaluate(el=>({height:getComputedStyle(el).height,background:getComputedStyle(el).backgroundColor,opacity:getComputedStyle(el).opacity})))
-      .toEqual({height:'52px',background:'rgb(232, 239, 247)',opacity:'1'});
+    await expect(page.locator('#capstage')).toBeVisible();
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose', 'order');
+    await expect(page.locator('#capstage .capimg')).toHaveCSS('filter', /drop-shadow/);
+    await expect(page.locator('#capstage .capimg')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, -6)');
+    await expect(page.locator('#capstage .lbl span')).toHaveText(EN.capOrder);
     const stored = JSON.parse(readFileSync(join(b.root, 'state/decisions/D-1.json'), 'utf8'));
     expect(stored.chosen).toBe('custom');
     expect(stored.text).toBe(literal);
     expect(posts).toBe(1);
     expect(existsSync(b.recorder)).toBe(false);
-    await expect(page.locator('.scene .fig.cheer')).toHaveCount(3);
-    expect(await page.locator('.scene .fig.cheer .armR').evaluateAll(els=>els.every(el=>getComputedStyle(el).animationName === 'crewArms'))).toBe(true);
-    await page.evaluate(async () => (window as any).render(await (await fetch('/api/state')).json()));
-    await expect(page.locator('.scene .fig.cheer')).toHaveCount(3);
-    const delays = await page.locator('.scene .fig.cheer').evaluateAll(els => els.map(el=>parseFloat((el as HTMLElement).style.animationDelay)));
-    expect(delays[1] - delays[0]).toBeCloseTo(.055);
-    await expect(page.locator('#salvo')).not.toHaveClass(/fire/);
     await page.locator('[data-l="zh-CN"]').click();
     await expect(page.locator('#orderFeedback')).toContainText(literal);
     await expect(page.locator('#orderFeedback script')).toHaveCount(0);
-    await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:15_000});
-    await expect(page.locator('.scene #captain .r-cap')).toBeVisible();
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose','idle',{timeout:15_000});
+    await expect(page.locator('#capstage .capimg')).toHaveCSS('filter','none');
+    await expect(page.locator('#capstage .capimg')).toHaveCSS('transform','none');
+    await expect(page.locator('#capstage .lbl span')).toHaveText(CN.capDeciding);
   } finally { await stopBoard(b); }
 });
 
