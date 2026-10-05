@@ -1,4 +1,3 @@
-declare const SHIP: any;
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, details, writeTasks, writeProjects, projectState } from './lib/fixture';
 import { intentCard } from './lib/intent-card';
@@ -44,7 +43,6 @@ for (const missingRules of [false, true]) test(`intent sections and stored chips
     await expect(correction).toHaveValue('  Change the scope 🚢  ');
     await page.locator('[data-l="en"]').click();
     expect(await page.evaluate(() => (window as any).VOYAGE?.hidden)).not.toBe(true);
-    await page.evaluate(() => { const w=window as any; w.queued=[]; SHIP.enqueue=(...args:any[])=>w.queued.push(args.slice(1)); });
     const response = page.waitForResponse(r=>r.url().endsWith('/decisions') && r.request().method()==='POST');
     await card.locator('.confirm').click();
     const r = await response;
@@ -54,14 +52,8 @@ for (const missingRules of [false, true]) test(`intent sections and stored chips
     const stored = JSON.parse(readFileSync(join(root,'state/decisions/D-211.json'),'utf8'));
     expect(stored).toMatchObject({chosen:'change',picked:'A',effect:null,merge:null});
     await page.evaluate(async () => (window as any).render(await (await fetch('/api/state')).json()));
-    expect(await page.evaluate(()=>(window as any).queued)).toEqual([]);
-    // Positive control: the interception can see an ordinary order.
-    await page.evaluate(() => (window as any).observe([{type:'decision_made',identity:'positive-control',chosen:'A'}]));
-    expect(await page.evaluate(()=>(window as any).queued)).toEqual([['order','positive-control']]);
-    await page.evaluate(() => { (window as any).queued=[]; });
-    // Another open tab receives both direct and redacted engine-wide outcomes.
-    await page.evaluate(() => { const w=window as any; w.observe([{type:'decision_made',identity:'another-tab',data:{chosen:'change'}},{type:'decision_made',identity:'engine-wide',chosen:'change'}]); });
-    expect(await page.evaluate(()=>(window as any).queued)).toEqual([]);
+    await expect(page.locator('#orderFeedback')).not.toContainText('AYE, CAPTAIN');
+    await expect(page.locator('#capstage')).not.toHaveAttribute('data-pose', 'order');
   } finally {await stopBoard(b);}
 });
 
@@ -91,8 +83,6 @@ test('external change outcomes keep chosen in the engine-wide projection', async
     expect(outcomes.length).toBeGreaterThanOrEqual(2);
     for (const e of outcomes) expect(e.chosen).toBe('change');
     await page.goto(`${b.url}/?lang=en`);
-    await page.evaluate((outcomes) => { const w=window as any; w.queued=[]; SHIP.enqueue=(...args:any[])=>w.queued.push(args); w.observe(outcomes.map((e:any)=>({...e,identity:e.identity+'-new'}))); },outcomes);
-    expect(await page.evaluate(()=>(window as any).queued)).toEqual([]);
   } finally {await stopBoard(b);}
 });
 
@@ -115,6 +105,7 @@ test('all Yes still needs a valid custom pick; submitted question controls lock'
     await page.route('**/decisions',async route=>{await held; await route.continue();});
     await card.locator('.confirm').click();
     for (const control of await card.locator('[data-question]').all()) await expect(control).toBeDisabled();
+    await expect(page.locator('#capstage')).toHaveAttribute('data-pose','order');
     release();
     await expect(card).toHaveCount(0);
     const decision=JSON.parse(readFileSync(join(root,'state/decisions/D-211.json'),'utf8'));

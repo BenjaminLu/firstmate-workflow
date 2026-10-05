@@ -1,5 +1,4 @@
-// The ship is asserted through classes and numbers, never through a
-// screenshot: a pose is a class, and every shared number has one source.
+// Crew roster behavior and shared board helpers, independent of the voyage.
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -11,6 +10,22 @@ const ROOT = join(HERE, "..");
 const SHIP = createRequire(import.meta.url)(join(ROOT, "board/public/ship.js"));
 const CSS = readFileSync(join(ROOT, "board/public/ship.css"), "utf8");
 const T = (k: string) => k;
+
+test("removing the ship preserves decision controls and page-wide reduced motion", () => {
+  const css = CSS.replace(/\s+/g, "");
+  for (const rule of [
+    '.acts{flex-wrap:wrap}',
+    '.acts .tradeoffs,.acts label{width:100%}',
+    '.acts textarea{display:block;width:100%;min-height:80px}',
+    '.acts [aria-pressed="true"]{outline:2px solid var(--brass)}',
+    '.acts [hidden]{display:none}',
+    '#orderFeedback{white-space:pre-wrap;overflow-wrap:anywhere}',
+    '.change-fallback{display:flex;align-items:center;gap:16px}',
+    '.change-fallback section{flex:1}',
+    '.change-fallback[hidden]{display:none}',
+    '@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}',
+  ]) expect(css).toContain(rule.replace(/\s+/g, ""));
+});
 
 const stub = () => ({
   onclick: null as unknown, textContent: "", style: {} as Record<string, string>,
@@ -46,30 +61,6 @@ const state = (n: number, stage = "working") => ({
   ],
 });
 
-test("a crowd stacks onto more decks, it does not stretch the hull", () => {
-  const two = SHIP.rateFor(2), full = SHIP.rateFor(24);
-  expect(full.rows).toBeGreaterThan(two.rows);
-  expect(SHIP.RATES.length).toBe(6);
-  expect(SHIP.RATES[SHIP.RATES.length - 1].max).toBe(24);
-  // every rate is reachable and the ladder only ever grows
-  for (let i = 1; i < SHIP.RATES.length; i++) {
-    expect(SHIP.RATES[i].max).toBeGreaterThan(SHIP.RATES[i - 1].max);
-    expect(SHIP.RATES[i].w).toBeGreaterThan(SHIP.RATES[i - 1].w);
-    expect(SHIP.RATES[i].rows).toBeGreaterThanOrEqual(SHIP.RATES[i - 1].rows);
-  }
-  expect(full.rows).toBe(4);
-  // a deck must hold its share without the crew overlapping
-  for (const r of SHIP.RATES) expect(Math.ceil(r.max / r.rows)).toBeLessThanOrEqual(7);
-});
-
-test("every deck carries crew, including the topmost", () => {
-  for (const n of [1, 4, 9, 14, 19, 24]) {
-    const r = SHIP.rateFor(n), per = SHIP.layout(n, r.rows);
-    expect(per.reduce((a: number, b: number) => a + b, 0)).toBe(n);
-    if (n >= r.rows) expect(Math.min(...per)).toBeGreaterThan(0);
-  }
-});
-
 test("the crew are the agents the server named, and 24 is the deck limit", () => {
   const c = SHIP.crewOf(state(3), T);
   expect(c.map((x: any) => x.id)).toEqual(["firstmate", "worker-0", "worker-1", "worker-2"]);
@@ -84,81 +75,21 @@ test("the crew are the agents the server named, and 24 is the deck limit", () =>
   expect(SHIP.crewOf(state(1), T).some((x: any) => x.role === "cap")).toBe(false);
 });
 
-test("a pose is a class, and every action holds a prop", () => {
-  for (const a of SHIP.ACTIONS) {
-    expect(CSS).toContain(`.fig.a-${a} `);
-    expect(CSS.split(`.fig.a-${a} .tool`).length).toBeGreaterThan(1);
-  }
-  expect(SHIP.ACTIONS.length).toBe(12);
-  // the same crewman always gets the same action
-  expect(SHIP.actionFor("T-7", "working")).toBe(SHIP.actionFor("T-7", "working"));
-  for (const s of ["working", "gate", "review", "queued", "captain"]) {
-    expect(SHIP.ACTIONS).toContain(SHIP.actionFor("T-7", s));
-  }
-});
-
 test("every state a crewman can be in is styled and named", () => {
   const en = JSON.parse(readFileSync(join(ROOT, "i18n/ui.en.json"), "utf8"));
-  // the rate name is a computed key, so the file scan cannot see it
-  for (const r of SHIP.RATES) expect(en[r.key]).toBeTruthy();
   const states = new Set<string>();
-  for (const st of ["working", "gate", "review", "captain"]) {
+  for (const st of ["working", "gate", "review", "captain", "queued", "waiting_ci", "unknown"]) {
     for (const c of SHIP.crewOf({ ...state(3, st), pending: [{ id: "d" }] }, T)) states.add(c.state);
   }
   for (const s of states) {
-    expect(CSS).toContain(`.fig.s-${s}`);
+    expect(CSS).toContain(`.roster li.st-${s}`);
     expect(CSS).toContain(`st-${s}`);
     // the roster names it from the dictionary, so it is switchable
     expect(en["lane" + s[0].toUpperCase() + s.slice(1)]).toBeTruthy();
   }
 });
 
-// The page maps the server's three role names onto short class
-// suffixes and falls back to "unknown" for anything else. The comment
-// beside that line says a mismatch "should be visible, not painted as a
-// worker" - which was reasoning, not code: r-unknown had no rule, so it
-// inherited .fig and looked like an ordinary crewman.
-// The captain's geometry has one source, and the test for that is not a
-// comment saying so. It wrote three properties nothing in his block read
-// - two of them for a sum that a more specific rule overrode - which is
-// the same defect as a literal, pointed the other way.
-// The chip below the top deck carries the task, and falls back to the
-// agent's name when there is none. The fallback is the page's contract
-// with a crew list, not with today's server: firstmate is crew[0] and
-// crew[0] is always on the top row, so nothing the server sends reaches
-// it - and an empty chip is a crewman the board cannot name at all.
-test("a crewman below the top deck with no task is still named on his chip", () => {
-  const s = state(7);
-  const nameless = s.crew[4] as { task?: string | null; title?: string | null; id: string };
-  nameless.task = null; nameless.title = null;
-  const h = host();
-  SHIP.render(h as never, s, T);
-  const minis = [...h.innerHTML.matchAll(/class="bub mini [^"]*"[^>]*><div class="who">([^<]*)</g)]
-    .map((m) => m[1]);
-  expect(minis.length).toBeGreaterThan(0);
-  // no chip is blank, and the taskless one carries the agent's own id
-  for (const m of minis) expect(m.trim()).not.toBe("");
-  expect(minis.map(x=>x.trim())).toContain(nameless.id);
-});
-
-test("every custom property the captain writes is one his own block reads", () => {
-  const js = readFileSync(join(ROOT, "board/public/ship.js"), "utf8");
-  const body = js.slice(js.indexOf("function captain("), js.indexOf("function roster("));
-  const props = [...body.matchAll(/setProperty\("(--[\w-]+)"/g)].map((m) => m[1]);
-  expect(props.length).toBe(0); // the captain now shares the ship's deck geometry
-  // his rules only: a property read somewhere else on the page is not
-  // read HERE, which is the whole of the claim
-  const his = CSS.replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("}")
-    .filter((chunk) => /(^|[\s{,])\.(captain|capwrap|capstand|capsays)\b/.test(chunk.split("{")[0] ?? ""))
-    .join("}");
-  expect(his).toContain(".captain");
-  for (const p of props) expect(his).toContain(`var(${p})`);
-  // and the other way: the column the captain stands in takes its size
-  // from him, rather than a literal that has to be kept in step
-  expect(CSS).toContain('var(--capRow) * var(--rowStep)');
-});
-
+// Unknown roles remain a visible mismatch in roster rows.
 test("a role the page does not know is drawn as a mismatch, not as a worker", () => {
   // every suffix the map can produce has a rule of its own, and the
   // server's own role union is what decides the set - a fourth role
@@ -169,7 +100,7 @@ test("a role the page does not know is drawn as a mismatch, not as a worker", ()
   expect(roles.length).toBeGreaterThan(2);
   for (const r of roles) expect(SHIP.ROLE[r]).toBeTruthy();
   for (const k of [...Object.values(SHIP.ROLE) as string[], "unknown"]) {
-    expect(CSS).toContain(`.fig.r-${k}`);
+    expect(CSS).toContain(`.roster li[data-role="${k}"]`);
   }
   // and it reaches the page loudly: a crewman the server sent with a
   // role this page has never heard of
@@ -177,99 +108,20 @@ test("a role the page does not know is drawn as a mismatch, not as a worker", ()
   (s.crew[1] as { role: string }).role = "quartermaster";
   expect(SHIP.crewOf(s, T)[1].role).toBe("unknown");
   const h = host();
-  SHIP.render(h as never, s, T);
-  expect(h.innerHTML).toContain("r-unknown");
-  expect(h.innerHTML).not.toContain("r-w ");
+  SHIP.roster(h as never, SHIP.crewOf(s, T), T);
+  expect(h.innerHTML).toContain('data-role="unknown"');
+  expect(h.innerHTML).not.toContain('data-role="w"');
 });
 
-test("state and role reach the page as classes", () => {
+test("state and role reach the roster rows", () => {
   const h = host();
-  const crew = SHIP.render(h as any, state(4, "review"), T);
-  expect(crew.length).toBe(5);
-  expect(h.innerHTML.split("class=\"pivot\"").length - 1).toBe(6);
-  expect(h.innerHTML).toContain("s-review");
-  expect(h.innerHTML).toContain("r-fm");
-  expect(h.innerHTML).toContain("r-r");
-  expect(h.dataset.crew).toBe("5");
-  expect(h.dataset.rate).toBe(SHIP.rateFor(5).key);
-
-  // the crew reach the page on the decks the layout put them on
-  const rate = SHIP.rateFor(5);
-  const rowsSeen = [...h.innerHTML.matchAll(/--r:(\d+)/g)].map((m) => +m[1]);
-  const perRow = SHIP.layout(5, rate.rows);
-  for (let r = 0; r < rate.rows; r++) {
-    expect(rowsSeen.filter((x) => x === r).length).toBe(perRow[r] * 2 + (r===rate.rows-1?1:0)); // human captain shares top deck
-  }
-  expect(new Set(rowsSeen).size).toBe(rate.rows);
-
-  // and each one wears the action his own state chose, not one shared pose
-  const mixed = { ...state(6), tasks: [
-    { id: "T-a", title: "a", stage: "working" }, { id: "T-b", title: "b", stage: "gate" },
-    { id: "T-c", title: "c", stage: "review" }, { id: "T-d", title: "d", stage: "working" }] };
-  const h2 = host();
-  const c2 = SHIP.render(h2 as any, mixed, T);
-  const worn = [...h2.innerHTML.matchAll(/class="fig r-\w+ s-\w+ a-(\w+)"/g)].map((m) => m[1]);
-  expect(worn).toEqual([...c2.map((c: any) => c.role==='fm'?'helm':SHIP.actionFor(c.id, c.state)), 'helm']);
-  expect(new Set(worn).size).toBeGreaterThan(1);
-});
-
-test("shared numbers have one source: ship.css declares no geometry", () => {
-  const h = host();
-  SHIP.render(h as any, state(6), T);
-  for (const k of ["--sceneH", "--deckY0", "--rowStep", "--deckW", "--figH", "--hullBottom"]) {
-    expect(h.props[k]).toBeTruthy();
-    // a fallback in var() is a read; a declaration would be a second source
-    expect(CSS).not.toMatch(new RegExp("[;{]\\s*" + k + "\\s*:"));
-  }
-});
-
-test("the whole sail clears the tallest crewman's head", () => {
-  for (const n of [1, 7, 24]) {
-    const h = host();
-    SHIP.render(h as any, state(n), T);
-    const px = (k: string) => parseFloat(h.props[k]);
-    const rate = SHIP.rateFor(SHIP.crewOf(state(n), T).length);
-    const topDeck = px("--deckY0") + (rate.rows - 1) * px("--rowStep");
-    // every sail on every mast: a topsail clearing the heads says nothing
-    // about the course hung below it
-    const masts = [...h.innerHTML.matchAll(/<div class="mast"[^>]*height:(\d+)px">([\s\S]*?)<\/div>/g)];
-    expect(masts.length).toBeGreaterThanOrEqual(2);
-    for (const [, height, rig] of masts) {
-      const sails = [...rig.matchAll(/class="sail[^"]*" style="top:(\d+)px;height:(\d+)px/g)];
-      expect(sails.length).toBe(2);
-      for (const s of sails) {
-        const sailBottom = topDeck + parseInt(height, 10) - (parseInt(s[1], 10) + parseInt(s[2], 10));
-        expect(sailBottom).toBeGreaterThan(topDeck + px("--figH"));
-      }
-    }
-  }
-});
-
-test("a two-mast ship, name tags without percentages, and demonstrations that record nothing", () => {
-  const h = host();
-  const s = state(3);
-  (s.crew[1] as any).progress = { done: 3, total: 7 };
-  SHIP.render(h as any, s, T);
-  expect(h.innerHTML.split('class="mast"').length - 1).toBe(2);
-  // the smallest ship is a two-master too, not a single stick
-  const small = host();
-  SHIP.render(small as any, state(1), T);
-  expect(small.innerHTML.split('class="mast"').length - 1).toBe(2);
-  // the tag over a head carries no bar and no number, bounded or not
-  const tags = [...h.innerHTML.matchAll(/<div class="bub[^"]*"[\s\S]*?<\/div><\/div>/g)].map((m) => m[0]);
-  expect(tags.length).toBeGreaterThan(0);
-  for (const tag of tags) {
-    expect(tag).not.toContain('class="pb"');
-    // the text a reader sees; the position style is a percentage too
-    expect(tag.replace(/<[^>]*>/g, "")).not.toMatch(/\d+\s*%/);
-  }
-  // the roster toggle and both demonstrations are on the ship's bar
-  for (const id of ["rosterBtn", "ahoyDemo", "orderDemo", "muteBtn"]) expect(h.innerHTML).toContain(`id="${id}"`);
-  // and the demonstrations go through the effect queue, not the network
-  const src = readFileSync(join(ROOT, "board/public/ship.js"), "utf8");
-  const demo = src.slice(src.indexOf('querySelector("#ahoyDemo")'), src.indexOf('querySelector("#orderDemo")') + 120);
-  expect(demo).toContain("enqueue(");
-  expect(demo).not.toMatch(/fetch\(|XMLHttpRequest|sendBeacon/);
+  const crew = SHIP.crewOf(state(4, "review"), T);
+  SHIP.roster(h, crew, T);
+  expect(crew).toHaveLength(5);
+  expect([...h.innerHTML.matchAll(/<li class="rrow /g)]).toHaveLength(5);
+  expect([...h.innerHTML.matchAll(/class="rrow st-review"/g)]).toHaveLength(4);
+  expect(h.innerHTML).toContain('data-role="fm"');
+  expect([...h.innerHTML.matchAll(/data-role="r"/g)]).toHaveLength(4);
 });
 
 test("the roster is two-line rows and a bar only for bounded progress", () => {
@@ -341,20 +193,6 @@ test("a roster row's title and activity link the #n the server mapped, and only 
   expect(SHIP.linkPrs("it&#39;s #5", null)).toBe("it&#39;s #5");
 });
 
-test("one gun list drives the ports, the flashes and the broadside", () => {
-  const h = host();
-  SHIP.render(h as any, state(20), T);
-  const rate = SHIP.rateFor(SHIP.crewOf(state(20), T).length);
-  expect(h.innerHTML.split('class="port"').length - 1).toBe(rate.guns);
-  expect(h.innerHTML.split('<i style="left:').length - 1).toBe(rate.guns);
-  expect((h as any)._guns.length).toBe(rate.guns);
-  // all of them point the same way, and the bow is to the left
-  expect(CSS).toContain("scaleX(-1)");
-  // one band, so every port is clear of the crew standing on a deck
-  expect(new Set((h as any)._guns.map((g: any) => g.y)).size).toBe(1);
-  expect(CSS.split("translateX(-7px)").length).toBe(2);
-});
-
 test("brass is the only accent", () => {
   const accents = new Set((CSS.match(/#[0-9a-f]{6}/gi) || [])
     .filter((c) => /^#(d9a441|e8ae3e|c9972f|f0c46a|ffe6a8|ffe9ae|fffbe8|f6b447)$/i.test(c)));
@@ -369,22 +207,20 @@ test("the board says nothing the reader cannot switch language on", () => {
   expect(han).toEqual([]);
 });
 
-// T-145: role placement and notice deduplication live here; e2e watches cues.
-test("handoff notices name only unknown actors, once per page", () => {
-  const deck = [{ id: "firstmate" }, { id: "worker-ana-t9-r1" }];
-  const noticed = new Set();
-  for (const event of [
-    { kind: "approve", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: "firstmate", to_role: "firstmate" },
-    { kind: "reject", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: null, to_role: null },
-    { kind: "work", from: "worker-ana-t9-r1", from_role: "worker", to: null, to_role: null },
-    { kind: "order", from: "firstmate", from_role: "firstmate", to: "worker-ana-t9-r1", to_role: "worker" },
-    { kind: "order", from: "firstmate", from_role: "firstmate", to: "secondmate", to_role: "worker" },
-  ]) expect(SHIP.handoffNotice(event, deck, noticed)).toEqual([]);
-  for (const actor of ["reviewer-odd", "mystery"]) {
-    const event = { kind: "approve", from: actor, from_role: null, to: "firstmate", to_role: "firstmate" };
-    expect(SHIP.handoffNotice(event, deck, noticed)).toEqual([actor]);
-    expect(SHIP.handoffNotice(event, deck, noticed)).toEqual([]);
+
+test("the board exposes roster helpers without a second ship or effect queue", () => {
+  for (const name of ["render", "enqueue", "captain"]) expect(SHIP).not.toHaveProperty(name);
+});
+
+test("roster retains CLI, CI window and project chips with explicit roles", () => {
+  for (const projects of [["alpha"], ["alpha", "beta"]]) {
+    const s: any = state(1, "waiting_ci");
+    s.projects = projects; s.default_project = "alpha";
+    s.crew[1].cli_version = "test-cli 2.0";
+    const h = host(); SHIP.roster(h, SHIP.crewOf(s, T), T);
+    expect(h.innerHTML).toContain('class="rc" data-label="crewCli">test-cli 2.0');
+    expect(h.innerHTML).toContain('class="cwindow" data-label="crewWindow">ciNoWindow');
+    expect(h.innerHTML).toContain('data-role="w"');
+    expect(h.innerHTML.includes('class="pj pchip"')).toBe(projects.length > 1);
   }
-  expect(["order", "work", "reject", "approve"].map(k => SHIP.HANDOFF_ENDS[k].join(">")))
-    .toEqual(["firstmate>worker", "worker>reviewer", "reviewer>worker", "reviewer>firstmate"]);
 });

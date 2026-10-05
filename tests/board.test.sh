@@ -39,6 +39,7 @@ cp -R "$ROOT/board/public" "$k/board/public"
 # Static serving is independent of the build toolchain; e2e loads the real build.
 mkdir -p "$k/board/public/voyage2d"
 printf '%s\n' '<!doctype html><title>Live fixture</title>' > "$k/board/public/voyage2d/index.html"
+printf 'portrait fixture' > "$k/board/public/voyage2d/captain.webp"
 keeper="$(HERDR_ENV=0 FM_ROOT="$k" FM_PORT=0 bash "$ROOT/bin/lib/fm-lifeline.sh" --owner-pid "$$" --log "$k/board.log" -- bun run "$k/board/server.ts")"
 port="$(board_port "$k/board.log" "$keeper")" || port=''
 status='server did not start'; page=''; url=''
@@ -52,6 +53,13 @@ if [ -n "$port" ]; then
   status="$(curl -s --max-time 15 -o "$k/live.html" -w '%{http_code}' "$url/voyage2d/index.html")"
   page="$(curl -sf --max-time 15 "$url/")"
 fi
+portrait_type=''
+if [ -n "$url" ]; then
+  portrait_type="$(curl -sf --max-time 15 -o "$k/captain.webp" -w '%{content_type}' "$url/voyage2d/captain.webp")"
+fi
+assert_eq image/webp "$portrait_type" "generated captain portrait is served as WebP"
+assert_eq 'portrait fixture' "$(cat "$k/captain.webp" 2>/dev/null)" "portrait bytes reach the browser"
+assert_ok "git -C '$ROOT' check-ignore --no-index -q board/public/voyage2d/captain.webp" "generated captain portrait is gitignored"
 assert_eq 200 "$status" "voyage Live bundle is served by the real board"
 assert_contains "$page" 'src="game.js"' "board page loads the voyage controller"
 for locale in en zh-TW; do

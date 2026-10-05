@@ -12,15 +12,15 @@ export const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',aboa
   roster:'船员名册',descriptionUnavailable:'尚无工作说明',waitingOnYou:'等你拍板',
   titleMissing:'design/tasks.json 未列出标题',blockedOn:'卡在',gateFailedN:'第 {n} 道闸未过',
   optionsN:'{n} 个选项',rosterBtn:'名册',crossVendor:'跨供应商审核',mergedMore:'另 {n} 个在已完成历史中',
-  dragHint:'拖曳人物可旋转单人 · 拖曳甲板转全员 · 双击复位',ahoyDemo:'试放礼炮（不写入事件）',
-  orderDemo:'试演下令回应（不写入事件）',alsoWaiting:'其他待决（点开就地展开）',
+  alsoWaiting:'其他待决（点开就地展开）',
   engine:'引擎',gateFailed:'闸门未过',viewDesign:'design.md',
+  laneWorking:'施工',laneGate:'闸门',laneReview:'审核',capDeciding:'在后甲板上裁决',
   ready:'就绪',backlog:'待办',laneReady:'就绪',laneBacklog:'待办'};
 // Every key T-040 added. Each must have an oracle above, and the board's own
 // conversion must reproduce it: an oracle only some keys are checked against
 // let 閘門未過 ship half-converted.
 export const T040_KEYS = ['engine','crossVendor','waitingOnYou','blockedOn','titleMissing','mergedMore',
-  'gateFailed','gateFailedN','optionsN','rosterBtn','ahoyDemo','orderDemo','dragHint','alsoWaiting','viewDesign'];
+  'gateFailed','gateFailedN','optionsN','rosterBtn','alsoWaiting','viewDesign'];
 // and every key T-057 added, held to the same rule
 export const T057_KEYS = ['ready','backlog','laneReady','laneBacklog'];
 export const CN_ACTIVITY = {
@@ -67,7 +67,7 @@ const open = async (page: Page, lang: string, how: "query" | "stored" = "query",
     await page.evaluate((l) => localStorage.setItem("board.lang", l), lang);
     await page.goto(url);                 // no query parameter this time
   }
-  await expect(page.locator(".scene .pivot").first()).toBeVisible();
+  await expect(page.locator("#roster .rrow").first()).toBeVisible();
 };
   return { board, open };
 }

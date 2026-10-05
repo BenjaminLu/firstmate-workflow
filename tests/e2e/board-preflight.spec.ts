@@ -37,7 +37,6 @@ test('preflight crew remains labelled through warnings, never creates tasks or c
     for(const [lang,label] of [['en','spec preflight'],['zh-TW','預檢'],['zh-CN','预检']]) {
       await page.goto(`${b.url}/?lang=${lang}`);
       await expect(page.locator(`[data-crew-chip="${actor}"] .cd`)).toHaveText(label);
-      await expect(page.locator(`#crewcard-${actor} .cround`)).toHaveText(label);
       await expect(page.locator(`[data-roster="${actor}"] .rd`)).toHaveText(label);
     }
     await page.locator('[data-sort="round"]').click();
