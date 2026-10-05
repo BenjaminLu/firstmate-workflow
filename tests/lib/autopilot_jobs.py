@@ -45,6 +45,8 @@ class Jobs(unittest.TestCase):
                     self.assertTrue(bell.wait(30), 'the completion writer must wake the service')
                     pilot.consume_jobs()
                     child.wait(timeout=30)
+                job = next(iter(pilot.data['jobs'].values()))
+                self.assertEqual((job['kind'], job['number'], job['head']), ('review', 12, 'a'*40))
                 self.assertEqual(len(received), 1)
                 self.assertEqual(received[0]['code'], 3)
                 self.assertIn('log is at /kept/second.log', received[0]['output'])

@@ -15,7 +15,7 @@ does not start a service or acquire service locks.
 The service records its `bin/` and `skills/` tree identities. Once firstmate
 fast-forwards the engine checkout after a merge, the next `ensure` requests a
 reload when those committed trees differ. It drains running or consuming jobs,
-started actions, batches and unpushed wakes, then its old code hands off to a
+batches and unpushed wakes, then its old code hands off to a
 fresh snapshot without killing the service. If the new service cannot start,
 the old snapshot resumes and queues one bilingual failure wake; that failed
 code identity is never retried. Dirty code keeps the running snapshot, and the
@@ -55,7 +55,7 @@ The card retains proceed, rescope, park and drop effects; it authorizes no merge
 project conventions. Autopilot neither runs gates nor claims an approval, current
 CI, six-gate readiness or permission to merge.
 
-Service state, branch retry/pending records and other write-ahead action records live in `state/autopilot/` for the
+Service state, branch retry/pending records and jobs live in `state/autopilot/` for the
 self project, or `FM_HOME/projects/<name>/state/autopilot/` externally. Judgment
 records live in the corresponding `state/wake-queue/`, then enter T-137's
 `state/session/wake.jsonl` transport. CI failures, findings, failed/lost rounds,
@@ -78,15 +78,21 @@ re-check requests are recorded per PR head in `rechecked` and completed when
 GitHub returns 201 or lists the reviewer as already requested, or the reviewer
 has reviewed that head. A 422 refusal wakes once with GitHub's message without
 retry; other failures retry at offsets 0, 1 and 3, then wake once.
-The one-time `migrated_t200` upgrade drops legacy pr-event, recheck and
-observed-merge actions with their undelivered wakes, marking a terminal PR
-whose pr-event action was not done as `event_pending` so its row is written by
-the normal retry series. Delivered wake files remain unchanged.
-Review launch is the remaining write-ahead action class; interrupted launches
-remain held for reconciliation. Restack uses a per-PR-head `restacks` record
-with `head`, `parent`, `task` and outcome `started`, `done`, `moved`, `conflict`
-or `published`. `migrated_t204` removes legacy restack actions and their
-undelivered wakes once, leaving delivered wake files untouched.
+Review launch is decided from the review job recorded for that PR head, in any
+state: at most one autopilot-launched review per head. Gate 7 can request a
+review even with a same-head verdict whose binding is stale. A failed start
+marks the job uncertain (or records an uncertain job if launch failed before
+recording one) and wakes firstmate once; later gate results do not retry it.
+Legacy jobs without kind/PR/head fields match through their packet files.
+The autopilot keeps no write-ahead action ledger: per-PR records (`updates`,
+`holds`, `advanced`, `rechecked`, `restacks`), shared `retries` and `jobs` remain.
+The one-time `migrated_t205` upgrade removes the legacy ledger and obsolete
+undelivered action wakes, restores terminal PRs' unfinished `event_pending`,
+and preserves reconciliation wakes and uncertain review holds for interrupted
+or uncertain launches; delivered wake files and old migration flags stay unchanged.
+Restack keeps one per-PR-head record in `restacks`, with `head`, `parent`, `task`
+and outcome `started`, `done`, `moved`, `conflict` or `published`. Eligible children
+are reconsidered under the expected-head lease and worker exclusion.
 
 Restack helper exits distinguish completion (0), refusal (65), rebase conflict
 (66), GitHub head movement (67), a stale local ref (68), publication without
@@ -105,11 +111,7 @@ the merged parent so autopilot no longer restacks it. Other records clear on
 head changes. A cleanup failure preserves the publication/unknown outcome,
 or appears as `tree_cleanup` in a successful helper result.
 
-The one-time `migrated_t190` upgrade removes legacy update actions and their
-undelivered wakes. Delivered wake files remain unchanged, and legacy advance
-actions with their undelivered wakes are removed by `migrated_t193`. Eligible
-open PRs gate once more after upgrade; busy jobs and merge-card deduplication
-still apply, and job recovery is unchanged. A gate, protocol or review result
+Job recovery is unchanged. A gate, protocol or review result
 for a PR that has merged, or that has a captain merge chosen A at that head
 which is running or merged, is dropped without a wake; such a PR is not gated.
 The service's log names failures before startup.

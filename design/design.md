@@ -5291,7 +5291,7 @@ sets `FM_AUTOPILOT_TEST_ENABLE=1`. Reviews still use visible Herdr dispatch.
 The service records its `bin/` and `skills/` tree identities. Once firstmate
 fast-forwards the engine checkout after a merge, the next `ensure` requests a
 reload when those committed trees differ. It drains running or consuming jobs,
-started actions, batches and unpushed wakes, then its old code hands off to a
+batches and unpushed wakes, then its old code hands off to a
 fresh snapshot without killing the service. If the new service cannot start,
 the old snapshot resumes and queues one bilingual failure wake; that failed
 code identity is never retried. Dirty code keeps the running snapshot, and the
@@ -5353,24 +5353,21 @@ re-check requests are recorded per PR head in `rechecked` and completed when
 GitHub returns 201 or lists the reviewer as already requested, or the reviewer
 has reviewed that head. A 422 refusal wakes once with GitHub's message without
 retry; other failures retry at offsets 0, 1 and 3, then wake once.
-The one-time `migrated_t200` upgrade drops legacy pr-event, recheck and
-observed-merge actions with their undelivered wakes, marking a terminal PR
-whose pr-event action was not done as `event_pending` so its row is written by
-the normal retry series. Delivered wake files remain unchanged.
-Review launch is the remaining write-ahead action class under
-`state/autopilot/`: completion marks it done; interruption or an ambiguous
-result queues reconciliation rather than replaying the action. Restack keeps
-one per-PR-head record in `restacks`, with `head`, `parent`, `task` and an
-outcome of `started`, `done`, `moved`, `conflict` or `published`. The one-time
-`migrated_t204` upgrade drops legacy restack actions in every state and their
-undelivered wakes; delivered wake files remain unchanged. Eligible children
+Review launch is decided from the review job recorded for that PR head, in any
+state: at most one autopilot-launched review per head. Gate 7 can request a
+review even with a same-head verdict whose binding is stale. A failed start
+marks the job uncertain (or records an uncertain job if launch failed before
+recording one) and wakes firstmate once; later gate results do not retry it.
+Legacy jobs without kind/PR/head fields match through their packet files.
+The autopilot keeps no write-ahead action ledger: per-PR records (`updates`,
+`holds`, `advanced`, `rechecked`, `restacks`), shared `retries` and `jobs` remain.
+The one-time `migrated_t205` upgrade removes the legacy ledger and obsolete
+undelivered action wakes, restores terminal PRs' unfinished `event_pending`,
+and preserves reconciliation wakes and uncertain review holds for interrupted
+or uncertain launches; delivered wake files and old migration flags stay unchanged.
+Restack keeps one per-PR-head record in `restacks`, with `head`, `parent`, `task`
+and outcome `started`, `done`, `moved`, `conflict` or `published`. Eligible children
 are reconsidered under the expected-head lease and worker exclusion.
-The one-time `migrated_t190` upgrade removes legacy update actions and their
-undelivered action wakes before recovery. `migrated_t193` similarly drops legacy
-advance actions in every state and their undelivered wakes, without rewriting
-delivered wake files or requeueing anything. Because legacy fingerprints cannot
-identify a PR, the new advance map starts empty: eligible open PRs gate once
-more after upgrade, subject to busy jobs and existing merge-card deduplication.
 Jobs and their recovery remain unchanged. CI
 failures, findings, failed/lost rounds, unsent worker notes, B/C answers, readiness and conventions
 drift persist reason lines under `state/wake-queue/` and enter the T-137 bridge.
@@ -5443,7 +5440,7 @@ these mechanical operations later; it does not supply their authorization.
 #### Autopilot owns PR advancement (T-175)
 
 Each session owns one supervisor per registered project. Conditional GitHub
-polls persist their cache and action identities across restarts. The supervisor
+polls persist their cache, per-PR records and jobs across restarts. The supervisor
 writes `pr_opened`, `merged` and `closed` through `fm-emit.sh` as actor `github`,
 using the canonical branch/title task grammar and project-local deduplication.
 An event without a project belongs to the default project's log.
