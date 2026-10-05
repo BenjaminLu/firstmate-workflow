@@ -291,6 +291,12 @@ verify_review_head() {
     return 0  # Legacy local-only self review establishes no remote readiness.
   fi
   local verified
+  if [ "${1:-}" = final ]; then
+    verified="$(fm_binding review-final --task "$TASK" --pr "$PR" --branch "$BRANCH" \
+      --head "$R_HEAD" --base-name "$REVIEW_PR_BASE")" || return 65
+    [ -n "$R_HEAD" ] && [ "$verified" = "$R_HEAD" ]
+    return $?
+  fi
   # The binding service owns repository resolution: configured GH_REPO or
   # registry first, then the self checkout's origin. Do not add a second
   # GitHub lookup (or alter GH_REPO for the later check-evidence readers).
@@ -1244,7 +1250,7 @@ fi
 printf '%s\n' "$verdict" > "$work/selected-final.txt"
 # Keep the final answer as evidence even when the PR moved during the round.
 # A stale result is not published as current approval.
-if ! verify_review_head; then
+if ! verify_review_head final; then
   cp "$work/selected-final.txt" "$FM_RUN_DIR/stale-final.txt"
   emit --review-outcome infrastructure_error --type review_failed \
     --en 'PR head changed or could not be verified; final answer retained as stale' \

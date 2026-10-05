@@ -5116,10 +5116,19 @@ fetched confirmed base. External task branch names, commit subjects and PR title
 carry generic task labels rather than private spec titles, and PR/Actions requests
 name the selected repository. Both initial and rebuilt isolated review checkouts
 clone the target repository with their own objects and no remote. External review
-requires a PR and compares its authoritative head/base with local refs before
-preparation, after the CI wait and before publishing the final verdict. A moved
-or unreadable head retains the final answer as stale evidence instead of publishing
-current approval. Gate and merge candidate authority remains T-138's shared binding.
+requires a PR and compares its authoritative head and fresh base with local refs
+before preparation and after the CI wait. Before recording the final verdict,
+the PR must remain open, its head must match the reviewed head, fetched PR ref
+and local task ref, and its base branch name must be unchanged; main having moved
+does not void the round. A moved or unreadable head, retargeted base or closed PR
+retains the final answer as stale evidence instead of publishing current approval.
+The verdict stays bound to the original reviewed head, merge-base and patch-id;
+only gate 7's existing patch-id rule decides whether it covers a later head.
+Accepted risk: a semantic conflict introduced by main outside the reviewed files
+(for example, main renames a function the PR calls) is not seen by the reviewer;
+it is caught only by required CI on the current head (gate 6), exactly as for
+today's gate 7 carry across a merge of main. Gate and merge candidate authority
+remains T-138's shared binding.
 
 Dispatch records its session owner and keeper in the selected project's
 `state/dispatch/<task>.json`; this is a launch receipt, not a completion verdict.
