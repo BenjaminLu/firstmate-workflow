@@ -136,6 +136,12 @@ class RegisteredDispatch(unittest.TestCase):
 root="$2"; shift 2
 case "$1 $2" in
   'rev-parse --show-toplevel') printf '%s\n' "$root" ;;
+  'config --includes')
+    case "$*" in
+      *'--get-all remote.origin.url') printf 'local\thttps://github.com/owner/%s.git\n' "$(basename "$(dirname "$root")")" ;;
+      *'--get-all remote.origin.pushurl'|*'--get-regexp '*) exit 1 ;;
+      *) exit 1 ;;
+    esac ;;
   'remote get-url') printf 'https://github.com/owner/%s.git\n' "$(basename "$(dirname "$root")")" ;;
   *) exit 1 ;;
 esac
