@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/worker.sh"
 # shellcheck source=tests/lib/worker-rebuild.sh
 . "$ROOT/tests/lib/worker-rebuild.sh"
+# shellcheck source=tests/lib/worker-note.sh
+. "$ROOT/tests/lib/worker-note.sh"
 # --- a clean rebuild is always published (T-098) ------------------------
 # A rebuild with nothing handed to the worker is the round's work whether
 # or not the worker adds to it. A worker that changed nothing and left a
@@ -88,8 +90,9 @@ G
 rb_note_kept_once() {   # rb_note_kept_once <dir> <case>
   assert_contains "$rb_out" "#42 would not take the comment" "$2: the refusal is said"
   assert_eq "1" "$(grep -c -- '--body-file' "$1/ghcalls")" "$2: the note is offered to the pull request once"
-  assert_eq "1" "$(ls "$1/repo/state/unsent" 2>/dev/null | wc -l | tr -d ' ')" "$2: and kept once"
+  assert_eq "1" "$(find "$1/repo/state/unsent" -name 'T-Z-*.md' 2>/dev/null | wc -l | tr -d ' ')" "$2: and kept once"
   local kept=("$1"/repo/state/unsent/T-Z-*.md)
+  assert_eq 42 "$(jq -r .pr "${kept[0]}.json")" "$2: sidecar records PR"
   assert_contains "$(cat "${kept[0]}" 2>/dev/null)" "ASK-PASS-CRITERIA:T-Z" "$2: with the worker's text"
   assert_lacks "$rb_out" "before the worker's note reached a pull request" "$2: and never said to be lost"
   assert_contains "$rb_out" "the worker asked rather than changed anything; #42 would not take its question" \
@@ -128,6 +131,41 @@ assert_eq "71" "$rb_rc" "V5c: a refused push ends the round with its own code"
 assert_contains "$rb_out" "could not push the rebuilt $bV5c" "V5c: the refusal is the rebuild's push"
 rb_note_kept_once "$dV5c" "V5c"
 assert_eq "$oldV5c" "$(rb_head "$dV5c" "$bV5c")" "V5c: and the branch stays where it was"
+# T-199: a report beside worker changes survives a rebuilt publication.
+for outcome in published lease-refused; do
+  dN="$(RB_HOOKS=1 rb_fixture)"; bN="$(rb_branch "$dN")"
+  rb_replay_conflict "$dN"; oldN="$(rb_head "$dN" "$bN")"; mainN="$(rb_head "$dN" main)"
+  cat > "$dN/work-note.sh" <<'S'
+echo work > src/round-two
+printf 'ASK-PASS-CRITERIA:T-Z\n' > .fm-say.md
+S
+  if [ "$outcome" = published ]; then
+    note_gh "$dN"
+    NOTE_PR=42 FM_NOTE_RETRY_DELAYS='0 0' rb_round_two "$dN" "$dN/work-note.sh"
+    assert_eq 0 "$rb_rc" 'rebuilt work completes despite exhausted transient note retries'
+    assert_eq 3 "$(grep -c -- '--body-file' "$dN/ghcalls")" 'rebuilt note has at most two retries'
+    assert_eq "$mainN" "$(rb_head "$dN" "$bN^")" 'rebuilt work is on current base'
+    assert_eq work "$(git --git-dir="$dN/remote.git" show "$bN:src/round-two")" 'worker changes were pushed'
+    assert_eq 'T-Z: a mock task' "$(git --git-dir="$dN/remote.git" log -1 --format=%s "$bN")" 'rebuilt publication uses normal commit'
+    assert_eq 1 "$(jq -s '[.[]|select(.type=="worker_note_unsent" and .pr==42)]|length' "$dN/repo/state/events.jsonl")" 'one unsent event'
+    want_head="$(rb_head "$dN" "$bN")"
+  else
+    rb_refusing_gh "$dN"
+    PATH="$(rb_gitwrap "$dN"):$PATH" FM_T_GIT_FAIL=' --force-with-lease=' rb_round_two "$dN" "$dN/work-note.sh"
+    assert_eq 71 "$rb_rc" 'lease refusal retains its own code after saving note'
+    assert_eq 1 "$(grep -c -- '--body-file' "$dN/ghcalls")" 'generic refusal offered once'
+    assert_eq "$oldN" "$(rb_head "$dN" "$bN")" 'lease refusal leaves branch unchanged'
+    assert_lacks "$(cat "$dN/repo/state/events.jsonl")" worker_note_unsent 'no wake for unpublished rebuild'
+    want_head=null
+  fi
+  rb_rebuilt "$dN" "$outcome"
+  keptN=("$dN"/repo/state/unsent/T-Z-*.md)
+  assert_eq 1 "${#keptN[@]}" 'rebuilt changed round keeps note once'
+  assert_contains "$rb_out" state/unsent/T-Z 'rebuilt round says where recovery lives'
+  assert_eq 42 "$(jq -r .pr "${keptN[0]}.json")" 'rebuilt sidecar records PR'
+  assert_eq "$want_head" "$(jq -r .head "${keptN[0]}.json")" 'rebuilt sidecar reflects publication'
+  assert_lacks "$(cat "$dN/repo/state/events.jsonl")" worker_crashed 'refused report is not a crash'
+done
 # V4: a conflicting rebuild the worker only asks about is still not
 # published: the markers are the worker's to resolve, next round.
 dV4="$(RB_HOOKS=1 rb_fixture)"; bV4="$(rb_branch "$dV4")"; oldV4="$(rb_head "$dV4" "$bV4")"

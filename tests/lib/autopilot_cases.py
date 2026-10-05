@@ -122,6 +122,19 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(len(restored.data['wakes']), 5)
         self.assertTrue(all(v['line'] for v in restored.data['wakes'].values()))
 
+    def test_unsent_note_wakes_once_even_while_busy_and_survives_restart(self):
+        event = dict(type='worker_note_unsent', task='T-001', pr=12, data={})
+        self.pilot.busy = lambda task: True
+        self.pilot.event(event, 'unsent-1')
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.assertEqual(next(iter(self.pilot.data['wakes'].values()))['line'],
+                         'Worker note unsent; run bin/fm.sh unsent --post: T-001')
+        self.pilot.save()
+        restored = A.Pilot(self.context, clock=lambda: 1200)
+        restored.busy = lambda task: True
+        restored.event(event, 'unsent-1')
+        self.assertEqual(restored.data['wakes'], self.pilot.data['wakes'])
+
     def test_project_identity_prevents_cross_project_task_wakes(self):
         self.pilot.event(dict(type='agent_lost', task='T-001', project='other'), '1')
         self.assertEqual(self.pilot.data['wakes'], {})

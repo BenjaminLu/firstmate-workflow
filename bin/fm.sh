@@ -88,6 +88,10 @@ usage: fm.sh <command> [options]
         it up. Refuses while the card is unanswered or answered no. Still
         edits no skill.
 
+  unsent [--post]
+        List kept self-project notes. --post looks for an existing marker,
+        posts recoverable notes, and moves delivered notes to unsent/posted/.
+
   tasks [--repo DIR]
         Print the task table from design/tasks/, grouped by milestone:
         id, title and dependencies. Nothing generated is committed.
@@ -870,6 +874,86 @@ cmd_stop() {
   fi
 }
 
+# Resolve from the installation, never from the invoking directory or an
+# inherited project. Recovery cannot turn local-only delivery into a post.
+cmd_unsent() (
+  local post=0 file sidecar pr marker bodies body endpoint failed=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --post) post=1; shift ;;
+      *) die "unsent: unknown argument $1" ;;
+    esac
+  done
+  cd "$REPO" || exit 65
+  unset FM_PROJECT
+  fm_storage_init "$REPO" || exit 65
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    [ "$post" = 0 ] || die 'unsent: --post is only available for the self project'
+    exit 0
+  fi
+  # gh otherwise honors an inherited GH_REPO even from the correct cwd.
+  unset GH_REPO
+  if [ "$post" = 1 ] && [ "$(fm_projection)" != comments ]; then
+    die 'unsent: --post requires comments projection'
+  fi
+  shopt -s nullglob
+  export LC_ALL=C
+  for file in "$FM_STATE_DIR"/unsent/*.md; do
+    sidecar="$file.json"
+    python3 - "$file" <<'PYLIST'
+import datetime, json, re, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+match = re.match(r'((?:T|SK)-[0-9]+)-', p.stem)
+task = match[1] if match else p.stem
+saved = datetime.datetime.fromtimestamp(p.stat().st_mtime, datetime.timezone.utc).isoformat()
+try:
+    data = json.loads(Path(str(p) + '.json').read_text())
+    saved = data.get('saved_at') or saved
+    detail = 'PR #{}; head {}; round {}'.format(data.get('pr'), data.get('head') or 'not published', data.get('round'))
+except (OSError, ValueError, AttributeError):
+    detail = 'no pull request recorded'
+print('{}\t{}\t{}\t{}'.format(p.name, task, saved, detail))
+PYLIST
+    [ "$post" = 1 ] || continue
+    [ -f "$sidecar" ] || continue
+    # Never post a copy saved before its round's push, or legacy unknown PRs.
+    pr="$(jq -er 'select((.pr|type)=="number" and .pr>0 and (.pr|floor)==.pr and (.head|type)=="string" and (.head|length)>0)|.pr' "$sidecar" 2>/dev/null)" || continue
+    marker="$(jq -r '.marker // empty' "$sidecar")"
+    if [ -z "$marker" ]; then
+      marker="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$file")" || { failed=1; continue; }
+    fi
+    [[ "$marker" =~ ^[a-f0-9]{64}$ ]] || { echo "fm: unsent: invalid marker in $sidecar" >&2; failed=1; continue; }
+    endpoint="repos/{owner}/{repo}/issues/$pr/comments"
+    if ! bodies="$("${GH:-${FM_GH:-gh}}" api "$endpoint" --paginate --jq '.[].body')"; then
+      echo "fm: unsent: could not look up #$pr; kept $file" >&2
+      failed=1; continue
+    fi
+    # Check archive collisions before posting: recovery never overwrites data.
+    if [ -e "$FM_STATE_DIR/unsent/posted/${file##*/}" ] || [ -e "$FM_STATE_DIR/unsent/posted/${sidecar##*/}" ]; then
+      echo "fm: unsent: archive already exists for $file" >&2
+      failed=1; continue
+    fi
+    if ! grep -Fq -- "<!-- fm-note sha256=$marker -->" <<<"$bodies"; then
+      body="$(mktemp)" || { failed=1; continue; }
+      trap 'rm -f "${body:-}"' EXIT
+      if ! { cat "$file" && printf '\n<!-- fm-note sha256=%s -->\n' "$marker"; } > "$body" ||
+         ! fm_comment_projection "$pr" --body-file "$body"; then
+        echo "fm: unsent: could not post to #$pr; kept $file" >&2
+        rm -f "$body"; body=''
+        failed=1; continue
+      fi
+      rm -f "$body"; body=''
+    fi
+    if ! mkdir -p "$FM_STATE_DIR/unsent/posted" ||
+       ! mv "$file" "$sidecar" "$FM_STATE_DIR/unsent/posted/"; then
+      echo "fm: unsent: could not archive $file" >&2
+      failed=1
+    fi
+  done
+  exit "$failed"
+)
+
 # The hooks that wake firstmate (T-137): bin/lib/fm_hooks.py, which
 # fm-session.sh start runs too, reads its own options, --repo included
 # (else this script's repository), and says what it changed.
@@ -928,6 +1012,7 @@ case "$cmd" in
   sync-skills) cmd_sync "$@" ;;
   lint)        cmd_lint "$@" ;;
   tasks)       cmd_tasks "$@" ;;
+  unsent)      cmd_unsent "$@" ;;
   roster)      cmd_roster "$@" ;;
   board)       cmd_board "$@" ;;
   stop)        cmd_stop "$@" ;;
