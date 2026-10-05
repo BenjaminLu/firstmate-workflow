@@ -15,6 +15,7 @@ for (const lang of ['en', 'zh-TW']) {
       await page.goto(`${b.url}/?lang=${lang}`);
       const row = page.locator('.roster [data-roster="firstmate"]');
       await expect(row.locator('.rv')).toHaveText('codex');
+      await expect(row.locator('.rv')).not.toHaveClass(/warn/);
       await expect(row.locator('.rm')).toHaveText('gpt-6-astra');
       const card = page.locator('[data-bubble="firstmate"] .crewcard');
       await expect(card.locator('.ccli')).toHaveText('codex-cli 0.116.0');
@@ -25,6 +26,16 @@ for (const lang of ['en', 'zh-TW']) {
       await page.reload();
       await expect(row.locator('.rv')).toHaveText('claude');
       await expect(row.locator('.rm')).toHaveText(lang === 'en' ? 'unknown' : '未知');
+      await expect(card.locator('.cvendor')).not.toHaveClass(/warn/);
+      writeFileSync(file, JSON.stringify({ harness: 'claude', confirmed: false }));
+      await page.reload();
+      const warning = lang === 'en' ? 'claude (unconfirmed)' : 'claude（未確認）';
+      await expect(row.locator('.rv')).toHaveText(warning);
+      await expect(row.locator('.rv')).toHaveClass(/warn/);
+      await expect(card.locator('.cvendor')).toHaveText(warning);
+      await expect(card.locator('.cvendor')).toHaveClass(/warn/);
+      const unconfirmed = await (await page.request.get(`${b.url}/api/state`)).json();
+      expect(unconfirmed.crew.find((c: any) => c.id === 'firstmate').host_confirmed).toBe(false);
       unlinkSync(file);
       await page.reload();
       await expect(row.locator('.rv')).toHaveCount(0);
