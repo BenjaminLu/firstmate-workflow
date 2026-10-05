@@ -16,6 +16,7 @@ import threading
 sys.dont_write_bytecode = True
 import fm_lifeline as life
 from fm_watch import Locked, read_json, save_json
+from fm_autopilot_branches import ERRORS
 
 BIN = Path(__file__).resolve().parents[1]
 
@@ -67,15 +68,24 @@ class MechanicalLoop:
     def observe_pr(self, pr):
         if pr.get('state') not in ('open', 'closed'): return
         kind = 'merged' if pr.get('merged_at') else 'closed' if pr['state'] == 'closed' else 'pr_opened'
-        identity = ['pr-event', pr['number'], kind]
+        token = f'event-{kind}:{pr["number"]}:{pr["head"]["sha"]}'
         if any(r.get('type') == kind and r.get('pr') == pr['number'] for r in self.rows()):
+            self.data['retries'].pop(token, None)
+            return
+        if not self.retry_due(token):
             return
         task = self.pr_task(pr)
         en, tw = {'merged':('merged','已合併'), 'closed':('closed','已關閉'),
                   'pr_opened':('opened','已開啟')}[kind]
-        self.once(identity, task, lambda: self.emit(kind, task,
-            f'#{pr["number"]} {en}: {pr.get("title", "")}',
-            f'#{pr["number"]} {tw}：{pr.get("title", "")}', pr['number'], actor='github'))
+        try:
+            self.emit(kind, task,
+                f'#{pr["number"]} {en}: {pr.get("title", "")}',
+                f'#{pr["number"]} {tw}：{pr.get("title", "")}', pr['number'], actor='github')
+            self.data['retries'].pop(token, None)
+            if getattr(self, '_poll_rows', None) is not None:
+                self._poll_rows.append(dict(type=kind, pr=pr['number'], task=task))
+        except ERRORS as error:
+            self.branch_failure('event-' + kind, pr['number'], pr['head']['sha'], task, str(error))
 
     def verdict(self, task):
         from fm_evidence import Store
