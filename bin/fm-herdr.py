@@ -2153,6 +2153,27 @@ def board_secret(port):
     return secret
 
 
+def board_drain(url, port, release=False):
+    """Ask a verified board to stop taking answers; old boards simply refuse."""
+    try:
+        request = urllib.request.Request(url + '/drain',
+                data=json.dumps({'release': True} if release else {}).encode(),
+                headers={'Authorization': 'Bearer ' + board_secret(port),
+                         'Origin': url, 'Content-Type': 'application/json'}, method='POST')
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                if response.status != 200: return None
+                result = json.load(response)
+                return result if isinstance(result, dict) else None
+        except urllib.error.HTTPError as error:
+            with error:
+                if error.code != 409: return None
+                result = json.load(error)
+                return dict(result, status=409) if isinstance(result, dict) else None
+    except Exception:  # transport, secret and malformed replies all mean no drain support
+        return None
+
+
 def board_login_url(url, port):
     """A one-time address for the captain's browser: /login#<code>. The code
     is the issue time, a nonce and an HMAC over them and the board's origin,
@@ -2370,7 +2391,7 @@ def board_start(root):
         previous = read(base / 'board.json') if (base / 'board.json').exists() else {}
         current = board_code_id(root)
         reused = board_matches(root, url)
-        if not reused:
+        def fresh_start(owner):
             # Any response means a different/unverifiable listener, never reuse it.
             try: http_get(url); occupied = True
             except urllib.error.HTTPError: occupied = True
@@ -2382,7 +2403,7 @@ def board_start(root):
             # longer-lived owner it belongs to - the session - and ends with
             # it (T-151). The keeper exports that owner as FM_SESSION_PID,
             # and the merges the board starts belong to the same session.
-            owner = lifeline().session_owner()
+            if owner is None: owner = lifeline().session_owner()
             with (base / 'board.log').open('ab') as log:
                 child = lifeline().start([bun, 'run', str(root / 'board/server.ts')], owner=owner,
                         name='board', cwd=root, env=dict(os.environ, FM_ROOT=str(root), FM_PORT=str(port)),
@@ -2392,6 +2413,58 @@ def board_start(root):
                 if board_matches(root, url): break
                 time.sleep(.1)
             if not board_matches(root, url): raise RuntimeError('board did not verify; inspect state/session/board.log')
+            return owner
+        owner = previous.get('owner')
+        stale_reason = None
+        replaced = None
+        old = previous.get('code')
+        if reused and old and current and not current['dirty'] and not board_same_code(old, current):
+            before, after = board_short_code(old), board_short_code(current)
+            stale_reason = {
+                'en': f'the board runs older code ({before} -> {after}); restart it by hand: stop the board process and run fm board',
+                'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}）；請手動重啟：停止看板程序後執行 fm board'}
+            drained = board_drain(url, port)
+            if drained is not None:
+                if drained.get('status') == 409:
+                    stale_reason = {
+                        'en': f'the board runs older code ({before} -> {after}); a merge or an answer is in progress, so it was not replaced; run fm board again when it ends',
+                        'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}）；有合併或回覆正在進行，所以沒有替換；結束後再執行一次 fm board'}
+                elif drained.get('session_owned') is not True:
+                    board_drain(url, port, release=True)
+                else:
+                    pid = drained.get('pid')
+                    freed = False
+                    if type(pid) is int and pid > 1:
+                        try:
+                            os.kill(pid, 0)
+                            os.kill(pid, signal.SIGTERM)
+                            deadline = time.monotonic() + 10
+                            while time.monotonic() < deadline:
+                                try: http_get(url)
+                                except urllib.error.HTTPError: pass  # still a listener, even on 5xx
+                                except OSError:
+                                    freed = True
+                                    break
+                                time.sleep(.1)
+                        except OSError: pass
+                    if freed:
+                        owner = drained.get('owner')
+                        if type(owner) is not int or owner <= 1:
+                            owner = None
+                        else:
+                            try: os.kill(owner, 0)
+                            except OSError: owner = None
+                        owner = fresh_start(owner)
+                        reused = False
+                        stale_reason = None
+                        replaced = {'from': before, 'to': after}
+                    else:
+                        board_drain(url, port, release=True)
+                        stale_reason = {
+                            'en': f'the board runs older code ({before} -> {after}) and did not stop when asked; restart it by hand: stop the board process and run fm board',
+                            'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}），要求停止但沒有停下；請手動重啟：停止看板程序後執行 fm board'}
+        elif not reused:
+            owner = fresh_start(None)
         page = bool(http_get(url))
         # The browser is sent to a one-time sign-in address (T-122), which
         # alone lets the page write. The address is never recorded: `url`
@@ -2402,18 +2475,19 @@ def board_start(root):
         # (T-145), so the captain keeps one tab and it is the one that writes.
         record = dict(root=str(root), url=url, reused=reused, page_http_verified=page,
                       browser_navigation_verified=False, **board_open(url, port))
+        record['owner'] = owner
         if not reused:
-            record['owner'] = owner
             record['code'] = current
         elif 'code' in previous:
             record['code'] = previous['code']
-        old = record.get('code')
-        if reused and old and current and not current['dirty'] and not board_same_code(old, current):
-            before, after = board_short_code(old), board_short_code(current)
+        if stale_reason:
             record['stale'] = True
-            record['stale_reason'] = {
-                'en': f'the board runs older code ({before} -> {after}); restart it by hand: stop the board process and run fm board',
-                'zh-TW': f'看板仍在執行較舊的程式（{before} -> {after}）；請手動重啟：停止看板程序後執行 fm board'}
+            record['stale_reason'] = stale_reason
+        if replaced:
+            record['replaced'] = replaced
+            record['replaced_reason'] = {
+                'en': f'replaced the board: {before} -> {after}',
+                'zh-TW': f'看板已換成新程式：{before} -> {after}'}
         save(base / 'board.json', record)
         return record
 
@@ -2772,7 +2846,7 @@ def main(args):
         except (OSError, RuntimeError) as error:
             print('fm board: ' + str(error), file=sys.stderr); return 70
         print(json.dumps(record, indent=2))
-        for reason in record.get('stale_reason', {}).values():
+        for reason in {**record.get('stale_reason', {}), **record.get('replaced_reason', {})}.values():
             print('fm board: ' + reason, file=sys.stderr)
         if record.get('sign_in_error'):
             print('fm board: ' + record['sign_in_error'], file=sys.stderr); return 69

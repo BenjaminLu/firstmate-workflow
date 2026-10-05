@@ -194,6 +194,7 @@ class Session(unittest.TestCase):
                  patch.object(m, 'board_open', return_value={}), \
                  patch.object(m, 'board_matches', return_value=True), \
                  patch.object(m, 'http_get', return_value=b'page'), \
+                 patch.object(m, 'board_drain', return_value=None), \
                  patch.object(m, 'lifeline') as life, patch.object(m.os, 'kill') as kill:
                 for _ in range(2):
                     reply = m.board_start(repo)
@@ -228,6 +229,125 @@ class Session(unittest.TestCase):
                 self.assertNotIn('stale', m.board_start(self.repo))
                 self.assertEqual(life.return_value.start.call_count, 0)
                 self.assertEqual(kill.call_count, 0)
+
+    def test_board_drain_replacement_preserves_session_and_waits_for_free_port(self):
+        import contextlib, io
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary).resolve()
+            for folder in ('board', 'i18n'):
+                (repo / folder).mkdir(); (repo / folder / 'fixture').write_text('old')
+            def git(*args):
+                subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+            git('init', '-q'); git('config', 'user.name', 'Board fixture')
+            git('config', 'user.email', 'board@example.invalid')
+            git('add', '.'); git('commit', '-qm', 'old')
+            old = m.board_code_id(repo)
+            (repo / 'board/fixture').write_text('new')
+            git('add', '.'); git('commit', '-qm', 'new')
+            current = m.board_code_id(repo)
+            path = repo / 'state/session/board.json'; path.parent.mkdir(parents=True)
+            for case in ('busy', 'hand', 'replace', 'timeout', 'dead-pid', 'invalid-pid', 'dead-owner', 'http-errors', 'equal', 'dirty', 'unknown', 'unknown-current'):
+                with self.subTest(case=case), contextlib.ExitStack() as stack:
+                    path.write_text(json.dumps({'code': current if case == 'equal' else None if case == 'unknown' else old, 'owner': 903}))
+                    if case == 'dirty': (repo / 'board/fixture').write_text('dirty')
+                    def mocked(obj, name, **kw):
+                        return stack.enter_context(patch.object(obj, name, **kw))
+                    mocked(m, 'configured_board_port', return_value=4173)
+                    mocked(m, 'board_matches', return_value=True)
+                    if case == 'unknown-current': mocked(m, 'board_code_id', return_value=None)
+                    opened = mocked(m, 'board_open', return_value={})
+                    mocked(m.shutil, 'which', return_value='/fixture/bun')
+                    life = mocked(m, 'lifeline'); life.return_value.session_owner.return_value = 902
+                    life.return_value.start.return_value.poll.return_value = None
+                    stopped = []; responses = []; ticks = [0]
+                    def kill(pid, sig):
+                        if sig == 0 and ((case == 'dead-pid' and pid == 900) or (case == 'dead-owner' and pid == 901)):
+                            raise ProcessLookupError()
+                        if sig == signal.SIGTERM: stopped.append(pid)
+                    killed = mocked(m.os, 'kill', side_effect=kill)
+                    def get(url):
+                        if stopped and not life.return_value.start.called and case != 'timeout':
+                            responses.append('occupied' if case == 'http-errors' and len(responses) < 3 else 'free')
+                            if responses[-1] == 'occupied':
+                                raise m.urllib.error.HTTPError(url, 503, 'stopping', {}, None)
+                            raise ConnectionRefusedError()
+                        return b'page'
+                    mocked(m, 'http_get', side_effect=get)
+                    def clock():
+                        ticks[0] += .1; return ticks[0]
+                    mocked(m.time, 'monotonic', side_effect=clock)
+                    mocked(m.time, 'sleep')
+                    payload = {'status': 409, 'busy': 'merge'} if case == 'busy' else {'session_owned': case != 'hand', 'pid': 900, 'owner': 901}
+                    if case == 'invalid-pid': payload['pid'] = True
+                    drain = mocked(m, 'board_drain', return_value=payload)
+                    result = m.board_start(repo)
+                    self.assertEqual(1, opened.call_count)
+                    self.assertEqual(result, json.loads(path.read_text()))
+                    if case in ('replace', 'dead-owner', 'http-errors'):
+                        self.assertFalse(result['reused'])
+                        self.assertEqual(current, result['code']); self.assertNotIn('stale', result)
+                        self.assertEqual({'from': m.board_short_code(old), 'to': m.board_short_code(current)}, result['replaced'])
+                        self.assertEqual([900], stopped)
+                        self.assertEqual(1, life.return_value.start.call_count)
+                        owner = 902 if case == 'dead-owner' else 901
+                        self.assertEqual(owner, life.return_value.start.call_args.kwargs['owner'])
+                        self.assertEqual(owner, result['owner'])
+                        self.assertTrue(result['page_http_verified'])
+                        drain.assert_called_once_with('http://127.0.0.1:4173', 4173)
+                        if case == 'http-errors': self.assertEqual(['occupied'] * 3 + ['free', 'free'], responses)
+                        mocked(m, 'board_start', return_value=result)
+                        out, err = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                            self.assertEqual(0, m.main(['board', str(repo)]))
+                        change = m.board_short_code(old) + ' -> ' + m.board_short_code(current)
+                        self.assertEqual(['fm board: replaced the board: ' + change, 'fm board: 看板已換成新程式：' + change], err.getvalue().splitlines())
+                    else:
+                        self.assertTrue(result['reused']); self.assertEqual(903, result['owner'])
+                        life.return_value.start.assert_not_called()
+                        if case in ('equal', 'dirty', 'unknown', 'unknown-current'):
+                            drain.assert_not_called(); self.assertNotIn('stale', result)
+                        else:
+                            self.assertTrue(result['stale'])
+                            reason = result['stale_reason']['en']
+                            if case == 'busy':
+                                self.assertIn('a merge or an answer is in progress', reason)
+                                self.assertEqual(1, drain.call_count)
+                            else:
+                                self.assertEqual(call('http://127.0.0.1:4173', 4173, release=True), drain.call_args)
+                                self.assertEqual(2, drain.call_count)
+                                self.assertIn('restart it by hand' if case == 'hand' else 'did not stop when asked', reason)
+                        if case == 'timeout': self.assertEqual([900], stopped)
+                        else: self.assertEqual([], stopped)
+                        if case in ('hand', 'busy', 'equal', 'dirty', 'unknown', 'unknown-current'): killed.assert_not_called()
+                    git('checkout', '--', 'board')
+
+    def test_board_drain_http_contract_and_failures(self):
+        import io
+        from unittest.mock import Mock
+        url = 'http://127.0.0.1:4173'
+        for release in (False, True):
+            response = Mock(status=200)
+            response.__enter__ = Mock(return_value=response); response.__exit__ = Mock(return_value=False)
+            response.read.return_value = b'{"draining": true}'
+            with patch.object(m, 'board_secret', return_value='fixture-secret'), patch.object(m.urllib.request, 'urlopen', return_value=response) as send:
+                self.assertEqual({'draining': True}, m.board_drain(url, 4173, release=release))
+                request = send.call_args.args[0]
+                self.assertEqual(url + '/drain', request.full_url)
+                self.assertEqual('POST', request.method)
+                self.assertEqual('Bearer fixture-secret', request.get_header('Authorization'))
+                self.assertEqual(url, request.get_header('Origin'))
+                self.assertEqual('application/json', request.get_header('Content-type'))
+                self.assertEqual({'release': True} if release else {}, json.loads(request.data))
+                self.assertEqual(5, send.call_args.kwargs['timeout'])
+        for status in (409, 404, 403, 503):
+            error = m.urllib.error.HTTPError(url, status, 'refused', {}, io.BytesIO(b'{"busy":"merge"}'))
+            with patch.object(m, 'board_secret', return_value='fixture-secret'), patch.object(m.urllib.request, 'urlopen', side_effect=error):
+                self.assertEqual({'busy': 'merge', 'status': 409} if status == 409 else None, m.board_drain(url, 4173))
+        with patch.object(m, 'board_secret', side_effect=FileNotFoundError()), patch.object(m.urllib.request, 'urlopen') as send:
+            self.assertIsNone(m.board_drain(url, 4173)); send.assert_not_called()
+        for error in (OSError(), ValueError()):
+            with patch.object(m, 'board_secret', return_value='fixture-secret'), patch.object(m.urllib.request, 'urlopen', side_effect=error):
+                self.assertIsNone(m.board_drain(url, 4173))
 
     def test_one_time_address_never_in_an_argument_list(self):
         # T-122: `ps` shows every process's arguments to every other; on macOS
