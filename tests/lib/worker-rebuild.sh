@@ -27,6 +27,10 @@ rb_build_fixture() {   # build each immutable seed with round one done
     if [ "${RB_HOOKS:-0}" = 1 ]; then
       cp -R "$ROOT/.githooks" .githooks; cp "$ROOT/bin/fm-install-hooks.sh" bin/
     fi
+    if [ "${RB_PINNED:-0}" = 1 ]; then
+      printf 'project:\n  check: true\n' >> config.yaml
+      printf 'state/\n' > .gitignore
+    fi
     git add -A; git commit -qm 'app and task table'; git push -q origin main
     [ "${RB_HOOKS:-0}" != 1 ] || bin/fm-install-hooks.sh >/dev/null
   ) || return 1
@@ -50,9 +54,18 @@ awk '{ if ($0 == "prose the two sides may both edit") print "prose as the task s
 mv design/d.next design/design.md
 jq '.depends_on=["T-1"]' design/tasks/T-Z.json > design/t.next && mv design/t.next design/tasks/T-Z.json
 S
+  local project_args=()
+  if [ "${RB_PINNED:-0}" = 1 ]; then
+    # Pinned seeds keep the approved task bytes throughout round one.
+    sed '/^jq /d' "$d/round-one.sh" > "$d/pinned-round-one.sh"
+    mv "$d/pinned-round-one.sh" "$d/round-one.sh"
+    printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$r/state/events.jsonl"
+    seed_spec_preflight "$r" T-Z "" firstmate-workflow || return 1
+    project_args=(--project firstmate-workflow)
+  fi
   ghstub "$d" >/dev/null
   ( cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" FM_T_STEP="$d/round-one.sh" \
-      bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) || return 1
+      bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"} >/dev/null 2>&1 ) || return 1
   printf '%s' "$d"
 }
 # Round one is identical across the rebuild cases. Keep one seed for each
@@ -104,12 +117,13 @@ rb_move_main() {   # rb_move_main <dir> <script run in a fresh clone of main>
       && . "$2" && git add -A && git commit -qm 'main moved' && git push -q origin main )
 }
 rb_round_two() {   # rb_round_two <dir> <step> [pr, '' for none]; sets rb_out and rb_rc
-  local pr="${3-42}"
+  local pr="${3-42}" project_args=()
+  [ "${RB_PINNED:-0}" != 1 ] || project_args=(--project firstmate-workflow)
   # a prompt left from an earlier round would answer for this one
   : > "$1/ghcalls"; rm -f "$1/prompt.md"
   rb_out="$(cd "$1/repo" && FM_ROOT="$1/repo" FM_GH="$1/stub/gh" FM_T_STEP="$2" \
     FM_T_DIR="$1" FM_T_BRANCH="$(rb_branch "$1")" FM_CAPTURE="$1/prompt.md" \
-    bin/fm-worker.sh --task T-Z ${pr:+--pr "$pr"} 2>&1)"; rb_rc=$?
+    bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"} ${pr:+--pr "$pr"} 2>&1)"; rb_rc=$?
 }
 printf 'printf "two\\n" > src/round-two\n' > "${TMPDIR:-/tmp}/fm-rb-add-$$.sh"
 rb_add="${TMPDIR:-/tmp}/fm-rb-add-$$.sh"

@@ -505,9 +505,10 @@ it copies the spec it read from the dispatching repository in, uncommitted,
 and the prompt says it is there and goes out with the round's commit. The
 copy is not the round's work: a round that leaves it as it was and changes
 nothing else changed nothing. A later round's branch carries the file
-already, and a rebuilt round's entry stays frozen (5.3.3), so only a new
-branch gets the copy. `tests/worker.test.sh` covers a new task whose spec is
-untracked in the repository.
+already; a pinned round's file follows the latest approved pin (15.5),
+while an unpinned rebuilt round's entry stays frozen to the previous head
+(5.3.3), so only a new unpinned branch gets the dispatch copy.
+`tests/worker.test.sh` covers a new task whose spec is untracked in the repository.
 
 ### 5.3 The adapter contract, `bin/adapters/<vendor>.sh`
 
@@ -865,8 +866,8 @@ changes ends successfully), `74` GitHub could not
 say which pull request the branch has, `75` a rebuilt round was refused
 before its commit — a conflict marker left, a conflict with no markers left
 exactly as the merge left it, a HEAD no longer on the rebuild base, or the
-task's own entry not as the previous head had it — and nothing
-was published, and `130`, `143` — a signal, 128
+task's own entry not as the pin has it (the previous head for an unpinned
+round) — and nothing was published, and `130`, `143` — a signal, 128
 plus its number, from the INT/TERM traps that make a killed run stop
 rather than carry on. `SIGHUP` is ignored (same as `fm-config.sh`) so a
 managed transport wait and PR publish survive a launching agent shell
@@ -950,8 +951,9 @@ GitHub, until the captain pushed it by hand (T-089, T-086).
 
 Unresolved is a conflict, with or without markers, and also the task's
 own `design/tasks/<id>.json` file when the rebuild could not
-keep it as the previous head had it — the prompt lists that file for the
-worker to put back, and the check before the commit refuses the rebuild
+keep it as the pin has it (or the previous head in an unpinned round) —
+the prompt lists that file for the worker to put back, and the check before
+the commit refuses the rebuild
 as it stands, as it refuses a marker. An unresolved rebuild is never
 published. A round that only asks about one completes as asked and
 publishes nothing; one refused before its commit publishes nothing
@@ -960,8 +962,9 @@ worktree dirty, copies it to `state/rescued/` as it does any interrupted
 run, recreates the worktree from the unmoved branch and rebuilds again.
 
 The task's own file, `design/tasks/<id>.json` (section 14), comes through
-as the branch had it. Restoration is best effort; the pre-commit check
-holds the round if it fails or the worker changes the frozen file.
+as the latest approved pin has it, byte for byte; an unpinned round keeps
+it as the previous head had it. Restoration is best effort; the pre-commit
+check holds the round if it fails or the worker changes the frozen file.
 Other files are merged normally, with unresolved conflicts handed to the
 worker. Legacy array and task-table migration is retired (T-157).
 
@@ -971,11 +974,12 @@ would sit under the round, outside every check — nor while any file it
 carries, read against that base, has a line starting `<<<<<<<` or
 `>>>>>>>`, nor while a conflict with no markers is byte for byte what the
 merge left, nor while the task's own file differs
-from the previous head's — however it got that way, including a worker
-that rewrote it while resolving. In a rebuilt round the task's own entry
-is therefore frozen: a change to it waits for a round that
-is not a rebuild. The run names the files, publishes nothing and exits
-`75`. Otherwise the rebuild and the round's work are one commit on the
+from the pin's bytes (or the previous head's in an unpinned round) —
+however it got that way, including a worker that rewrote it while resolving.
+In a rebuilt round the task's own entry is therefore frozen: a pinned
+entry changes only through a captain-approved repin, and an unpinned
+entry's edit waits for a round that is not a rebuild. The run names the
+files, publishes nothing and exits `75`. Otherwise the rebuild and the round's work are one commit on the
 base, so gate 2 holds by construction. The commit is made with `git
 commit-tree` from the staged tree, parented on the fetched base, under
 the identity a plain round's commit takes and signed when
@@ -4965,6 +4969,11 @@ Gate 4 refuses missing pins, mismatches, out-of-scope files and `.fm-*` artifact
 Repin requires an exact project/task captain decision for changed snapshots,
 appends a version and emits `spec_repinned`; never rewrite old pins.
 
+A self task's branch file is the committed copy of the latest pin, written
+by `fm-worker.sh` at round start and committed with the round (T-207).
+A non-rebuilt round restores an edited file to the pin before publishing,
+and a rebuilt round that changes it is held (exit `75`); gate 4 is unchanged.
+
 Before each worker or reviewer round, the launcher materializes the verified
 snapshots byte for byte under that run's private `pinned/` directory as
 `spec.json`, `design.md`, optional `CONVENTIONS.md`, and `contract.yaml` (T-173).
@@ -4992,8 +5001,8 @@ spec, design, conventions and contract bytes are private local snapshots; resolv
 files to exist on public engine main. Every reader uses `fm_spec_pins.py`, which
 verifies the complete append-only chain, each snapshot hash, identity and
 approval provenance, and re-derives committed self sources. Workers and
-reviewers receive the pinned spec and context; gate 4 also rejects any change
-to the self task entry and any path component beginning `.fm-`.
+reviewers receive the pinned spec and context; gate 4 also rejects a self
+task entry that differs from the pin and any path component beginning `.fm-`.
 
 Initial authority comes from dispatch records only (T-171): the captain's
 `decision_made` A for the readiness card named by `state/ready/<task>.json`
