@@ -127,6 +127,28 @@ def authoritative(root, branch, repository, pr):
     return head
 
 
+def review_final(root, branch, repository, pr, head, base_name):
+    """Retain a verdict for this head even when its base branch has advanced."""
+    head = sha(head)
+    view = remote_head(repository, pr)
+    name = view['baseRefName']
+    if not isinstance(name, str) or not name or name.startswith('-'):
+        raise ValueError('invalid authoritative base name')
+    if name != base_name:
+        raise ValueError('PR base name differs from reviewed base name')
+    if view['headRefOid'] != head:
+        raise ValueError('authoritative PR head differs from reviewed head')
+    if not re.fullmatch(r'[1-9][0-9]*', str(pr)):
+        raise ValueError('invalid PR number')
+    fetched = fetch_ref(root, 'https://github.com/' + repository + '.git',
+                        'refs/pull/' + str(pr) + '/head')
+    if fetched != head:
+        raise ValueError('fetched head differs from reviewed head')
+    if git(root, 'rev-parse', branch + '^{commit}') != head:
+        raise ValueError('local task ref differs from reviewed head')
+    return head
+
+
 def required_checks(root, repository, pr, head):
     from fm_project_checks import status_runs
     view = remote_head(repository, pr)
@@ -281,12 +303,13 @@ def verify_current(root, repo, pr, head, base_tip):
 def main():
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument('mode', choices=['base', 'local-gate-base', 'head', 'checks', 'ready', 'candidate', 'external-review'])
+    p.add_argument('mode', choices=['base', 'local-gate-base', 'head', 'checks', 'ready', 'candidate', 'external-review', 'review-final'])
     p.add_argument('--project-base', default='main')
     p.add_argument('--task', required=True)
     p.add_argument('--pr', required=True)
     p.add_argument('--branch', default='')
     p.add_argument('--head', default='')
+    p.add_argument('--base-name', default='')
     p.add_argument('--gate-report', default='')
     args = p.parse_args()
     root = Path(os.environ['FM_TARGET_ROOT'])
@@ -297,6 +320,8 @@ def main():
         print(view_base(repo, args.pr)); return
     if args.mode == 'head':
         print(authoritative(root, args.branch, repo, args.pr)); return
+    if args.mode == 'review-final':
+        print(review_final(root, args.branch, repo, args.pr, args.head, args.base_name)); return
     head = sha(args.head)
     if remote_head(repo, args.pr)['headRefOid'] != head:
         raise ValueError('authoritative PR head moved; candidate is stale')

@@ -8,10 +8,12 @@ mkdir -p "$d/stub" "$d/repo"
 export FM_TARGET_ROOT="$d/repo" FM_BINDING_REPOSITORY=owner/project
 export FM_GH="$d/stub/gh" PATH="$d/stub:$PATH"
 export FM_EXTERNAL=0
+unset PR_STATE VIEW_HEAD FETCHED_PULL_HEAD LOCAL_TASK_HEAD VIEW_BASE_NAME
 export PR_HEAD=cccccccccccccccccccccccccccccccccccccccc
 export OLD_BASE=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export LIVE_BASE=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export LOCAL_BASE="$LIVE_BASE" BASE_NAME=release/next
+export VIEW_LOG="$d/view-log"
 export FETCH_FILE="$d/fetched" FETCH_LOG="$d/fetch-log" FETCH_FAIL=0
 cat > "$d/stub/gh" <<'PY'
 #!/usr/bin/env python3
@@ -31,10 +33,13 @@ if args[:1] == ['api']:
     sys.exit(0)
 assert args == ['pr', 'view', '9', '--repo', 'owner/project', '--json',
                         'headRefOid,baseRefOid,baseRefName,headRefName,state']
+with open(os.environ['VIEW_LOG'], 'a') as log:
+    log.write('pr view\n')
 # GitHub's recorded base stays old when only the base branch advances.
-print(json.dumps(dict(state='OPEN', headRefOid='c' * 40,
+print(json.dumps(dict(state=os.environ.get('PR_STATE', 'OPEN'),
+                      headRefOid=os.environ.get('VIEW_HEAD', os.environ['PR_HEAD']),
                       baseRefOid=os.environ['OLD_BASE'],
-                      baseRefName=os.environ['BASE_NAME'], headRefName='task')))
+                      baseRefName=os.environ.get('VIEW_BASE_NAME', os.environ['BASE_NAME']), headRefName='task')))
 PY
 cat > "$d/stub/git" <<'PY'
 #!/usr/bin/env python3
@@ -54,13 +59,13 @@ if args[:3] == ['fetch', '--no-tags', 'https://github.com/owner/project.git']:
         value = os.environ['LIVE_BASE']
     else:
         assert source == '+refs/pull/9/head'
-        value = os.environ['PR_HEAD']
+        value = os.environ.get('FETCHED_PULL_HEAD', os.environ['PR_HEAD'])
     fetched.parent.mkdir(parents=True, exist_ok=True)
     fetched.write_text(value)
 elif args[:2] == ['update-ref', '-d']:
     (Path(os.environ['FETCH_FILE']) / args[2]).unlink(missing_ok=True)
 elif args == ['rev-parse', 'task^{commit}']:
-    print(os.environ['PR_HEAD'])
+    print(os.environ.get('LOCAL_TASK_HEAD', os.environ['PR_HEAD']))
 elif args[0] == 'rev-parse' and args[1].startswith('refs/fm/fetch/'):
     print((Path(os.environ['FETCH_FILE']) / args[1]).read_text())
 elif args == ['rev-parse', os.environ['BASE_NAME'] + '^{commit}']:
@@ -104,5 +109,40 @@ for entry in base view_base head required_checks; do
   out="$(invoke 2>&1)"; code=$?
   assert_ne 0 "$code" "$entry fails closed when live tip is unreadable"
   assert_contains "$out" 'live base unavailable' "$entry retains the fetch failure reason"
+done
+# T-201: a final verdict binds the reviewed head and base name, not the base tip.
+review_final() {
+  python3 "$ROOT/bin/lib/fm_binding.py" review-final --task T-201 --pr 9 \
+    --branch task --head "$PR_HEAD" --base-name "$BASE_NAME"
+}
+export LOCAL_BASE="$OLD_BASE" FETCH_FAIL=0
+: > "$FETCH_LOG"
+: > "$VIEW_LOG"
+out="$(review_final 2>"$d/final-error")"; code=$?
+assert_eq 0 "$code" 'review-final accepts an unchanged head after the live base moves'
+assert_eq "$PR_HEAD" "$out" 'review-final prints the reviewed head'
+assert_eq '' "$(cat "$FETCH_LOG")" 'review-final never fetches the live base tip'
+assert_eq 'pr view' "$(cat "$VIEW_LOG")" 'review-final reads the PR exactly once'
+for mode in base head; do
+  out="$(python3 "$ROOT/bin/lib/fm_binding.py" "$mode" --task T-201 --pr 9 --branch task 2>&1)"; code=$?
+  assert_ne 0 "$code" "$mode still requires a fresh base in the same setup"
+  assert_contains "$out" 'local base is stale' "$mode retains its base freshness reason"
+done
+for control in VIEW_BASE_NAME VIEW_HEAD FETCHED_PULL_HEAD LOCAL_TASK_HEAD PR_STATE; do
+  case "$control" in
+    VIEW_BASE_NAME) values='other-base'; reason='base' ;;
+    VIEW_HEAD) values="$OLD_BASE"; reason='head' ;;
+    FETCHED_PULL_HEAD) values="$OLD_BASE"; reason='fetched head' ;;
+    LOCAL_TASK_HEAD) values="$OLD_BASE"; reason='local task ref' ;;
+    PR_STATE) values='CLOSED MERGED'; reason='not open' ;;
+  esac
+  for value in $values; do
+    export "$control=$value"
+    out="$(review_final 2>&1)"; code=$?
+    assert_ne 0 "$code" "review-final refuses $control=$value"
+    assert_contains "$out" 'fm-binding:' "$control failure comes from binding validation"
+    assert_contains "$out" "$reason" "$control failure names the mismatch"
+  done
+  unset "$control"
 done
 finish
