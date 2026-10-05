@@ -99,6 +99,7 @@ extract_version() {  # extract_version <text> -> the first dotted number in it
 # The judging layer reads observations, never command -v or --version.
 # TSV is deliberately readable with awk, even when Python or jq is missing.
 # tool<TAB>name<TAB>path<TAB>version<TAB>raw<TAB>shim
+# bundle<TAB>cursor-agent<TAB>names|absent|unreadable (installed cursor only)
 # host<TAB>os|sandbox<TAB>value; probe<TAB>vendor<TAB>status<TAB>en<TAB>tw
 fact_value() {
   awk -F '\t' -v k="$1" -v n="$2" -v c="$3" '$1==k && ($2==n || (k=="tool" && $3==n)) {print $c; exit}' <<<"$tool_facts"
@@ -159,6 +160,29 @@ xcrun_shim_bad() {  # xcrun_shim_bad <bin> -> 0, having said so, when it is a sh
   say_bad "$1" "wrong version: $found is Apple's xcrun shim, not $1 itself, and a crew round cannot run it; fix: $(fm_xcrun_fix "$1")"
 }
 
+# Follow the installed launcher, including auto-update symlinks, to its bundle.
+# This is an observation, not a judgment of whether a vendor can run.
+collect_cursor_bundle() {
+  local real dir js state=absent rc
+  real="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null)" || real=''
+  dir="${real%/*}"
+  if [ -z "$real" ] || [ ! -f "$real" ] || [ ! -d "$dir" ] || [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
+    state=unreadable
+  else
+    for js in "$dir"/*.js; do
+      [ -e "$js" ] || [ -L "$js" ] || continue
+      if grep -lF 'AGENT_CLI_CREDENTIAL_STORE' "$js" >/dev/null 2>&1; then
+        state=names
+        break
+      else
+        rc=$?
+        [ "$rc" -eq 1 ] || state=unreadable
+      fi
+    done
+  fi
+  printf 'bundle\tcursor-agent\t%s\n' "$state"
+}
+
 # The collecting layer only observes the host. It prints data and makes no
 # pass/fail decision; --collect is also useful for a reproducible diagnosis.
 collect_tools() {
@@ -191,6 +215,9 @@ collect_tools() {
     fi
     raw="$(head -1 <<<"$raw" | tr '\t\r\n' '   ')"
     printf 'tool\t%s\t%s\t%s\t%s\t%s\n' "$bin" "$path" "$version" "$raw" "$shim"
+    if [ "$bin" = cursor-agent ] && [ -n "$path" ]; then
+      collect_cursor_bundle "$path"
+    fi
   done
 }
 if [ -n "$facts_file" ]; then tool_facts="$(cat "$facts_file")"
@@ -335,6 +362,15 @@ while IFS= read -r v; do
       say_bad "$v" "wrong version: $have, older than $min, the oldest known to have its status check; install: $(vendor_install "$v")"
       continue
     fi
+  fi
+  if [ "$v" = cursor-agent ]; then
+    case "$(fact_value bundle cursor-agent 3)" in
+      absent)
+        say_bad cursor-agent "installed cursor-agent $have no longer names AGENT_CLI_CREDENTIAL_STORE; crew rounds would stall on keychain writes, so the probe refuses it; pin or reinstall a version that has it"
+        continue ;;
+      unreadable)
+        say_warn cursor-agent "could not read the installed cursor-agent bundle to check it still names AGENT_CLI_CREDENTIAL_STORE" ;;
+    esac
   fi
   if [ -n "$facts_file" ]; then
     pstatus="$(fact_value probe "$v" 3)"
