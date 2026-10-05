@@ -464,13 +464,17 @@ fm_record_end() {
 # The recorded host, never the board/launcher's own FM_HARNESS. Selected
 # board-owned session wins, then selected project state. A project without
 # a session shares the engine's record.
-fm_host_harness() {
+fm_host_record() {
   local state="${FM_SESSION_HOST_STATE:-${FM_STATE_DIR:-${FM_ENGINE_ROOT:-${FM_ROOT:-$PWD}}/state}}" record
   record="$state/session/host.json"
   if [ ! -f "$record" ]; then
     record="${FM_ENGINE_ROOT:-${FM_ROOT:-$PWD}}/state/session/host.json"
   fi
-  jq -r '.harness | select(type == "string")' "$record" 2>/dev/null || true
+  printf '%s\n' "$record"
+}
+
+fm_host_harness() {
+  jq -r '.harness | select(type == "string")' "$(fm_host_record)" 2>/dev/null || true
 }
 
 fm_vendor_rule() {
@@ -505,6 +509,9 @@ fm_role_vendor() {
   v="$(fm_vendor_rule "$role" "$f")"
   if [ "$v" = opposite-of-host ]; then
     host="$(fm_host_harness)"
+    jq -r 'select(.confirmed == false and .harness != null) |
+      "fm-vendor: opposite-of-host: recorded host \(.harness) is unconfirmed since \(.unconfirmed_since // "unknown")"' \
+      "$(fm_host_record)" >&2 2>/dev/null || true
     case "$host" in
       claude) v=codex ;;
       codex) v=claude ;;

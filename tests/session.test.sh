@@ -715,6 +715,55 @@ class Session(unittest.TestCase):
                dict(status='observed', decision=dict(answer, id='D-046'), id='D-046', observed=1780000000.0))
         self.assertEqual(['D-046'], [i['id'] for i in json.loads(self.session_cli('status').stdout)['unacknowledged']])
         self.assertEqual(0, self.session_cli('ack', '--decision', 'D-046').returncode)
+    def test_legacy_receipts_use_current_decisions_without_writing(self):
+        state = self.repo / 'state'
+        cases = {
+            'settled': dict(task='T-198', chosen='A', kind='merge', merge='merged', merge_settled='now'),
+            'terminal': dict(task='T-199', chosen='A', kind='choice'),
+            'closed': dict(task='T-200', chosen='A', kind='choice'),
+            'reopened': dict(task='T-201', chosen='A', kind='choice'),
+            'unanswered': dict(task='T-199', kind='choice', text='current question'),
+            'running': dict(task='T-202', chosen='A', kind='merge', merge='running'),
+            'failed': dict(task='T-203', chosen='A', kind='merge', merge='failed'),
+            'open': dict(task='SK-001', chosen='A', kind='choice'),
+        }
+        for name, decision in cases.items():
+            ident = 'D-' + name
+            m.save(state / ('session/observed/' + ident + '.json'),
+                   dict(id=ident, observed=1, decision=dict(task='stale', chosen='old', merge='running')))
+            m.save(state / ('decisions/' + ident + '.json'), dict(decision, id=ident))
+        for name in ('missing', 'unreadable'):
+            m.save(state / ('session/observed/D-' + name + '.json'),
+                   dict(observed=1, decision=dict(task='legacy')))
+        (state / 'decisions/D-unreadable.json').write_text('{invalid')
+        events = [dict(type=kind, task=task, actor=actor, data=dict(reason=reason))
+                  for kind, task, actor, reason in [
+                      ('merged', 'T-199', 'firstmate', ''), ('closed', 'T-200', 'captain', ''),
+                      ('reopened', 'T-200', 'worker', 'not authorized'),
+                      ('reopened', 'T-200', 'captain', '  '),
+                      ('merged', 'T-201', 'firstmate', ''),
+                      ('reopened', 'T-201', 'captain', 'retry')]]
+        (state / 'events.jsonl').write_text('\n'.join(map(json.dumps, events)) + '\n')
+        # Wake queue entries are never subject to legacy settlement filtering.
+        (state / 'session/wake.jsonl').write_text(json.dumps(dict(
+            id='D-wake', woken=2, reason='answered', decision=cases['settled'])) + '\n')
+        m.save(state / 'session/acknowledged/D-other.json', dict(id='D-other', acknowledged=0))
+        def snapshot():
+            return {str(p.relative_to(state)): p.read_bytes()
+                    for folder in ('observed', 'acknowledged')
+                    for p in (state / 'session' / folder).rglob('*') if p.is_file()}
+        before = snapshot()
+        result = self.session_cli('status')
+        self.assertEqual(0, result.returncode, result.stderr)
+        listed = {item['id']: item for item in json.loads(result.stdout)['unacknowledged']}
+        self.assertEqual({'D-reopened', 'D-unanswered', 'D-running', 'D-failed', 'D-open',
+                          'D-missing', 'D-unreadable', 'D-wake'}, set(listed))
+        self.assertEqual('current question', listed['D-unanswered']['text'])
+        self.assertIsNone(listed['D-unanswered']['chosen'])
+        self.assertEqual('failed', listed['D-failed']['merge'])
+        self.assertEqual('legacy', listed['D-missing']['task'])
+        self.assertEqual(before, snapshot(), 'status must leave legacy receipts and acknowledgements byte-identical')
+
     def test_an_owned_decision_id_is_woken_listed_and_acknowledged(self):
         """T-047: an id naming its owner, D-<project>-<task>-<n>, wakes firstmate like D-<digits> does."""
         owned = 'D-firstmate-workflow-T047-1'

@@ -133,6 +133,10 @@ with tempfile.TemporaryDirectory(prefix='fm-host-') as temporary:
         assert result.returncode == 0, result.stderr
         observed = json.loads(record.read_text())
         assert (observed['harness'], observed['model'], observed['cli_version']) == (harness, model, version), observed
+        assert observed['confirmed'] is True and observed['source'] == 'env'
+        assert observed['session']['pid'] == 1
+        assert observed['written_by']['pid'] > 0
+        assert len(observed['written_by']['parent_command']) <= 200
         assert observed['model_source'].endswith('settings.json:model' if harness == 'claude' else 'config.toml:model')
     # External sessions write beside their existing private session records.
     config.write_text(base + 'projects:\n  outside:\n    github: fixture/outside\n'
@@ -159,6 +163,7 @@ with tempfile.TemporaryDirectory(prefix='fm-host-') as temporary:
                     record.unlink(missing_ok=True)
                 else:
                     host(previous)
+                before = record.read_bytes() if record.exists() else None
                 if failure == 'missing-collector':
                     collector.unlink()
                 elif failure == 'missing-detector':
@@ -173,22 +178,99 @@ with tempfile.TemporaryDirectory(prefix='fm-host-') as temporary:
                         capture_output=True, text=True)
                     assert result.returncode == 0, (failure, mode, result.stderr)
                     assert 'host refresh failed' in result.stderr, result.stderr
-                    assert json.loads(record.read_text()) == {
-                        'harness': None, 'cli_version': None, 'model': None, 'model_source': None}
+                    if previous:
+                        assert record.read_bytes() == before, (failure, mode)
+                        assert 'keeping the recorded host claude' in result.stderr
+                    else:
+                        assert json.loads(record.read_text()) == {
+                            'harness': None, 'cli_version': None, 'model': None, 'model_source': None}
                 finally:
                     collector.write_text(collector_source)
                     detector.write_text(detector_source)
+    # Round contexts must not refresh, even with a positive different host.
+    for guard in ('FM_IN_ROUND', 'FM_RUN_DIR'):
+        host('claude')
+        before = record.read_bytes()
+        result = shell('export FM_ENTRY_PID=$$ FM_ENTRY_SCRIPT=fm-session.sh; '
+                       'exec bash "$1/bin/fm-session.sh" status --repo "$1"',
+                       FM_HARNESS='codex', **{guard: str(run)})
+        assert record.read_bytes() == before, guard
+        assert result.stdout == '', result.stdout
+
+    # Unknown detection is deterministic and belongs to a different session.
+    detector.write_text(detector_source.replace('def detect_source():',
+        'def detect_source():\n    return None, None\n\ndef unused_detect_source():'))
+    legacy = dict(harness='claude', cli_version='fixture version', model='opus', model_source='fixture')
+    record.write_text(json.dumps(legacy))
+    result = shell('export FM_ENTRY_PID=$$ FM_ENTRY_SCRIPT=fm-session.sh; '
+                   'exec bash "$1/bin/fm-session.sh" status --repo "$1"', FM_SESSION_PID=str(os.getpid()))
+    unconfirmed = json.loads(record.read_text())
+    assert unconfirmed['confirmed'] is False and unconfirmed['harness'] == 'claude'
+    assert 'firstmate host record is unconfirmed: it says claude' in result.stderr
+    assert 'FM_HARNESS=<claude|codex> bin/fm-session.sh status' in result.stderr
+    result = shell('fm_role_vendor worker')
+    assert result.stdout.strip() == 'codex'
+    assert 'recorded host claude is unconfirmed since ' + unconfirmed['unconfirmed_since'] in result.stderr
+    record.write_text(json.dumps(legacy))
+    result = shell('fm_role_vendor worker')
+    assert result.stdout.strip() == 'codex' and 'unconfirmed' not in result.stderr
+
+    # Matching session identity must preserve even noncanonical JSON bytes.
+    import subprocess as sp
+    session = dict(pid=os.getpid(), started=sp.check_output(
+        ['ps', '-p', str(os.getpid()), '-o', 'lstart='], text=True).strip())
+    record.write_text(json.dumps(dict(legacy, session=session), indent=4) + '\n\n')
+    before = record.read_bytes()
+    shell('export FM_ENTRY_PID=$$ FM_ENTRY_SCRIPT=fm-session.sh; '
+          'exec bash "$1/bin/fm-session.sh" status --repo "$1"', FM_SESSION_PID=str(os.getpid()))
+    assert record.read_bytes() == before
+    detector.write_text(detector_source)
+
     # No harness-owned model: no config.yaml guess. Unknown detector is
     # controlled here, rather than depending on this machine's process tree.
     sys.path.insert(0, str(root / 'bin/lib'))
     import fm_host
+    import fm_hooks
+    from unittest.mock import patch
     original_env = os.environ.copy()
     os.environ.clear()
     os.environ.update(env)
     try:
-        fm_host.detect = lambda: None
+        with patch.object(fm_hooks.life, 'session_owner', return_value=123), \
+             patch.object(fm_hooks.life, '_parent_of', return_value=(1, 'codex')):
+            assert fm_hooks.detect_source() == ('codex', 'owner')
+            assert fm_hooks.detect() == 'codex'
+            os.environ['FM_HARNESS'] = 'claude'
+            assert fm_hooks.detect_source() == ('claude', 'env')
+            del os.environ['FM_HARNESS']
+        with patch.object(fm_hooks.life, 'session_owner', side_effect=RuntimeError('no session')):
+            assert fm_hooks.detect_source() == (None, None)
+            assert fm_host.collect(root)['session'] is None
+            os.environ['CLAUDECODE'] = '1'
+            assert fm_hooks.detect_source() == ('claude', 'claudecode')
+            del os.environ['CLAUDECODE']
+        old = dict(legacy, session={'pid': 10, 'started': 'old'}, source='owner',
+                   written_by={'pid': 11, 'parent_command': 'claude'})
+        unknown = dict(harness=None, source=None, session={'pid': 20, 'started': 'new'},
+                       written_by={'pid': 21, 'parent_command': 'shell'})
+        positive = dict(unknown, harness='codex', source='env')
+        assert fm_host.decide(old, positive) == dict(positive, confirmed=True)
+        assert fm_host.decide(legacy, positive)['confirmed'] is True
+        for previous in (None, {'harness': None}):
+            assert fm_host.decide(previous, unknown) == dict(unknown, confirmed=False)
+        assert fm_host.decide(old, dict(unknown, session=old['session'])) is None
+        for previous in (old, legacy):
+            changed = fm_host.decide(previous, unknown)
+            assert changed['confirmed'] is False
+            assert all(changed[k] == previous[k] for k in previous)
+            assert changed['last_unknown'] == {k: unknown[k] for k in ('session', 'written_by')}
+            assert changed['unconfirmed_since']
+            again = fm_host.decide(changed, dict(unknown, session=None))
+            assert again['unconfirmed_since'] == changed['unconfirmed_since']
+            assert again['harness'] == 'claude'
+        fm_host.detect_source = lambda: (None, None)
         assert fm_host.collect(root)['harness'] is None
-        fm_host.detect = lambda: 'codex'
+        fm_host.detect_source = lambda: ('codex', 'env')
         (home / '.codex/config.toml').unlink()
         assert fm_host.collect(root)['model'] is None
     finally:
