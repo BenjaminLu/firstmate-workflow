@@ -78,7 +78,7 @@ for second in 'projects:' 'projects: # duplicate'; do
   printf '\n%s\n  other:\n    github: owner/other\n    base: main\n    required_check: ci\n' "$second" >> "$eng/config.yaml"
   cp "$eng/config.yaml" "$t/before"
   add_seed; status=$?
-  assert_ok '[ "$status" -ne 0 ]' 'two projects blocks refuse onboarding'
+  assert_ok "[ $status -ne 0 ]" 'two projects blocks refuse onboarding'
   assert_contains "$(cat "$t/err")" 'more than one projects: block' 'duplicate-block refusal explains manual repair'
   assert_ok 'cmp "$t/before" "$eng/config.yaml"' 'duplicate-block refusal preserves config bytes'
 done
@@ -95,7 +95,7 @@ for binding in github base; do
   printf '    required_check: old-check\n' >> "$eng/config.yaml"
   cp "$eng/config.yaml" "$t/before"
   add_seed; status=$?
-  assert_ok '[ "$status" -ne 0 ]' "commented existing name refuses changed $binding"
+  assert_ok "[ $status -ne 0 ]" "commented existing name refuses changed $binding"
   assert_contains "$(cat "$t/err")" 'existing registry binding differs' 'existing binding refusal remains explicit'
   assert_ok 'cmp "$t/before" "$eng/config.yaml"' 'binding refusal preserves config bytes'
 done
@@ -122,8 +122,9 @@ for shape in empty header-eof entry-eof crlf; do
     empty)
       printf 'projects: # empty\n' > "$eng/config.yaml"
       cp "$eng/config.yaml" "$t/expected"
-      cat "$t/tail" >> "$eng/config.yaml"
-      cat "$t/entry" "$t/tail" >> "$t/expected"
+      printf '# Other settings.\nlanguage: en\n' > "$t/empty-tail"
+      cat "$t/empty-tail" >> "$eng/config.yaml"
+      cat "$t/entry" "$t/empty-tail" >> "$t/expected"
       ;;
     header-eof)
       printf 'projects: # empty' > "$eng/config.yaml"
