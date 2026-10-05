@@ -8,6 +8,10 @@ function racing<T>(operation: string, path: unknown, read: () => T): T {
   let race;
   try { race = JSON.parse(fs.readFileSync(marker, "utf8")); } catch { return read(); }
   if (race.operation !== operation || race.path !== String(path)) return read();
+  if (Number.isInteger(race.skip) && race.skip > 0) {
+    fs.writeFileSync(marker, JSON.stringify({ ...race, skip: race.skip - 1 }));
+    return read();
+  }
   fs.unlinkSync(marker);
   const saved = String(path) + ".race-saved";
   fs.renameSync(String(path), saved);

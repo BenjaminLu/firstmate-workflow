@@ -82,6 +82,42 @@ try:
 finally:
     conn.close()
 
+# With no stream or HTTP request in flight, only merge recovery can consume
+# these faults. Wait for consumption without reading the board's HTTP state.
+def wait_for_timer_fault():
+    deadline = time.monotonic() + 5
+    while (root / 'race.json').exists() and time.monotonic() < deadline:
+        time.sleep(.1)
+    assert not (root / 'race.json').exists(), 'merge-recovery timer did not exercise race'
+    time.sleep(1.5)
+
+(root / 'race.json').write_text(json.dumps({
+    'operation': 'readdirSync', 'path': str(root / 'state/decisions')}))
+wait_for_timer_fault()
+message = 'the merge-recovery timer survives a failed read of state/decisions'
+try:
+    assert state()[0] == 200, message
+    time.sleep(1)
+    assert state()[0] == 200, message
+except (OSError, http.client.HTTPException) as error:
+    raise AssertionError(message) from error
+
+# Skip anyRunning's read so recover's own loop header gets the fault.
+running = root / 'state/decisions/D-9.json'
+running.write_text(json.dumps({'id': 'D-9', 'kind': 'merge', 'merge': 'running', 'pr': 9}))
+(root / 'race.json').write_text(json.dumps({
+    'operation': 'readdirSync', 'path': str(root / 'state/decisions'), 'skip': 1}))
+wait_for_timer_fault()
+message = 'merge recovery survives a failed read and keeps the running record'
+try:
+    assert state()[0] == 200, message
+    time.sleep(1)
+    assert state()[0] == 200, message
+    assert json.loads(running.read_text())['merge'] == 'running', message
+except (OSError, http.client.HTTPException) as error:
+    raise AssertionError(message) from error
+running.unlink()
+
 # Keep a stream open while its timer encounters exactly the same failures.
 # A change to events forces the timer to rebuild state for directory reads.
 for operation, path in [('statSync', 'config.yaml'), ('readdirSync', 'state/pending'),
