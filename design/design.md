@@ -354,7 +354,15 @@ localizes its labels and validation, not the captain's authored words. The
 `text` field preserves literal whitespace, markup and Unicode, with a maximum
 of 1000 Unicode code points; empty/whitespace-only input, control characters
 other than tabs/newlines, and lone surrogates are rejected. Custom never calls
-the merge helper. A/B/C keep their existing meanings.
+the merge helper. A/B/C keep their existing meanings when all confirmation
+answers are Yes. Cards with questions store `answers` in question order as
+`{index, ok: true}` or `{index, ok: false, text}`; each No text obeys the custom
+text limits. Any No stores `chosen: "change"`, the selected option or `custom`
+in `picked`, and custom `text` when present. Such a record has `effect: null`,
+`effect_outcome: "recorded"` and `merge: null`: it requests a spec revision and
+grants no dispatch, merge, park, drop or send-back authority. Never act on
+`picked`. An identical selected option, custom text and answers is idempotent;
+a different submission conflicts with the recorded answer.
 
 New requests require `--details <file>` with this shared data contract:
 `{en: Locale, "zh-TW": Locale}`, where each Locale contains nonempty strings
@@ -366,6 +374,9 @@ and zh-CN applies the same ordered TW-to-CN table as the UI. Invalid requests
 fail before a pending record is written; existing IDs cannot be replaced.
 Legacy scalar records remain readable with an explicit missing-details notice.
 Trusted repository diagram fragments are assets, never fields in this input.
+The built-in diagram tier draws `before_nodes`/`after_nodes` when present, with
+a legend and optional change table; authored drawings still win, and the board
+records confirmation answers on the decision.
 
 Intent cards add optional locale fields (T-210): `intent`, `why`, `done` and
 `questions` hold `{kind: "step"|"fact", text}` items; `notes` holds
@@ -2175,12 +2186,25 @@ the ship.
 
 ### Interaction
 
-T-211 renders the intent, reason, scope, completion, notes and confirmation
-sections, plus before/after nodes and the change table. It displays the stored
-`ste` report without recomputing it and gets rule text from `fm_ste.py rules`.
-It also records the captain's confirmation answers; “No, change it” becomes a
-spec-change request under the defaults in §5.2. Cards already pending without
-intent fields keep their current rendering.
+Intent cards show intent, reason, scope in/out, completion conditions, notes,
+cautions and confirmation questions after the before/after drawing and outcome.
+Before/after node flows include a state legend and the optional change table.
+Read-only sentence chips show kind, word count and rule results from the stored
+`ste` report; the header pill counts passing sentences for the reader's locale.
+The server loads bilingual tooltip text once from `fm_ste.py rules` and serves
+it as `ste_rules`; without that module the chips show rule ids, and without a
+report the sections show no chips. Simplified Chinese uses the existing text
+conversion, including SVG title text.
+
+Each question offers “Yes, correct” and “No, change it”; No opens a bounded
+correction field. Confirm remains disabled until every question has a valid
+answer and an option or custom choice is selected. Draft answers survive card
+refreshes and language switches, and locked/read-only cards disable all controls.
+Any No records a spec-change request (§5.2), wakes firstmate, and shows only
+“Change requested — firstmate revises the spec”. It carries out no option,
+shows no order cry or authored outcome, and queues no order animation in any
+tab or project view. All-Yes answers retain existing effects. Cards already
+pending without intent fields keep their current rendering and answer behavior.
 
 Drag a figure to turn it, drag the deck to turn the whole crew, double-click to
 reset. Every pose is a `.fig.s-<state>` class, so **e2e asserts classes rather

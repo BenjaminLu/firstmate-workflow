@@ -215,6 +215,14 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   .voyage-full #voyage{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,2fr) minmax(0,3fr)}
   .voyage-full #voyage:has(#voyage-drawer[hidden]){grid-template-rows:auto minmax(0,1fr)}
 }
+
+.intent-alignment{border-top:1px solid var(--line);margin-top:16px;padding-top:8px}
+.intent-alignment h4{color:var(--brass)}.intent-alignment h5{font-size:14px;margin:12px 0 5px}.intent-alignment p{margin:6px 0}
+.intent-scope{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.intent-note,.intent-caution{border-left:3px solid var(--warn);padding:8px 12px;margin:10px 0;background:var(--bg2)}.intent-caution{border-color:var(--bad)}
+.ste-pill,.ste-chip{display:inline-block;border:1px solid var(--line);border-radius:5px;padding:2px 5px;font:11px var(--mono);color:var(--fg2)}.ste-pill{margin-left:8px;color:var(--brass)}.ste-chip{margin:2px}.ste-fail{color:var(--bad)}.ste-warn{color:var(--warn)}
+.confirm-question{margin:12px 0}.question-controls button{font:inherit;background:var(--bg2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:4px 8px 4px 0}.question-controls button[aria-pressed=true]{border-color:var(--brass);color:var(--brass)}.question-controls button:disabled{opacity:.5}.question-controls label{display:block}.question-controls label[hidden]{display:none}.question-controls textarea{display:block;width:100%;font:inherit;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:8px}
+@media(max-width:540px){.intent-scope{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -322,7 +330,7 @@ const localized = d => d?.details?.[lang === 'en' ? 'en' : 'zh-TW'];
 // a task card's identity: its project and its id, as the server wrote it
 const keyOf = task => task?.key || task?.id;
 const words = s => lang === 'zh-CN' ? cn(String(s ?? '')) : String(s ?? '');
-const picks = new Map(), drafts = new Map(), sent = new Set();
+const picks = new Map(), drafts = new Map(), answers = new Map(), sent = new Set();
 // T-112: the error an answer came back with, shown on its own card until the
 // next attempt - a refusal is never dropped between the POST and the deck.
 // It is an alert only on the render that first shows it; every later render
@@ -404,7 +412,7 @@ function feedbackText() {
   // about some other card
   const which = feedback?.key === 'mergeRefused' ? [feedback.decisionId, feedback.task].filter(Boolean).join(' · ') : '';
   el.innerHTML = feedback ? [feedback.cry || '', t(feedback.key), which,
-    words(localized(feedback.decision)?.outcome || ''), feedback.literal || '', feedback.eventFailed ? t('eventFailed') : '']
+    feedback.key === 'changeRequested' ? '' : words(localized(feedback.decision)?.outcome || ''), feedback.literal || '', feedback.eventFailed && feedback.key !== 'changeRequested' ? t('eventFailed') : '']
     .filter(Boolean).map(x => said(x, feedback.decision)).join(' · ') : '';
 }
 function pose() {
@@ -425,7 +433,7 @@ function observe(outcomes) {
   for (const e of outcomes || []) {
     if (seen.has(e.identity)) continue;
     seen.add(e.identity);
-    if (!initialized || window.VOYAGE?.hidden) continue;
+    if ((e.chosen ?? e.data?.chosen) === 'change' || !initialized || window.VOYAGE?.hidden) continue;
     const kind = e.type === 'merged' ? 'merge' : 'order';
     SHIP.enqueue(document.getElementById('scene'), kind, e.identity);
   }
@@ -623,6 +631,7 @@ function render(s) {
   const pendingIds = new Set(pend.map(d => d.id));
   for (const id of [...picks.keys()]) if (!pendingIds.has(id)) picks.delete(id);
   for (const id of [...drafts.keys()]) if (!pendingIds.has(id)) drafts.delete(id);
+  for (const id of [...answers.keys()]) if (!pendingIds.has(id)) answers.delete(id);
   for (const id of [...sent]) if (!pendingIds.has(id)) sent.delete(id);
   for (const id of [...expanded]) if (!pendingIds.has(id)) expanded.delete(id);
   for (const id of [...refused.keys()]) if (!pendingIds.has(id)) refused.delete(id);
@@ -694,7 +703,7 @@ function render(s) {
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros), d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons), d)}</p>` : '');
     }).join('');
     return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${whose(d)}` +
-      `</div><h3>${said(content ? words(content.title) : d.title || t("waiting"), d)}</h3>` +
+      `${stePill(d)}</div><h3>${said(content ? words(content.title) : d.title || t("waiting"), d)}</h3>` +
       // T-118: a card whose task is already merged or closed is shown, and
       // says so: it may have been raised under the wrong task
       (d.task_final ? `<p class="final-note" role="note">${esc(t('finalNote').replace('{task}', d.task || '').replace('{stage}', laneLabel(d.task_final)))}</p>` : '') +
@@ -704,6 +713,8 @@ function render(s) {
       (d.kind === "merge" && gates.length
         ? `<ul class="gates">${GATES().map((g,i)=>{const n=GATE_NUMBERS[i], ok=gates[n-1];return `<li class="${ok?"y":"n"}"><i>${ok?"&#10003;":"&#8211;"}</i>${n}. ${g}</li>`;}).join("")}</ul>`
         : "") +
+      (content?.intent ? `<p class="intent-outcome">${said(words(content.outcome || ''), d)}</p>` : '') +
+      intentSection(d, content, locked) +
       `<div class="acts">${options}
          <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
          <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>
@@ -744,8 +755,20 @@ function render(s) {
   deck.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
     picks.set(b.dataset.id, b.dataset.c); render(latest);
   });
+  deck.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => {
+    if (sent.has(b.dataset.id) || readOnly()) return;
+    const saved = answers.get(b.dataset.id) || [];
+    const index = Number(b.dataset.question);
+    saved[index] = {...saved[index], ok:b.dataset.ok === 'yes'};
+    answers.set(b.dataset.id, saved); render(latest);
+  });
   deck.querySelectorAll('textarea').forEach(el => el.oninput = () => {
-    drafts.set(el.dataset.id, el.value); validate(el.dataset.id);
+    if (el.dataset.question !== undefined) {
+      const saved = answers.get(el.dataset.id) || [];
+      const index = Number(el.dataset.question);
+      saved[index] = {...saved[index], text:el.value}; answers.set(el.dataset.id, saved);
+    } else drafts.set(el.dataset.id, el.value);
+    validate(el.dataset.id);
   });
   deck.querySelectorAll('.confirm').forEach(b => { b.onclick = () => answer(b.dataset.id); validate(b.dataset.id); });
   // the diagrams arrive after the card: mount checks each one is there
@@ -758,7 +781,7 @@ function render(s) {
   if (document.getElementById("captain")) SHIP.captain(document.getElementById("captain"), pend.length || (feedback || SHIP.active() ? 1 : 0), t);
   pose(); feedbackText();
   if (focusKey) {
-    const replacement = [...deck.querySelectorAll('[data-id]')].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && (focusChoice ? el.dataset.c === focusChoice : !el.dataset.c));
+    const replacement = [...deck.querySelectorAll('[data-id]')].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && (focusChoice ? el.dataset.c === focusChoice : !el.dataset.c) && el.dataset.question === focus.dataset.question && el.dataset.ok === focus.dataset.ok);
     replacement?.focus({preventScroll:true});
     if (replacement && selection) replacement.setSelectionRange(...selection);
   }
@@ -773,14 +796,69 @@ function render(s) {
   window.VOYAGE?.update(s, t, lang);
 }
 
+const validAnswerText = text => typeof text === 'string' && !!text.trim() && [...text].length <= 1000
+  && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text);
+const steEntries = d => d.ste?.locales?.[lang === 'en' ? 'en' : 'zh-TW'];
+function stePill(d) {
+  const entries = steEntries(d);
+  return localized(d)?.intent && Array.isArray(entries)
+    ? `<span class="ste-pill">STE · ${entries.filter(e => !(e.issues || []).some(i => i.severity === 'fail')).length}/${entries.length}</span>` : '';
+}
+function steChip(e) {
+  const issues = (e.issues || []).filter(i => i.severity === 'fail' || i.severity === 'warn');
+  const rules = issues.map(i => {
+    const rule = (latest?.ste_rules || []).find(r => r.id === i.rule);
+    const text = rule?.[lang === 'en' ? 'en' : 'zh-TW'];
+    return `<span data-rule="${esc(i.rule)}" class="ste-${i.severity === 'fail' ? 'fail' : 'warn'}" title="${esc(text ? i.rule + ' — ' + words(text) : i.rule)}">${esc(i.rule)}</span>`;
+  }).join(' ');
+  return `<span class="ste-chip"><span>${esc(e.kind)}</span> <span>${esc(e.n)}/${esc(e.max)} ${esc(t('steWords'))}</span> ${rules || '✓'}</span>`;
+}
+function steSentence(d, field, index, text) {
+  // Locate the stored sentences in the authored text; do not split or recheck
+  // writing rules in the browser. Unmatched reports never replace authored text.
+  const entries = (steEntries(d) || []).filter(e => e.field === field && e.index === index);
+  let cursor = 0, rendered = '', unmatched = '';
+  for (const entry of entries) {
+    const start = typeof entry.sentence === 'string' && entry.sentence ? text.indexOf(entry.sentence, cursor) : -1;
+    if (start < 0) { unmatched += steChip(entry); continue; }
+    rendered += said(words(text.slice(cursor, start)), d) + `<span class="ste-sentence">${said(words(entry.sentence), d)} ${steChip(entry)}</span>`;
+    cursor = start + entry.sentence.length;
+  }
+  return rendered + said(words(text.slice(cursor)), d) + unmatched;
+}
+function intentSection(d, content, locked) {
+  if (!content?.intent) return '';
+  const sentences = (field, heading) => Array.isArray(content[field])
+    ? `<section><h5>${esc(t(heading))}</h5>${content[field].map((item, index) => `<p>${steSentence(d, field, index, item.text)}</p>`).join('')}</section>` : '';
+  const scope = (field, heading) => Array.isArray(content[field])
+    ? `<section><h5>${esc(t(heading))}</h5><ul>${content[field].map(text => `<li>${said(words(text), d)}</li>`).join('')}</ul></section>` : '';
+  const controls = (index) => {
+    const a = answers.get(d.id)?.[index];
+    return `<div class="question-controls">${['yes','no'].map(value => `<button type="button" data-id="${esc(d.id)}" data-question="${index}" data-ok="${value}" aria-pressed="${a?.ok === (value === 'yes')}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t(value === 'yes' ? 'answerYes' : 'answerNo'))}</button>`).join('')}` +
+      `<label ${a?.ok === false ? '' : 'hidden'}>${esc(t('answerText'))}<textarea data-id="${esc(d.id)}" data-question="${index}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(a?.text || '')}</textarea></label></div>`;
+  };
+  return `<section class="intent-alignment"><h4>${esc(t('intentAlignment'))}</h4>` +
+    sentences('intent','intentHeading') + sentences('why','whyHeading') +
+    `<div class="intent-scope">${scope('scope_in','scopeIn')}${scope('scope_out','scopeOut')}</div>` + sentences('done','doneWhen') +
+    (content.notes || []).map((note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${steSentence(d,'notes',index,note.text)}</p></aside>`).join('') +
+    (content.questions ? `<section class="confirm-questions"><h5>${esc(t('confirmQuestions'))}</h5>${content.questions.map((q,index)=>`<div class="confirm-question"><p>${steSentence(d,'questions',index,q.text)}</p>${controls(index)}</div>`).join('')}</section>` : '') + '</section>';
+}
+function questionAnswers(d) {
+  return d?.details?.en?.questions?.map((_, index) => {
+    const a = answers.get(d.id)?.[index];
+    return a?.ok === true ? {index, ok:true} : {index, ok:a?.ok, text:a?.text || ''};
+  });
+}
 function validate(id) {
   const chosen = picks.get(id), text = drafts.get(id) || '';
-  const valid = chosen && (chosen !== 'custom' || (text.trim() && [...text].length <= 1000
-    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text)));
+  const validPick = chosen && (chosen !== 'custom' || validAnswerText(text));
+  const replies = questionAnswers(latest?.pending?.find(d => d.id === id));
+  const validQuestions = !replies || replies.every(a => a.ok === true || (a.ok === false && validAnswerText(a.text)));
+  const valid = validPick && validQuestions;
   const button = document.querySelector(`.confirm[data-id="${id}"]`);
   if (button) button.disabled = !valid || sent.has(id) || readOnly();
   const label = document.getElementById('validation-' + id);
-  if (label) label.textContent = chosen === 'custom' && !valid ? t('customInvalid') : '';
+  if (label) label.textContent = chosen === 'custom' && !validPick ? t('customInvalid') : !validQuestions ? t('answersInvalid') : '';
   return valid;
 }
 // a write refused for want of the credential turns the tab read-only
@@ -794,7 +872,7 @@ async function answer(id) {
   refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
     method: "POST", headers: credential({ "content-type": "application/json" }),
-    body: JSON.stringify({ id, chosen, ...(decision?.project ? {project:decision.project} : {}), ...(chosen === 'custom' ? {text} : {}) }),
+    body: JSON.stringify({ id, chosen, ...(decision?.project ? {project:decision.project} : {}), ...(chosen === 'custom' ? {text} : {}), ...(decision?.details?.en?.questions ? {answers:questionAnswers(decision)} : {}) }),
   }).then(x => x.status === 403 ? refusedFor(x) : x.json()).catch(() => ({ error: t("unreachable") }));
   sent.delete(id);
   if (r.error) {
@@ -802,21 +880,22 @@ async function answer(id) {
     refused.set(id, {error:String(r.error), announced:false});
   }
   else {
-    picks.delete(id); drafts.delete(id);
+    picks.delete(id); drafts.delete(id); answers.delete(id);
     // a merge answers at once while it runs; its outcome arrives in the record
     const merge = r.decision?.merge ?? r.merge ?? null;
     // T-118: an effect that failed says so, with its reason, and is never
     // read as done; one carried out says what was done
     const effectFailed = r.effect && r.effect !== 'merge' && r.outcome === 'failed';
     const effectDone = r.effect && r.effect !== 'merge' && r.outcome === 'done';
-    feedback = {key:merge === 'failed' ? 'mergeRefused' : merge === 'running' ? 'mergeRunning'
+    const changeRequested = r.decision?.chosen === 'change';
+    feedback = {key:changeRequested ? 'changeRequested' : merge === 'failed' ? 'mergeRefused' : merge === 'running' ? 'mergeRunning'
       : effectFailed ? 'effectRefused' : chosen === 'custom' ? 'customRecorded' : effectDone ? 'effectDone' : 'recorded', decisionId:id,
       task:decision?.task || r.decision?.task || null,
-      cry:effectFailed ? '' : 'AYE, CAPTAIN! / ORDERS AWAY', decision,
-      literal:chosen === 'custom' ? text : r.effect && r.effect !== 'merge' ? `${effectLabel(r.effect)}${r.reason ? ': ' + r.reason : ''}` : '',
+      cry:changeRequested || effectFailed ? '' : 'AYE, CAPTAIN! / ORDERS AWAY', decision,
+      literal:changeRequested ? '' : chosen === 'custom' ? text : r.effect && r.effect !== 'merge' ? `${effectLabel(r.effect)}${r.reason ? ': ' + r.reason : ''}` : '',
       eventFailed:r.eventRecorded === false};
     const identity = r.decision?.identity || `decision:${id}`;
-    if (!r.already && !seen.has(identity)) {
+    if (!changeRequested && !r.already && !seen.has(identity)) {
       seen.add(identity); if (!window.VOYAGE?.hidden) SHIP.enqueue(document.getElementById('scene'), 'order', identity);
     }
   }

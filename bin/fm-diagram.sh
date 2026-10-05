@@ -303,6 +303,57 @@ fragment() {
   cat "$f"
 }
 
+# All record text passes through esc; states select only fixed drawing values.
+node_flow() {  # node_flow <lang> <field>
+  local lang="$1" field="$2" count height row label state stroke fill dash mark y=6 i=0
+  count="$(jq --arg lang "$lang" --arg field "$field" '.details[$lang][$field]|length' "$FILE")"
+  height=$((count * 36))
+  printf '<svg role="img" viewBox="0 0 300 %s" style="width:100%%;display:block"><title>%s</title>\n' "$height" \
+    "$(esc "$(jq -r --arg lang "$lang" --arg field "$field" '[.details[$lang][$field][].label]|join(" → ")' "$FILE")")"
+  while IFS= read -r row; do
+    state="$(jq -r '.state' <<<"$row")"; label="$(jq -r '.label' <<<"$row")"
+    stroke='var(--line)'; fill='none'; dash=''; mark=''
+    case "$state" in
+      gone) stroke='var(--bad)'; fill='rgba(242,100,90,.08)'; dash=' stroke-dasharray="4 2"'; mark='✕' ;;
+      new) stroke='var(--brass)'; fill='rgba(217,164,65,.08)'; mark='+' ;;
+    esac
+    printf '<rect x="6" y="%s" width="288" height="24" rx="4" stroke="%s" fill="%s"%s/>\n' "$y" "$stroke" "$fill" "$dash"
+    printf '<text x="16" y="%s" fill="var(--fg2)" font-size="12">%s</text>\n' "$((y + 16))" "$(esc "$label")"
+    if [ -n "$mark" ]; then printf '<text x="278" y="%s" fill="%s" font-size="14">%s</text>\n' "$((y + 16))" "$stroke" "$mark"; fi
+    i=$((i + 1))
+    if [ "$i" -lt "$count" ]; then
+      printf '<path d="M150 %s v10 m-3 -3 l3 3 3 -3" fill="none" stroke="var(--fg3)"/>\n' "$((y + 25))"
+    fi
+    y=$((y + 36))
+  done < <(jq -c --arg lang "$lang" --arg field "$field" '.details[$lang][$field][]' "$FILE")
+  printf '</svg>\n'
+}
+node_pair() {  # node_pair <lang>
+  local lang="$1" side row key cell color
+  printf '<style>:root{--bad:#f2645a}.node-legend{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0;font-size:12px;color:var(--fg2)}.node-legend i{display:inline-block;width:16px;height:10px;margin-right:5px;border:1px solid var(--line);border-radius:2px}.change-table{width:100%%;border-collapse:collapse;font-size:13px}.change-table th,.change-table td{border-bottom:1px solid var(--line);padding:6px;text-align:left}</style>\n'
+  printf '<div class="before-after" style="display:flex;gap:16px;align-items:center">'
+  for side in before after; do
+    [ "$side" = before ] || printf '<span aria-hidden="true">→</span>'
+    printf '<section style="flex:1"><b>%s</b>' "$(dsc "$side")"
+    node_flow "$lang" "${side}_nodes"
+    printf '<p>%s</p></section>' "$(esc "$(jq -r --arg lang "$lang" --arg side "$side" '.details[$lang][$side]' "$FILE")")"
+  done
+  printf '</div>\n<div class="node-legend"><span><i></i>%s</span><span><i style="border-color:var(--bad);border-style:dashed;background:rgba(242,100,90,.08)"></i>%s</span><span><i style="border-color:var(--brass);background:rgba(217,164,65,.08)"></i>%s</span></div>\n' "$(dsc lgSame)" "$(dsc lgGone)" "$(dsc lgNew)"
+  if jq -e --arg lang "$lang" '.details[$lang].change_table' "$FILE" >/dev/null; then
+    printf '<table class="change-table"><thead><tr><th>%s</th><th>A</th><th>B</th><th>C</th></tr></thead><tbody>\n' "$(dsc change2)"
+    while IFS= read -r row; do
+      printf '<tr><td>%s</td>' "$(esc "$(jq -r '.text' <<<"$row")")"
+      for key in A B C; do
+        cell="$(jq -r --arg key "$key" '.[$key]' <<<"$row")"
+        case "$cell" in '✓') color=ok ;; '—') color=fg3 ;; *) color=warn ;; esac
+        printf '<td style="color:var(--%s)">%s</td>' "$color" "$(esc "$cell")"
+      done
+      printf '</tr>\n'
+    done < <(jq -c --arg lang "$lang" '.details[$lang].change_table[]' "$FILE")
+    printf '</tbody></table>\n'
+  fi
+}
+
 # ------------------------------------------------------------------- render
 
 render() {  # render <html-lang> <dictionary> <fragment-language>
@@ -352,6 +403,8 @@ HTML
 
   if [ -n "$frag" ]; then
     printf '<div class="drawn">\n%s\n</div>\n' "$frag"
+  elif jq -e --arg lang "$3" '.details[$lang].before_nodes and .details[$lang].after_nodes' "$FILE" >/dev/null; then
+    node_pair "$3"
   elif jq -e --arg lang "$3" '.details[$lang].before and .details[$lang].after' "$FILE" >/dev/null; then
     printf '<div class="before-after" style="display:flex;gap:16px;align-items:center"><section style="flex:1"><b>%s</b><p>%s</p></section><span aria-hidden="true">→</span><section style="flex:1"><b>%s</b><p>%s</p></section></div>\n' \
       "$(dsc before)" "$(esc "$(jq -r --arg lang "$3" '.details[$lang].before' "$FILE")")" \
