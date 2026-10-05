@@ -85,7 +85,7 @@ class CodexReview(unittest.TestCase):
         policy = dict(never_read=[], repo_config=['.codex'], review_git_readonly=True)
         (self.tree / '.codex').mkdir()
         roots = [str(self.tree), str(self.home / 'round-temp')]
-        profile = namespace['darwin'](policy, roots, [], {}, '', None)
+        profile = namespace['darwin'](policy, roots, [], {}, '', None, root=str(self.tree))
         self.assertIn('(deny file-write* (subpath "' + str(self.tree / '.git') + '"))', profile)
         linux = namespace['linux'](policy, roots, [], {}, '').splitlines()
         self.assertIn(['--ro-bind', str(self.tree / '.git'), str(self.tree / '.git')],
