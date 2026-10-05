@@ -171,6 +171,7 @@ case "$vendor" in
           vendor_env=(CLAUDE_CONFIG_DIR="$work/tmp/claude-config") ;;
   codex)  mkdir -p "$work/tmp/codex-home" || exit 70
           vendor_env=(CODEX_HOME="$work/tmp/codex-home") ;;
+  cursor-agent) vendor_env=(AGENT_CLI_CREDENTIAL_STORE=memory) ;;
 esac
 
 # The time limit. No `timeout(1)` is assumed to exist (it does not ship
@@ -397,8 +398,8 @@ case "$status" in
         "無法限制 cursor-agent 的鑰匙圈存取"
     else
       print_result keychain-blocked "$version" \
-        "cursor-agent needs keychain storage, which crew rounds deny" \
-        "cursor-agent 需要鑰匙圈儲存，而 crew 回合禁止存取鑰匙圈"
+        "cursor-agent tried to store its login in the keychain, which crew rounds deny; this cursor-agent version may no longer honour AGENT_CLI_CREDENTIAL_STORE=memory; run fm doctor" \
+        "cursor-agent 試圖把登入存進鑰匙圈，而 crew 回合禁止存取鑰匙圈；此版本的 cursor-agent 可能已不支援 AGENT_CLI_CREDENTIAL_STORE=memory；請執行 fm doctor"
     fi ;;
   timeout)
     print_result timeout "$version" \
