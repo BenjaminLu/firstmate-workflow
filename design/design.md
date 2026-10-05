@@ -1523,9 +1523,9 @@ twice (616 s). That left the required `ci` check red on a change whose
 shards were green, and any large change would hit the same limit. So CI
 runs it in three steps, all on pull requests only:
 
-1. **`fail-first timings`** reads the suite timings once, the way each bash
-   shard does (the last green run on `main`, best effort), and hands the
-   same text to every shard. If a green run on `main` finished between two
+1. **`fail-first timings`** reads the suite timings once, the way the
+   `bash timings` job does for the bash shards (the last green run on `main`,
+   best effort), and hands the same text to every shard. If a green run on `main` finished between two
    shards' own downloads, they would get two different splits, and a suite
    could land in no shard at all.
 2. **`fail-first shard i/6`**, a matrix of 6, the bash shards' count. It
@@ -2585,19 +2585,35 @@ that variable is set — never
 under `FM_ROOT`, so the gate still leaves nothing behind in the tree it
 judges — and only then: the plain, flag-less run pays for none of the timing
 calls. `.github/workflows/ci.yml` runs four kinds of job: `fast`; `bash`, a
-matrix of shards, each downloading the previous successful run's timings
-artifacts (best effort — a first run, a fork with no read access, or a
-`gh` failure all just leave the shards balanced by size instead) and
-uploading its own as `suite-timings-<shard>`, so a slow suite is visible by
-name; `bun`; and `e2e`. A final job named `ci` — the required check's own
-name — `needs` all four and fails if any of them failed or was skipped, so
+matrix of six shards; `bun`; and `e2e`. One `bash-timings` job reads the
+previous successful main run's timings artifacts once and hands the same
+text to all six bash shards (best effort — a first run, a fork with no read
+access, or a `gh` failure leaves all shards using the same size fallback).
+Each uploads its observed timings as `suite-timings-<shard>`, so a slow suite
+is visible by name. Independent downloads raced in run 37218411231: 36 suites
+ran in no shard, while all six shards were green (T-196). Sharing one read
+prevents different partitions when main finishes a run during shard startup.
+Each shard also writes `FM_CI_ASSIGNED_OUT` before its pool starts, including
+an empty shard: `# shard i/n` followed by its assigned suite paths. This output
+is local to the invocation: suites that run CI on fixtures do not inherit it
+and cannot overwrite the parent assignment. Relative output paths stay
+relative to the caller, even with `FM_ROOT`. Each shard uploads that file as `suite-assigned-<shard>`, even when a suite fails. The `ci` job
+checks out `bin/` and `tests/` of the run's own default ref (the merge ref on
+a pull request, the pushed commit on main) and runs `bin/ci.sh --coverage`
+over the downloaded assignments. On both pull requests and pushes to main,
+coverage fails unless all shard headers agree, each shard occurs once, and
+every `tests/*.test.sh` appears exactly once with no unknown suite. Invalid
+headers and out-of-range shards are excluded entirely before checking the
+remaining assignments. Coverage runs no stage; assigned suites that fail or
+never finish still fail their bash shard. The final job named `ci` — the
+required check's own name — `needs` all four and fails if any of them failed or was skipped, so
 branch protection and gate 6 read exactly what they read before. Every job
 keeps its own 10-minute `timeout-minutes`. Sharding turned the one
-`bun install` main had into six — the four `bash` shards, `bun` and `e2e` —
+`bun install` main had into eight — the six `bash` shards, `bun` and `e2e` —
 so every one of those jobs, not just one, caches bun's install cache
 (`~/.bun/install/cache`, keyed on `hashFiles('bun.lock')` and the runner
 OS) ahead of its `bun install` step; `e2e` also keeps the pre-existing
-Playwright-browser cache the one job had. `tests/ci.test.sh` proves the
+Playwright-browser cache the one job had. `tests/ci-sharding.test.sh` proves the
 flags' validation, that `--stage` runs only its own group of stages, that
 `--shard`'s shards union to exactly `tests/*.test.sh` with no suite in two
 (including a suite added after the fixture was first split), that
@@ -2605,9 +2621,15 @@ flags' validation, that `--stage` runs only its own group of stages, that
 `FM_CI_TIMINGS_IN`'s recorded duration — not a suite's real size — decides
 the split, and, from timings with zeros and a missing suite, that no shard
 is left holding only zero-timed suites and no shard's recorded load exceeds
-the mean by more than the longest suite; and reads the workflow file for the job names, the shard flag,
-the final `ci` job's `needs`, the per-job timeout, and, for every job that
-runs `bun install`, a `bun.lock`-keyed cache step positioned before it.
+the mean by more than the longest suite. Its coverage tests prove shared
+and mixed timings, missing and duplicate shards, malformed and out-of-range
+headers, disagreeing counts, unknown and newly added suites, optional and
+unsharded assignment output, and coverage usage errors. `tests/ci-workflow.test.sh`
+reads the workflow for job names, the shard flag, the final `ci` job's `needs`,
+the per-job timeout, and a `bun.lock`-keyed cache before every `bun install`.
+It also pins the single bash timings read, assignment uploads, coverage on
+both events, and the default checkout ref; mutations that reintroduce a
+per-shard download or a head-ref override must fail those pins.
 
 ---
 
