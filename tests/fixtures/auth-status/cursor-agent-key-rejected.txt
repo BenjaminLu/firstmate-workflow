@@ -3,7 +3,9 @@
 # cli: 2026.10.01-e373342
 # date: 2026-10-05
 # host: macOS, Darwin 24.6.0, outside any round, env -i with an empty temp HOME, under the auth-probe sandbox profile
-# setup: no CURSOR_API_KEY
+# setup: CURSOR_API_KEY=key_bogus000000
 # redacted: nothing
 # exit: 1
-Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.
+[33m⚠ Warning: The provided API key is invalid.[0m
+The API key was loaded from the CURSOR_API_KEY environment variable.
+Please check you have the right key, create a new one, or authenticate without it.

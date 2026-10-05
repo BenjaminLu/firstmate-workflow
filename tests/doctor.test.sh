@@ -192,7 +192,7 @@ sed -n '/^vendor_min() {/,/^}/p' "$DOCTOR" > "$d/vendor_min.sh"
 for v in claude codex cursor-agent; do
   rec="$(sed -n 's/^# cli: //p' "$FIX/$v-signed-out.txt" | grep -oE '[0-9]+(\.[0-9]+){1,3}' | head -1)"
   floor="$(bash -c '. "$1"; vendor_min "$2"' _ "$d/vendor_min.sh" "$v")"
-  assert_eq "$rec" "$floor" "$v's floor is the version its status check was recorded from"
+  assert_eq "$rec" "$floor" "$v's floor matches its recorded check (Cursor: 2026-10-05 model list)"
 done
 version_fact claude "2.1.0 (Claude Code)"
 out="$(run_doctor)"; rc=$?

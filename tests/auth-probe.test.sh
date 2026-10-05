@@ -58,7 +58,9 @@ fake() {  # fake <vendor> <version line> <status-argv reply> <exit code>
   local v="$1" ver="$2" reply="$3" rc="$4"
   {
     printf '#!/usr/bin/env bash\n'
+    [ "$v" != cursor-agent ] || printf '[ "$#" -eq 1 ] || exit 64\n'
     printf 'if [ "$1" = --version ]; then printf %%s\\\\n %s; exit 0; fi\n' "$(printf '%q' "$ver")"
+    [ "$v" != cursor-agent ] || printf '[ "$#" -eq 1 ] && [ "$1" = --list-models ] || exit 64\n'
     printf 'printf %%s\\\\n %s\n' "$(printf '%q' "$reply")"
     printf 'exit %s\n' "$rc"
   } > "$bin/$v"
@@ -68,7 +70,9 @@ recorded() {  # recorded <vendor> <fixture>: answers exactly as the recorded CLI
   local v="$1" f="$FIX/$2.txt"
   {
     printf '#!/usr/bin/env bash\n'
+    [ "$v" != cursor-agent ] || printf '[ "$#" -eq 1 ] || exit 64\n'
     printf 'if [ "$1" = --version ]; then exec %q %q --version; fi\n' "$FIX/replay.sh" "$f"
+    [ "$v" != cursor-agent ] || printf '[ "$#" -eq 1 ] && [ "$1" = --list-models ] || exit 64\n'
     printf 'exec %q %q\n' "$FIX/replay.sh" "$f"
   } > "$bin/$v"
   chmod +x "$bin/$v"
@@ -81,7 +85,7 @@ for f in "$FIX"/*.txt; do
     assert_ne "" "$(sed -n "s/^# $key: //p" "$f" | head -1)" "fixture $n names its $key"
   done
 done
-for n in claude-signed-in claude-signed-out codex-signed-in codex-signed-out cursor-agent-signed-in cursor-agent-signed-out; do
+for n in claude-signed-in claude-signed-out codex-signed-in codex-signed-out cursor-agent-signed-in cursor-agent-signed-out cursor-agent-key-rejected; do
   assert_eq "yes" "$(sed -n 's/^# recorded: //p' "$FIX/$n.txt" | head -1)" "$n is a recording of the real CLI"
 done
 run() { PATH="$bin:$PATH" "$PROBE" "$@"; }
@@ -119,8 +123,8 @@ assert_eq "authenticated" "$(field "$out" status)" "codex's recorded 'Logged in 
 
 recorded cursor-agent cursor-agent-signed-in
 out="$(run cursor-agent)"
-assert_eq "authenticated" "$(field "$out" status)" "cursor-agent's recorded exit-0 '✓ Logged in as …' is authenticated"
-assert_eq "2026.09.23-86fc751" "$(field "$out" version)" "and its probed version is recorded"
+assert_eq "authenticated" "$(field "$out" status)" "cursor-agent's recorded model list is authenticated despite keychain-save warnings"
+assert_eq "2026.10.01-e373342" "$(field "$out" version)" "and its version matches the 2026-10-05 recording"
 
 # --- unauthenticated, per vendor's own recorded wording --------------------
 recorded claude claude-signed-out
@@ -130,7 +134,7 @@ recorded codex codex-signed-out
 assert_eq "unauthenticated" "$(field "$(run codex)" status)" "codex's recorded 'Not logged in' is unauthenticated"
 
 recorded cursor-agent cursor-agent-signed-out
-assert_eq "unauthenticated" "$(field "$(run cursor-agent)" status)" "cursor-agent's recorded exit-0 'Not logged in' is unauthenticated too"
+assert_eq "unauthenticated" "$(field "$(run cursor-agent)" status)" "cursor-agent's recorded Authentication required is unauthenticated"
 
 # --- the login asked about is the round's, not the operator's session -----
 # (T-121). Each fake answers "signed in" only when it is handed the
@@ -140,7 +144,9 @@ fake_checks() {  # fake_checks <vendor> <bash condition> <yes fixture> <no fixtu
   local v="$1" cond="$2" yes="$FIX/$3.txt" no="$FIX/$4.txt"
   {
     printf '#!/usr/bin/env bash\n'
+    [ "$v" != cursor-agent ] || printf '[ "$#" -eq 1 ] || exit 64\n'
     printf 'if [ "$1" = --version ]; then exec %q %q --version; fi\n' "$FIX/replay.sh" "$yes"
+    [ "$v" != cursor-agent ] || printf '[ "$#" -eq 1 ] && [ "$1" = --list-models ] || exit 64\n'
     printf 'echo status >> %q\n' "$d/$v-status"
     printf 'env > %q\n' "$d/$v-env"
     printf 'if %s; then exec %q %q; fi\n' "$cond" "$FIX/replay.sh" "$yes"
@@ -154,7 +160,7 @@ fake_checks() {  # fake_checks <vendor> <bash condition> <yes fixture> <no fixtu
 # login, handed in as CURSOR_API_KEY
 no_logins
 printf 'crew-cursor-key' > "$d/keychain/firstmate-cursor-api-key"
-fake_checks cursor-agent '[ "${CURSOR_API_KEY:-}" = crew-cursor-key ]' cursor-agent-signed-in cursor-agent-signed-out
+fake_checks cursor-agent '[ "${CURSOR_API_KEY:-}" = crew-cursor-key ]' cursor-agent-signed-in cursor-agent-key-rejected
 out="$(run cursor-agent)"
 assert_eq "authenticated" "$(field "$out" status)" "cursor-agent with the crew key in the keychain only is authenticated"
 assert_contains "$(cat "$d/cursor-agent-env" 2>/dev/null)" "CURSOR_API_KEY=crew-cursor-key" \
@@ -170,7 +176,7 @@ out="$(
   PATH="$bin:$PATH" fm_auth_filter_chain "$ROOT" cursor-agent "$t/auth-notes"
 )"
 assert_eq cursor-agent "$out" "a fresh signed-in check keeps cursor-agent despite stale notes"
-assert_eq "$((before + 1))" "$(wc -l < "$d/cursor-agent-status" | tr -d ' ')" "notes filtering asks status again"
+assert_eq "$((before + 1))" "$(wc -l < "$d/cursor-agent-status" | tr -d ' ')" "notes filtering checks the key again"
 assert_ok "[ ! -s '$t/auth-notes' ]" "the exact stale notes file is now empty"
 
 # The profile uses the round's complete secret-service deny list.
@@ -195,16 +201,42 @@ out="$(run cursor-agent)"
 assert_eq keychain-blocked "$(field "$out" status)" "a confined keychain failure has its own status"
 assert_eq 'cursor-agent needs keychain storage, which crew rounds deny' "$(field "$out" en)" "keychain refusal explains the crew policy in English"
 assert_eq 'cursor-agent 需要鑰匙圈儲存，而 crew 回合禁止存取鑰匙圈' "$(field "$out" tw)" "keychain refusal explains the crew policy in Traditional Chinese"
-fake cursor-agent 2026.10.01-e373342 $'✓ Logged in\nkeychain warning: not authenticated' 0
-assert_eq authenticated "$(field "$(run cursor-agent)" status)" "a working key wins over a keychain warning"
-for pair in 'quota-exhausted|quota exceeded' 'expired|session expired'; do
-  fake cursor-agent 2026.10.01-e373342 "✓ Logged in; keychain warning; ${pair#*|}" 0
-  assert_eq "${pair%%|*}" "$(field "$(run cursor-agent)" status)" "${pair%%|*} wins over Logged in"
+recorded cursor-agent cursor-agent-signed-in
+out="$(run cursor-agent)"
+assert_eq authenticated "$(field "$out" status)" "a working key wins over recorded keychain-save warnings"
+assert_eq "cursor-agent's model list confirms the crew Cursor API key" "$(field "$out" en)" "model-list confirmation is in English"
+assert_eq 'cursor-agent 的模型清單確認 crew 的 Cursor API key 有效' "$(field "$out" tw)" "model-list confirmation is in Traditional Chinese"
+for fixture in signed-in key-rejected signed-out; do
+  recorded cursor-agent "cursor-agent-$fixture"
+  out="$(run cursor-agent)"
+  while IFS= read -r line; do
+    case "$line" in '# '*|'') continue ;; esac
+    assert_lacks "$out" "$line" "cursor $fixture vendor output is private"
+  done < "$FIX/cursor-agent-$fixture.txt"
+  assert_lacks "$out" 'crew-cursor-key' "cursor $fixture never prints the crew key"
+  case "$fixture" in
+    key-rejected)
+      assert_eq unauthenticated "$(field "$out" status)" "the recorded rejected key is unauthenticated"
+      assert_eq 'cursor rejected the crew Cursor API key as invalid; replace it: security add-generic-password -U -s firstmate-cursor-api-key -a "$USER" -w' "$(field "$out" en)" "rejected key has the replacement command in English"
+      assert_eq 'cursor 判定 crew 的 Cursor API key 無效；請更換：security add-generic-password -U -s firstmate-cursor-api-key -a "$USER" -w' "$(field "$out" tw)" "rejected key has the replacement command in Traditional Chinese" ;;
+    signed-out)
+      assert_eq unauthenticated "$(field "$out" status)" "no received credential is unauthenticated"
+      assert_eq 'cursor-agent did not receive the crew Cursor API key; run fm doctor' "$(field "$out" en)" "missing received key names doctor in English"
+      assert_eq 'cursor-agent 沒有收到 crew 的 Cursor API key；請執行 fm doctor' "$(field "$out" tw)" "missing received key names doctor in Traditional Chinese" ;;
+  esac
 done
-fake cursor-agent 2026.10.01-e373342 '✓ Logged in' 1
-assert_eq indeterminate "$(field "$(run cursor-agent)" status)" "nonzero Logged in is not authenticated"
+for pair in 'quota-exhausted|quota exceeded' 'expired|session expired'; do
+  fake cursor-agent 2026.10.01-e373342 "$(printf 'Available models\n%s' "${pair#*|}")" 0
+  assert_eq "${pair%%|*}" "$(field "$(run cursor-agent)" status)" "${pair%%|*} wins over Available models"
+done
+fake cursor-agent 2026.10.01-e373342 'Available models' 1
+assert_eq indeterminate "$(field "$(run cursor-agent)" status)" "nonzero Available models is not authenticated"
+for reply in '✓ Logged in' 'keychain warning' 'noise' 'prefix Available models' 'Available models suffix' ''; do
+  fake cursor-agent 2026.10.01-e373342 "$reply" 0
+  assert_eq indeterminate "$(field "$(run cursor-agent)" status)" "exit zero requires an exact Available models line: $reply"
+done
 
-fake_checks cursor-agent 'true' cursor-agent-signed-in cursor-agent-signed-out
+fake_checks cursor-agent 'true' cursor-agent-signed-in cursor-agent-key-rejected
 # Fail only profile generation; policy and login resolution still use Python.
 mkdir -p "$d/profile-failure-bin"
 {
@@ -220,36 +252,61 @@ assert_ok "[ -e '$d/profile-generation-failed' ]" "the profile helper failure is
 assert_eq keychain-blocked "$(field "$out" status)" "failed profile generation fails closed"
 assert_eq "could not confine cursor-agent's keychain access" "$(field "$out" en)" "profile generation failure explains the confinement refusal"
 assert_eq '無法限制 cursor-agent 的鑰匙圈存取' "$(field "$out" tw)" "profile generation failure explains the refusal in Traditional Chinese"
-assert_ok "[ ! -e '$d/cursor-agent-status' ]" "failed profile generation never starts cursor status"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "failed profile generation never starts cursor check"
 
 out="$(FM_SANDBOX_TOOL="$d/missing-sandbox-tool" run cursor-agent)"
 assert_eq keychain-blocked "$(field "$out" status)" "a missing sandbox tool fails closed"
 assert_eq "could not confine cursor-agent's keychain access" "$(field "$out" en)" "a wrapper failure is distinguished from a vendor keychain error"
 assert_ne '' "$(field "$out" tw)" "wrapper failure also has a Traditional Chinese reason"
-assert_ok "[ ! -e '$d/cursor-agent-status' ]" "missing confinement never starts cursor status"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "missing confinement never starts cursor check"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$d/refused-tool"
 printf '#!/usr/bin/env bash\nexec sleep 30\n' > "$d/hanging-tool"
 chmod +x "$d/refused-tool" "$d/hanging-tool"
 out="$(FM_SANDBOX_TOOL="$d/refused-tool" run cursor-agent)"
 assert_eq keychain-blocked "$(field "$out" status)" "a refused profile without a started marker fails closed"
-assert_ok "[ ! -e '$d/cursor-agent-status' ]" "a refused wrapper never starts cursor status"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "a refused wrapper never starts cursor check"
 out="$(FM_SANDBOX_TOOL="$d/hanging-tool" FM_AUTH_PROBE_TIMEOUT=1 run cursor-agent)"
 assert_eq timeout "$(field "$out" status)" "a wrapper timeout wins over its missing started marker"
-assert_ok "[ ! -e '$d/cursor-agent-status' ]" "a hanging wrapper never starts cursor status"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "a hanging wrapper never starts cursor check"
 # Linux resolves the crew key from its file tier, without a macOS wrapper.
 crew_cursor
 out="$(FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$d/missing-sandbox-tool" run cursor-agent)"
-assert_eq authenticated "$(field "$out" status)" "Linux checks status without a sandbox tool or started marker"
-assert_ok "[ -s '$d/cursor-agent-status' ]" "Linux actually asks cursor status"
+assert_eq authenticated "$(field "$out" status)" "Linux checks the key without a sandbox tool or started marker"
+assert_ok "[ -s '$d/cursor-agent-status' ]" "Linux actually asks cursor check"
 
 # cursor-agent: the operator's own `agent login` works, but there is no crew
 # key - a round would have no login, so the probe refuses before asking
 no_logins
-fake_checks cursor-agent 'true' cursor-agent-signed-in cursor-agent-signed-out
-out="$(run cursor-agent)"
-assert_eq "unauthenticated" "$(field "$out" status)" "an interactive agent login with no crew key is refused"
-assert_contains "$(field "$out" en)" "firstmate-cursor-api-key" "naming the keychain item a round's login comes from"
-assert_ok "[ ! -e '$d/cursor-agent-status' ]" "and cursor-agent's own status is never asked about the operator's session"
+fake_checks cursor-agent 'true' cursor-agent-signed-in cursor-agent-key-rejected
+for os in darwin linux; do
+  out="$(FM_SANDBOX_OS="$os" run cursor-agent)"
+  assert_eq unauthenticated "$(field "$out" status)" "$os missing crew key is refused"
+  assert_contains "$(field "$out" en)" "no crew Cursor API key is stored; cursor-agent's own sign-in (agent login) lives in the macOS keychain, which crew rounds cannot read" "$os explains the absent crew key in English"
+  assert_contains "$(field "$out" tw)" '尚未保存 crew 的 Cursor API key；cursor-agent 自己的登入（agent login）存在 macOS 鑰匙圈，crew 回合無法讀取' "$os explains the absent crew key in Traditional Chinese"
+  assert_contains "$(field "$out" en)" 'firstmate-cursor-api-key' "$os retains the policy hint"
+  assert_ok "[ ! -e '$d/cursor-agent-status' ]" "$os never starts the cursor check without a key"
+done
+crew_cursor
+chmod 644 "$home/.config/firstmate/cursor-api-key"
+out="$(FM_SANDBOX_OS=linux run cursor-agent)"
+assert_eq unauthenticated "$(field "$out" status)" "an unsafe key file is refused"
+for lang in en tw; do
+  assert_contains "$(field "$out" "$lang")" 'chmod 600' "unsafe file retains its actionable $lang reason"
+done
+assert_lacks "$out" 'no crew Cursor API key is stored' "an unsafe file is not absence"
+assert_lacks "$out" '尚未保存 crew' "an unsafe file is not absence in Traditional Chinese"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "unsafe key file never starts cursor"
+no_logins
+printf '#!/usr/bin/env bash\nexit 36\n' > "$d/locked-security"
+chmod +x "$d/locked-security"
+out="$(FM_KEYCHAIN_TOOL="$d/locked-security" run cursor-agent)"
+assert_eq unauthenticated "$(field "$out" status)" "an unreadable keychain item is refused"
+for lang in en tw; do
+  assert_contains "$(field "$out" "$lang")" 'could not be read (exit 36' "unreadable keychain retains its actionable $lang reason"
+done
+assert_lacks "$out" 'no crew Cursor API key is stored' "an unreadable item is not absence"
+assert_lacks "$out" '尚未保存 crew' "an unreadable item is not absence in Traditional Chinese"
+assert_ok "[ ! -e '$d/cursor-agent-status' ]" "unreadable keychain never starts cursor"
 
 # claude: the crew token is handed in as CLAUDE_CODE_OAUTH_TOKEN, and an
 # ambient ANTHROPIC_API_KEY the round sheds is neither counted nor handed in
@@ -382,7 +439,9 @@ hang_check() {
   rm -f "$d/started" "$d/held" "$d/hang-pids"; mkfifo "$d/started" "$d/held"
   {
     printf '#!/usr/bin/env bash\n'
+    [ "$vendor" != cursor-agent ] || printf '[ "$#" -eq 1 ] || exit 64\n'
     printf 'if [ "$1" = --version ]; then echo "claude 2.1.3"; exit 0; fi\n'
+    [ "$vendor" != cursor-agent ] || printf '[ "$#" -eq 1 ] && [ "$1" = --list-models ] || exit 64\n'
     printf 'exec 3<>%q\n' "$d/held"
     printf 'sleep 30 &\n'
     printf 'echo "$$ $!" > %q\n' "$d/hang-pids"

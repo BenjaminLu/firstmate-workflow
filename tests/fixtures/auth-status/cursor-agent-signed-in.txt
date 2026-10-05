@@ -1,8 +1,17 @@
 # recorded: yes
-# command: cursor-agent status
-# cli: 2026.09.23-86fc751
-# date: 2026-09-29
-# host: macOS, Darwin 24.6.0, outside any round (firstmate), crew key as CURSOR_API_KEY
-# redacted: the account email -> user@example.com
+# command: cursor-agent --list-models
+# cli: 2026.10.01-e373342
+# date: 2026-10-05
+# host: macOS, Darwin 24.6.0, outside any round, env -i with an empty temp HOME, under the auth-probe sandbox profile
+# setup: the crew key as CURSOR_API_KEY
+# redacted: the model list after its first two entries
 # exit: 0
-✓ Logged in as user@example.com
+[33m⚠ Cursor couldn't save your credentials. This session continues with the credentials it already has.[0m
+Error: Cursor couldn't save your login to the macOS keychain.
+The keychain item is stuck. Delete it and sign in again:
+  security delete-generic-password -s cursor-access-token -a cursor-user
+  agent login
+Available models
+
+auto - Auto (default)
+gpt-5.3-codex-low - Codex 5.3 Low

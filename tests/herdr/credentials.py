@@ -86,7 +86,7 @@ class Entrypoints(EntrypointsFixture):
     def test_all_supported_cli_formats_inject_roles_and_keep_final(self):
         # Only a vendor whose round's login its own status check confirms
         # runs (T-121): claude's recording says signed in. cursor-agent's
-        # recorded answer is "Not logged in" and gemini has no status check,
+        # 2026-10-05 model-list recording says "Authentication required"; gemini has no status check,
         # so each is refused before its CLI sees a prompt, with the reason
         # on the board; their JSON formats are adapter-contract's to check.
         for vendor in ('claude','cursor-agent','gemini'):
