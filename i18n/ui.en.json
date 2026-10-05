@@ -73,7 +73,7 @@
   "crossVendor": "cross-vendor review",
   "waitingOnYou": "waiting on you",
   "blockedOn": "blocked on",
-  "titleMissing": "Title missing from design/tasks.json",
+  "titleMissing": "Title missing from the task file",
   "mergedMore": "{n} more in completed history",
   "gateFailed": "gate failed",
   "gateFailedN": "gate {n} failed",

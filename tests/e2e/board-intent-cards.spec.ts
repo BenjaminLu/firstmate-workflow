@@ -70,7 +70,7 @@ test('intent card without a report renders without chips and read-only controls 
   } finally {await context.close(); await stopBoard(b);}
 });
 
-test('external change outcomes keep chosen in the engine-wide projection', async ({page}) => {
+test('external change outcomes keep chosen on the main page', async ({page}) => {
   const root=makeRoot([],false);
   writeProjects(root,[{name:'engine',github:'fixtures/engine'},{name:'external',github:'fixtures/external',tasks:[{id:'T-211'}]}]);
   const dir=projectState(root,'external');
