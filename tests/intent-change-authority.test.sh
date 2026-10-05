@@ -6,7 +6,7 @@ for key in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do unset "$k
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 . "$ROOT/tests/lib/project-storage.sh"
-x="$(mktemp -d)"
+x="$(safe_tmpdir)"
 trap 'rm -rf "$x"' EXIT
 mkdir -p "$x/bin" "$x/design/tasks" "$x/state/decisions"
 cp "$ROOT/bin/fm-ready.sh" "$ROOT/bin/fm-reconcile.sh" "$ROOT/bin/fm-emit.sh" "$x/bin/"

@@ -74,7 +74,7 @@ test("nothing here can reach a model", async () => {
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
   expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "lib"]);
   // lib/ contains the lifeline and config helpers, nothing that calls a model
-  expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm_config_runtime.py", "fm_config_tasks.py", "fm_config_values.py", "fm_lifeline.py", "fm_project_paths.py", "fm_registry.py"]);
+  expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm_config_runtime.py", "fm_config_tasks.py", "fm_config_values.py", "fm_lifeline.py", "fm_project_paths.py", "fm_registry.py", "fm_ste.py"]);
   const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);
   expect([...called].sort()).toEqual(["fm_board_port", "fm_language", "fm_lifeline", "fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
 });

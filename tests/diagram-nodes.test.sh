@@ -4,7 +4,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 . "$ROOT/tests/lib/project-storage.sh"
-x="$(mktemp -d)"
+x="$(safe_tmpdir)"
 trap 'rm -rf "$x"' EXIT
 mkdir -p "$x/bin" "$x/i18n" "$x/state/pending" "$x/design/diagrams" "$x/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$x/bin/"
