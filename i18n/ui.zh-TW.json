@@ -113,6 +113,8 @@
   "projectChip": "專案",
   "mergeRunning": "合併進行中",
   "mergeUnknown": "合併結果不明：無法讀取 GitHub，此專案的下一次合併需等待",
+  "boardRestarting": "未送出：看板正在重新啟動，請稍後再送一次",
+  "drainBusy": "看板未重新啟動：合併或回覆進行中",
   "mergeBusy": "未送出：此專案已有合併正在進行，卡片仍待決定",
   "roleWorker": "船員",
   "roleReviewer": "審查員",

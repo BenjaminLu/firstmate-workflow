@@ -46,6 +46,7 @@ cat > "$x/bin/fm-merge.sh" <<'SH'
 printf '%s\n' "$*" >> "$FM_ROOT/merge-calls"
 pr=''; task=''
 while [ $# -gt 0 ]; do case "$1" in --pr) pr="$2"; shift 2 ;; --task) task="$2"; shift 2 ;; *) shift ;; esac; done
+for _ in $(seq 1 300); do [ -e "$FM_ROOT/wait-merge" ] || break; sleep 0.1; done
 "$FM_ROOT/bin/fm-emit.sh" --actor captain --type merged --pr "$pr" ${task:+--task "$task"} \
   --en "merged #$pr from the board" --tw "從看板合併 #$pr" >/dev/null 2>&1 </dev/null
 echo "fm-merge: merged #$pr"
@@ -55,6 +56,7 @@ cat > "$x/bin/fm-dispatch.sh" <<'SH'
 task=''
 while [ $# -gt 0 ]; do case "$1" in --task) task="$2"; shift 2 ;; *) shift ;; esac; done
 printf '%s\n' "$task" >> "$FM_ROOT/dispatch-calls"
+for _ in $(seq 1 300); do [ -e "$FM_ROOT/wait-$task" ] || break; sleep 0.1; done
 if [ -e "$FM_ROOT/hold-$task" ]; then
   echo "fm-dispatch: $task waits for a slot: 3 in flight, limit 3" >&2
   echo "fm-dispatch: 3 in flight, limit 3 - nothing to start"
@@ -230,8 +232,12 @@ assert_contains "$(jq -r .reason "$x/post")" "cannot lock T-036" "it says why, i
 # merge from a card, as before, now with the effect recorded
 emx --actor worker-39 --task T-039 --type pr_opened --pr 39 --en "opened #39" --tw "開了 #39"
 card D-1039 T-039 merge null 39
+: > "$x/wait-merge"
 assert_eq "200" "$(answer D-1039 A)" "the captain answers A, merge"
 assert_eq "merge running" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "a merge runs in the background"
+assert_eq "409" "$(wcurl "$PORTX" -s -o "$x/drain" -w '%{http_code}' -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORTX/drain")" "a running merge refuses drain"
+assert_eq "drainBusy merge" "$(jq -r '"\(.code) \(.busy)"' "$x/drain")" "the durable merge record holds the board"
+rm "$x/wait-merge"
 wait_for 20 jq -e '.merge=="merged"' "$x/state/decisions/D-1039.json"
 assert_eq "merged done" "$(record D-1039 '"\(.merge) \(.effect_outcome)"')" "and its record says it was done once it merged"
 assert_eq "merged" "$(lane T-039)" "the task is merged"
@@ -410,6 +416,77 @@ assert_eq "200" "$(answer D-1119 A)" "the captain merges #97"
 wait_for 20 jq -e '.merge=="merged"' "$x/state/decisions/D-1119.json"
 assert_contains "$(cat "$x/merge-calls")" "--pr 97 --task T-117" "through fm-merge.sh, for #97"
 assert_eq "merged 97" "$(jq -r '.tasks[]|select(.id=="T-117")|"\(.stage) \(.pr)"' <<<"$(sx)")" "and T-117 is merged with #97"
+
+# T-209: a held dispatch spans the entire answer; draining refuses every effect.
+card D-1200 T-038 choice '{"A":"dispatch"}'
+card D-1201 T-038 choice null
+python3 - "$x" "$PORTX" "$XDG_CONFIG_HOME" <<'PYDRAIN'
+import concurrent.futures, hashlib, hmac, json, sys, time, urllib.request, urllib.error
+from pathlib import Path
+x, port, config = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+url = 'http://127.0.0.1:' + port
+secret = (config / 'firstmate' / ('board-' + port + '.secret')).read_text().strip()
+token = hmac.new(secret.encode(), ('session:' + url).encode(), hashlib.sha256).hexdigest()
+def post(path, body, bearer=secret, origin=True):
+    headers = {'Authorization': 'Bearer ' + bearer, 'Content-Type': 'application/json'}
+    if origin: headers['Origin'] = url
+    req = urllib.request.Request(url + path, json.dumps(body).encode(), headers)
+    try: response = urllib.request.urlopen(req, timeout=35)
+    except urllib.error.HTTPError as error: response = error
+    with response: return response.status, json.load(response)
+assert post('/drain', {}, token)[0] == 403, 'tab token cannot drain'
+assert post('/drain', {}, origin=False)[0] == 403, 'drain requires Origin'
+wait = x / 'wait-T-038'; wait.touch()
+with concurrent.futures.ThreadPoolExecutor() as pool:
+    answer = pool.submit(post, '/decisions', {'id': 'D-1200', 'chosen': 'A'})
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if 'T-038' in (x / 'dispatch-calls').read_text(): break
+            time.sleep(.1)
+        else: raise AssertionError('dispatch stub never entered')
+        status, body = post('/drain', {})
+        assert (status, body.get('code'), body.get('busy')) == (409, 'drainBusy', 'answer'), body
+    finally: wait.unlink(missing_ok=True)
+    status, body = answer.result()
+    assert status == 200 and body['outcome'] == 'done', body
+status, body = post('/drain', {})
+assert status == 200 and body['draining'] is True, body
+assert type(body['pid']) is int and body['pid'] > 1 and body['started'] > 0, body
+assert body['session_owned'] is False and body['owner'] is None, body
+def snapshot():
+    paths = list((x / 'state/decisions').glob('*.json')) + [x / 'state/events.jsonl']
+    paths += [x / name for name in ('dispatch-calls', 'merge-calls', 'worker-calls')]
+    return {str(p): p.read_bytes() for p in paths if p.exists()}
+before = snapshot()
+for route, body in (('/decisions', {'id': 'D-1201', 'chosen': 'A'}),
+                    ('/tasks', {'task': 'T-038', 'action': 'park'}),
+                    ('/open', {'path': 'board/server.ts'})):
+    status, body = post(route, body)
+    assert (status, body.get('code')) == (503, 'boardRestarting'), (route, body)
+assert snapshot() == before, 'draining writes no decision, event or stub call'
+assert not (x / 'state/decisions/D-1201.json').exists()
+assert post('/drain', {'release': True}) == (200, {'draining': False})
+assert post('/decisions', {'id': 'D-1201', 'chosen': 'A'})[0] == 200
+PYDRAIN
+assert_eq "0" "$?" "drain protects answers and all writing routes, then releases"
+
+# Expiry has its own empty board; the main board retains the 30 second default.
+y="$(safe_tmpdir)"
+mkdir -p "$y/state/pending" "$y/state/decisions" "$y/state/runs" "$y/state/worktrees"
+cp -R "$x/bin" "$x/board" "$x/design" "$x/stub" "$y/"
+FM_ROOT="$y" FM_PORT=0 FM_BOARD_DRAIN_TTL_MS=500 bun run "$y/board/server.ts" > "$y/out" 2>&1 < /dev/null &
+pidy=$!
+printf '%s\n' "$pidy" > "$y/pids"
+PORTY="$(board_port "$y/out" "$pidy")"
+for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTY/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+assert_eq "200" "$(wcurl "$PORTY" -s -o "$y/drain" -w '%{http_code}' -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORTY/drain")" "expiry board drains"
+assert_eq "503" "$(wcurl "$PORTY" -s -o "$y/post" -w '%{http_code}' -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORTY/tasks")" "expiry board initially refuses writes"
+sleep 0.7
+assert_eq "400" "$(wcurl "$PORTY" -s -o "$y/post" -w '%{http_code}' -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORTY/tasks")" "expired drain lets requests reach validation again"
+stop_pids "$y/pids"
+wait "$pidy" 2>/dev/null || true
+safe_rm_rf "$y"
 
 kill "$pidx" 2>/dev/null
 wait "$pidx" 2>/dev/null || true

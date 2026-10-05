@@ -103,6 +103,7 @@ usage: fm.sh <command> [options]
         and service records keyed by the old names stay with those names.
 
   board [--repo DIR]
+        A stale session-owned board is replaced when idle.
         Says in English and Chinese when the board runs older code and must be restarted by hand.
         Uses config.yaml board.port (4173 by default); FM_PORT overrides it.
         Open or reopen the captain's board: start it or reuse it, then
