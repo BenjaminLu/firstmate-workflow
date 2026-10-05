@@ -93,59 +93,7 @@ if [ "$ci_coverage_set" = 1 ]; then
   fi
   ci_coverage_root="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
   [ -d "$ci_coverage_root" ] || exit 2
-  python3 - "$ci_coverage" "$ci_coverage_root" <<'PYCOVERAGE'
-from collections import Counter
-from glob import escape, glob
-from pathlib import Path
-import re
-import sys
-
-directory, root = map(Path, sys.argv[1:])
-files = sorted(Path(path) for path in glob(escape(str(directory)) + "/*.txt") if Path(path).is_file())
-expected = {Path(path).relative_to(root).as_posix()
-            for path in glob(escape(str(root)) + "/tests/*.test.sh")}
-counts = Counter()
-shards = set()
-total = None
-errors = []
-if not files:
-    errors.append(f"no assignment files in {sys.argv[1]}")
-for path in files:
-    with path.open(newline="") as stream:
-        lines = stream.read().split("\n")
-    match = re.fullmatch(r"# shard ([1-9][0-9]*)/([1-9][0-9]*)", lines[0])
-    if not match:
-        errors.append(f"bad header: {path}")
-        continue
-    index, size = map(int, match.groups())
-    if index > size:
-        errors.append(f"shard out of range: {path}")
-        continue
-    if total is None:
-        total = size
-    if size != total:
-        errors.append(f"shard count disagrees: {path}")
-    if index in shards:
-        errors.append(f"duplicate shard {index}: {path}")
-    shards.add(index)
-    counts.update(line for line in lines[1:] if line)
-if total is not None:
-    for index in range(1, total + 1):
-        if index not in shards:
-            errors.append(f"missing shard {index}")
-for path in sorted(expected | counts.keys()):
-    if path not in expected:
-        errors.append(f"unknown suite: {path}")
-    if counts[path] == 0:
-        errors.append(f"suite in no shard: {path}")
-    elif counts[path] > 1:
-        errors.append(f"suite in {counts[path]} shards: {path}")
-if errors:
-    for error in errors:
-        print(f"ci: coverage: {error}")
-    sys.exit(1)
-print(f"ci: coverage: {len(expected)} suites, each in exactly one of {total} shards")
-PYCOVERAGE
+  python3 "$_fm_code_dir/lib/fm_ci_checks.py" coverage "$ci_coverage" "$ci_coverage_root"
   exit $?
 fi
 case "$ci_stage" in

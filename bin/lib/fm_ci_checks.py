@@ -131,6 +131,62 @@ def design_layout():
     sys.exit(1 if bad else 0)
 
 
+def coverage():
+    """Check that shard assignments cover every bash suite exactly once."""
+    from collections import Counter
+    from glob import escape, glob
+    from pathlib import Path
+    import re
+    import sys
+
+    directory, root = map(Path, sys.argv[2:])
+    files = sorted(Path(path) for path in glob(escape(str(directory)) + "/*.txt") if Path(path).is_file())
+    expected = {Path(path).relative_to(root).as_posix()
+                for path in glob(escape(str(root)) + "/tests/*.test.sh")}
+    counts = Counter()
+    shards = set()
+    total = None
+    errors = []
+    if not files:
+        errors.append(f"no assignment files in {sys.argv[2]}")
+    for path in files:
+        with path.open(newline="") as stream:
+            lines = stream.read().split("\n")
+        match = re.fullmatch(r"# shard ([1-9][0-9]*)/([1-9][0-9]*)", lines[0])
+        if not match:
+            errors.append(f"bad header: {path}")
+            continue
+        index, size = map(int, match.groups())
+        if index > size:
+            errors.append(f"shard out of range: {path}")
+            continue
+        if total is None:
+            total = size
+        if size != total:
+            errors.append(f"shard count disagrees: {path}")
+        if index in shards:
+            errors.append(f"duplicate shard {index}: {path}")
+        shards.add(index)
+        counts.update(line for line in lines[1:] if line)
+    if total is not None:
+        for index in range(1, total + 1):
+            if index not in shards:
+                errors.append(f"missing shard {index}")
+    for path in sorted(expected | counts.keys()):
+        if path not in expected:
+            errors.append(f"unknown suite: {path}")
+        if counts[path] == 0:
+            errors.append(f"suite in no shard: {path}")
+        elif counts[path] > 1:
+            errors.append(f"suite in {counts[path]} shards: {path}")
+    if errors:
+        for error in errors:
+            print(f"ci: coverage: {error}")
+        sys.exit(1)
+    print(f"ci: coverage: {len(expected)} suites, each in exactly one of {total} shards")
+
+
 if __name__ == "__main__":
     {"variable-boundary": variable_boundary, "compile": compile_modules,
-     "private-fetch": private_fetch, "design-layout": design_layout}[sys.argv[1]]()
+     "private-fetch": private_fetch, "design-layout": design_layout,
+     "coverage": coverage}[sys.argv[1]]()
