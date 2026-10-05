@@ -142,6 +142,7 @@ type Crew = {
   model?: string | null;
   model_source?: string | null;
   host_recorded?: boolean;
+  host_confirmed?: boolean;
   model_requested?: string | null;
   cli_version?: string | null;
   model_mismatch?: boolean;
@@ -612,7 +613,7 @@ const firstmateHost = (project: string): Partial<Crew> => {
       const value = JSON.parse(readFileSync(path, "utf8"));
       if (!value || typeof value !== "object" || Array.isArray(value)) return {};
       const text = (v: unknown) => typeof v === "string" && v.trim() ? v : null;
-      return { host_recorded: true, vendor: text(value.harness), model: text(value.model),
+      return { host_recorded: true, host_confirmed: value.confirmed !== false, vendor: text(value.harness), model: text(value.model),
         cli_version: text(value.cli_version), model_source: text(value.model_source) };
     } catch { return {}; }
   }
@@ -1353,7 +1354,7 @@ const buildState = (only: string | null) => {
     const keys = new Set(["id", "key", "project", "task", "pr", "pr_url", "type", "ts", "actor",
       "role", "stage", "state", "kind", "chosen", "merge", "merge_unknown", "owner", "task_final", "identity",
       "confirm", "merged_seq", "crew_name", "name", "mode", "round", "attempt", "vendor", "model", "model_source",
-      "model_requested", "cli_version", "model_mismatch", "host_recorded", "progress", "window_expected"]);
+      "model_requested", "cli_version", "model_mismatch", "host_recorded", "host_confirmed", "progress", "window_expected"]);
     const metadata = (value: Record<string, any>) => {
       const project = projectOf(value), entry = registry().projects.get(project);
       if (!entry || entry.state === join(ROOT, "state")) return value;

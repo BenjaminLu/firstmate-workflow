@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Firstmate's host facts, separate from crew configuration and identities."""
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,8 @@ import sys
 import tempfile
 
 sys.dont_write_bytecode = True
-from fm_hooks import detect
+from fm_hooks import detect_source
+import fm_lifeline as life
 
 
 def text(value):
@@ -48,7 +50,7 @@ def configured_model(root, harness):
 
 def collect(root):
     root = Path(root).resolve()
-    harness = detect()
+    harness, detection_source = detect_source()
     version = None
     # Never execute an arbitrary FM_HARNESS value as a command.
     cli = {'claude': 'claude', 'codex': 'codex', 'cursor': 'cursor-agent'}.get(harness)
@@ -60,7 +62,36 @@ def collect(root):
         except (OSError, subprocess.SubprocessError):
             pass
     model, source = configured_model(root, harness)
-    return dict(harness=harness, cli_version=version, model=model, model_source=source)
+    try:
+        pid = life.session_owner()
+        session = dict(pid=pid, started=process_field(pid, 'lstart'))
+    except (RuntimeError, ValueError, OSError):
+        session = None
+    return dict(harness=harness, cli_version=version, model=model, model_source=source,
+                session=session, source=detection_source,
+                written_by=dict(pid=os.getpid(), parent_command=process_field(os.getppid(), 'command')[:200]))
+
+
+def process_field(pid, field):
+    try:
+        return subprocess.run(['ps', '-p', str(pid), '-o', field + '='],
+                              capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def decide(previous, detected):
+    """Return the record to write, or None to keep its exact existing bytes."""
+    if detected.get('source') is not None:
+        return dict(detected, confirmed=True)
+    if not previous or previous.get('harness') is None:
+        return dict(detected, confirmed=False)
+    if detected.get('session') is not None and detected['session'] == previous.get('session'):
+        return None
+    since = (previous.get('unconfirmed_since') if previous.get('confirmed') is False else None)
+    return dict(previous, confirmed=False,
+                unconfirmed_since=since or datetime.now(timezone.utc).isoformat(),
+                last_unknown={key: detected.get(key) for key in ('session', 'written_by')})
 
 
 def save(path, value):
@@ -78,4 +109,13 @@ def save(path, value):
 
 
 if __name__ == '__main__':
-    save(Path(sys.argv[2]) / 'session/host.json', collect(sys.argv[1]))
+    path = Path(sys.argv[2]) / 'session/host.json'
+    try:
+        previous = json.loads(path.read_text())
+        if not isinstance(previous, dict):
+            previous = None
+    except (OSError, ValueError):
+        previous = None
+    value = decide(previous, collect(sys.argv[1]))
+    if value is not None:
+        save(path, value)

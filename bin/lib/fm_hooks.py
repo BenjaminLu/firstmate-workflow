@@ -141,22 +141,26 @@ def hooks_change(root, harness, install):
     return f'{rel}: {"installed" if install else "removed"} {", ".join(changed)}'
 
 
-def detect():
+def detect_source():
     """The harness this session runs in: FM_HARNESS, else the name of the
     session's own process (bin/lib/fm_lifeline.py's session_owner), else
     CLAUDECODE=1, which Claude Code sets for every command it runs (its
     process can be named `node`)."""
     given = os.environ.get('FM_HARNESS', '')
     if given:
-        return given
+        return given, 'env'
     try:
         _, name = life._parent_of(life.session_owner())
     except (RuntimeError, ValueError, OSError):
         name = ''
     for harness in HARNESSES:
         if harness in (name or '').lower():
-            return harness
-    return 'claude' if os.environ.get('CLAUDECODE') == '1' else None
+            return harness, 'owner'
+    return ('claude', 'claudecode') if os.environ.get('CLAUDECODE') == '1' else (None, None)
+
+
+def detect():
+    return detect_source()[0]
 
 
 def codex_capability(root):

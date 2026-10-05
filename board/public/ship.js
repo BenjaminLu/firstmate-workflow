@@ -175,7 +175,9 @@ const SHIP = (() => {
       // The Model field carries the warning colour, with both names, only
       // when the run reported a model other than the one config.yaml asked for.
       (c.role === "fm" && !c.host_recorded ? "" :
-      line("cvendor", T("crewVendor"), c.vendor ? esc(c.vendor) : unknown) +
+      line("cvendor" + (c.host_confirmed === false ? " warn" : ""), T("crewVendor"),
+        c.host_confirmed === false ? esc(T("hostUnconfirmed").replace("{vendor}", c.vendor || T("crewUnknown")))
+          : c.vendor ? esc(c.vendor) : unknown) +
       `<dt>${esc(T("crewModel"))}</dt><dd class="cmodel${c.model_mismatch ? " warn" : ""}">` +
       (c.model_mismatch
         ? esc(T("modelMismatch").replace("{requested}", c.model_requested || unknown).replace("{model}", c.model || unknown))
@@ -236,6 +238,7 @@ const SHIP = (() => {
         // T-127: what the round actually ran on, read from the run itself;
         // null/false for a run recorded before this, never guessed
         host_recorded: !!a.host_recorded,
+        host_confirmed: a.host_confirmed,
         vendor: a.vendor || null,
         model: a.model || null,
         model_requested: a.model_requested || null,
@@ -498,7 +501,9 @@ const SHIP = (() => {
       cell("pj", T("projectChip"), c.project
         ? `<i class="pdot" style="--pc:${projectColor(c.project)}" aria-hidden="true"></i>${esc(c.project)}` : unknown) +
       (c.role === "fm" && !c.host_recorded ? "" :
-      cell("rv", T("crewVendor"), c.vendor ? esc(c.vendor) : unknown) +
+      cell("rv" + (c.host_confirmed === false ? " warn" : ""), T("crewVendor"),
+        c.host_confirmed === false ? esc(T("hostUnconfirmed").replace("{vendor}", c.vendor || T("crewUnknown")))
+          : c.vendor ? esc(c.vendor) : unknown) +
       cell("rm" + (c.model_mismatch ? " warn" : ""), T("crewModel"), c.model_mismatch
         ? esc(T("modelMismatch").replace("{requested}", c.model_requested || unknown).replace("{model}", c.model || unknown))
         : c.model ? esc(c.model) : unknown)) +
