@@ -323,16 +323,35 @@ def registry_value(engine, name, field):
 
 
 def register(engine, name, p):
-    path=engine/'config.yaml'; text=path.read_text()
+    path=engine/'config.yaml'
+    with path.open(newline='') as source:
+        text=source.read()
+    lines=text.splitlines(keepends=True)
+    headers=[i for i,line in enumerate(lines)
+             if re.match(r'projects:\s*(#.*)?$',line.rstrip('\r\n'))]
+    if len(headers) > 1:
+        raise ValueError('config.yaml has more than one projects: block; merge them by hand before onboarding')
     # The public registry receives routing only. Existing names must match;
     # onboarding never overwrites another project or private nested contract.
-    if re.search(r'^  '+re.escape(name)+r':\s*$',text,re.M):
+    if any(re.match(r'^  '+re.escape(name)+r':[ \t]*(#.*)?$',line.rstrip('\r\n')) for line in lines):
         for field,value in [('github',p['repository']),('base',p['base'])]:
             if registry_value(engine,name,field) != value: raise ValueError('existing registry binding differs')
         return
     entry='  '+name+':\n    github: '+json.dumps(p['repository'])+'\n    base: '+json.dumps(p['base'])+'\n    required_check: '+json.dumps(p['required_checks'][0])+'\n'
-    if re.search(r'^projects:\s*$',text,re.M):
-        text=re.sub(r'^projects:\s*\n',lambda m:m[0]+entry,text,count=1,flags=re.M)
+    if headers:
+        insertion=headers[0]+1
+        for i in range(insertion,len(lines)):
+            raw=lines[i].rstrip('\r\n')
+            # Match fm_registry.top_block's boundary, retaining comments and
+            # blank lines verbatim. Indented continuations belong to the entry.
+            if raw.strip() and not raw.lstrip().startswith('#') and not raw[:1].isspace():
+                break
+            if raw[:1].isspace():
+                insertion=i+1
+        before=''.join(lines[:insertion])
+        if not before.endswith(('\n','\r')):
+            before+='\n'
+        text=before+entry+''.join(lines[insertion:])
     else:
         text+='\nprojects:\n'+entry
     atomic(path,text)
@@ -397,7 +416,7 @@ def main(argv=None):
             print(json.dumps(dict(inferred=p,questions=questions(e,p)),indent=2,ensure_ascii=False))
             return 0
         answers=json.loads(args.answers.read_text())
-        if re.search(r'^  '+re.escape(name)+r':\s*$',config,re.M):
+        if re.search(r'^  '+re.escape(name)+r':[ \t]*(#.*)?$',config,re.M):
             for field, proposed in [('github',answers.get('repository',p['repository'])),
                                     ('base',answers.get('base',p['base']))]:
                 if registry_value(engine,name,field) != proposed:
