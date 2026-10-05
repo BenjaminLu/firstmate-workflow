@@ -660,5 +660,64 @@ assert_eq "70" "$?" "a worker's name is refused for a reviewer"
 assert_contains "$refused" "crew name $worker_name is on the worker roster" "and the refusal says whose name it is"
 rm -rf "$dn"
 
+# T-201: the adapter changes repository state only after review preparation.
+for movement in base retarget head closed; do
+  df="$(fixture)"; rf="$df/repo"; GHf="$(ghstub "$df")"
+  reviewed_head="$(git -C "$rf" rev-parse work)"
+  reviewed_base="$(git -C "$rf" merge-base main work)"
+  reviewed_patch="$(git -C "$rf" diff-tree -r -p --no-renames "$reviewed_base" "$reviewed_head" |
+    git patch-id --stable | cut -d ' ' -f 1)"
+  cat > "$rf/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+set -eu
+[ "$1" = run ] || exit 64
+case "$FM_FIXTURE_MOVEMENT" in
+  base|head)
+    ref=main
+    [ "$FM_FIXTURE_MOVEMENT" != head ] || ref=work
+    old="$(git -C "$FM_TARGET_ROOT" rev-parse "$ref")"
+    # A sibling file keeps main's new commit unrelated to the reviewed src/a.
+    blob="$(printf 'unrelated change\n' | git -C "$FM_TARGET_ROOT" hash-object -w --stdin)"
+    tree="$( { git -C "$FM_TARGET_ROOT" ls-tree "$old"; printf '100644 blob %s\tunrelated.txt\n' "$blob"; } |
+      git -C "$FM_TARGET_ROOT" mktree)"
+    new="$(printf 'move during review\n' | git -C "$FM_TARGET_ROOT" commit-tree "$tree" -p "$old")"
+    git -C "$FM_TARGET_ROOT" update-ref "refs/heads/$ref" "$new"
+    ;;
+  retarget) printf 'other-base\n' > "$FM_TARGET_ROOT/.fixture-pr-base" ;;
+  closed) touch "$FM_TARGET_ROOT/.fixture-pr-closed" ;;
+esac
+printf 'APPROVE:T-Z\n' > "$3/verdict.txt"
+M
+  chmod +x "$rf/bin/adapters/mock.sh"
+  out="$(cd "$rf" && FM_ROOT="$rf" FM_GH="$GHf" FM_FIXTURE_MOVEMENT="$movement" \
+    bin/fm-review.sh --task T-Z --branch work --pr 9 2>"$df/stderr")"; code=$?
+  actor="$(jq -r 'select(.type=="review_opened")|.actor' "$rf/state/events.jsonl")"
+  verdict_heads="$(jq -r 'select(.kind=="verdict")|.head' "$rf/state/evidence/self/T-Z/"*.json)"
+  if [ "$movement" = base ]; then
+    assert_eq 0 "$code" 'base moving during review does not discard the verdict'
+    assert_ne "$reviewed_base" "$(git -C "$rf" rev-parse main)" 'the adapter really advanced main'
+    assert_eq "$reviewed_head" "$verdict_heads" 'the retained verdict names the originally reviewed head'
+    assert_eq "$reviewed_base" "$(jq -r 'select(.kind=="verdict")|.base' "$rf/state/evidence/self/T-Z/"*.json)" \
+      'the retained verdict keeps its original merge-base'
+    assert_eq "$reviewed_patch" "$(jq -r 'select(.kind=="verdict")|.patch' "$rf/state/evidence/self/T-Z/"*.json)" \
+      'the retained verdict keeps its original patch-id'
+    assert_contains "$(cat "$df/ghcalls")" 'pr comment' 'the base-move verdict is projected'
+    assert_contains "$(jq -r .type "$rf/state/events.jsonl")" approved 'the base-move verdict emits approved'
+    assert_fail "test -e '$rf/state/runs/$actor/stale-final.txt'" 'the base-move verdict is not stale'
+  else
+    assert_eq 65 "$code" "$movement during review refuses the final verdict"
+    assert_ok "test -f '$rf/state/runs/$actor/stale-final.txt'" "$movement retains stale final evidence"
+    assert_eq infrastructure_error \
+      "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$rf/state/events.jsonl" | tail -1)" \
+      "$movement emits infrastructure failure"
+    assert_eq '' "$verdict_heads" "$movement records no verdict"
+    assert_lacks "$(cat "$df/ghcalls")" 'pr comment' "$movement projects no verdict"
+    if [ "$movement" = retarget ]; then
+      assert_contains "$(cat "$df/stderr")" 'fm-binding:' 'retarget failure preserves binding stderr'
+      assert_contains "$(cat "$df/stderr")" 'base' 'retarget failure names the base'
+    fi
+  fi
+  rm -rf "$df"
+done
 
 finish
