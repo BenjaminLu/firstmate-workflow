@@ -202,7 +202,7 @@ class Preflight(unittest.TestCase):
         policy = dict(never_read=[], repo_config=[], review_root_readonly=True,
                       review_git_readonly=True)
         roots = [str(self.root / 'checkout'), str(self.root / 'tmp')]
-        mac = darwin(policy, roots, [], {}, '', [])
+        mac = darwin(policy, roots, [], {}, '', [], root=roots[0])
         self.assertIn('(deny file-write* (subpath "' + roots[0] + '"))', mac)
         linux_args = linux(policy, roots, [], {}, '').splitlines()
         at = linux_args.index(roots[0])

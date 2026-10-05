@@ -4180,8 +4180,12 @@ elsewhere for a vendor's own rewritten state files, which would also deny
 characters (round 1 review). This is narrower than the write roots' own
 reach: a round may still delete everything else in its tree, including the
 tree's own directory once emptied, but not this one path, which is what
-lets `git` still answer inside whatever is left. `tests/sandbox.test.sh`
-asserts the generated profile and bwrap arguments carry this on every host,
+lets `git` still answer inside whatever is left. An external round's
+pinned-folder deny covers the whole project home, so on macOS the profile
+re-allows read (only read) of the round's own git directories under it after
+that deny. Linux needs no additional rule because it never hides that home.
+`tests/sandbox.test.sh` asserts the generated profile and bwrap arguments
+carry this on every host,
 and, only on a host that can actually nest a real sandbox (never inside
 another one, which is why the rest of the suite uses a stand-in - design
 13.1), runs it for real, in the block guarded by `real_sandbox_ok`: inside
@@ -5234,9 +5238,11 @@ existing diff prompt shape around that index.
 Both projects receive the approved immutable pin when present.
 
 T-173 supersedes the bounded design excerpts: complete approved snapshots live
-in the round's sandbox-protected `pinned/` folder. Prompts index their absolute
-paths, hashes and design section anchors instead of embedding or trimming design
-text. Whole conventions and the complete parsed gate contract remain in the
+in the round's sandbox-protected `pinned/` folder. The external home stays
+hidden except for the pinned folder, the round's roots and the round's own
+git directories (read-only, with any `never_read` entry inside them still
+denied). Prompts index their absolute paths, hashes and design section anchors
+instead of embedding or trimming design text. Whole conventions and the complete parsed gate contract remain in the
 prompt. Run-mode contract summaries use the pin rather than mutable target
 configuration whenever a pin exists. Existing review total-input bounds still
 refuse an unrepresentable prompt.

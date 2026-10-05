@@ -270,6 +270,149 @@ class PinnedContext(unittest.TestCase):
         self.assertFalse((target / 'pinned').exists())
         self.assertIn(str(self.folder / 'design.md'), result.stdout)
 
+    def external_git_fixture(self):
+        private = self.root / 'private'
+        repo = private / 'repo'
+        tree = private / 'worktrees/T-218'
+        self.env = {k: v for k, v in self.env.items() if not k.startswith('GIT_')}
+        self.env.update(HERDR_ENV='0', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
+                        FM_EXTERNAL='1')
+        self.folder = private / 'state/runs/worker-x/pinned'
+        self.env['FM_PINNED_DIR'] = str(self.folder)
+        self.assertEqual(self.render().returncode, 0)
+        for args in (['init', '-q', '-b', 'main', str(repo)],
+                     ['-C', str(repo), '-c', 'core.hooksPath=/dev/null',
+                      '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                      '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base', '--allow-empty'],
+                     ['-C', str(repo), '-c', 'core.hooksPath=/dev/null',
+                      'worktree', 'add', str(tree), '-b', 't218']):
+            result = subprocess.run(['git', *args], env=self.env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        hidden = [private / 'CONVENTIONS.md', private / 'design.md',
+                  private / 'tasks/T-218.json', private / 'state/evidence-signing.key',
+                  private / 'state/runs/another/secret', repo / 'working-tree-secret']
+        for path in hidden:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('private fixture')
+        hooks = repo / '.git/hooks'
+        hooks.mkdir(exist_ok=True)
+        (hooks / 'secret').write_text('private hook')
+        policy = dict(write=['{root}'],
+                      read=['/usr', '/bin', '/lib', '/lib64', '/etc', '/System', '/opt', '/Library'],
+                      never_read=[str(private / 'state')], repo_config=[], vendors={},
+                      dimensions=[], network=[], env_scrub=[], procs=2048, cpu=600)
+        return private, repo, tree, hooks, hidden, policy
+
+    def git_profile(self, tree, policy, platform='darwin', baseline=False):
+        path = self.root / 'git-policy.json'
+        path.write_text(json.dumps(policy))
+        if baseline:
+            command = [sys.executable, str(ROOT / 'tests/lib/t177_sandbox_base.py'),
+                       'profile', str(path), platform, str(tree), '', '', '', '', '']
+        else:
+            command = ['bash', str(ROOT / 'bin/fm-sandbox.sh'), 'profile',
+                       '--policy=' + str(path), '--root=' + str(tree)]
+        result = subprocess.run(command, env=dict(self.env, FM_SANDBOX_OS=platform),
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def git_read_rule(self, repo):
+        return ('(allow file-read* (subpath "' + str(repo / '.git/worktrees/T-218') +
+                '") (subpath "' + str(repo / '.git') + '"))')
+
+    def test_external_git_profile_restores_read_after_home_deny(self):
+        private, repo, tree, hooks, hidden, policy = self.external_git_fixture()
+        result = self.git_profile(tree, policy)
+        rule = self.git_read_rule(repo)
+        deny = '(deny file-read* file-write* (subpath "' + str(private) + '"))'
+        roots = '(allow file-read* file-write* (subpath "' + str(tree) + '"))'
+        self.assertIn(deny + '\n' + rule + '\n', result.stdout)
+        self.assertEqual(result.stdout.count(rule), 1)
+        self.assertLess(result.stdout.index(rule), result.stdout.index(roots))
+        # The root used for git discovery must not depend on write-root order.
+        extra = self.root / 'extra-write'
+        extra.mkdir()
+        policy['write'].insert(0, str(extra))
+        self.assertIn(deny + '\n' + rule + '\n', self.git_profile(tree, policy).stdout)
+
+    def test_self_and_unpinned_git_profiles_match_frozen_baseline(self):
+        private, repo, tree, hooks, hidden, policy = self.external_git_fixture()
+        self.folder = self.root / 'engine/state/runs/worker-x/pinned'
+        self.env.update(FM_EXTERNAL='0', FM_PINNED_DIR=str(self.folder))
+        self.assertEqual(self.render().returncode, 0)
+        for external, pinned in (('0', True), ('1', True), ('1', False)):
+            with self.subTest(external=external, pinned=pinned):
+                self.env['FM_EXTERNAL'] = external
+                if not pinned:
+                    self.env.pop('FM_PINNED_DIR')
+                result = self.git_profile(tree, policy)
+                base = self.git_profile(tree, policy, baseline=True)
+                self.assertNotIn(self.git_read_rule(repo), result.stdout)
+                self.assertEqual((base.returncode, base.stdout, base.stderr),
+                                 (result.returncode, result.stdout, result.stderr))
+
+    def test_external_git_profile_respects_never_read(self):
+        private, repo, tree, hooks, hidden, policy = self.external_git_fixture()
+        rule = self.git_read_rule(repo)
+        for covered in (repo, repo / '.git'):
+            with self.subTest(covered=covered):
+                policy['never_read'] = [str(private / 'state'), str(covered)]
+                result = self.git_profile(tree, policy)
+                self.assertNotIn(rule, result.stdout)
+                base = self.git_profile(tree, policy, baseline=True)
+                self.assertEqual(base.stdout, result.stdout)
+        policy['never_read'] = [str(private / 'state'), str(hooks)]
+        result = self.git_profile(tree, policy)
+        deny = '(deny file-read* file-write* (subpath "' + str(hooks) + '"))'
+        self.assertIn(rule + '\n' + deny + '\n', result.stdout)
+        # A sibling sharing the prefix is neither an ancestor nor a descendant.
+        policy['never_read'] = [str(private / 'state'), str(repo / '.git-other')]
+        result = self.git_profile(tree, policy)
+        self.assertIn(rule + '\n;; the round', result.stdout)
+
+    def test_real_sandbox_external_git_read_and_private_boundaries(self):
+        platform = 'darwin' if sys.platform == 'darwin' else 'linux'
+        tool = shutil.which('sandbox-exec' if platform == 'darwin' else 'bwrap')
+        if not tool:
+            self.skipTest('OS sandbox tool unavailable; profile tests still apply')
+        if os.environ.get('FM_IN_ROUND') == '1':
+            self.skipTest('real sandbox cannot nest inside a crew round')
+        private, repo, tree, hooks, hidden, policy = self.external_git_fixture()
+        for hide_hooks in (False, True):
+            with self.subTest(hide_hooks=hide_hooks):
+                if hide_hooks:
+                    policy['never_read'].append(str(hooks))
+                result = self.git_profile(tree, policy, platform)
+                if platform == 'darwin':
+                    profile = self.root / 'git-profile.sb'
+                    profile.write_text(result.stdout)
+                    command = [tool, '-f', str(profile)]
+                else:
+                    command = [tool, *result.stdout.splitlines()]
+                for args, expected in ((['rev-parse', '--git-dir'], str(repo / '.git/worktrees/T-218') + '\n'),
+                                       (['status', '--porcelain'], '')):
+                    result = subprocess.run(command + ['git', '-C', str(tree), *args],
+                                            env=self.env, text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, expected)
+                denied = hidden + ([hooks / 'secret'] if hide_hooks else [])
+                for path in [self.folder / 'design.md', *denied]:
+                    result = subprocess.run(command + ['/bin/cat', str(path)],
+                                            env=self.env, text=True, capture_output=True)
+                    if path in denied:
+                        self.assertNotEqual(result.returncode, 0, str(path))
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout, path.read_text())
+                for path in (repo / '.git/round-write', self.folder / 'design.md'):
+                    # chmod first ensures the pinned write is denied by the sandbox,
+                    # rather than merely by the fixture's 0444 permissions.
+                    result = subprocess.run(command + ['/bin/sh', '-c',
+                        'chmod u+w "$1"; printf changed > "$1"', '_', str(path)],
+                        env=self.env, text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0, str(path))
+
     def test_real_sandbox_reads_pinned_but_denies_writes_key_and_other_run(self):
         platform = 'darwin' if sys.platform == 'darwin' else 'linux'
         tool = shutil.which('sandbox-exec' if platform == 'darwin' else 'bwrap')

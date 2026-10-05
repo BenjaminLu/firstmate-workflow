@@ -191,7 +191,7 @@ def pinned_state(path):
     return os.path.dirname(state) if os.environ.get('FM_EXTERNAL') == '1' else state
 
 
-def darwin(p, roots, reads, own, port, listening):
+def darwin(p, roots, reads, own, port, listening, *, root):
     sub = lambda paths: ' '.join('(subpath %s)' % sbpl(x) for x in paths)
     auth, state, vtmp = own.get('auth', []), own.get('state', []), own.get('tmp', [])
     board = int(os.environ.get('FM_PORT') or 4173)
@@ -234,7 +234,18 @@ def darwin(p, roots, reads, own, port, listening):
                   '(deny file-read* file-write* %s)' % sub(p['never_read'])]
     pinned = pinned_of()
     if pinned:
-        lines.append('(deny file-read* file-write* %s)' % sub([pinned_state(pinned)]))
+        hidden = pinned_state(pinned)
+        lines.append('(deny file-read* file-write* %s)' % sub([hidden]))
+        # The external home deny also covers this worktree's git directories.
+        # Restore only their reads, preserving never-readable children.
+        under = lambda path, parent: path == parent or path.startswith(parent.rstrip('/') + '/')
+        git_reads = [g for g in gitdirs(root) if under(g, hidden)
+                     and not any(under(g, n) for n in p['never_read'])]
+        if git_reads:
+            lines.append('(allow file-read* %s)' % sub(git_reads))
+            denied = [n for n in p['never_read'] if any(under(n, g) for g in git_reads)]
+            if denied:
+                lines.append('(deny file-read* file-write* %s)' % sub(denied))
     if auth:
         lines.append('(allow file-read* %s)' % ' '.join('(literal %s)' % sbpl(a) for a in auth))
     if state:
@@ -788,7 +799,7 @@ def main():
     own = p['vendors'].get(vendor, {})
     if os_ == 'darwin':
         ports = None if listening == 'unknown' else [int(x) for x in listening.split(',') if x]
-        sys.stdout.write(darwin(p, roots, reads, own, port, ports))
+        sys.stdout.write(darwin(p, roots, reads, own, port, ports, root=real(root)))
     else:
         sys.stdout.write(linux(p, roots, reads, own, sock))
 
