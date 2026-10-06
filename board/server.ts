@@ -1573,6 +1573,15 @@ const pushWake = (id: string, reason: "answered" | "merge_settled", decision: un
     const r = Bun.spawnSync(["python3", LIFELINE, "ring", ROOT, id], { stdin: "ignore", env: { ...childEnv(), FM_PROJECT: ownerOf(id)?.project ?? defaultProject() } });
     if (r.exitCode !== 0) console.error(`wake not rung for ${id}: ${new TextDecoder().decode(r.stderr).trim()}`);
   } catch (e) { console.error(`wake not rung for ${id}: ${(e as Error).message}; the queue carries it`); }
+  try {
+    const project = ownerOf(id)?.project ?? defaultProject();
+    if (registry().projects.has(project) && stateDir(project) !== join(ROOT, "state")) {
+      const record = decision && typeof decision === "object" ? decision as Record<string, unknown> : {};
+      const line = reason === "answered" ? `card: ${id} answered ${record.chosen || "?"}` : `merge: ${id} ${record.merge || "settled"}`;
+      const r = Bun.spawnSync(["python3", LIFELINE, "forward", ROOT, project, id, reason, line], { stdin: "ignore", env: childEnv() });
+      if (r.exitCode !== 0) console.error(`wake not forwarded for ${id}: ${new TextDecoder().decode(r.stderr).trim()}`);
+    }
+  } catch (e) { console.error(`wake not forwarded for ${id}: ${(e as Error).message}; the project queue carries it`); }
 };
 
 // --- Merges run after the answer, not inside it (design sections 5.2, 15.10) ---

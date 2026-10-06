@@ -216,6 +216,11 @@ assert_eq "D-beta-T001-1 D-alpha-T002-1" "$(jq -r '[.pending[].id]|join(" ")' <<
 # another project's merge runs alongside it and completes
 assert_eq "200" "$(posth D-beta-T001-1 A '[{"index":0,"ok":true}]')" "another project's merge is not held behind it"
 wait_for 20 jq -e '.merge=="merged"' "$(project_fixture_state "$h" beta)/decisions/D-beta-T001-1.json"
+wait_for 20 jq -e 'select(.reason=="forwarded" and .origin_reason=="merge_settled" and .id=="beta_D-beta-T001-1")' "$h/state/session/wake.jsonl"
+assert_eq 1 "$(jq -sc '[.[] | select(.reason=="forwarded" and .origin_reason=="answered" and .id=="beta_D-beta-T001-1" and .line=="card: beta D-beta-T001-1 answered A")] | length' "$h/state/session/wake.jsonl")" "external answer forwards one project-named card wake"
+assert_eq 1 "$(jq -sc '[.[] | select(.reason=="forwarded" and .origin_reason=="merge_settled" and .id=="beta_D-beta-T001-1" and .line=="merge: beta D-beta-T001-1 merged")] | length' "$h/state/session/wake.jsonl")" "external settlement forwards one project-named merge wake"
+assert_eq 0 "$(jq -sc '[.[] | select(.reason=="forwarded" and (.id | startswith("alpha_")))] | length' "$h/state/session/wake.jsonl")" "self cards never forward"
+
 assert_eq '[{"index":0,"ok":true}]' "$(jq -c .answers "$(project_fixture_state "$h" beta)/decisions/D-beta-T001-1.json")" "main-page question answer is stored in beta"
 assert_eq "merged" "$(jq -r .merge "$(project_fixture_state "$h" beta)/decisions/D-beta-T001-1.json")" "and completes while the first still runs"
 assert_contains "$(cat "$h/merge-calls")" "--pr 7 --task T-001 --project beta" "on its own project"

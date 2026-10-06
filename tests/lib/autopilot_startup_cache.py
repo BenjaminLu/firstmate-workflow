@@ -106,6 +106,19 @@ sys.exit(code)
         pilot.local()
         self.assertEqual(len(pilot.data['wakes']), 2)
 
+    def test_forwarded_wake_is_not_a_decision(self):
+        directory = self.state / 'autopilot'
+        directory.mkdir()
+        (directory / 'state.json').write_text('{"offset":0,"wake_offset":0}')
+        self.logs['wake_offset'].write_text(json.dumps(dict(
+            id='private-app_D-private-app-T001-1', reason='forwarded',
+            origin_reason='answered', origin_project='private-app',
+            line='card: private-app D-private-app-T001-1 answered A')) + '\n')
+        pilot = A.Pilot(self.ctx)
+        pilot.local()
+        self.assertEqual(pilot.data['wakes'], {})
+        self.assertEqual(pilot.data['wake_offset'], self.logs['wake_offset'].stat().st_size)
+
     def test_missing_logs_start_at_zero_and_accept_later_events(self):
         pilot = A.Pilot(self.ctx)
         for cursor in self.logs:
