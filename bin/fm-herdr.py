@@ -2117,23 +2117,38 @@ def acknowledge(root, decision):
     return lifeline().acknowledge(root, decision, woken, wakes=len(items))
 
 
-def http_get(url):
+BOARD_PROBE_TRY = 5
+BOARD_PROBE_BUDGET = 20
+
+
+def http_get(url, *, timeout=2):
     try:
-        with urllib.request.urlopen(url, timeout=2) as response: return response.read()
+        with urllib.request.urlopen(url, timeout=timeout) as response: return response.read()
     except urllib.error.HTTPError as error:
         error.close()
         raise
 
 
-def board_matches(root, url):
+def board_matches(root, url, *, budget=BOARD_PROBE_BUDGET):
     root = Path(root)
     # This random nonce verifies the engine board, not a project record.
     directory = root / 'state/session'; directory.mkdir(parents=True, exist_ok=True)
     relative = Path('state/session') / ('probe-' + uuid.uuid4().hex)
     nonce = uuid.uuid4().hex.encode(); (root / relative).write_bytes(nonce)
     try:
-        return http_get(url + '/file?path=' + urllib.parse.quote(str(relative))) == nonce
-    except (OSError, ValueError): return False
+        address = url + '/file?path=' + urllib.parse.quote(str(relative))
+        deadline = time.monotonic() + budget
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0: return False
+            try:
+                return http_get(address, timeout=min(BOARD_PROBE_TRY, remaining)) == nonce
+            except urllib.error.HTTPError: return False
+            except TimeoutError: pass
+            except urllib.error.URLError as error:
+                if not isinstance(error.reason, TimeoutError): return False
+            except (OSError, ValueError): return False
+            # Only silence gets another try, with the same nonce and deadline.
     finally: (root / relative).unlink()
 
 
@@ -2339,7 +2354,7 @@ def board_check_port(root, port):
             pass
     except ConnectionRefusedError:
         return
-    if not board_matches(Path(root).resolve(), f'http://127.0.0.1:{port}'):
+    if not board_matches(Path(root).resolve(), f'http://127.0.0.1:{port}', budget=2):
         raise RuntimeError(f'board port belongs to an unverified root: http://127.0.0.1:{port}')
 
 
@@ -2444,7 +2459,7 @@ def board_start(root):
         reused = board_matches(root, url)
         def fresh_start(owner):
             # Any response means a different/unverifiable listener, never reuse it.
-            try: http_get(url); occupied = True
+            try: http_get(url, timeout=BOARD_PROBE_TRY); occupied = True
             except urllib.error.HTTPError: occupied = True
             except OSError:
                 if board_listening(port): raise BoardRefusal(port, board_port_pid(port))
@@ -2520,7 +2535,7 @@ def board_start(root):
                         stale_reason = board_manual_reason(before, after, port, drained, did_not_stop=True)
         elif not reused:
             owner = fresh_start(None)
-        page = bool(http_get(url))
+        page = bool(http_get(url, timeout=BOARD_PROBE_TRY))
         # The browser is sent to a one-time sign-in address (T-122), which
         # alone lets the page write. The address is never recorded: `url`
         # below is the board's own, without a code.

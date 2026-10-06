@@ -24,7 +24,7 @@ class Session(SessionFixture):
             self.assertIn((self.repo / 'skills' / role / 'SKILL.md').read_text(), result)
     def test_board_verifies_root_with_relative_nonce(self):
         seen = []
-        def request(url):
+        def request(url, **kw):
             from urllib.parse import urlparse, parse_qs
             seen.append(url)
             name = parse_qs(urlparse(url).query)['path'][0]
@@ -35,6 +35,82 @@ class Session(SessionFixture):
         with patch.object(m, 'http_get', return_value=b'wrong root'):
             self.assertFalse(m.board_matches(self.repo, 'http://127.0.0.1:4173'))
         self.assertEqual(1, len(seen))
+    def test_board_probe_timeout_budget_and_definite_refusals(self):
+        url = 'http://127.0.0.1:4173'
+        for failure in (TimeoutError(), m.urllib.error.URLError(TimeoutError())):
+            seen = []
+            def request(address, **kw):
+                seen.append((address, kw.get('timeout')))
+                if len(seen) == 1: raise failure
+                name = m.urllib.parse.parse_qs(m.urllib.parse.urlparse(address).query)['path'][0]
+                return (self.repo / name).read_bytes()
+            with patch.object(m, 'http_get', side_effect=request), \
+                 patch.object(m.time, 'monotonic', side_effect=[0, 0, 17]):
+                self.assertTrue(m.board_matches(self.repo, url))
+            self.assertEqual([5, 3], [timeout for _, timeout in seen])
+            self.assertEqual(seen[0][0], seen[1][0])
+            self.assertEqual([], list((self.repo / 'state/session').glob('probe-*')))
+        with patch.object(m, 'http_get', side_effect=TimeoutError()) as get, \
+             patch.object(m.time, 'monotonic', side_effect=[0, 0, 17, 20]):
+            self.assertFalse(m.board_matches(self.repo, url))
+            self.assertEqual([5, 3], [item.kwargs['timeout'] for item in get.call_args_list])
+        clock = [0]
+        def late_reply(address, **kw):
+            clock[0] = 21
+            name = m.urllib.parse.parse_qs(m.urllib.parse.urlparse(address).query)['path'][0]
+            return (self.repo / name).read_bytes()
+        with patch.object(m, 'http_get', side_effect=late_reply) as get, \
+             patch.object(m.time, 'monotonic', side_effect=lambda: clock[0]):
+            self.assertTrue(m.board_matches(self.repo, url))
+            self.assertEqual(1, get.call_count)
+        for failure in (ConnectionRefusedError(), ConnectionResetError(), PermissionError(),
+                        m.urllib.error.URLError(ConnectionRefusedError()),
+                        m.urllib.error.URLError(ConnectionResetError()),
+                        m.urllib.error.URLError(PermissionError()), ValueError(),
+                        m.urllib.error.HTTPError(url, 503, 'busy', {}, None), b'wrong root'):
+            seen = []
+            def refused(address, **kw):
+                seen.append(address)
+                if isinstance(failure, Exception): raise failure
+                return failure
+            with patch.object(m, 'http_get', side_effect=refused):
+                self.assertFalse(m.board_matches(self.repo, url))
+            self.assertEqual(1, len(seen))
+            self.assertEqual([], list((self.repo / 'state/session').glob('probe-*')))
+    def test_board_http_timeout_defaults_and_setup_budget(self):
+        url = 'http://127.0.0.1:4173'
+        with patch.object(m.urllib.request, 'urlopen') as opened:
+            m.http_get(url)
+            self.assertEqual(call(url, timeout=2), opened.call_args)
+            m.http_get(url, timeout=5)
+            self.assertEqual(call(url, timeout=5), opened.call_args)
+        with patch.object(m.socket, 'create_connection'), patch.object(m, 'board_matches', return_value=True) as matches:
+            m.board_check_port(self.repo, 4173)
+            self.assertEqual(call(self.repo.resolve(), url, budget=2), matches.call_args)
+            self.assertEqual(1, matches.call_count)
+        with patch.object(m, 'http_get', side_effect=TimeoutError()) as get, \
+             patch.object(m.time, 'monotonic', side_effect=[0, 0, 2]):
+            self.assertFalse(m.board_matches(self.repo, url, budget=2))
+            self.assertEqual([2], [item.kwargs['timeout'] for item in get.call_args_list])
+    def test_board_busy_matching_code_is_reused_without_starting_child(self):
+        url = 'http://127.0.0.1:4173'; seen = []
+        code = {'board': 'board-tree', 'i18n': 'i18n-tree', 'dirty': False}
+        path = self.repo / 'state/session/board.json'; path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'code': code, 'owner': 900}))
+        def request(address, **kw):
+            seen.append((address, kw.get('timeout')))
+            if len(seen) == 1: raise TimeoutError()
+            if address == url: return b'page'
+            name = m.urllib.parse.parse_qs(m.urllib.parse.urlparse(address).query)['path'][0]
+            return (self.repo / name).read_bytes()
+        with patch.object(m, 'http_get', side_effect=request), patch.object(m.time, 'monotonic', return_value=0), \
+             patch.object(m, 'configured_board_port', return_value=4173), patch.object(m, 'board_code_id', return_value=code), \
+             patch.object(m, 'board_open', return_value={}), patch.object(m, 'lifeline') as life:
+            reply = m.board_start(self.repo)
+            self.assertTrue(reply['reused']); self.assertTrue(reply['page_http_verified'])
+            self.assertEqual(0, life.return_value.start.call_count)
+        self.assertEqual([5, 5, 5], [timeout for _, timeout in seen])
+        self.assertEqual(seen[0][0], seen[1][0]); self.assertEqual(url, seen[2][0])
     def push(self, ident, reason='answered', **answer):
         """What the board does when it writes a decision (T-151): one line on
         the wake queue, then a ring of every waiter's doorbell, through the
@@ -251,7 +327,7 @@ class Session(SessionFixture):
                             raise ProcessLookupError()
                         if sig == signal.SIGTERM: stopped.append(pid)
                     killed = mocked(m.os, 'kill', side_effect=kill)
-                    def get(url):
+                    def get(url, **kw):
                         if stopped and not life.return_value.start.called and case != 'timeout':
                             responses.append('occupied' if case == 'http-errors' and len(responses) < 3 else 'free')
                             if responses[-1] == 'occupied':
@@ -343,7 +419,9 @@ class Session(SessionFixture):
             matches.side_effect = [False, True, True]
             get.side_effect = [ConnectionRefusedError(), b'page']
             life.return_value.start.return_value.poll.return_value = None
+            get.reset_mock()
             self.assertFalse(m.board_start(self.repo)['reused'])
+            self.assertEqual([call('http://127.0.0.1:4173', timeout=5)] * 2, get.call_args_list)
             self.assertEqual(1, life.return_value.start.call_count)
             # A competing listener may acquire the port after the initial check.
             matches.side_effect = None; matches.return_value = False
