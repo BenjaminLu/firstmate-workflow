@@ -978,6 +978,13 @@ roadmap, not a claim of shipped external execution. Finish the accepted engine
 repairs first. T-142 waits for T-166; preserve each dependency and coordinate
 shared-file edits for parallel evidence/brief work. Never edit live runtimes.
 
+When writing an external spec, add `public_title` (English, plain, no paths)
+and an optional `public_summary`. These are the only spec prose for public
+commits and PRs. Keep both fields only in the external task spec under
+`FM_HOME/projects/<name>/tasks/`; never copy real external titles or repository
+names into tracked engine files. Preflight checks new specs; existing SPEC-OK
+receipts stay valid, and older pinned rounds use the generic public label.
+
 External private data belongs in FM_HOME/projects/<name>, including specs,
 conventions, pins, evidence and recovery; no copies in engine state. Private
 repos are accepted. Unknown protection requires confirmed checks/policy, not
