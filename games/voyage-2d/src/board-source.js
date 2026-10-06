@@ -20,8 +20,8 @@ export class BoardSource {
       const id=eventId(e);
       if (!this.history.has(id)) {this.history.set(id,e); fresh.push(e);}
     }
-    // Handoff identities on the board contain the original event. External
-    // aggregate identities are opaque hashes: never infer private review data.
+    // Handoff identities contain the original event for every project, so
+    // external handoffs replay in the same way as the self project's handoffs.
     // Recover the complete allowed stream before replaying the recent window.
     const complete=new Map();
     for (const h of s.handoffs || []) {

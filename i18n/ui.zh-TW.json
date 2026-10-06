@@ -73,7 +73,7 @@
   "crossVendor": "跨供應商審核",
   "waitingOnYou": "等你拍板",
   "blockedOn": "卡在",
-  "titleMissing": "design/tasks.json 未列出標題",
+  "titleMissing": "任務檔案未列出標題",
   "mergedMore": "另 {n} 個在已完成歷史中",
   "gateFailed": "閘門未過",
   "gateFailedN": "第 {n} 道閘未過",

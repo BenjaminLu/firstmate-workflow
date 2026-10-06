@@ -77,7 +77,7 @@ emh --actor github --task T-002 --type merged --project beta --en "beta merged" 
 # numeric card, an old skill-update card, and cards whose ids name their owner
 printf '{"id":"D-7","task":"T-002","kind":"choice","title":"old numeric"}\n' > "$h/state/pending/D-7.json"
 printf '{"id":"D-SK-003","task":"SK-003","kind":"choice","title":"skill update"}\n' > "$h/state/pending/D-SK-003.json"
-printf '{"id":"D-beta-T001-1","project":"beta","task":"T-001","kind":"merge","pr":7,"title":"merge beta #7"}\n' \
+printf '{"id":"D-beta-T001-1","project":"beta","task":"T-001","kind":"merge","pr":7,"title":"merge beta #7","details":{"en":{"title":"Merge beta #7","options":{"A":{"description":"Merge"},"B":{"description":"Hold"}},"questions":[{"kind":"fact","text":"The scope is correct."}]},"zh-TW":{"title":"合併 beta #7","options":{"A":{"description":"合併"},"B":{"description":"暫緩"}},"questions":[{"kind":"fact","text":"範圍正確。"}]}}}\n' \
   > "$(project_fixture_state "$h" beta)/pending/D-beta-T001-1.json"
 printf '{"id":"D-alpha-T001-1","project":"alpha","task":"T-001","kind":"merge","pr":7,"title":"merge alpha #7"}\n' \
   > "$h/state/pending/D-alpha-T001-1.json"
@@ -100,8 +100,9 @@ start_h() {   # start_h: the board on $h, its pid in pidh and port in PORTH
 }
 start_h
 sh_() { curl -sf -m 5 "http://127.0.0.1:$PORTH/api/state${1-}"; }
-posth() {   # posth <id> <choice>: the HTTP status, the body in $h/post
+posth() {   # posth <id> <choice> [answers]: the HTTP status, the body in $h/post
   local body; body="$(jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}')"
+  if [ "$#" -ge 3 ]; then body="$(jq -c --argjson answers "$3" '. + {answers:$answers}' <<<"$body")"; fi
   wcurl "$PORTH" -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
     -d "$body" "http://127.0.0.1:$PORTH/decisions"
 }
@@ -113,12 +114,16 @@ private_state="$(project_fixture_state "$h" beta)"
 printf '%s\n' '{"ts":"2026-01-01T00:00:00Z","project":"beta","actor":"worker-b1","task":"T-001","type":"crew_status","summary":{"en":"PRIVATE-EVENT","zh-TW":"PRIVATE-EVENT"},"data":{"activity":{"en":"PRIVATE-ACTIVITY","zh-TW":"PRIVATE-ACTIVITY"},"progress":{"done":1,"total":2,"secret":"PRIVATE-PROGRESS"}}}' >> "$private_state/events.jsonl"
 printf '%s\n' '{"id":"D-beta-T099-1","project":"beta","task":"T-099","chosen":"B","details":{"secret":"PRIVATE-DETAIL"},"actions":[{"secret":"PRIVATE-ACTION"}],"badges":{"secret":"PRIVATE-BADGE"},"last_review":{"secret":"PRIVATE-REVIEW"},"progress":{"done":1,"total":2,"secret":"PRIVATE-NESTED"}}' > "$private_state/decisions/D-beta-T099-1.json"
 sh1="$(sh_)"
-assert_lacks "$sh1" 'beta one' "aggregate exposes metadata without external task descriptions"
+assert_contains "$sh1" 'beta one' "main page shows external task descriptions"
+assert_eq 'design.md' "$(jq -r '.design_docs.beta' <<<"$sh1")" "main page links beta design"
+assert_eq 'true' "$(jq -r '.pending[]|select(.id=="D-beta-T001-1")|.answerable' <<<"$sh1")" "external card is answerable on the main page"
+assert_eq 'A B' "$(jq -r '.pending[]|select(.id=="D-beta-T001-1")|.details.en.options|keys|join(" ")' <<<"$sh1")" "main page retains external options"
+assert_eq 'fact' "$(jq -r '.pending[]|select(.id=="D-beta-T001-1")|.details.en.questions[0].kind' <<<"$sh1")" "main page retains external questions"
 assert_contains "$(sh_ '?project=beta')" 'beta one' "selected project reads its private description locally"
 field_h() { jq -r --arg p "$1" --arg i "$2" ".tasks[]|select(.project==\$p and .id==\$i)|$3" <<<"$(sh_ "?project=$1")"; }
 
 for private in PRIVATE-EVENT PRIVATE-ACTIVITY PRIVATE-DETAIL PRIVATE-ACTION PRIVATE-BADGE PRIVATE-REVIEW PRIVATE-NESTED PRIVATE-PROGRESS; do
-  assert_lacks "$sh1" "$private" "aggregate excludes $private"
+  assert_contains "$sh1" "$private" "main page retains $private"
 done
 selected="$(sh_ '?project=beta')"
 for private in PRIVATE-EVENT PRIVATE-ACTIVITY PRIVATE-DETAIL PRIVATE-ACTION PRIVATE-BADGE PRIVATE-REVIEW PRIVATE-NESTED; do
@@ -170,17 +175,14 @@ assert_eq "D-beta-T001-1|1" "$(jq -r '"\([.pending[].id]|join(" "))|\(.counts.wa
 assert_eq "4" "$(jq -r .counts.waiting <<<"$(sh_ '?project=alpha')")" "alpha's count is alpha's cards, the old ones included"
 assert_eq "5" "$(jq -r .counts.waiting <<<"$(sh_ '?project=..%2Fetc')")" "a filter that is no project's name filters nothing"
 
-# T-202: fallback titles stay inside the selected external project's view.
+# T-202 / T-222: external fallback titles are also visible on the main page.
 emh --actor captain --task T-077 --type dispatched --project beta --en "pin task" --tw "釘選任務"
 mkdir -p "$private_state/pins/T-077"
 jq -cn '{snapshots:{spec:{text:({title:"beta pin title"}|tojson)}}}' > "$private_state/pins/T-077/1.json"
 emh --actor captain --task T-078 --type decision_requested --project beta --en "T-078: beta decided" --tw "T-078：beta 決定"
-aggregate_titles="$(sh_)"
-for id in T-077 T-078; do
-  assert_eq 'null|false' "$(jq -r --arg id "$id" '.tasks[]|select(.project=="beta" and .id==$id)|[.title,has("title_tw")]|map(tostring)|join("|")' <<<"$aggregate_titles")" "aggregate strips beta $id fallback titles"
-done
-assert_lacks "$aggregate_titles" 'beta pin title' "aggregate does not leak pin title"
-assert_lacks "$aggregate_titles" 'beta decided' "aggregate does not leak decision title"
+main_titles="$(sh_)"
+assert_eq 'beta pin title' "$(jq -r '.tasks[]|select(.project=="beta" and .id=="T-077")|.title' <<<"$main_titles")" "main page retains pin title"
+assert_eq 'beta decided|beta 決定' "$(jq -r '.tasks[]|select(.project=="beta" and .id=="T-078")|[.title,.title_tw]|join("|")' <<<"$main_titles")" "main page retains bilingual decision titles"
 assert_eq 'beta pin title' "$(field_h beta T-077 .title)" "selected beta reads its pin title"
 assert_eq 'beta decided' "$(field_h beta T-078 .title)" "selected beta reads its decision title"
 assert_eq 'beta 決定' "$(field_h beta T-078 .title_tw)" "selected beta reads its Chinese decision title"
@@ -212,8 +214,9 @@ assert_eq "0" "$(grep -c '"decision":"D-alpha-T002-1"' "$h/state/events.jsonl")"
 assert_eq "D-beta-T001-1 D-alpha-T002-1" "$(jq -r '[.pending[].id]|join(" ")' <<<"$(sh_)")" "and the card stays pending, in place"
 
 # another project's merge runs alongside it and completes
-assert_eq "200" "$(posth D-beta-T001-1 A)" "another project's merge is not held behind it"
+assert_eq "200" "$(posth D-beta-T001-1 A '[{"index":0,"ok":true}]')" "another project's merge is not held behind it"
 wait_for 20 jq -e '.merge=="merged"' "$(project_fixture_state "$h" beta)/decisions/D-beta-T001-1.json"
+assert_eq '[{"index":0,"ok":true}]' "$(jq -c .answers "$(project_fixture_state "$h" beta)/decisions/D-beta-T001-1.json")" "main-page question answer is stored in beta"
 assert_eq "merged" "$(jq -r .merge "$(project_fixture_state "$h" beta)/decisions/D-beta-T001-1.json")" "and completes while the first still runs"
 assert_contains "$(cat "$h/merge-calls")" "--pr 7 --task T-001 --project beta" "on its own project"
 assert_eq "running" "$(jq -r .merge "$h/state/decisions/D-alpha-T001-1.json")" "the first is still running"
