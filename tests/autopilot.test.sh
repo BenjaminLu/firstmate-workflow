@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Shared branch fixture: tests/lib/autopilot_branch_fixture.py
 # Feature-owned synthetic event tests; never contacts GitHub.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
