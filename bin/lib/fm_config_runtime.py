@@ -74,6 +74,33 @@ def private_stage():
         print("fm: private artifacts cannot be committed: " + repr(bad), file=sys.stderr)
         sys.exit(65)
 
+    from pathlib import Path
+    import subprocess
+    design = os.environ.get('FM_DESIGN')
+    if len(sys.argv) < 2 or not design:
+        return
+    try:
+        source = Path(design)
+        if not source.is_file():
+            return
+        private = source.read_bytes()
+    except OSError:
+        return
+    copies = []
+    for path in paths:
+        if not path:
+            continue
+        try:
+            result = subprocess.run(['git', '-C', sys.argv[1], 'cat-file', 'blob', ':' + os.fsdecode(path)],
+                                    stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0 and result.stdout == private:
+            copies.append(os.fsdecode(path))
+    if copies:
+        print("fm: the private design.md cannot be committed: " + repr(copies), file=sys.stderr)
+        sys.exit(65)
+
 
 def attempt_id():
     import uuid; print(uuid.uuid4().hex)

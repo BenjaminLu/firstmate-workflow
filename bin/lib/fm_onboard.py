@@ -246,6 +246,25 @@ def validate_merge_methods(p):
         raise ValueError('merge method disabled by repository')
 
 
+def design_seed(name, p, contract):
+    lines = ['---', 'based_on: unrecorded', 'checked_at: unrecorded', '---',
+             f'# {name}: private design', '',
+             f"Firstmate's private reference for this project, written by fm project add at {p['confirmed_at']}. It lives only under FM_HOME, never in the repository. based_on is the {p['base']} commit it was last checked against; when {p['base']} moves past it, fm project sync reports the commits and files so firstmate can correct this file and run fm-project.sh design-checked {name}. Onboarding never rewrites it.",
+             '', '## 1. Product intent', '', p['product'], '',
+             f"Captain intent ({p['confirmed_at']}): {p['captain']} — {p['intent']}",
+             '', '## 2. Repository and checks', '',
+             f"- Repository: {p['repository']}, base {p['base']}",
+             f"- Check: {contract['check']}"]
+    if contract.get('setup'):
+        lines.append(f"- Setup: {contract['setup']}")
+    lines.extend(['- Required checks: ' + ', '.join(p['required_checks']),
+                  '', '## 3. Policy', '',
+                  f"- Land: {p['land']}; review: {p['review']}; post: {p['post']}",
+                  f"- Merge method: {p['merge_method']}; delete branch: {p['delete_branch']}",
+                  ''])
+    return '\n'.join(lines)
+
+
 def approve(home, e, p, answers):
     if answers.get('confirmed') is not True or answers.get('policy_confirmed') is not True:
         raise ValueError('explicit captain confirmation required')
@@ -280,6 +299,11 @@ def approve(home, e, p, answers):
     # owns interpretation, including test globs and commands.
     atomic(home/'state/config.yaml', contract_text)
     atomic(home/'CONVENTIONS.md', render(p))
+    design = home/'design.md'
+    if design.is_symlink():
+        raise ValueError('refusing symlink: ' + str(design))
+    if not design.exists():
+        atomic(design, design_seed(home.name, p, contract))
     return p
 
 

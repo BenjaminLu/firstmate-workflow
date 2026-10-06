@@ -36,6 +36,16 @@ class ScheduledConventions(unittest.TestCase):
         (self.engine/'config.yaml').write_text(config)
         self.env=patch.dict(os.environ,{**{k:v for k,v in os.environ.items() if not k.startswith(('FM_','HERDR_'))},'FM_HOME':str(self.private),'FM_PROJECT':'self'},clear=True)
         self.env.start(); self.addCleanup(self.env.stop)
+    def test_design_sync_command_and_failures(self):
+        run=Mock(return_value=Mock(returncode=17))
+        self.assertEqual(C.design_sync(self.engine,'one',run=run),17)
+        self.assertEqual(run.call_args.args[0],[str(root/'bin/fm-project.sh'),'sync','one','--repo',str(self.engine)])
+        self.assertEqual(run.call_args.kwargs['stdin'],subprocess.DEVNULL)
+        self.assertEqual(run.call_args.kwargs['timeout'],300)
+        for error in (subprocess.TimeoutExpired('sync',300), OSError('sync unavailable')):
+            self.assertEqual(C.design_sync(self.engine,'one',run=Mock(side_effect=error)),70)
+            self.assertIn(str(error),(self.homes['one']/'state/onboarding/inspection-error.txt').read_text())
+
     def test_self_only_and_unconfirmed_registry_have_no_timer(self):
         for names in (['self'], ['self', 'pending']):
             with patch.object(C,'project_names',return_value=names), patch.object(C,'registry_value',side_effect=lambda engine,name,field: str(self.engine if name=='self' else self.private/'pending')):
