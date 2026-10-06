@@ -4,6 +4,7 @@
   "kindRepin": "重新固定",
   "kindScope": "範圍",
   "kindSkill": "技能",
+  "kindSkillTitlePrefix": "技能",
   "kindDecision": "決定",
   "hostUnconfirmed": "{vendor}（未確認）",
   "history": "已完成歷史（展開或收合）",

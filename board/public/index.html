@@ -345,8 +345,10 @@ function cardKind(d) {
   const en = String(d.details?.en?.title || d.title || '');
   const tw = String(d.details?.['zh-TW']?.title || d.title || '');
   for (const [kind, english, chinese] of [
-    ['dispatch','Dispatch ','派工'], ['repin','Repin ','重新固定'],
-    ['scope','Scope','範圍'], ['skill','Skill update','技能']
+    ['dispatch',DICT.en.kindDispatch + ' ',DICT['zh-TW'].kindDispatch],
+    ['repin',DICT.en.kindRepin + ' ',DICT['zh-TW'].kindRepin],
+    ['scope',DICT.en.kindScope,DICT['zh-TW'].kindScope],
+    ['skill',DICT.en.kindSkillTitlePrefix,DICT['zh-TW'].kindSkill]
   ]) if (en.startsWith(english) || tw.startsWith(chinese)) return kind;
   return 'decision';
 }
