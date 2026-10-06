@@ -282,4 +282,24 @@ fm_binding() { printf '%s\\n' "$*" > "$CALLS"; printf ''' + answer + '''; }
 unittest.main(argv=['external-execution'], verbosity=2)
 PY
 assert_eq 0 "$?" "external launch synchronizes target and refuses stale review heads"
+# The index, not the working copy or filename, owns publication bytes.
+t="$(safe_tmpdir)"
+guard_tree="$t/design-guard"
+git init -q "$guard_tree"
+printf 'private design body\n' > "$t/private-design"
+cp "$t/private-design" "$guard_tree/copied-reference.txt"
+git -C "$guard_tree" add copied-reference.txt
+printf 'different working copy\n' > "$guard_tree/copied-reference.txt"
+guard_rc=0
+FM_EXTERNAL=1 FM_DESIGN="$t/private-design" bash -c '. "$1/bin/fm-config.sh"; fm_private_stage "$2"' _ "$ROOT" "$guard_tree" > "$t/design-out" 2> "$t/design-err" || guard_rc=$?
+assert_eq 65 "$guard_rc" "private design bytes in index cannot be published"
+assert_contains "$(cat "$t/design-err")" "copied-reference.txt" "refusal names the staged copy"
+git -C "$guard_tree" add copied-reference.txt
+guard_rc=0
+FM_EXTERNAL=1 FM_DESIGN="$t/private-design" bash -c '. "$1/bin/fm-config.sh"; fm_private_stage "$2"' _ "$ROOT" "$guard_tree" || guard_rc=$?
+assert_eq 0 "$guard_rc" "different staged content passes"
+guard_rc=0
+FM_EXTERNAL=1 FM_DESIGN="$t/missing-design" bash -c '. "$1/bin/fm-config.sh"; fm_private_stage "$2"' _ "$ROOT" "$guard_tree" || guard_rc=$?
+assert_eq 0 "$guard_rc" "unreadable private source counts as no match"
+
 finish

@@ -68,7 +68,7 @@ if [ "${1:-}" = repin ]; then
 fi
 
 REPO="${FM_ROOT:-$(pwd)}"; MIGRATE=0; GH="${FM_GH:-gh}"; URL="${FM_GITHUB_URL:-https://github.com}"
-usage() { echo "usage: fm-project.sh add <owner/repo|local-path> [--name name] [--answers file]; edit|drift <name>; sync|verify <name> [--migrate] [--repo dir]; history on <name> [--repo dir]" >&2; exit 64; }
+usage() { echo "usage: fm-project.sh add <owner/repo|local-path> [--name name] [--answers file]; edit|drift <name>; sync|verify|design-checked <name> [--migrate] [--repo dir]; history on <name> [--repo dir]" >&2; exit 64; }
 words=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -84,7 +84,7 @@ else
   [ "${#words[@]}" -eq 2 ] || usage
   CMD="${words[0]}"; NAME="${words[1]}"
 fi
-case "$CMD" in sync|verify|history) ;; *) usage ;; esac
+case "$CMD" in sync|verify|history|design-checked) ;; *) usage ;; esac
 
 REPO="$(cd "$REPO" 2>/dev/null && pwd -P)" || { echo "fm-project: no engine root at $REPO" >&2; exit 64; }
 CFG="$REPO/config.yaml"
@@ -172,6 +172,7 @@ sync_clone() {
     if [ -s "$ex" ] && [ -n "$(tail -c 1 "$ex")" ]; then printf '\n' >> "$ex"; fi
     printf '%s\n' '.fm-*' >> "$ex"
   fi
+  python3 "$_fm_code_dir/lib/fm_design_check.py" check --engine "$REPO" --name "$NAME" --home "$project_home" --base "$base" || true
   exit 0
 }
 
@@ -258,6 +259,11 @@ verify_target() {
 }
 
 case "$CMD" in
+  design-checked)
+    place_ok || exit 65
+    is_clone || { echo "fm-project: refusing $clone - it is not a clone of its own" >&2; exit 65; }
+    python3 "$_fm_code_dir/lib/fm_design_check.py" mark --engine "$REPO" --name "$NAME" --home "$project_home" --base "$base"
+    ;;
   sync) sync_clone ;;
   verify) verify_target ;;
 esac
