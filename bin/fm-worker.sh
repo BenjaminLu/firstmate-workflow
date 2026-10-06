@@ -229,11 +229,7 @@ publish_wip_if_dirty() {
   [ "${_fm_wip_done}" = 1 ] && return 0
   [ -n "${tree:-}" ] && [ -d "$tree" ] && [ -n "${branch:-}" ] && [ -n "${TASK:-}" ] || return 0
   case "$branch" in main|master|HEAD|'') return 0 ;; esac
-  if [ "${caught_up:-0}" = 1 ]; then
-    echo "fm-worker: the merge of $BASE into $branch was not committed ($reason); nothing is published / $BASE 合併進 $branch 尚未提交；不發布任何內容" >&2
-    return 0
-  fi
-  fm_publication_policy "$tree" || return 1
+  fm_publication_policy "$tree" "$branch" || return 1
   if [ "${pin_post_adapter:-0}" = 0 ] && [ -n "${pinned_path:-}" ] \
       && { [ "${pin_synced:-0}" = 1 ] || [ "${pin_start_copy:-0}" = 1 ]; }; then
     if git -C "$tree" cat-file -e "HEAD:${pinned_path:-}" 2>/dev/null; then
@@ -316,31 +312,6 @@ rebuild_settle() {
     echo "fm-worker: could not clear refs/fm-rebuilt/$branch; the next round settles it again" >&2; return 1; }
 }
 
-# A merge commit is recorded before its task ref moves. Settle that local
-# move from origin's answer after interruption; never rewrite origin.
-catchup_settle() {
-  local pending ls origin_head previous local_head
-  [ -n "${branch:-}" ] && [ -n "${FM_TARGET_ROOT:-}" ] || return 0
-  pending="$(git -C "$FM_TARGET_ROOT" rev-parse -q --verify "refs/fm-caughtup/$branch^{commit}" 2>/dev/null)" || return 0
-  ls="$(git -C "$FM_TARGET_ROOT" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null)" || {
-    echo "fm-worker: could not ask origin about caught-up $branch ($pending); retained for next round / 無法詢問 origin；保留 $branch 的合併紀錄供下一輪處理" >&2
-    return 1; }
-  origin_head="$(printf '%s\n' "$ls" | awk 'NR == 1 { print $1 }')"
-  if [ -n "$origin_head" ] && ! git -C "$FM_TARGET_ROOT" cat-file -e "$origin_head^{commit}" 2>/dev/null; then
-    git -C "$FM_TARGET_ROOT" fetch -q origin "$origin_head" 2>/dev/null || true
-  fi
-  if [ -z "$origin_head" ] || ! git -C "$FM_TARGET_ROOT" merge-base --is-ancestor "$pending" "$origin_head" 2>/dev/null; then
-    previous="$(git -C "$FM_TARGET_ROOT" rev-parse "$pending^1")" || return 1
-    local_head="$(git -C "$FM_TARGET_ROOT" rev-parse -q --verify "refs/heads/$branch")"
-    if [ "$local_head" = "$pending" ]; then
-      git -C "$FM_TARGET_ROOT" update-ref "refs/heads/$branch" "$previous" "$pending" || {
-        echo "fm-worker: could not restore $branch to $previous / 無法還原 $branch 至 $previous" >&2; return 1; }
-    fi
-  fi
-  git -C "$FM_TARGET_ROOT" update-ref -d "refs/fm-caughtup/$branch" "$pending" || {
-    echo "fm-worker: could not clear catch-up record for $branch / 無法清除 $branch 的合併紀錄" >&2; return 1; }
-}
-
 finished() {
   local rc=$?
   # The mirror watcher (T-128), if this round ever started one - stopped
@@ -351,7 +322,6 @@ finished() {
   # reach here via `exit`; SIGKILL cannot. Mid-run saves use fm-checkpoint.sh.
   publish_wip_if_dirty "exit-$rc" || true
   rebuild_settle || true
-  catchup_settle || true
   # the scratch worktree the rebuild check replays in, if a signal cut it short
   if [ -n "${rebuild_probe:-}" ]; then
     git -C "$FM_TARGET_ROOT" worktree remove --force "$rebuild_probe" >/dev/null 2>&1; rm -rf "$rebuild_probe"
@@ -602,6 +572,7 @@ fi
 # see them. Tonight that nearly cost two finished tasks.
 leftover_dirty=0
 branch_existed=0
+bound_head=''
 if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
      -- . ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
   leftover_dirty=1
@@ -622,7 +593,6 @@ else
   rm -rf "$tree"; mkdir -p "$FM_WORKTREES"
   git worktree prune >/dev/null 2>&1
   rebuild_settle || true
-  catchup_settle || true
   if git show-ref --verify --quiet "refs/heads/$branch"; then
     round_two=1
     branch_existed=1
@@ -967,7 +937,6 @@ mirror_watch_stop() {
 # the branch ref never points at a half-rebuilt tree: a run that dies here
 # leaves the branch as it was, and fm-checkpoint.sh refuses a detached
 # HEAD. A commit made on it anyway is refused before the round's own.
-caught_up=0; catchup_prev=''; catchup_base=''
 rebuilt=0; rebuild_prev=''; rebuild_lease=''; rebuild_base=''; rebuild_mark=''
 rebuild_entry=''; rebuild_probe=''
 rebuild_conflicts=(); rebuild_restore=()
@@ -983,15 +952,11 @@ rebuild_state_of() {   # rebuild_state_of <path>; the worktree's blob, or absent
     echo absent
   fi
 }
-rebuild_side_left() {   # rebuild_side_left <path> [catchup]; which side the merge left, in words
+rebuild_side_left() {   # rebuild_side_left <path>; which side the merge left, in words
   local ours='' theirs='' now sha stage
   while IFS=$' \t' read -r _ sha stage _; do
     case "$stage" in 2) ours="$sha" ;; 3) theirs="$sha" ;; esac
   done < <(git -C "$tree" ls-files -u -- "$1" 2>/dev/null)
-  if [ "${2:-}" = catchup ]; then
-    # Stage 2 is the task in a catch-up; retain the rebuild's base/task wording.
-    stage="$ours"; ours="$theirs"; theirs="$stage"
-  fi
   now="$(rebuild_state_of "$1")"
   if [ "$now" = absent ] && [ -z "$ours" ]; then echo "deleted, as $BASE has it; your task changed it"
   elif [ "$now" = absent ] && [ -z "$theirs" ]; then echo "deleted, as your task has it; $BASE changed it"
@@ -1092,76 +1057,17 @@ rebuild_probe_drop() {
   git worktree remove --force "$rebuild_probe" >/dev/null 2>&1; rm -rf "$rebuild_probe"
   git worktree prune >/dev/null 2>&1; rebuild_probe=''
 }
-# Shared conflict inventory; only the direction changes the side names.
-rebuild_collect_conflicts() {
-  local f side
-  # NUL-separated: without -z, git quotes a name outside ASCII
-  # ("\346\226\207.txt"), and that string names no file in the worktree
-  while IFS= read -r -d '' f; do
-    [ -n "$f" ] && rebuild_conflicts+=("$f")
-  done < <(git -C "$tree" diff --name-only -z --diff-filter=U)
-  # A conflict with no marker in it - binary, or deleted on one side - has
-  # one side sitting in the worktree looking resolved. `add -A` would
-  # commit that side whole, so each is described as what it is and held
-  # until the worker changes it.
-  for f in ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"}; do
-    [ -f "$tree/$f" ] && grep -qIE '^(<<<<<<<|>>>>>>>)( |$)' "$tree/$f" 2>/dev/null && continue
-    side="$(rebuild_side_left "$f" "${1:-}")"
-    rebuild_bare+=("$f"); rebuild_bare_left+=("$(rebuild_state_of "$f")"); rebuild_bare_side+=("$side")
-  done
-}
-external_catch_up() {
-  local method dirty ls head rc base_ref="refs/remotes/origin/$BASE"
-  method="$(fm_stack_policy merge_method)" || {
-    echo 'fm-worker: could not read confirmed merge policy / 無法讀取已確認的合併政策' >&2; exit 65; }
-  case "$method" in
-    squash|merge) ;;
-    rebase)
-      echo "fm-worker: the project lands by rebase; $branch is not caught up by a merge / 專案以 rebase 合入；不會以合併更新 $branch" >&2
-      return 0 ;;
-    *) echo 'fm-worker: unreadable merge policy / 無法辨識合併政策' >&2; exit 65 ;;
-  esac
-  if [ -z "$PR" ]; then
-    echo "fm-worker: no open PR; $branch is not caught up this round / 沒有開啟的 PR；本輪不更新 $branch" >&2
-    return 0
-  fi
-  dirty="$(git -C "$tree" status --porcelain)" || {
-    echo "fm-worker: could not read $tree status / 無法讀取 $tree 狀態" >&2; exit 65; }
-  if [ -n "$dirty" ]; then
-    echo "fm-worker: $tree is not clean; $branch is not caught up this round / $tree 不乾淨；本輪不更新 $branch" >&2
-    return 0
-  fi
-  ls="$(git -C "$tree" ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; rc=$?
-  head="$(git -C "$tree" rev-parse HEAD)"
-  if [ "$rc" != 0 ] || [ -z "${bound_head:-}" ] || [ "$head" != "$bound_head" ] \
-      || [ "$(printf '%s\n' "$ls" | awk 'NR == 1 { print $1 }')" != "$bound_head" ]; then
-    echo "fm-worker: origin's $branch is not the head this round was bound to; not merging $BASE into it / $branch 並非本輪綁定的版本；不會合併 $BASE" >&2
-    exit 65
-  fi
-  if [ "$(git -C "$tree" symbolic-ref -q --short HEAD)" != "$branch" ]; then
-    echo "fm-worker: HEAD is not attached to $branch / HEAD 不在 $branch 分支上" >&2; exit 65
-  fi
-  git -C "$tree" fetch -q origin "+refs/heads/$BASE:$base_ref" 2>/dev/null || {
-    echo "fm-worker: could not fetch $BASE; $branch is not caught up / 無法擷取 ${BASE}；不更新 $branch" >&2
-    return 0; }
-  git -C "$tree" merge-base --is-ancestor "$base_ref" HEAD && return 0
-  catchup_prev="$bound_head"; catchup_base="$(git -C "$tree" rev-parse "$base_ref")"
-  caught_up=1
-  git -C "$tree" -c merge.conflictStyle=merge -c rerere.enabled=false \
-    merge --no-ff --no-commit -q "$base_ref"; rc=$?
-  if [ "$rc" != 0 ] && [ -z "$(git -C "$tree" diff --name-only --diff-filter=U)" ]; then
-    git -C "$tree" merge --abort 2>/dev/null || true
-    echo "fm-worker: could not merge $BASE into $branch / 無法把 $BASE 合併進 $branch" >&2
-    exit 70
-  fi
-  rebuild_collect_conflicts catchup
-  rebuild_mark="$(rebuild_fingerprint)"
-  emit_status "Merged $BASE into $branch" "已把 $BASE 合併進 $branch"
-}
 bring_up_to_date() {
   if [ "$FM_EXTERNAL" = 1 ]; then
-    external_catch_up
-    return
+    local force_policy
+    if ! force_policy="$(fm_stack_policy force_with_lease)" || [ "$force_policy" != true ]; then
+      echo "fm-worker: the project conventions do not allow force_with_lease; ${branch} is not rebuilt / 專案慣例不允許 force_with_lease；不重建 ${branch}" >&2
+      return 0
+    fi
+    if [ -z "$PR" ]; then
+      echo "fm-worker: no open PR; ${branch} is not rebuilt this round / 沒有開啟的 PR；本輪不重建 ${branch}" >&2
+      return 0
+    fi
   fi
   local base_ref="refs/remotes/origin/$BASE" head mb ls rc f side
   # The worktree was just made from the branch, so it is clean. Were it
@@ -1195,6 +1101,10 @@ bring_up_to_date() {
     2) rebuild_lease='' ;;
     *) echo "fm-worker: could not read origin's $branch; not rebuilding it" >&2; return 0 ;;
   esac
+  if [ "$FM_EXTERNAL" = 1 ] && [ "$rebuild_lease" != "$bound_head" ]; then
+    echo "fm-worker: origin's ${branch} is not the head this round was bound to; not rebuilding it / ${branch} 並非本輪綁定的版本；不重建" >&2
+    return 0
+  fi
   if [ -n "$rebuild_lease" ] && ! git merge-base --is-ancestor "$rebuild_lease" "$head" 2>/dev/null; then
     echo "fm-worker: origin's $branch has commits this worktree lacks; not rebuilding it" >&2
     return 0
@@ -1221,7 +1131,20 @@ bring_up_to_date() {
   # Repair is best-effort; the pre-commit check holds the round if it failed
   # or the worker subsequently changes the frozen task file.
   rebuild_own_file_restore "$head" || true
-  rebuild_collect_conflicts
+  # NUL-separated: without -z, git quotes a name outside ASCII
+  # ("\346\226\207.txt"), and that string names no file in the worktree
+  while IFS= read -r -d '' f; do
+    [ -n "$f" ] && rebuild_conflicts+=("$f")
+  done < <(git -C "$tree" diff --name-only -z --diff-filter=U)
+  # A conflict with no marker in it - binary, or deleted on one side - has
+  # one side sitting in the worktree looking resolved. `add -A` would
+  # commit that side whole, so each is described as what it is and held
+  # until the worker changes it.
+  for f in ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"}; do
+    [ -f "$tree/$f" ] && grep -qIE '^(<<<<<<<|>>>>>>>)( |$)' "$tree/$f" 2>/dev/null && continue
+    side="$(rebuild_side_left "$f")"
+    rebuild_bare+=("$f"); rebuild_bare_left+=("$(rebuild_state_of "$f")"); rebuild_bare_side+=("$side")
+  done
   # a file that merged but still lost the task's entry goes to the
   # worker too, by name; a conflicted one is already on the list above
   while IFS= read -r f; do
@@ -1318,6 +1241,9 @@ round_head="$(git -C "$tree" rev-parse HEAD)" || {
   round_head=''
   echo "fm-worker: round head unavailable; evidence coverage is unknown" >&2
 }
+if [ "$FM_EXTERNAL" = 1 ] && [ "$rebuilt" = 1 ]; then
+  round_head="$rebuild_prev"
+fi
 round_context="$FM_RUN_DIR/context.md"
 round_coverage="$FM_RUN_DIR/coverage.json"
 printf '%s\n' "$spec" > "$FM_RUN_DIR/context-spec.json"
@@ -1408,20 +1334,12 @@ fm_round_pinned worker "$spec" || exit 65
     sed -n 's/^at=\([^ ]*\).* why=\(.*\)$/- \1: \2/p' "$FM_WORKTREES/$TASK.restored"
     rm -f "$FM_WORKTREES/$TASK.restored"
   fi
-  if [ "$rebuilt" = 1 ] || [ "${caught_up:-0}" = 1 ]; then
-    if [ "${caught_up:-0}" = 1 ]; then
-      printf '\n---\n\n# The current %s was merged into your branch\n\n' "$BASE"
-      printf '%s moved and your branch did not contain it. fm-worker.sh merged\n' "$BASE"
-      printf 'origin/%s (%s) into %s at %s.\n' "$BASE" "$catchup_base" "$branch" "$catchup_prev"
-      printf 'The merge is in progress, not committed; fm-worker.sh commits it with\n'
-      printf 'this round as one merge commit.\n'
-    else
-      printf '\n---\n\n# Your branch was rebuilt on the current %s\n\n' "$BASE"
-      printf '%s moved under this branch and the branch no longer rebased onto it,\n' "$BASE"
-      printf 'so fm-worker.sh rebuilt it: your change so far (previous head %s)\n' "$rebuild_prev"
-      printf 'was applied three-way onto %s at %s. It is staged, not committed;\n' "$BASE" "$rebuild_base"
-      printf 'fm-worker.sh commits it with this round as one commit on %s.\n' "$BASE"
-    fi
+  if [ "$rebuilt" = 1 ]; then
+    printf '\n---\n\n# Your branch was rebuilt on the current %s\n\n' "$BASE"
+    printf '%s moved under this branch and the branch no longer rebased onto it,\n' "$BASE"
+    printf 'so fm-worker.sh rebuilt it: your change so far (previous head %s)\n' "$rebuild_prev"
+    printf 'was applied three-way onto %s at %s. It is staged, not committed;\n' "$BASE" "$rebuild_base"
+    printf 'fm-worker.sh commits it with this round as one commit on %s.\n' "$BASE"
     if [ "${#rebuild_conflicts[@]}" -gt 0 ]; then
       marked_list=()
       for f in "${rebuild_conflicts[@]}"; do
@@ -1447,26 +1365,18 @@ fm_round_pinned worker "$spec" || exit 65
       printf 'and your task'"'"'s intent. Never take a whole side, and never drop %s'"'"'s change.\n' "$BASE"
       printf 'A conflict marker left in any file this commit carries refuses the commit.\n'
     else
-      if [ "${caught_up:-0}" = 1 ]; then
-        printf '\nEvery file merged cleanly; there is nothing to resolve.\n'
+      printf '\nEvery file applied cleanly; there is nothing to resolve.\n'
+    fi
+    if [ "${#rebuild_restore[@]}" -gt 0 ]; then
+      printf '\nThe rebuild could not keep your task'"'"'s own entry in:\n\n'
+      printf -- '- `%s`\n' "${rebuild_restore[@]}"
+      if [ -n "$pinned_path" ]; then
+        printf '\nPut it back exactly as pin v%s has it (the approved spec at %s/spec.json), keeping %s\047s other changes.\n' "$pinned_version" "$FM_PINNED_DIR" "$BASE"
       else
-        printf '\nEvery file applied cleanly; there is nothing to resolve.\n'
+        printf '\nPut it back exactly as it is at %s, keeping %s'"'"'s other changes.\n' "$rebuild_prev" "$BASE"
       fi
     fi
-    if [ "${caught_up:-0}" = 1 ]; then
-      printf '\nDo not commit, abort or restart the merge, and do not run git history commands.\n'
-      printf 'A round whose HEAD is no longer %s on %s, or whose merge is no longer\n' "$catchup_prev" "$branch"
-      printf 'in progress, is refused. fm-checkpoint.sh refuses while this merge is in progress.\n'
-    else
-      if [ "${#rebuild_restore[@]}" -gt 0 ]; then
-        printf '\nThe rebuild could not keep your task'"'"'s own entry in:\n\n'
-        printf -- '- `%s`\n' "${rebuild_restore[@]}"
-        if [ -n "$pinned_path" ]; then
-          printf '\nPut it back exactly as pin v%s has it (the approved spec at %s/spec.json), keeping %s\047s other changes.\n' "$pinned_version" "$FM_PINNED_DIR" "$BASE"
-        else
-          printf '\nPut it back exactly as it is at %s, keeping %s'"'"'s other changes.\n' "$rebuild_prev" "$BASE"
-        fi
-      fi
+    if [ "$FM_EXTERNAL" = 0 ]; then
       if [ -n "$pinned_path" ]; then
         printf '\nYour task file design/tasks/%s.json must come through exactly as pin v%s has it; a rebuilt round that changes it is refused, like one that leaves a conflict marker.\n' "$TASK" "$pinned_version"
       else
@@ -1474,10 +1384,10 @@ fm_round_pinned worker "$spec" || exit 65
         printf 'is at %s; a rebuilt round that changes it is refused, like one\n' "$rebuild_prev"
         printf 'that leaves a conflict marker.\n'
       fi
-      printf '\nThe worktree is detached until fm-worker.sh commits; fm-worker.sh pushes the\n'
-      printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
-      printf 'is refused.\n'
     fi
+    printf '\nThe worktree is detached until fm-worker.sh commits; fm-worker.sh pushes the\n'
+    printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
+    printf 'is refused.\n'
   fi
   # T-117: a crew round runs inside the OS sandbox, whose write roots are
   # the worktree and the round's own temp directory. The worktree's git
@@ -1503,7 +1413,7 @@ fm_round_pinned worker "$spec" || exit 65
 # difference from what the rebuild left that counts - or every vendor would
 # look busy, and an unavailable one would be read as having done work.
 worker_changed_files() {
-  if [ "$rebuilt" = 1 ] || [ "${caught_up:-0}" = 1 ]; then
+  if [ "$rebuilt" = 1 ]; then
     [ "$(rebuild_fingerprint)" != "$rebuild_mark" ]
     return
   fi
@@ -1539,7 +1449,7 @@ rebuild_unresolved() {
   [ "${#rebuild_conflicts[@]}" -gt 0 ] || [ "${#rebuild_restore[@]}" -gt 0 ]
 }
 rebuild_publishes() {
-  { [ "$rebuilt" = 1 ] || [ "${caught_up:-0}" = 1 ]; } && ! rebuild_unresolved
+  [ "$rebuilt" = 1 ] && ! rebuild_unresolved
 }
 log="$FM_RUN_DIR/worker.log"; : > "$log"
 fm_log_vendor_resolution "$log"
@@ -1759,7 +1669,7 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
     fm_private_note worker-report "$TASK" "$1" || return 1
     if [ "$projection" != comments ]; then
       # Changed work projects only after publication, at its fixing head.
-      if ! worker_changed_files && ! rebuild_publishes; then
+      if [ "${rebuilt:-0}" != 1 ] && ! worker_changed_files; then
         fm_external project --pr "$2" --head "$round_head" --stage worker || {
           echo 'fm-worker: optional projection failed; local report retained' >&2
           FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' \
@@ -1987,7 +1897,7 @@ refused=0
 if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ] && [ -n "$PR" ]; then
   if [ "$FM_EXTERNAL" = 0 ] && worker_changed_files; then
     note_unsent "$say"
-  elif { [ "$rebuilt" = 1 ] || [ "${caught_up:-0}" = 1 ]; } && { worker_changed_files || rebuild_publishes; }; then
+  elif [ "$rebuilt" = 1 ] && { worker_changed_files || rebuild_publishes; }; then
     note_refused "$say"
     refused=1
   fi
@@ -2025,18 +1935,14 @@ if [ "$asked" = 1 ] && ! first_round_question && ! worker_changed_files; then
       asked_where="its question is retained in local evidence"
     fi
   fi
-  if [ "${caught_up:-0}" = 1 ]; then
-    echo "fm-worker: the worker asked rather than changed anything; $asked_where; the merge applied, so it is published all the same / 工作人員提出問題；合併成功，仍會發布" >&2
-  else
-    echo "fm-worker: the worker asked rather than changed anything; $asked_where; the rebuild applied, so it is published all the same" >&2
-  fi
+  echo "fm-worker: the worker asked rather than changed anything; $asked_where; the rebuild applied, so it is published all the same" >&2
 fi
 
 # the same predicate the chain was given, not a second spelling of it: the
 # two agreed only because the prompt happened to be removed between them.
 # A rebuild is work in its own right: a branch brought up to date with
 # nothing else to add is still committed and pushed.
-if [ "$rebuilt" = 0 ] && [ "${caught_up:-0}" = 0 ] && ! first_round_question && ! worker_did_work; then
+if [ "$rebuilt" = 0 ] && ! first_round_question && ! worker_did_work; then
   # A round that destroyed its own tree did something, and the mirror
   # already said so (worktree_restored); it is not the same round as one
   # that truly left the tree untouched (T-128).
@@ -2058,12 +1964,8 @@ fi
 # it never made.
 rebuild_refuse() {   # rebuild_refuse <what, en> <what, zh-TW>
   echo "fm-worker: $1" >&2
-  echo "fm-worker: nothing is committed or pushed; the branch stays at ${catchup_prev:-$rebuild_prev}" >&2
-  if [ "${caught_up:-0}" = 1 ]; then
-    echo "fm-worker: the worktree is left at $tree; the next round rescues it and merges the base again / 工作樹保留於 ${tree}；下一輪將救回並重新合併基底" >&2
-  else
-    echo "fm-worker: the worktree is left at $tree; the next round rescues it and rebuilds from the branch" >&2
-  fi
+  echo "fm-worker: nothing is committed or pushed; the branch stays at ${rebuild_prev}" >&2
+  echo "fm-worker: the worktree is left at $tree; the next round rescues it and rebuilds from the branch" >&2
   emit --type gate_failed ${PR:+--pr "$PR"} --en "$1; not committed" --tw "${2}，沒有 commit"
   exit 75
 }
@@ -2079,26 +1981,16 @@ if [ "$rebuilt" = 1 ]; then
       "這輪中途 HEAD 離開了重建的基底 ${rebuild_base}"
   fi
 fi
-if [ "${caught_up:-0}" = 1 ]; then
-  now_head="$(git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null)"
-  if [ "$now_head" != "$catchup_prev" ] \
-      || [ "$(git -C "$tree" symbolic-ref -q --short HEAD 2>/dev/null)" != "$branch" ] \
-      || [ "$(git -C "$tree" rev-parse -q --verify MERGE_HEAD 2>/dev/null)" != "$catchup_base" ]; then
-    rebuild_refuse "the merge of $BASE into $branch was aborted, committed or restarted, or HEAD left $catchup_prev" \
-      "合併已被中止、提交或重新開始，或 HEAD 已離開 $catchup_prev"
-  fi
-fi
 git -C "$tree" add -A || { echo "fm-worker: could not stage the round on $branch" >&2; exit 70; }
 # A rebuilt round is committed only once every handed-over conflict is
 # resolved. Every file this commit carries is read - on a rebuild that is
 # the task's whole change - not just the ones listed, because a marker the
 # worker copied elsewhere is as broken as one it left in place. From the
 # index, since that is what would be committed.
-if [ "$rebuilt" = 1 ] || [ "${caught_up:-0}" = 1 ]; then
-  carried_base="${catchup_base:-$rebuild_base}"
+if [ "$rebuilt" = 1 ]; then
   carried=(); marked=()
   while IFS= read -r -d '' f; do carried+=("$f"); done \
-    < <(git -C "$tree" diff --cached --name-only -z --diff-filter=d "$carried_base")
+    < <(git -C "$tree" diff --cached --name-only -z --diff-filter=d "$rebuild_base")
   if [ ${#carried[@]} -gt 0 ]; then
     # exit 1 is "no marker anywhere"; anything above it is a grep that did
     # not read the files, and that is not the same answer
@@ -2126,8 +2018,6 @@ if [ "$rebuilt" = 1 ] || [ "${caught_up:-0}" = 1 ]; then
     rebuild_refuse "conflicts with no markers are still as the merge left them: ${listed}" \
       "沒有衝突標記的衝突還是合併留下的樣子：${listed}"
   fi
-fi
-if [ "$rebuilt" = 1 ]; then
   # the task's own entry and row, exactly as the previous head had them,
   # whatever repaired or resolved them on the way here
   lost=()
@@ -2180,8 +2070,6 @@ new_scripts_executable() {   # new_scripts_executable <commit the round started 
 }
 if [ "$rebuilt" = 1 ]; then
   new_scripts_executable "$rebuild_base" "$rebuild_prev"
-elif [ "${caught_up:-0}" = 1 ]; then
-  new_scripts_executable "$catchup_base" "$catchup_prev"
 else
   new_scripts_executable "${round_start:-HEAD}"
 fi || { echo "fm-worker: could not set the executable bit on a new script on $branch; the round is not committed" >&2; exit 70; }
@@ -2201,9 +2089,8 @@ fi || { echo "fm-worker: could not set the executable bit on a new script on $br
 commit_msg="$TASK: $(jq -r .title <<<"$spec")"
 [ "$FM_EXTERNAL" = 0 ] || commit_msg="$TASK: project work"
 fm_private_stage "$tree" || exit 65
-rebuilt_head=''; catchup_head=''; commit_ok=0
-if [ "${caught_up:-0}" = 1 ]; then fm_publication_policy "$tree" || exit 65; fi
-if [ "$rebuilt" = 1 ] || [ "${caught_up:-0}" = 1 ]; then
+rebuilt_head=''; commit_ok=0
+if [ "$rebuilt" = 1 ]; then
   # fm_git_commit (bin/fm-config.sh) is the identity rule, a refusal and
   # `commit -q -m`; this is the same rule and refusal, applied to
   # commit-tree. What commit does beyond that and commit-tree does not is
@@ -2217,22 +2104,9 @@ if [ "$rebuilt" = 1 ] || [ "${caught_up:-0}" = 1 ]; then
   if [ -z "$rb_name" ] || [ -z "$rb_email" ]; then
     echo "fm: set git user.name and user.email (or FM_GIT_NAME / FM_GIT_EMAIL) before committing" >&2
   elif rebuilt_tree="$(git -C "$tree" write-tree)" && [ -n "$rebuilt_tree" ]; then
-    commit_parents=(-p "$rebuild_base")
-    if [ "${caught_up:-0}" = 1 ]; then commit_parents=(-p "$catchup_prev" -p "$catchup_base"); fi
     rebuilt_head="$(git -C "$tree" -c user.name="$rb_name" -c user.email="$rb_email" \
-      commit-tree ${rb_sign:+"$rb_sign"} "$rebuilt_tree" "${commit_parents[@]}" -m "$commit_msg" </dev/null)" || rebuilt_head=''
-    if [ "${caught_up:-0}" = 1 ]; then
-      catchup_head="$rebuilt_head"
-      if [ -n "$catchup_head" ] \
-          && git -C "$tree" update-ref "refs/fm-caughtup/$branch" "$catchup_head" \
-          && git -C "$tree" update-ref "refs/heads/$branch" "$catchup_head" "$catchup_prev"; then
-        if git -C "$tree" merge --quit; then
-          commit_ok=1
-        else
-          git -C "$tree" update-ref "refs/heads/$branch" "$catchup_prev" "$catchup_head" || true
-        fi
-      fi
-    elif [ -n "$rebuilt_head" ] && git -C "$tree" update-ref --no-deref -m "fm-worker: rebuilt $branch" \
+      commit-tree ${rb_sign:+"$rb_sign"} "$rebuilt_tree" -p "$rebuild_base" -m "$commit_msg" </dev/null)" || rebuilt_head=''
+    if [ -n "$rebuilt_head" ] && git -C "$tree" update-ref --no-deref -m "fm-worker: rebuilt $branch" \
          HEAD "$rebuilt_head" "$rebuild_base"; then
       commit_ok=1
     fi
@@ -2262,15 +2136,21 @@ if [ "$rebuilt" = 1 ]; then
   # anything pushed to the branch since is refused rather than overwritten.
   # An empty lease means the branch must still not exist on origin.
   if [ "$FM_EXTERNAL" = 1 ]; then
-    echo 'fm-worker: task force-push needs confirmed project policy; rebuild retained for recovery' >&2
-    exit 65
+    if ! force_policy="$(fm_stack_policy force_with_lease)" || [ "$force_policy" != true ]; then
+      echo 'fm-worker: the project conventions do not allow force_with_lease; rebuild retained for recovery / 專案慣例不允許 force_with_lease；保留重建結果以便復原' >&2
+      exit 65
+    fi
+    if [ -z "$rebuild_lease" ] || [ "$rebuild_lease" != "$bound_head" ]; then
+      echo 'fm-worker: an external branch that is not the head the round was bound to / 外部分支並非本輪綁定的版本' >&2
+      exit 65
+    fi
+    fm_publication_policy "$tree" "$branch" || exit 65
   fi
   if ! git -C "$tree" push -q --force-with-lease="refs/heads/$branch:$rebuild_lease" \
        origin "$rebuilt_head:refs/heads/$branch" 2>/dev/null; then
     # refused: the local branch never moved; the rebuilt commit stays
     # reachable by the id printed here
     rebuild_settle || true
-    catchup_settle || true
     echo "fm-worker: could not push the rebuilt $branch: origin no longer has ${rebuild_lease:-no such branch}, or refused" >&2
     echo "fm-worker: the rebuilt commit is ${rebuilt_head}; $branch is back at $(git -C "$FM_TARGET_ROOT" rev-parse -q --verify "refs/heads/$branch")" >&2
     exit 71
@@ -2285,21 +2165,9 @@ if [ "$rebuilt" = 1 ]; then
     || echo "fm-worker: could not clear refs/fm-rebuilt/$branch; the next round settles it" >&2
   echo "fm-worker: $branch rebuilt on $BASE; the previous head was ${rebuild_prev}" >&2
 else
-  if [ "${caught_up:-0}" != 1 ]; then fm_publication_policy "$tree" || exit 65; fi
+  fm_publication_policy "$tree" || exit 65
   git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
-    if [ "${caught_up:-0}" = 1 ]; then
-      if git -C "$tree" update-ref "refs/heads/$branch" "$catchup_prev" "$catchup_head"; then
-        git -C "$tree" update-ref -d "refs/fm-caughtup/$branch" "$catchup_head" || true
-      fi
-      echo "fm-worker: could not push merge commit $catchup_head; local $branch is at $(git -C "$tree" rev-parse "refs/heads/$branch") / 無法推送合併 ${catchup_head}；已保留本機分支狀態" >&2
-    else
-      echo "fm-worker: could not push $branch" >&2
-    fi
-    exit 71; }
-  if [ "${caught_up:-0}" = 1 ]; then
-    git -C "$tree" update-ref -d "refs/fm-caughtup/$branch" "$catchup_head" || {
-      echo "fm-worker: could not clear catch-up record; next round settles it / 無法清除合併紀錄；下一輪將處理" >&2; }
-  fi
+    echo "fm-worker: could not push $branch" >&2; exit 71; }
 fi
 # Only now: a push that was refused - a lease above, or a plain one - left
 # a commit that is not on origin, and the log must not say it was pushed.
@@ -2307,12 +2175,6 @@ emit_status "Commit pushed on $branch" "已在 $branch 上推送 commit"
 emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"
 note_unsent_published
 rebuild_args=()
-if [ "${caught_up:-0}" = 1 ]; then
-  rebuild_args=(--data "$(jq -cn --arg prev "$catchup_prev" --arg base "$BASE" \
-    --arg base_head "$catchup_base" --arg head "$catchup_head" \
-    '{caught_up:{previous_head:$prev,base:$base,base_head:$base_head,head:$head,
-      conflicts:$ARGS.positional}}' --args ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"})")
-fi
 if [ "$rebuilt" = 1 ]; then
   rebuild_args=(--data "$(jq -cn --arg prev "$rebuild_prev" --arg base "$BASE" \
     --arg base_head "$rebuild_base" --arg head "$(git -C "$tree" rev-parse HEAD)" \
@@ -2371,12 +2233,23 @@ if [ "$rebuilt" = 1 ]; then
   else
     handed='none'
   fi
-  if ! fm_github pr comment "$num" --body "$(printf '%s\n' \
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    rebuild_note="$(scratch_new)" || exit 70
+    scratch_add "$rebuild_note"
+    printf '%s\n' "$(printf '%s\n' \
        "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
        "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
-       "Conflicts handed to the worker: $handed")" \
-       >/dev/null 2>&1 </dev/null; then
-    echo "fm-worker: could not note the rebuild on #$num; the previous head was ${rebuild_prev}" >&2
+       "Conflicts handed to the worker: $handed")" > "$rebuild_note"
+    fm_private_note rebuild "$TASK" "$rebuild_note" || {
+      echo 'fm-worker: could not retain the private rebuild note' >&2; exit 65; }
+  else
+    if ! fm_github pr comment "$num" --body "$(printf '%s\n' \
+         "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
+         "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
+         "Conflicts handed to the worker: $handed")" \
+         >/dev/null 2>&1 </dev/null; then
+      echo "fm-worker: could not note the rebuild on #$num; the previous head was ${rebuild_prev}" >&2
+    fi
   fi
 fi
 # The held note now has a PR. Use the pre-commit work observation: a clean

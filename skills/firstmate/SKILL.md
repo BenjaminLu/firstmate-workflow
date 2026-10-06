@@ -1042,11 +1042,9 @@ an immediate inspection. Review a proposal with the captain before changing
 CONVENTIONS.md; new bots or required approvals cannot grant permission.
 Every merge still needs the captain's intent card, authoritative head CI/check
 statuses, all six gates, and the project review. Handoff never calls engine
-merge. External later rounds with squash or merge landing merge the fetched
-base into the task branch; they are never rebuilt or force-pushed. Gate 2
-accepts such a branch when it already contains the base. Rebase landing
-retains gate 2's replay and does not use a catch-up merge. Policy-authorized
-stacking and explicit expected-head restacking use the T-143 operator helper.
+merge. External stacking remains held for T-143; an external rebuild runs only
+when conventions set `force_with_lease: true`, force-pushed with a lease on the
+bound PR head (T-223).
 
 ### T-138 signed evidence and merge candidates
 
