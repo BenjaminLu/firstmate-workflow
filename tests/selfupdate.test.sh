@@ -278,6 +278,7 @@ assert_eq "" "$offscope" "every glob is under skills/ or tests/"
 assert_contains "$(types "$d")" "decision_requested" "it puts a card in front of the captain"
 assert_lacks "$(types "$d")" "dispatched" "and dispatches nothing itself"
 assert_ok "test -f '$d/state/pending/D-SK-001.json'" "the decision is pending on the board"
+assert_eq "skill" "$(jq -r .purpose "$d/state/pending/D-SK-001.json")" "self-update records the skill purpose"
 
 assert_ok "'$FM' self-update --skill reviewer --why 'again' --repo '$d'" "a second proposal is accepted"
 assert_ok "test -f '$d/state/skill-updates/SK-002.json'" "and gets the next free id"

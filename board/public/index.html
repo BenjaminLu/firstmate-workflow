@@ -10,6 +10,8 @@
   --bg:#080f17; --bg2:#0e1720; --bg3:#16212c; --line:#213041;
   --fg:#e8eff7; --fg2:#93a7bd; --fg3:#5d7188; --brass:#d9a441;
   --ok:#3ecf8e; --warn:#f2b544; --bad:#f2645a; --wait:#c07bf0; --accent:#4da3ff;
+  --k-merge:#3ecf8e; --k-dispatch:#4da3ff; --k-repin:#c07bf0;
+  --k-scope:#f2b544; --k-skill:#f49ac2; --k-decision:#93a7bd;
   --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
 }
@@ -68,6 +70,14 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .dstrip>summary{cursor:pointer;min-height:44px;padding:10px 12px;font-size:16px;overflow-wrap:anywhere}
 .dstrip>summary .meta{font:13px var(--mono);color:var(--fg3)}
 .dstrip>summary .picked{font:700 13px var(--mono);font-style:normal;color:var(--brass)}
+.kbadge{display:inline-block;flex-shrink:0;white-space:nowrap;font:700 12px/1.5 var(--sans);
+  padding:2px 8px;border-radius:4px;margin-right:8px;vertical-align:baseline}
+.k-merge{background:var(--k-merge);color:#080f17}
+.k-dispatch{background:var(--k-dispatch);color:#080f17}
+.k-repin{background:var(--k-repin);color:#080f17}
+.k-scope{background:var(--k-scope);color:#080f17}
+.k-skill{background:var(--k-skill);color:#080f17}
+.k-decision{background:var(--k-decision);color:#080f17}
 .dstrip[open]>summary{border-bottom:1px solid var(--line)}
 .dstrip>.dcard{margin:0;border:0}
 .links{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
@@ -327,6 +337,23 @@ const crewChip = c => `<span class="cchip r-${esc(c.role)}" data-crew-chip="${es
 // of the project the text belongs to
 const said = (s, owner) => SHIP.linkPrs(esc(s),
   owner && latest?.pr_urls_by_project ? latest.pr_urls_by_project[projOf(owner) || ''] || {} : prUrls);
+// Recorded classification wins; old cards keep their authored title fallback.
+function cardKind(d) {
+  if (d.kind === 'merge' || d.kind === 'merge-untracked') return 'merge';
+  if (['dispatch','repin','scope','skill','decision'].includes(d.purpose)) return d.purpose;
+  if (/^D-SK-/.test(d.id || '')) return 'skill';
+  const en = String(d.details?.en?.title || d.title || '');
+  const tw = String(d.details?.['zh-TW']?.title || d.title || '');
+  for (const [kind, english, chinese] of [
+    ['dispatch','Dispatch ','派工'], ['repin','Repin ','重新固定'],
+    ['scope','Scope','範圍'], ['skill','Skill update','技能']
+  ]) if (en.startsWith(english) || tw.startsWith(chinese)) return kind;
+  return 'decision';
+}
+function kindBadge(d) {
+  const kind = cardKind(d);
+  return `<span class="kbadge k-${kind}">${esc(t('kind' + kind[0].toUpperCase() + kind.slice(1)))}</span>`;
+}
 const localized = d => d?.details?.[lang === 'en' ? 'en' : 'zh-TW'];
 // a task card's identity: its project and its id, as the server wrote it
 const keyOf = task => task?.key || task?.id;
@@ -685,7 +712,7 @@ function render(s) {
         `${eff ? ` <i class="eff">→ ${esc(effectLabel(eff))}</i>` : ''}</button>` +
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros), d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons), d)}</p>` : '');
     }).join('');
-    return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${whose(d)}` +
+    return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${kindBadge(d)} ${whose(d)}` +
       `${stePill(d)}</div><h3>${said(content ? words(content.title) : d.title || t("waiting"), d)}</h3>` +
       // T-118: a card whose task is already merged or closed is shown, and
       // says so: it may have been raised under the wrong task
@@ -714,7 +741,7 @@ function render(s) {
       (pend.length > 1 ? `<p class="also" id="alsoWaiting">${esc(t("alsoWaiting"))}</p>` : '');
     const content = localized(d), pick = picks.get(d.id);
     return `<details class="dstrip" id="strip-${esc(d.id)}" data-id="${esc(d.id)}"${expanded.has(d.id) ? ' open' : ''}>` +
-      `<summary><span class="meta">${whose(d)}</span> ` +
+      `<summary>${kindBadge(d)} <span class="meta">${whose(d)}</span> ` +
       `<span class="st">${said(content ? words(content.title) : d.title || t("waiting"), d)}</span>` +
       (pick ? ` <i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') +
       `</summary>${full(d)}</details>`;

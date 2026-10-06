@@ -249,3 +249,75 @@ test('a skill-update card is answered, and a refused answer shows the server err
   } finally {await stopBoard(b);}
 });
 
+
+test('decision kind badges lead every card and strip in both locales with readable colours', async ({page}) => {
+  const root = makeRoot(['working'], false);
+  const cards = [
+    {id:'D-2271', kind:'merge'},
+    {id:'D-2272', kind:'choice', purpose:'dispatch'},
+    {id:'D-2273', kind:'choice', title:'Repin T-227'},
+    {id:'D-2274', kind:'choice', title:'A plain choice'},
+  ];
+  for (const card of cards) writeFileSync(join(root, `state/pending/${card.id}.json`), JSON.stringify(card));
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const kinds = ['merge', 'dispatch', 'repin', 'decision'];
+    for (const [lang, labels] of [['en', ['Merge','Dispatch','Repin','Decision']], ['zh-TW', ['合併','派工','重新固定','決定']]] as const) {
+      await page.locator(`[data-l="${lang}"]`).click();
+      for (let i = 0; i < cards.length; i++) {
+        const meta = page.locator(`#card-${cards[i].id} > .meta`);
+        await expect(meta.locator('.kbadge')).toHaveCount(1);
+        await expect(meta.locator(':scope > :first-child')).toHaveClass(`kbadge k-${kinds[i]}`);
+        await expect(meta.locator('.kbadge')).toHaveText(labels[i]);
+        if (i) {
+          const summary = page.locator(`#strip-${cards[i].id} > summary`);
+          await expect(summary.locator('.kbadge')).toHaveCount(1);
+          await expect(summary.locator(':scope > :first-child')).toHaveClass(`kbadge k-${kinds[i]}`);
+          await expect(summary.locator('.kbadge')).toHaveText(labels[i]);
+        }
+      }
+      const colours = await page.locator('#deck .kbadge').evaluateAll(badges => badges.map(badge => {
+        const style = getComputedStyle(badge);
+        const luminance = (colour: string) => {
+          const rgb = colour.match(/[\d.]+/g)!.slice(0,3).map(Number).map(v => {
+            v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+          });
+          return rgb[0]*0.2126 + rgb[1]*0.7152 + rgb[2]*0.0722;
+        };
+        const a = luminance(style.color), b = luminance(style.backgroundColor);
+        return {background:style.backgroundColor, contrast:(Math.max(a,b)+0.05)/(Math.min(a,b)+0.05)};
+      }));
+      expect(colours[0].background).not.toBe(colours[1].background);
+      for (const colour of colours) expect(colour.contrast).toBeGreaterThanOrEqual(4.5);
+    }
+    // Cover the remaining tokens and classification precedence without rewriting stored cards.
+    const cases = [
+      [{kind:'merge-untracked',purpose:'dispatch'}, 'merge'],
+      [{kind:'choice',purpose:'scope',title:'Dispatch T-227'}, 'scope'],
+      [{kind:'choice',purpose:'skill'}, 'skill'],
+      [{kind:'choice',purpose:'decision',id:'D-SK-227'}, 'decision'],
+      [{kind:'choice',id:'D-SK-227'}, 'skill'],
+      ...[['Dispatch T-227','dispatch'],['Repin T-227','repin'],['Scope widening','scope'],['Skill update worker','skill'],
+        ['派工 T-227','dispatch'],['重新固定 T-227','repin'],['範圍 T-227','scope'],['技能 worker','skill']].map(([title,kind]) => [{title},kind]),
+      [{purpose:'unknown',title:'Other'}, 'decision'],
+    ];
+    for (const [card, expected] of cases) {
+      expect(await page.evaluate(d => (window as any).cardKind(d), card)).toBe(expected);
+    }
+    // All six badge fills must stay legible, including scope and skill.
+    for (const kind of ['scope','skill']) {
+      await page.evaluate(kind => {
+        const badge = document.querySelector('#deck .kbadge')!;
+        badge.className = `kbadge k-${kind}`;
+      }, kind);
+      const ratio = await page.locator('#deck .kbadge').first().evaluate(el => {
+        const s = getComputedStyle(el);
+        const lum = (c: string) => c.match(/[\d.]+/g)!.slice(0,3).map(Number).map(v => v/255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4).reduce((sum,v,i) => sum+v*[.2126,.7152,.0722][i],0);
+        const a=lum(s.color), b=lum(s.backgroundColor);
+        return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+      });
+      expect(ratio).toBeGreaterThanOrEqual(4.5);
+    }
+  } finally { await stopBoard(b); }
+});

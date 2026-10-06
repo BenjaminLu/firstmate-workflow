@@ -257,7 +257,10 @@ Receiving a response is not itself approval; inspect the chosen option and conte
 {"id":"D-007","task":"T-004","kind":"choice","chosen":"B","note":"leave the schema alone","ts":"..."}
 ```
 
-Two kinds. `choice` is an option card carrying a before/after diagram. **`merge`
+Two kinds. `choice` is an option card carrying a before/after diagram. A choice
+card may record a purpose (dispatch, repin, scope, skill, decision) with
+`--purpose`, and the board shows every card's kind and purpose as a coloured
+badge, falling back to the title for cards raised before T-227. **`merge`
 is a request to merge**, carrying the gate checklist, the diff stat, the
 files touched and the pull request link, answered with merge, send back, or
 hold. **Every merge goes through a card.** firstmate may not merge on its own
@@ -1675,7 +1678,7 @@ percentages. The regions below are that layout.
 |---|---|
 | Header | brand, the engine badge, green-light state and the language switch |
 | Sea header | merged / in flight / waiting on you / blocked / ready / backlog; waiting on you is the number of pending decisions |
-| Decision deck | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place |
+| Decision deck | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place; each card and strip starts with a coloured kind badge (T-227) |
 | Voyage | the 2.5D stage (T-125) is the only ship view; crew, captain, handoffs and merge salvos live there |
 | Crew roster | separate field columns, shown by default and toggled from its own bar |
 | Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |

@@ -235,7 +235,7 @@ test('a board of one project shows no project chip anywhere, and says a merge ou
     await expect(page.locator('[data-roster="worker-a"]')).toHaveCount(1);
     await expect(page.locator('#history .history-cards .card', {hasText:'T-3'})).toHaveCount(1);
     // the owned id shows its project as it did before this task: plain text
-    await expect(page.locator(`#card-${owned} > .meta`)).toHaveText(`${owned} · fixture · T-1`);
+    await expect(page.locator(`#card-${owned} > .meta`)).toHaveText(`Decision ${owned} · fixture · T-1`);
     await expect(page.locator(`#card-${owned} > .meta .project`)).toHaveAttribute('class', 'project');
     // the merge whose outcome GitHub could not tell: named, and marked unknown
     const row = page.locator('#merging-D-fixture-T4-1');
