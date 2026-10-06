@@ -265,6 +265,16 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 .intent-card .change-fallback[hidden]{display:none}
 .intent-card .intent-footer .confirm{justify-self:end;min-height:44px}
 @media(max-width:599px){.intent-card .intent-scope{grid-template-columns:1fr}.intent-card .confirm-question{flex-direction:column}.intent-card .question-controls{width:100%}.intent-card .change-fallback{flex-direction:column;align-items:stretch}}
+.task-detail{font-size:16px;line-height:1.5;position:fixed;z-index:40;right:12px;top:var(--task-detail-top,76px);bottom:12px;width:min(680px,48vw);max-width:calc(100vw - 24px);overflow:auto;background:var(--bg2);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px #0008;overflow-wrap:anywhere}
+.task-detail[hidden]{display:none}.task-detail .detail-toolbar{position:sticky;top:0;z-index:2;display:flex;justify-content:flex-end;background:var(--bg2);padding:8px;border-bottom:1px solid var(--line)}
+.task-detail button{min-height:36px;color:var(--fg);background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+.task-detail h3{margin:4px 0;font-size:22px}.task-detail .detail-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.task-detail .badge{padding:2px 8px;border:1px solid var(--line);border-left:3px solid var(--edge,var(--brass));border-radius:6px;background:var(--bg3)}
+.task-detail .acceptance-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.task-detail .acceptance-text.expanded{display:block}
+.task-detail ol{padding-left:24px;margin:0}.task-detail ol li+li{margin-top:12px}.task-detail code{white-space:normal;overflow-wrap:anywhere}
+.task-detail .rounds-scroll{max-width:100%;overflow:auto}.task-detail table{border-collapse:collapse;width:100%;font-size:13px}.task-detail th,.task-detail td{padding:6px;text-align:left;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.card[tabindex]{cursor:pointer}.card[tabindex]:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+@media(max-width:759px){.task-detail{left:0;right:0;top:var(--task-detail-top,64px);bottom:0;width:100%;max-width:100%;border-radius:0}}
 </style>
 </head>
 <body>
@@ -297,6 +307,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 <section class="lanes-wrap">
   <h2 id="h-fleet"></h2>
   <div class="lanes" id="lanes"></div>
+  <aside id="taskDetail" class="intent-card task-detail" role="dialog" aria-modal="false" aria-labelledby="taskDetailTitle" hidden></aside>
   <!-- T-058: where the captain sets work aside. Both are drop targets for a
        dragged card; the click menu on a card reaches the same two actions. -->
   <div class="setaside">
@@ -494,6 +505,7 @@ function chrome() {
   document.getElementById("langs").querySelectorAll("button").forEach(b =>
     b.onclick = () => { lang = b.dataset.l; localStorage.setItem("board.lang", lang);
       document.documentElement.lang = lang; chrome();
+      drawTaskDetail();
       // straight away, so the drawing changes language with the chrome
       // rather than after the state comes back
       DIAGRAM.mount(document.getElementById("deck"), lang).catch(() => {});
@@ -506,6 +518,7 @@ function render(s) {
   const focusChoice = focus?.dataset?.c;
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
   latest = s;
+  refreshTaskDetail();
   prUrls = s.pr_urls || null;
   // A refused merge stays up until the same task or pull request is merged
   // afterwards; the server says which refusals have been overtaken.
@@ -593,7 +606,7 @@ function render(s) {
     return `<div class="lastrev" data-last-review="${esc(r.seconds)}">` +
       `${esc(t('lastReview').replace('{time}', clock(r.seconds)).replace('{outcome}', how))}</div>`;
   };
-  const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}" data-key="${esc(keyOf(task))}"` +
+  const card = (task, k) => `<div tabindex="0" role="button" aria-haspopup="dialog" class="card s-${k}" data-task="${esc(task.id)}" data-key="${esc(keyOf(task))}"` +
     `${task.project ? ` data-project="${esc(task.project)}"` : ''}${(task.actions || []).some(a => a !== 'reopen') && !readOnly() ? ' draggable="true"' : ''}>` +
     `<div class="hd"><span class="id">${esc(task.id)}</span>${multi() ? chip(task.project) : ''}` +
     `${task.pr ? prRef(task.pr, task.pr_url) : ''}${menu(task)}</div>` +
@@ -663,7 +676,7 @@ function render(s) {
   // merged ones past the lane's first few - is reopened from here
   const inLane = new Set([...document.querySelectorAll('#lanes [data-key]')].map(el => el.dataset.key));
   SHIP.patch(history.querySelector('.history-cards'), completed.map(item =>
-    `<div class="card s-${item.stage}" data-history="${esc(item.id)}"><div class="hd"><span class="id">${esc(item.id)}</span>${multi() ? ' ' + chip(item.project) : ''} <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
+    `<div tabindex="0" role="button" aria-haspopup="dialog" class="card s-${item.stage}" data-task="${esc(item.id)}" data-key="${esc(keyOf(item))}" data-project="${esc(item.project || '')}" data-history="${esc(item.id)}"><div class="hd"><span class="id">${esc(item.id)}</span>${multi() ? ' ' + chip(item.project) : ''} <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
     (item.pr ? ` ${prRef(item.pr, item.pr_url)}` : '') + (inLane.has(keyOf(item)) ? '' : menu(item)) + `</div>` + title(item) + `</div>`).join(''));
 
   const deck = document.getElementById("deck");
@@ -755,7 +768,7 @@ function render(s) {
       (d.task_final ? `<p class="final-note" role="note">${esc(t('finalNote').replace('{task}', d.task || '').replace('{stage}', laneLabel(d.task_final)))}</p>` : '') +
       links(d) +
       `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'), d)}</p>` +
-      (content?.intent ? '' : DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after), d)}</p></section></div>` : '')) +
+      (content?.intent ? '' : DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>` : '')) +
       (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome), d)}</p>` : '') +
       (d.kind === "merge" && gates.length
         ? `<ul class="gates">${GATES().map((g,i)=>{const n=GATE_NUMBERS[i], ok=gates[n-1];return `<li class="${ok?"y":"n"}"><i>${ok?"&#10003;":"&#8211;"}</i>${n}. ${g}</li>`;}).join("")}</ul>`
@@ -855,6 +868,111 @@ function render(s) {
   window.VOYAGE?.update(s, t, lang);
 }
 
+// Task detail lives outside the patched lane tree. Only these state fields
+// invalidate its read; disclosure keys survive both state and locale changes.
+let detailTrigger = null;
+let openTaskKey = null, detailState = null, detailData = null, detailRequest = 0;
+const expandedAcceptance = new Set();
+const detailPanel = document.getElementById('taskDetail');
+const positionTaskDetail = () => detailPanel.style.setProperty('--task-detail-top', Math.ceil(document.querySelector('.top').getBoundingClientRect().bottom) + 'px');
+new ResizeObserver(positionTaskDetail).observe(document.querySelector('.top'));
+const detailSignature = task => JSON.stringify(task ? [task.stage, task.pr, task.last_review, task.crew, task.badges] : null);
+const detailCard = key => document.querySelector(`.card[data-key="${CSS.escape(key)}"]`);
+function closeTaskDetail() {
+  const key = openTaskKey;
+  openTaskKey = null; detailData = null; detailState = null; detailRequest++;
+  detailPanel.hidden = true;
+  if (key) {
+    const selector = detailTrigger?.hasAttribute('data-history') ? '[data-history]' : ':not([data-history])';
+    const card = detailTrigger?.isConnected ? detailTrigger : document.querySelector(`.card[data-key="${CSS.escape(key)}"]${selector}`) || detailCard(key);
+    card?.focus();
+  }
+  detailTrigger = null;
+}
+function openTaskDetail(key, trigger) {
+  detailTrigger = trigger || detailCard(key);
+  if (openTaskKey === key) { detailPanel.querySelector('[data-close-task]')?.focus(); return; }
+  openTaskKey = key; detailData = null; detailState = null;
+  positionTaskDetail();
+  detailPanel.hidden = false;
+  detailPanel.innerHTML = `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('detailClose'))}">×</button></div><p role="status">${esc(t('detailLoading'))}</p>`;
+  detailPanel.querySelector('[data-close-task]').focus();
+  refreshTaskDetail();
+}
+async function refreshTaskDetail() {
+  if (!openTaskKey) return;
+  const task = taskByKey(openTaskKey), signature = detailSignature(task);
+  if (signature === detailState) return;
+  detailState = signature;
+  const key = openTaskKey, request = ++detailRequest;
+  const query = new URLSearchParams({ id: task?.id || key.slice(key.lastIndexOf('/') + 1), lang });
+  const project = task?.project || key.slice(0, key.lastIndexOf('/'));
+  if (project) query.set('project', project);
+  try {
+    const response = await fetch('/api/task?' + query);
+    if (!response.ok) throw new Error('task unavailable');
+    const data = await response.json();
+    if (request !== detailRequest || key !== openTaskKey) return;
+    detailData = data; drawTaskDetail();
+  } catch {
+    if (request !== detailRequest || key !== openTaskKey) return;
+    detailPanel.innerHTML = `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('detailClose'))}">×</button></div><p role="status">${esc(t('detailUnavailable'))}</p>`;
+  }
+}
+function drawTaskDetail() {
+  if (!openTaskKey || !detailData) return;
+  const { task, cards, tests, readiness, rounds, brief, notes } = detailData;
+  const source = [...cards].reverse().find(card => card.details &&
+    (['dispatch','repin','merge'].includes(card.kind) || ['dispatch','repin','merge'].includes(cardKind(card))));
+  const authored = source ? { ...source } : task.explain ? {
+    id: openTaskKey, details: task.explain, ste: task.explain_ste, diagram: task.diagram, diagram_name: task.diagram_name,
+  } : null;
+  const content = authored && localized(authored);
+  const steOk = source ? source.ste_ok : task.explain_ste?.ok;
+  const section = (key, html) => `<section data-detail-section="${key}"><h4>${esc(t(key))}</h4>${html}</section>`;
+  const list = items => `<ul>${items.map(item => `<li>${esc(item)}</li>`).join('')}</ul>`;
+  const checks = readiness?.checks?.map(check => `${check.name}: ${check.conclusion || '—'}`).join(' · ');
+  const note = value => {
+    const keys = {'not dispatched yet':'detailNotDispatched','no PR yet':'detailNoPr','no readiness record yet':'detailNoReadiness'};
+    return keys[value] ? t(keys[value]) : value.startsWith('evidence unreadable:') ? t('detailEvidenceUnreadable') + value.slice('evidence unreadable:'.length) : value;
+  };
+  const translatedTitle = lang !== 'en' && task.title_tw ? words(task.title_tw) : null;
+  const colon = translatedTitle?.indexOf(':') ?? -1;
+  const headline = translatedTitle ? (colon < 0 ? translatedTitle : translatedTitle.slice(0,colon)) : task.headline;
+  const detail = translatedTitle ? (colon < 0 ? '' : translatedTitle.slice(colon+1)) : task.detail;
+  const wasClose = document.activeElement?.hasAttribute('data-close-task');
+  SHIP.patch(detailPanel, `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('detailClose'))}">×</button></div>` +
+    `<header class="intent-header" style="padding:16px"><div class="detail-meta"><span class="badge s-${esc(task.stage)}">${esc(laneLabel(task.stage))}</span><b>${esc(task.id)}</b>${task.project ? chip(task.project) : ''}${task.pr ? prRef(task.pr,task.pr_url) : ''}` +
+    (typeof steOk === 'boolean' ? `<span class="ste-pill">${esc(t(steOk ? 'detailStePass' : 'detailSteFail'))}</span>` : '') +
+    `</div><h3 id="taskDetailTitle">${esc(headline)}</h3>${detail ? `<p>${esc(detail)}</p>` : ''}<p>${esc(t('detailCi'))}: ${esc(checks || t('detailNoReadiness'))}</p></header>` +
+    (content?.intent ? intentBody(authored, content, true, true) : `<p style="padding:16px">${esc(t('detailNoExplain'))}</p>`) +
+    section('detailSpec', `<p>${esc(t('detailMilestone'))}: ${esc(task.milestone || '—')}</p><p>${esc(t('detailDependencies'))}: ${esc(task.depends_on.join(', ') || '—')}</p><h5>${esc(t('scopeHeading'))}</h5>${list(task.scope)}<h5>${esc(t('detailAcceptance'))}</h5><ol>` + task.acceptance.map((text,index) => {
+      const key = JSON.stringify([openTaskKey,index]), expanded = expandedAcceptance.has(key);
+      return `<li><div class="acceptance-text${expanded ? ' expanded' : ''}">${esc(text)}</div><button data-acceptance="${esc(key)}" aria-expanded="${expanded}">${esc(t(expanded ? 'detailCollapse' : 'detailExpand'))}</button></li>`;
+    }).join('') + '</ol>') +
+    section('detailTests', (tests.length ? `<ul>${tests.map(test => `<li><code>${esc(test.path)}</code> · ${esc(t(test.source === 'acceptance' ? 'detailSourceAcceptance' : 'detailSourceScope'))}</li>`).join('')}</ul>` : `<p>${esc(t('detailNoTests'))}</p>`) +
+    `<div><h5>${esc(t('detailReadiness'))}</h5>${readiness ? `<p>${esc(t('detailHead'))}: <code>${esc(readiness.head)}</code></p><p>${esc(t('detailGateBase'))}: <code>${esc(readiness.gate_base || '—')}</code></p><p>${esc(t('detailGates'))}: ${esc((readiness.gates || []).join(', '))}</p><p>${esc(t('detailCi'))}: ${esc(checks || '—')}</p>` : `<p>${esc(t('detailNoReadiness'))}</p>`}</div>`) +
+    section('detailProgress', (rounds.length ? `<div class="rounds-scroll"><table><thead><tr>${['detailRound','detailWorker','detailReviewer','detailVendor','detailHead','detailWorkerHead','detailVerdict'].map(key => `<th>${esc(t(key))}</th>`).join('')}</tr></thead><tbody>${rounds.map(round => `<tr>${[round.round,round.worker,round.reviewer,[round.worker_vendor,round.reviewer_vendor].filter(Boolean).join(' / '),round.head,round.worker_head,round.verdict].map(value => `<td>${esc(value ?? '—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : `<p>${esc(t('detailNotDispatched'))}</p>`) +
+    `<h5>${esc(t('detailCards'))}</h5>` + (cards.length ? `<ul>${cards.map(card => `<li><b>${esc(card.id)}</b> · ${esc(card.chosen || t('detailPending'))} ${esc(card.ts || '')}` + (card.answers || []).map(answer => `<p>${esc(t(answer.ok ? 'answerYes' : 'answerNo'))}${answer.ok === false ? ': ' + esc(answer.text || '') : ''}</p>`).join('') + '</li>').join('')}</ul>` : `<p>${esc(t('detailNoCards'))}</p>`) +
+    (brief ? `<h5>${esc(t('detailBrief'))}</h5><p>${esc(brief)}</p>` : '') + list(notes.map(note))));
+  if (wasClose) detailPanel.querySelector('[data-close-task]')?.focus();
+  DIAGRAM.mount(detailPanel,lang).catch(() => {});
+}
+detailPanel.addEventListener('click', event => {
+  if (event.target.closest('[data-close-task]')) { closeTaskDetail(); return; }
+  const acceptance = event.target.closest('[data-acceptance]');
+  if (acceptance) {
+    const key = acceptance.dataset.acceptance;
+    expandedAcceptance.has(key) ? expandedAcceptance.delete(key) : expandedAcceptance.add(key);
+    drawTaskDetail(); return;
+  }
+  const reveal = event.target.closest('[data-reveal]');
+  if (reveal) { revealedSections.add(reveal.dataset.reveal); drawTaskDetail(); }
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && openTaskKey && !menuOpen && !confirming) { event.preventDefault(); closeTaskDetail(); }
+});
+
 const validAnswerText = text => typeof text === 'string' && !!text.trim() && [...text].length <= 1000
   && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text);
 const steEntries = d => d.ste?.locales?.[lang === 'en' ? 'en' : 'zh-TW'];
@@ -892,7 +1010,7 @@ function sectionItems(d, section, items, draw, wrap = html => html) {
   return wrap(shown.map(draw).join('')) + (shown.length < items.length
     ? `<button type="button" class="show-more" data-reveal="${esc(key)}">${esc(t('showMore').replace('{n}', items.length - shown.length))}</button>` : '');
 }
-function intentBody(d, content, locked) {
+function intentBody(d, content, locked, detailOnly = false) {
   const pick = picks.get(d.id);
   const list = html => `<ul>${html}</ul>`;
   const hasItems = field => Array.isArray(content[field]) && content[field].length > 0;
@@ -906,7 +1024,7 @@ function intentBody(d, content, locked) {
   const intent = `<section><h4>${esc(t('intentHeading'))}</h4>${sentences('intent', true)}` +
     (hasItems('why') ? `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${steSentence(d,'why',index,item.text)}</span>`)}</div>` : '') + '</section>';
   const how = `<section class="intent-how"><h4>${esc(t('howHeading'))}</h4>` +
-    DIAGRAM.embed(d.id) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after), d)}</p></section></div></section>`;
+    (d.diagram === false ? '' : DIAGRAM.embed(d.diagram_name || d.id)) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div></section>`;
   const alignment = hasItems('done') ? `<section><h4>${esc(t('alignmentHeading'))}</h4>${sentences('done')}</section>` : '';
   const scopeItems = ['scope_in','scope_out'].flatMap(field => (content[field] || []).map(text => ({field, text})));
   const scopeKey = JSON.stringify([d.id, 'scope']);
@@ -916,6 +1034,7 @@ function intentBody(d, content, locked) {
     `</div>${shownScope.length < scopeItems.length ? `<button type="button" class="show-more" data-reveal="${esc(scopeKey)}">${esc(t('showMore').replace('{n}',scopeItems.length - shownScope.length))}</button>` : ''}</section>` : '';
   const notes = hasItems('notes') ? `<section><h4>${esc(t('notesHeading'))}</h4>` +
     sectionItems(d, 'notes', content.notes || [], (note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${steSentence(d,'notes',index,note.text)}</p></aside>`) + '</section>' : '';
+  if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`;
   const options = `<section class="acts intent-options"><h4>${esc(t('optionsHeading'))}</h4>` +
     ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content.options?.[k];
@@ -1030,6 +1149,17 @@ function askFor(k, action) {
 const choose = (k, action) => asks(k, action) ? askFor(k, action) : act(k, action);
 const menuButton = k => document.querySelector(`.cmenu[data-key="${CSS.escape(k)}"]`);
 const board = document.querySelector('.lanes-wrap');
+let detailDragged = false;
+board.addEventListener('pointerdown', () => { detailDragged = false; });
+board.addEventListener('click', event => {
+  if (detailDragged || event.target.closest('a,button,input,textarea,[data-pr],[data-drag-handle]')) return;
+  const card = event.target.closest('.card[data-key]');
+  if (card) openTaskDetail(card.dataset.key, card);
+});
+board.addEventListener('keydown', event => {
+  if (!['Enter',' '].includes(event.key) || !event.target.matches('.card[data-key]')) return;
+  event.preventDefault(); openTaskDetail(event.target.dataset.key, event.target);
+});
 board.addEventListener('click', e => {
   const el = e.target.closest('[data-menu],[data-act],[data-confirm],[data-cancel]');
   if (!el) return;
@@ -1071,6 +1201,7 @@ board.addEventListener('dragstart', e => {
   if (pressedOn?.closest?.('a[data-pr]')) { e.preventDefault(); return; }
   const cardEl = e.target.closest?.('.card[draggable="true"]');
   if (!cardEl) return;
+  detailDragged = true;
   dragging = cardEl.dataset.key || cardEl.dataset.task;
   e.dataTransfer.setData('text/plain', cardEl.dataset.task);
   e.dataTransfer.effectAllowed = 'move';

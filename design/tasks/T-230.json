@@ -1,0 +1,235 @@
+{
+  "id": "T-230",
+  "title": "a click on a task card opens a detail panel that explains the task like an intent card - STE intent, the before/after mechanism diagram, alignment, scope and notes from its card or a new spec explain block - plus the full spec, the planned tests, readiness and the round history, for ready and finished tasks alike",
+  "milestone": "M2",
+  "depends_on": [
+    "T-229"
+  ],
+  "scope": [
+    "board/public/index.html",
+    "board/public/diagram.js",
+    "board/server.ts",
+    "bin/lib/fm_ste.py",
+    "bin/lib/fm_config_tasks.py",
+    "bin/lib/fm_spec_preflight.py",
+    "bin/lib/fm_evidence.py",
+    "bin/fm-diagram.sh",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "i18n/tw2cn.tsv",
+    "skills/firstmate/SKILL.md",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-230.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-06 the captain said: '船長看板上面的卡片都沒有可閱讀性, 預期點擊之後要能展開, 有良好的上下文, spec和測試項目等等', then '包含就緒的卡片應該也要能知道你打算怎麼做, spec是什麼, 測試案例是什麼' and '一樣用STE的方式和diagram完整說明'. On main 068a791 a fleet card (board/public/index.html `card(task, k)` :596-603) shows only id, project chip, PR link and the full spec title; /api/state's task (board/server.ts ~:1075-1106) carries title, stage, pr, pr_url, crew, badges, last_review and nothing of the spec body, the tests, the rounds or the cards. An answered card loses its authored details: the decision record written on answer (board/server.ts ~:2280-2296) copies kind, task, pr, binding and the answer but not `details`, `purpose` or `title`, and the pending file is unlinked (:2348-2349), so a merged task's intent, diagram text and alignment exist nowhere the board can read again (the diagram files in diagrams/D-*.html do survive).",
+    "Mechanism. A click, or Enter/Space when focused, on a lane card (not on its ⋯ menu, PR link or drag handle) opens one detail panel; a second card replaces it; × or Esc closes it and returns focus to the card. The panel is a sibling of #lanes (an aside/dialog element outside the patched lane tree), so render()/SHIP.patch never removes it; the open key (project/id) lives in a module variable, and each state update (the page receives state over its EventSource, index.html:1107) re-fetches /api/task only when one of these /api/state fields of that task changed: stage, pr, last_review, crew, badges, so an open panel neither collapses nor flickers. On a screen narrower than 760px the panel is full-width below the header with a sticky close button; at 390px nothing overflows horizontally. It works for every project's tasks on the main page (T-222). The lane card keeps its current content (crew, last review, dependencies, badges, index.html:596-603); only the click target is new.",
+    "Endpoint. GET /api/task?project=<p>&id=<task id> (task id = the board's task grammar ^(T|SK)-[0-9]{3,}$, board/server.ts:504, so SK tasks are included) — `project` empty or absent means the default project, the same rule as POST /tasks (`body.project || defaultProject()`), so an install whose registry gives the self project no name (defaultProject() returns '' at board/server.ts:461; /api/state sends project null at :1077) still reaches its own tasks; the page sends the card's data-project or nothing; (read-only and open to reads like /api/state, which has no origin or method check (board/server.ts:2086); a POST to it returns 405 through a new method check modelled on board/server.ts:2109 and :2439; never the board secret, a token, a private key or a full brief/report/verdict body) returns JSON: `task` (id, project, stage, pr, pr_url, title split into `headline` = text before the first ':' and `detail` = the rest, title_tw, milestone, depends_on, scope, acceptance as an array of strings, `explain` if the spec carries one, plus `explain_ste`: the report of `python3 bin/lib/fm_ste.py check-explain <spec file>` run by the server (fm_ste.py is already in the board fixture), or null without explain), `cards` (each with `ste_ok`: the pending/answered record's stored `ste.ok` when present, null for a legacy card without a report; every decision for the task from <store>/pending and <store>/decisions, newest last — cards archived to runtime/archived-pending are left out on purpose, because they were withdrawn, not answered: id, kind, purpose, chosen, answers' ok flags and No-texts, ts, and `details` when the record has them, `diagram` true when diagrams/<id>.<lang>.html exists for the requested locale), `tests` (planned: the unique `tests/...` and `test/...` paths named in acceptance and scope, each with `source`: 'acceptance' or 'scope'; for external projects the same rule on the spec), `readiness` (from the latest readiness evidence record: head, gate_base, gates, checks as name+conclusion, round; null when none), `rounds` (from events.jsonl of the task's store: per round the worker actor, reviewer actor and vendor from the identity payloads; from evidence, the reviewed head and verdict of the round's verdict record and the head of its worker-report record; ordinary push events carry no commit head (bin/fm-worker.sh:278, :2179; bin/fm-config.sh:596 identity payload) and are NOT a head source — a round with no verdict or report record shows head null, rendered '—'; no change to fm-worker.sh; empty array when none), `brief` (the first line of the latest brief record, only), and `notes` arrays saying in one line why a section is empty ('not dispatched yet', 'no PR yet', 'no readiness record yet'). Unknown project or task: 404 JSON {error}. Evidence is read through a new read-only subcommand `python3 bin/lib/fm_evidence.py summary --state <dir> --project <evidence project> --task <id> [--external]`, where the evidence project follows the writers' rule fm_evidence_project (bin/fm-config.sh:1078-1083: the project name, else default_project, else 'self'), so an install whose default project has no name reads its evidence under 'self' instead of failing Store's non-empty name check (fm_evidence.py:120-122) that loads Store(...).records() (so record signatures are verified; readers take no lock, fm_evidence.py:167-168) and prints only kind, round, actor, head, verdict, time, the brief's first line and the readiness fields above — never the readiness record's `review` object (it holds the full verdict text, bin/lib/fm_binding.py:381); board/server.ts spawns it like taskDefs spawns fm_tasks (Bun.spawnSync with childEnv(), cwd ROOT) with no cache: the page calls /api/task only when the panel opens and when one of the listed /api/state fields of the open task changed, so a spawn per request is bounded. If `summary` exits non-zero (records() raises on a forged record, wrong key mode, identity mismatch or bad spec-preflight record, fm_evidence.py:170-200), /api/task still returns 200 with `readiness: null`, `rounds` built from events only (no verdict heads), `brief: null` and a note 'evidence unreadable: <first stderr line, max 200 chars>'; a test covers it. Board fixture: `summary` imports fm_evidence.py and, only when it meets a spec-preflight record, fm_spec_preflight.py (which itself imports fm_ste lazily, see the explain line); neither reaches a model. tests/e2e/lib/fixture.ts:104 adds 'fm_evidence.py' and 'fm_spec_preflight.py' to the bin/lib copy list; tests/e2e/board-crew.spec.ts:49 adds both files to the exact bin/lib allowlist and :51 adds 'fm_evidence' to the exact set of fm_* names server.ts calls, and its trust comment (:40-44) gains one line: 'The board runs bin/lib/fm_evidence.py summary only to read evidence metadata (T-230), which reaches no model.'",
+    "Answered cards keep their details (documented in design §5.2's paragraph on answered decisions, not §8). When the board writes the decision record on an answer (board/server.ts ~:2280-2296), it also copies the pending card's `details`, `purpose`, `title` and `ste` report (when present; fm-decide.sh:440 stores `ste` beside details) into the record, so the panel's STE badge for an answered card reads the stored report. These four fields stay out of every other board output through one helper (e.g. `publicDecision(record)` that drops details, purpose, title and ste): state() (board/server.ts:1353, sent at :1439) builds `responses` with it, pushWake (:1565-1569) writes the wake line's `decision` with it, and the answer handler's response `decision: stored` (:2350-2351, read by index.html:976-984) goes through it too; so /api/state, the SSE pushes, the POST /decisions response and session/wake.jsonl keep exactly today's shape, and among board outputs only /api/task returns them. The local CLI `fm-decide.sh --await` prints the record file as it is and therefore includes the four fields; that is firstmate's own terminal output, not a board output, and is stated in design §5.2. The `responses` readers (index.html:514-523, :685, :688; tests/board-state.test.sh, board-readiness, board-card-effects, board-projects, board-pr-links, decisions, session, tests/lib/merge_authorization.py) therefore see no change, and a bash test asserts that /api/state.responses, the POST /decisions response and the wake line of an answered card contain none of details, purpose, title or ste, while decisions/<id>.json and /api/task do. Records written before this change stay as they are; for them /api/task returns the card without details and the panel falls back to the spec's explain block. No other writer of decisions/ changes (fm-decide.sh only reserves and requests; its :278/:364 checks read existence only).",
+    "Spec explain block (optional). A task spec may carry `explain`: {en:{...}, 'zh-TW':{...}} with the intent-card fields intent, why, scope_in, scope_out, done, notes, before_nodes, after_nodes (questions and change_table are not part of it). bin/lib/fm_ste.py gains `check_explain(explain)` and the CLI `fm_ste.py check-explain <spec.json>`: it reuses _validate's field rules (both locales, item kinds, node states, counts), requires intent, done and both node lists, requires one 'Intent N:'/'意圖 N：' alignment line in done per intent item (the T-228 rule), and runs the same STE sentence and node-label checks as check_details for intent, why, done, notes and the nodes; a spec without explain prints {\"explain\": false} and exits 0; a structural problem exits 64, an STE failure exits 65 with the same stderr lines as check-details. bin/lib/fm_config_tasks.py check() imports fm_ste lazily — only inside the branch for a task file that has explain, so the fixtures that copy fm_config_tasks.py without fm_ste.py (config_modules_fixture tests/lib/config-modules.sh:7-9 used by tests/ci-lints.test.sh, tests/design-layout.test.sh:74, tests/ci-pool.test.sh:196, tests/dispatch.test.sh:244, and the file lists in tests/settings.test.sh:28, tests/lib/autopilot_entrypoints.py:31, tests/codex-availability.test.sh:31, tests/codex-review.test.sh:118) keep working unchanged; a task with explain whose fm_ste cannot be imported is reported as the problem 'T-n: explain: fm_ste unavailable' — calls check_explain for every task file that has explain and reports 'T-n: explain: <reason>' as a problem (so bin/ci.sh's dag stage and fm_tasks_check catch it). bin/lib/fm_spec_preflight.py runs check_explain inside prompt() next to the identity/scope/acceptance check (:31) with a lazy `import fm_ste` inside that function (never at module level, because fm_evidence imports fm_spec_preflight at :194 and fm-canary.sh:528 and fm_spec_pins.py:412 import it too); a failure raises ValueError, which main already turns into exit 65 (bin/lib/fm_spec_preflight.py:164-168). check_explain is a separate function: it reuses _validate (:136-179) and the alignment loop of check_details (bin/lib/fm_ste.py:195-199) and does not call check_details, which needs title/explanation/before/after/outcome/options. fm_tasks output is unchanged (it already passes unknown keys through). This spec's own `explain` is the first user.",
+    "Diagram for a spec's explain. bin/fm-diagram.sh gains `--task <task id> [--project <p>]` (task id grammar ^(T|SK)-[0-9]{3,}$): it renders the explain block's before_nodes/after_nodes with the same built-in drawing the decision mode uses into diagrams/task-<project>-<T-n>.<en|zh-TW|zh-CN>.html (name regex: ^diagrams/task-(?:([a-z0-9-]{1,24})-)?((?:T|SK)-[0-9]{3,})\\.(en|zh-TW|zh-CN)\\.html$, the project part being PROJECT_NAME of board/server.ts:387; when `--project` is absent and the registry gives the default project no name, the file is diagrams/task-<T-n>.<lang>.html and the route maps the nameless form to the default project; board/public/diagrams/.gitignore:5 already ignores generated *.html) (self project: board/public/diagrams/; external: <state>/diagrams/), refuses a spec without explain (exit 64), and is added to the 'only for decisions' header comment as the second allowed input. board/server.ts's diagrams route (:2053-2056) also maps `diagrams/task-<project>-<T-n>.<lang>.html` to the owning project's store. board/public/diagram.js accepts a task diagram name in its src builder and mount (one function, as its header requires). Firstmate runs `bin/fm-diagram.sh --task` after a spec with explain passes preflight (skills/firstmate/SKILL.md, in the T-228 card-authoring rules, in place).",
+    "Panel content, fixed order, built from the same section builders as the intent card (intentBody, T-229) so cards and panels look the same. Header: kind-of-lane state badge, id, project chip, PR link, CI line (readiness checks), STE badge from the chosen source: the card's `ste_ok` (pending or answered), or `explain_ste.ok` for an explain block; no badge for a legacy card without a report, headline and detail. Then: the STE explanation — source picked as the newest answered or pending dispatch/repin/merge card with details for the task, else the spec's explain, else a one-line 'no STE explanation yet' — rendered in intentBody's order: intent, how (the diagram iframe of that card, or the task diagram for explain; no iframe when the file is missing), alignment (done), scope, notes; then Spec (depends_on, scope paths, acceptance as a numbered list, each line clamped to 2 lines with a 展開/Expand toggle that survives re-render, keyed by task+index); then Tests (planned suites with their source, and the readiness row: gates and required checks with conclusions at their head, or 'no readiness record yet'); then Progress (rounds table, cards list with their choice and No-texts, latest brief headline, or one-line empty notes). Every label comes from i18n/ui.en.json and ui.zh-TW.json (no Chinese literals in the page: tests/i18n.test.sh), with zh-CN through i18n/tw2cn.tsv for any new characters.",
+    "Security and privacy. /api/task never returns evidence text beyond the brief's first line, never verdict or report bodies, never anything from state/session, the signing key or the board secret; for an external project it reads only that project's registered store and tasks dir (T-222 already shows external specs on the main page). The endpoint is GET-only and shares /api/state's origin rules; a POST is 405.",
+    "Tests. Fail-first runs only *.test.sh (bin/fm-failfirst.sh:17), so the red-on-base proof comes from the bash suites below, which cover the endpoint, the stored card fields, the STE checks, the spec validation and the task diagrams; the panel's interaction, focus, re-render persistence and viewport are verified by the e2e suite only (it runs in CI's end-to-end job), and the spec says so. New tests/board-task-detail.test.sh (board fixture as in tests/board-pr-links.test.sh, two projects): GET /api/task for a ready task with explain returns explain, acceptance array, headline/detail split and planned tests from acceptance and scope; for a merged task returns rounds with verdict heads, readiness gates/checks and the brief first line only (assert no verdict body text and no 'BEGIN' marker); an answered card written by the board keeps details, purpose, title and ste in decisions/<id>.json while /api/state.responses and its session/wake.jsonl line carry none of them; an old record without details is returned without them; unknown task 404; a fixture whose registry has no default project name serves /api/task?id=T-n with no project parameter, returns its rounds and readiness from evidence stored under 'self', and serves its nameless task diagram; an SK task id resolves; POST 405; a store holding a forged evidence record returns 200 with readiness null and the 'evidence unreadable' note; an external project's task resolves from its own tasks dir and store, and with the same task id present in both projects' stores the response holds only the requested project's cards, rounds and evidence (isolation); no response contains the board secret, 'evidence-signing', a verdict body sentence or the readiness `review` field (secret exclusion); a round whose only events are pushes has head null; cards: a pending card's ste_ok is its report's ok, an answered card written after this change keeps ste_ok, a legacy record has ste_ok null, and a spec with explain returns explain_ste. tests/ste.test.sh (+ tests/lib/ste_cases.py) cases for check-explain: valid, missing alignment line, mismatched node counts, STE failure exit 65, no explain exit 0. tests/config.test.sh (fm_tasks_check cases at :491-503) cases: a task file with a bad explain is a problem, and a fixture tasks dir checked by a copy of fm_config_tasks.py WITHOUT fm_ste.py passes when no task has explain (proves the lazy import). tests/spec-preflight.test.sh case: a bad explain refuses before review. tests/diagram.test.sh cases for --task: three locale files written from explain; spec without explain exits 64; a task diagram name passes diagram.js's src builder and mount (browser-module block as at :811); the server serves an external project's task diagram from that project's store and 404s a missing one (HTTP block as at :1001); the language switch swaps the task diagram's locale. tests/lib/evidence_* or a new block for `fm_evidence.py summary` (fields only, no bodies). E2E tests/e2e/board-task-detail.spec.ts: the panel's sections appear in the order header, intent, how, alignment, scope, notes, Spec, Tests, Progress, using the intentBody section markup; click, Enter and Space open; a second card replaces the panel; × and Esc close and focus returns to the card; clicks on the ⋯ menu, the PR link and a drag do not open it; a poll re-render keeps it open and keeps an expanded acceptance line expanded, a ready task shows the 'not dispatched yet' notes, 390px has no horizontal scroll.",
+    "Callers and fixtures checked. Task-spec schema readers: bin/fm-config.sh fm_tasks/fm_task_get/fm_tasks_check (:368-425), bin/lib/fm_config_tasks.py, bin/ci.sh :1167 (dag stage), bin/fm.sh :778/:809, bin/fm-ready.sh :111, bin/lib/fm_concurrent.py :115, board/server.ts taskDefs :437-460, bin/lib/fm_spec_preflight.py :31, tests/config.test.sh, tests/ready.test.sh, tests/settings.test.sh, tests/lib/config-modules.sh, tests/lib/autopilot_entrypoints.py, tests/e2e/board-crew.spec.ts (whose :49/:51 allowlists change as stated in the endpoint line, with tests/e2e/lib/fixture.ts:104), and the fixtures that copy fm_config_tasks.py: tests/lib/config-modules.sh:7-9 (tests/ci-lints.test.sh, tests/design-layout.test.sh:74, tests/ci-pool.test.sh:196, tests/dispatch.test.sh:244), tests/settings.test.sh:28, tests/lib/autopilot_entrypoints.py:31, tests/codex-availability.test.sh:31, tests/codex-review.test.sh:118 — none breaks, because explain is optional and fm_ste is imported only for a task that has it. Board state readers unaffected: /api/state, the SSE pushes and the wake line keep their shape, because the answer record's four new fields are removed from `responses` and from the wake line (see the answered-cards line). Wake and decision readers: bin/fm-herdr.py:2010 (wake queue) and :2019 (state/decisions/*.json) read named fields; bin/lib/fm_autopilot.py:705 turns a wake line's `decision` into a decision_made event and tests/board-wake.test.sh:59-70 checks that `decision` — both keep working because the wake `decision` goes through publicDecision and keeps today's keys. Push-event writers (bin/fm-worker.sh:278, :2179) are not changed and not used as head sources. Decision record readers (board/server.ts decisionDir :656-671, bin/fm-ready.sh :176-178, bin/fm-diagram.sh :174, bin/lib/fm_autopilot_loop.py :417, bin/fm-reconcile.sh, bin/fm.sh, bin/lib/fm_spec_pins.py, and the record fm-decide.sh --await prints) only gain optional fields; none reads a fixed key list. tests/i18n.test.sh constrains page literals; tests/board-*.test.sh suites that count routes or assert 404 for unknown paths are checked for /api/task.",
+    "Design (edit in place, T-189): design/design.md §8 'Lanes and cards' paragraph (:1720 area) gains the task detail panel and /api/task; design §5.2 (the paragraph on how an answer is recorded, :249 area) states that answered records keep details, purpose, title and ste, that board outputs drop them except /api/task, and that fm-decide.sh --await prints them; §5.2's intent-card paragraph names the spec explain block. No new section at the end of design.md.",
+    "Migration / in flight: no stored record changes format except optional fields; fm_config_tasks.py gains no module-level dependency (lazy fm_ste import), so fixtures without fm_ste.py keep passing; old decision records keep working without details; specs in flight need no explain. Out of scope: lane card layout itself, the roster, the voyage, writing explain blocks for old tasks, per-suite CI results from GitHub. Scope: board/public/index.html, board/public/diagram.js, board/server.ts, bin/lib/fm_ste.py, bin/lib/fm_config_tasks.py, bin/lib/fm_spec_preflight.py, bin/lib/fm_evidence.py, bin/fm-diagram.sh, i18n/ui.en.json, i18n/ui.zh-TW.json, i18n/tw2cn.tsv, skills/firstmate/SKILL.md, tests/**, design/design.md, design/tasks/T-230.json."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A click on a task card opens a detail panel, and Esc closes it."
+        },
+        {
+          "kind": "fact",
+          "text": "The panel explains the task with the intent card sections and STE text."
+        },
+        {
+          "kind": "fact",
+          "text": "A task that has not started also shows its plan, its spec and its planned tests."
+        },
+        {
+          "kind": "fact",
+          "text": "The panel stays open when the board draws the lanes again."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The captain said that the fleet cards show no context."
+        }
+      ],
+      "scope_in": [
+        "board/public/index.html and diagram.js",
+        "board/server.ts",
+        "bin/lib/fm_ste.py, fm_config_tasks.py, fm_spec_preflight.py, fm_evidence.py",
+        "bin/fm-diagram.sh",
+        "i18n files, skills, tests and design sections 5.2 and 8"
+      ],
+      "scope_out": [
+        "The dispatch and merge flow",
+        "The board write endpoints, except the answer handler that keeps card details"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: a click or Enter on a card opens the panel, and Esc closes it. An e2e case proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the panel uses the intentBody sections in the same order. An e2e section-order case proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: /api/task returns the explain block, the acceptance lines and the planned tests of a ready task. tests/board-task-detail.test.sh proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the panel is outside the lanes, and a redraw keeps it open. An e2e case proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "An old task without a card or an explain block shows its raw spec and a one-line note."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Board reads /api/state"
+        },
+        {
+          "state": "gone",
+          "label": "Card shows id and title"
+        },
+        {
+          "state": "gone",
+          "label": "Answered card loses its details"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Board reads /api/state"
+        },
+        {
+          "state": "new",
+          "label": "Click reads /api/task"
+        },
+        {
+          "state": "new",
+          "label": "Server joins spec, cards, evidence"
+        },
+        {
+          "state": "new",
+          "label": "Panel uses intent card sections"
+        },
+        {
+          "state": "new",
+          "label": "Answered card keeps its details"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "點任務卡打開說明面板，Esc 關閉。"
+        },
+        {
+          "kind": "fact",
+          "text": "面板用意圖卡的段落和 STE 文字說明任務。"
+        },
+        {
+          "kind": "fact",
+          "text": "還沒開始的任務也顯示做法、spec 和計畫中的測試。"
+        },
+        {
+          "kind": "fact",
+          "text": "看板重繪各欄時，面板保持打開。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長說船隊卡片沒有上下文。"
+        }
+      ],
+      "scope_in": [
+        "board/public/index.html 和 diagram.js",
+        "board/server.ts",
+        "bin/lib/fm_ste.py、fm_config_tasks.py、fm_spec_preflight.py、fm_evidence.py",
+        "bin/fm-diagram.sh",
+        "i18n、skills、測試和 design 第 5.2 與 8 節"
+      ],
+      "scope_out": [
+        "派工和合併流程",
+        "看板的寫入端點，保留卡片細節的作答處理除外"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：點擊或 Enter 打開面板，Esc 關閉。e2e 案例證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：面板依同樣順序使用 intentBody 的段落。e2e 段落順序案例證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：/api/task 回傳就緒任務的 explain、驗收和計畫中的測試。tests/board-task-detail.test.sh 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：面板在各欄之外，重繪不移除它。e2e 案例證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "沒有卡片也沒有 explain 的舊任務，顯示原始 spec 和一行說明。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "看板讀 /api/state"
+        },
+        {
+          "state": "gone",
+          "label": "卡片只有編號和標題"
+        },
+        {
+          "state": "gone",
+          "label": "答完的卡失去細節"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "看板讀 /api/state"
+        },
+        {
+          "state": "new",
+          "label": "點擊讀 /api/task"
+        },
+        {
+          "state": "new",
+          "label": "伺服器組合 spec 和證據"
+        },
+        {
+          "state": "new",
+          "label": "面板用意圖卡段落"
+        },
+        {
+          "state": "new",
+          "label": "答完的卡保留細節"
+        }
+      ]
+    }
+  }
+}

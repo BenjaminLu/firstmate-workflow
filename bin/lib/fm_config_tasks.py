@@ -30,6 +30,18 @@ def check():
         if not isinstance(task, dict) or task.get('id') != f.stem:
             problems.append('%s: its id is %s, not %s' % (f.name, json.dumps(task.get('id') if isinstance(task, dict) else None), f.stem))
             continue
+        if 'explain' in task:
+            try:
+                import fm_ste
+            except ImportError:
+                problems.append('%s: explain: fm_ste unavailable' % f.stem)
+            else:
+                try:
+                    report = fm_ste.check_explain(task['explain'])
+                    if not report['ok']:
+                        problems.append('%s: explain: STE check failed' % f.stem)
+                except ValueError as error:
+                    problems.append('%s: explain: %s' % (f.stem, error))
         tasks[f.stem] = task
     deps = {}
     for name, task in tasks.items():

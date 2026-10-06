@@ -179,6 +179,34 @@ def _validate(details):
     return True
 
 
+def check_explain(explain):
+    """Validate a spec explanation without requiring decision-only fields."""
+    if not isinstance(explain, dict):
+        raise ValueError('explain must be an object')
+    for lang in LOCALES:
+        loc = explain.get(lang)
+        if not isinstance(loc, dict):
+            raise ValueError(lang + ': required in explain')
+        for field in ('intent', 'done', 'before_nodes', 'after_nodes'):
+            if field not in loc:
+                raise ValueError(lang + '.' + field + ': required in explain')
+        if any(field not in NEW_FIELDS or field in ('questions', 'change_table') for field in loc):
+            raise ValueError(lang + ': unknown explain field')
+    _validate(explain)
+    _alignment(explain)
+    return _report(explain, explain=True)
+
+
+def _alignment(details):
+    for lang in LOCALES:
+        loc = details[lang]
+        for number in range(1, len(loc['intent']) + 1):
+            name = ('Intent ' if lang == 'en' else '意圖 ') + str(number)
+            prefixes = (name + ':',) if lang == 'en' else (name + '：', name + ':')
+            if not any(item['text'].startswith(prefixes) for item in loc['done']):
+                raise ValueError(lang + '.done: no alignment item for ' + name)
+
+
 def check_details(details, kind=None):
     if not _validate(details):
         return {'intent_card': False}
@@ -192,12 +220,13 @@ def check_details(details, kind=None):
             _text(loc.get('title'), lang + '.title')
             if not loc['title'].startswith(prefix):
                 raise ValueError(lang + '.title: a merge card title starts with "' + prefix + '"')
-        for number in range(1, len(loc['intent']) + 1):
-            name = ('Intent ' if lang == 'en' else '意圖 ') + str(number)
-            prefixes = (name + ':',) if lang == 'en' else (name + '：', name + ':')
-            if not any(item['text'].startswith(prefixes) for item in loc['done']):
-                raise ValueError(lang + '.done: no alignment item for ' + name)
-    report = dict(intent_card=True, ok=True, locales={}, labels={})
+    _alignment(details)
+    return _report(details)
+
+
+def _report(details, explain=False):
+    report = dict(ok=True, locales={}, labels={})
+    report['explain' if explain else 'intent_card'] = True
     for lang in LOCALES:
         loc = details[lang]
         report['locales'][lang] = []
@@ -213,18 +242,19 @@ def check_details(details, kind=None):
                 if any(i['severity'] == 'fail' for i in result['issues']):
                     report['ok'] = False
 
-        add('title', loc.get('title'), 'fact', sentences=False)
-        for field in ('explanation', 'before', 'after', 'outcome'):
-            add(field, loc.get(field))
-        options = loc.get('options')
-        if not isinstance(options, dict):
-            raise ValueError(lang + '.options: expected object')
-        for key, option in options.items():
-            if not isinstance(option, dict):
-                raise ValueError(lang + '.options.' + key + ': expected object')
-            for field in ('description', 'pros', 'cons'):
-                add('options.' + key + '.' + field, option.get(field),
-                    None if field == 'description' else 'fact', sentences=field != 'description')
+        if not explain:
+            add('title', loc.get('title'), 'fact', sentences=False)
+            for field in ('explanation', 'before', 'after', 'outcome'):
+                add(field, loc.get(field))
+            options = loc.get('options')
+            if not isinstance(options, dict):
+                raise ValueError(lang + '.options: expected object')
+            for key, option in options.items():
+                if not isinstance(option, dict):
+                    raise ValueError(lang + '.options.' + key + ': expected object')
+                for field in ('description', 'pros', 'cons'):
+                    add('options.' + key + '.' + field, option.get(field),
+                        None if field == 'description' else 'fact', sentences=field != 'description')
         for field in ('intent', 'why', 'done', 'questions', 'notes'):
             for index, item in enumerate(loc.get(field, [])):
                 add(field, item['text'], 'fact' if field == 'notes' else item['kind'], index)
@@ -242,14 +272,20 @@ def main(argv):
     if len(argv) == 4 and argv[:2] == ['check-details', '--kind'] and not argv[2].startswith('--'):
         kind = argv[2]
         filename = argv[3]
-    elif len(argv) == 2 and argv[0] == 'check-details' and argv[1] != '--kind':
+    elif len(argv) == 2 and argv[0] in ('check-details', 'check-explain') and argv[1] != '--kind':
         filename = argv[1]
     else:
-        print('usage: fm_ste.py rules | check-details [--kind <kind>] <file>', file=sys.stderr)
+        print('usage: fm_ste.py rules | check-details [--kind <kind>] <file> | check-explain <spec.json>', file=sys.stderr)
         return 64
     try:
         with open(filename, encoding='utf-8') as stream:
-            report = check_details(json.load(stream), kind)
+            data = json.load(stream)
+            if argv[0] == 'check-explain':
+                if not isinstance(data, dict):
+                    raise ValueError('spec must be an object')
+                report = check_explain(data['explain']) if 'explain' in data else {'explain': False}
+            else:
+                report = check_details(data, kind)
     except (ValueError, OSError) as error:
         print('fm_ste: ' + str(error), file=sys.stderr)
         return 64
