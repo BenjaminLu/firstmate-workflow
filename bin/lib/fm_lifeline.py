@@ -655,7 +655,7 @@ def _ack_record(root, ident):
         return None
 
 
-def acknowledged_many(root, identifiers, *, blocking=True):
+def acknowledged_many(root, identifiers, *, blocking=True, busy=None):
     """One committed snapshot. Busy nonblocking readers conservatively see pending."""
     import fcntl
     import math
@@ -671,6 +671,8 @@ def acknowledged_many(root, identifiers, *, blocking=True):
         try:
             fcntl.flock(lock, fcntl.LOCK_SH | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError:
+            if busy is not None:
+                busy.append(True)
             return unknown
         result = {}
         for ident in identifiers:
@@ -1157,8 +1159,9 @@ def main(args):
         identifiers = json.load(sys.stdin)
         if not isinstance(identifiers, list):
             raise ValueError('wake ids must be an array')
-        print(json.dumps(acknowledged_many(args[0], identifiers, blocking=False)))
-        return 0
+        busy = []
+        print(json.dumps(acknowledged_many(args[0], identifiers, blocking=False, busy=busy)))
+        return 75 if busy else 0
     if mode == 'ring-events':
         if len(args) != 2 or not args[0]:
             return _usage()

@@ -6,7 +6,7 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks/ so the
 // board has no opinion the log does not already hold.
-import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { CString, dlopen, FFIType } from "bun:ffi";
@@ -79,6 +79,49 @@ const PORT = (() => {
   }
   return Number(given);
 })();
+const COLD = process.env.FM_BOARD_COLD === "1";
+const BUILD_BUDGET = Number(process.env.FM_BOARD_BUDGET_MS ?? 1000);
+let writeGeneration = 0;
+let lastBudgetLog = -Infinity;
+type BuildCost = { events: number; tasks: number; watch: number };
+let buildCost: BuildCost | null = null;
+const timed = <T,>(part: keyof BuildCost, read: () => T): T => {
+  const cost = buildCost, start = performance.now();
+  try { return read(); } finally { if (cost) cost[part] += performance.now() - start; }
+};
+const fileStamp = (file: string): string => {
+  const scope = !COLD && file === join(ROOT, "config.yaml") ? storageRequests.getStore() : undefined;
+  if (scope?.active && scope.configStamp !== undefined) return scope.configStamp;
+  let stamp: string;
+  try { const s = statSync(file); stamp = `${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`; }
+  catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; stamp = "absent"; }
+  if (scope?.active) scope.configStamp = stamp;
+  return stamp;
+};
+// Include files, not only their directory: in-place writes do not touch the parent.
+// Never descend through links. External stores have already passed validateStore.
+const directoryStamp = (dir: string, depth = 1): string => {
+  try {
+    const stamp = fileStamp(dir);
+    if (stamp === "absent" || !lstatSync(dir).isDirectory()) return stamp;
+    const entries = readdirSync(dir).sort().map(name => {
+      const path = join(dir, name);
+      try {
+        const st = lstatSync(path);
+        return [name, depth > 1 && st.isDirectory() ? directoryStamp(path, depth - 1) : fileStamp(path)];
+      } catch (error) {
+        // Atomic writers can rename a listed temporary file before we stat it.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        return [name, "absent"];
+      }
+    });
+    return JSON.stringify([stamp, entries]);
+  } catch (error) {
+    // The directory itself can disappear between stat, lstat and readdir too.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return "absent";
+  }
+};
 const LOG = join(ROOT, "state/events.jsonl");
 const PUBLIC = join(ROOT, "board/public");
 // The environment of every child the board starts, FM_PROJECT removed: a
@@ -109,11 +152,53 @@ const readText = (file: string): string => {
   }
 };
 
-const readEvents = (directories: string[] = stores()): Event[] => directories.flatMap(dir => {
-  const file = join(dir, "events.jsonl");
-  return readText(file).split("\n").filter(Boolean)
-    .flatMap(line => { try { return [JSON.parse(line) as Event]; } catch { return []; } });
-});
+type EventRead = { ino: number; size: number; offset: number; mtimeMs: number; ctimeMs: number;
+  events: Event[]; rest: Buffer; prefix: Buffer };
+const eventReads = new Map<string, EventRead>();
+const parseEvents = (text: string): Event[] => text.split("\n").filter(Boolean)
+  .flatMap(line => { try { return [JSON.parse(line) as Event]; } catch { return []; } });
+// The base reader accepts a valid final JSON line even before its newline.
+// Keep that tail out of the committed prefix so completing it never duplicates it.
+const eventSnapshot = (read: EventRead): Event[] => read.events.concat(parseEvents(read.rest.toString("utf8")));
+const eventFile = (file: string): Event[] => {
+  if (COLD) return parseEvents(readText(file));
+  const previous = eventReads.get(file);
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, "r");
+    const st = fstatSync(fd);
+    if (previous && st.ino === previous.ino && st.size === previous.size
+      && st.mtimeMs === previous.mtimeMs && st.ctimeMs === previous.ctimeMs) return eventSnapshot(previous);
+    const bytes = (start: number, size: number) => {
+      const buffer = Buffer.alloc(size);
+      let n = 0;
+      while (n < size) {
+        const read = readSync(fd!, buffer, n, size - n, start + n);
+        if (!read) throw new Error("event log changed while reading");
+        n += read;
+      }
+      return buffer;
+    };
+    const append = previous && st.ino === previous.ino && st.size > previous.size
+      && bytes(previous.offset - previous.prefix.length, previous.prefix.length).equals(previous.prefix);
+    const from = append ? previous.offset : 0;
+    const data = Buffer.concat([append ? previous.rest : Buffer.alloc(0), bytes(from, st.size - from)]);
+    const newline = data.lastIndexOf(10);
+    const events = append ? previous.events.slice() : [];
+    if (newline >= 0) for (const event of parseEvents(data.subarray(0, newline + 1).toString("utf8"))) events.push(event);
+    const current = { ino: st.ino, size: st.size, offset: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs,
+      events, rest: Buffer.from(data.subarray(newline + 1)), prefix: bytes(Math.max(0, st.size - 4096), Math.min(4096, st.size)) };
+    eventReads.set(file, current);
+    return eventSnapshot(current);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return previous ? eventSnapshot(previous) : parseEvents(textReads.get(file) ?? "");
+    eventReads.delete(file);
+    // Other errors use the original read/error boundary, never a partial append.
+    return parseEvents(readText(file));
+  } finally { if (fd !== undefined) closeSync(fd); }
+};
+const readEvents = (directories: string[] = stores()): Event[] => timed("events", () =>
+  directories.flatMap(dir => eventFile(join(dir, "events.jsonl"))));
 
 // A task's state is whatever the log last said about it. The board never
 // decides; it reports.
@@ -387,15 +472,17 @@ type Registry = { name: string | null; projects: Map<string, Registered> };
 const PROJECT_NAME = /^[a-z0-9-]{1,24}$/;
 let registryRead: (Registry & { stamp: string }) | null = null;
 const registry = (): Registry => {
+  const scope = storageRequests.getStore();
+  if (!COLD && scope?.active && scope.registry) return scope.registry;
+  const value = readRegistry();
+  if (!COLD && scope?.active) scope.registry = value;
+  return value;
+};
+const readRegistry = (): Registry => {
   const file = join(ROOT, "config.yaml"), lib = join(ROOT, "bin/fm-config.sh");
   if (!existsSync(lib)) return { name: null, projects: new Map() };
-  let st;
-  try { st = statSync(file); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return registryRead ?? { name: null, projects: new Map() };
-  }
-  const stamp = `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+  const stamp = fileStamp(file);
+  if (stamp === "absent") return registryRead ?? { name: null, projects: new Map() };
   if (registryRead?.stamp === stamp) return registryRead;
   let name: string | null = null;
   const projects = new Map<string, Registered>();
@@ -433,30 +520,53 @@ const registry = (): Registry => {
 // request time; each directory's answer is kept only while none of its task
 // files has changed. No directory, no library or a file that does not parse
 // is no task list, never half of one.
-const tasksRead = new Map<string, { stamp: string; defs: Array<Record<string, unknown>> }>();
-const taskDefs = (rel: string): Array<Record<string, unknown>> => {
-  const dir = isAbsolute(rel) ? rel : join(ROOT, rel), lib = join(ROOT, "bin/fm-config.sh");
-  if (!existsSync(dir) || !existsSync(lib)) return [];
-  let stamp = "";
-  try {
-    const d = statSync(dir);
-    stamp = `${d.ino}:${d.mtimeMs}|` + readdirSync(dir).filter(f => f.endsWith(".json")).sort().map(f => {
-      const st = statSync(join(dir, f));
-      return `${f}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
-    }).join("|");
-  } catch { return []; }
-  const kept = tasksRead.get(rel);
-  if (kept?.stamp === stamp) return kept.defs;
-  let defs: Array<Record<string, unknown>> = [];
-  try {
-    const r = Bun.spawnSync(["bash", "-c", '. "$1" && fm_tasks "$2"', "fm-board", lib, rel], { env: childEnv(), cwd: ROOT });
-    if (r.exitCode === 0) {
-      defs = new TextDecoder().decode(r.stdout).split("\n").filter(Boolean).map(line => JSON.parse(line));
-    }
-  } catch { defs = []; }
-  tasksRead.set(rel, { stamp, defs });
-  return defs;
+type TaskDefs = Array<Record<string, unknown>>;
+const tasksRead = new Map<string, { stamp: string; defs: TaskDefs }>();
+const tasksRefreshing = new Set<string>();
+const taskStamp = (dir: string) => directoryStamp(dir);
+const parseTasks = (text: string): TaskDefs => text.split("\n").filter(Boolean).map(line => JSON.parse(line));
+const refreshTasks = (dir: string, stamp: string) => {
+  if (tasksRefreshing.has(dir)) return;
+  tasksRefreshing.add(dir);
+  void (async () => {
+    try {
+      let current = stamp;
+      // One owned child at a time, including if a second edit arrives during a read.
+      for (;;) {
+        let defs: TaskDefs = [];
+        try {
+          const child = Bun.spawn(["python3", LIFELINE, "keep", "--pid", String(process.pid),
+            "--name", "board-tasks", "--", "bash", "-c", '. "$1" && fm_tasks "$2"',
+            "fm-board", join(ROOT, "bin/fm-config.sh"), dir],
+            { env: childEnv(), cwd: ROOT, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+          const [text, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+          if (code === 0) defs = parseTasks(text);
+        } catch { defs = []; }
+        if (JSON.stringify(tasksRead.get(dir)?.defs) !== JSON.stringify(defs)) writeGeneration++;
+        tasksRead.set(dir, { stamp: current, defs });
+        const next = taskStamp(dir);
+        if (next === current) break;
+        current = next;
+      }
+    } finally { tasksRefreshing.delete(dir); }
+  })().catch(() => { /* disappeared/unreadable directory: retry on the next request */ });
 };
+const taskDefs = (rel: string): TaskDefs => timed("tasks", () => {
+  const dir = isAbsolute(rel) ? rel : join(ROOT, rel), lib = join(ROOT, "bin/fm-config.sh");
+  if (!existsSync(lib)) return [];
+  let stamp: string;
+  try { stamp = taskStamp(dir); } catch { return []; }
+  const kept = tasksRead.get(dir);
+  if (kept?.stamp === stamp) return kept.defs;
+  if (!COLD && kept) { refreshTasks(dir, stamp); return kept.defs; }
+  let defs: TaskDefs = [];
+  try {
+    const r = Bun.spawnSync(["bash", "-c", '. "$1" && fm_tasks "$2"', "fm-board", lib, dir], { env: childEnv(), cwd: ROOT });
+    if (r.exitCode === 0) defs = parseTasks(r.stdout.toString());
+  } catch { defs = []; }
+  tasksRead.set(dir, { stamp, defs });
+  return defs;
+});
 // the project an event or card naming none belongs to (design section 15.4)
 const defaultProject = (): string => registry().name ?? "";
 // what a record says it belongs to: its own `project`, else the default
@@ -560,8 +670,9 @@ const mentioned = (repo: string | null, value: unknown, out: Record<string, stri
 // Validation walks at most 4096 routing entries, never repository copies and
 // never a shell/Python subprocess. A larger/unreadable store is unavailable.
 class StorageError extends Error {}
-const storageRequests = new AsyncLocalStorage<{ active: boolean; paths: Map<string, string | Error> }>();
+const storageRequests = new AsyncLocalStorage<{ active: boolean; paths: Map<string, string | Error>; registry?: Registry; configStamp?: string }>();
 const withStorage = <T,>(read: () => T): T => {
+  if (storageRequests.getStore()?.active) return read();
   const scope = { active: true, paths: new Map<string, string | Error>() };
   return storageRequests.run(scope, () => {
     try {
@@ -728,6 +839,7 @@ const WATCH_DIR = join(ROOT, "state/watch");
 const watchJson = (name: string): Record<string, unknown> | null => {
   try { return JSON.parse(readFileSync(join(WATCH_DIR, name), "utf8")); } catch { return null; }
 };
+let acknowledgedRead: { stamp: string; committed: Record<string, unknown> } | null = null;
 const watchWaiting = () => {
   let n = 0;
   try {
@@ -750,13 +862,23 @@ const watchWaiting = () => {
   // The bounded foreground helper refuses a busy lock; unknown means pending.
   let committed: Record<string, unknown> = {};
   if (latest.size) {
-    try {
+    const base = stateDir(defaultProject());
+    const ids = [...latest.keys()].sort();
+    const dir = join(base, "session/acknowledged");
+    const stamp = JSON.stringify([join(base, "session"), fileStamp(join(ROOT, "state/session/wake.jsonl")),
+      fileStamp(dir), fileStamp(join(base, "session/.ack-transaction.json")),
+      ids.map(id => [id, fileStamp(join(dir, `${id}.json`))])]);
+    if (!COLD && acknowledgedRead?.stamp === stamp) committed = acknowledgedRead.committed;
+    else try {
       const r = Bun.spawnSync(["python3", join(ROOT, "bin/lib/fm_lifeline.py"), "acknowledged", ROOT], {
         stdin: Buffer.from(JSON.stringify([...latest.keys()])), env: childEnv(),
       });
       if (r.exitCode === 0) {
         const value = JSON.parse(r.stdout.toString());
-        if (value && typeof value === "object" && !Array.isArray(value)) committed = value;
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          committed = value;
+          if (!COLD) acknowledgedRead = { stamp, committed };
+        }
       }
     } catch { /* unreadable/unsupported helper: retain every pending wake */ }
   }
@@ -807,9 +929,48 @@ const watchState = (events: Event[], aboard: string[], cards: Array<{ ts?: unkno
 
 // `only` is ?project=: that project's work, cards and log, and the counts of
 // those. Without it, every project on one page (design section 15.10 point 4).
-const state = (only: string | null = null) => {
-  return withStorage(() => buildState(only)) as Extract<ReturnType<typeof buildState>, { engine: unknown }>;
+// Input inventory is deliberately shared by HTTP and every SSE subscription.
+// Validate all registered stores before looking at a memo, including hidden ones.
+const stateStamp = () => {
+  const projects = [...registry().projects.keys()];
+  for (const project of projects) stateDir(project);
+  const dirs = stores();
+  const taskDirs = new Set([join(ROOT, "design/tasks"), ...[...registry().projects]
+    .map(([name, p]) => { const rel = p.tasks ?? `projects/${name}/tasks`; return isAbsolute(rel) ? rel : join(ROOT, rel); })]);
+  return JSON.stringify([writeGeneration, [...unknownOutcome].sort(),
+    fileStamp(join(ROOT, "config.yaml")), fileStamp(join(ROOT, "bin/fm-config.sh")),
+    fileStamp(join(ROOT, "design/design.md")), fileStamp(join(ROOT, "state/session/wake.jsonl")),
+    [...taskDirs].map(dir => [dir, taskStamp(dir)]),
+    dirs.map(dir => [dir, fileStamp(join(dir, "events.jsonl")),
+      ...["decisions", "pending", "ready", "skill-updates", "session/acknowledged"].map(name => directoryStamp(join(dir, name))),
+      directoryStamp(join(dir, "pins"), 2), fileStamp(join(dir, "session/.ack-transaction.json")),
+      fileStamp(join(dir, "session/host.json")), fileStamp(join(dirname(dir), "design.md"))])]);
 };
+type WatchInput = { events: Event[]; aboard: string[]; cards: Array<{ ts?: unknown }> };
+const watchInputs = new WeakMap<object, WatchInput>();
+type BoardState = Extract<ReturnType<typeof buildState>, { engine: unknown }>;
+const stateMemos = new Map<string | null, { stamp: string; generation: number; at: number; value: BoardState }>();
+const state = (only: string | null = null): BoardState => withStorage(() => {
+  const started = performance.now();
+  const stamp = stateStamp();
+  const kept = stateMemos.get(only);
+  if (!COLD && kept && kept.stamp === stamp && kept.generation === writeGeneration && started - kept.at < 1000) {
+    const input = watchInputs.get(kept.value)!;
+    return { ...kept.value, watch: watchState(input.events, input.aboard, input.cards) };
+  }
+  const cost: BuildCost = { events: 0, tasks: 0, watch: 0 };
+  buildCost = cost;
+  let value: BoardState;
+  try { value = buildState(only) as BoardState; }
+  finally { buildCost = null; }
+  if (!COLD) stateMemos.set(only, { stamp, generation: writeGeneration, at: started, value });
+  const elapsed = performance.now() - started;
+  if (elapsed > BUILD_BUDGET && started - lastBudgetLog >= 60000) {
+    lastBudgetLog = started;
+    console.error(`fm-board: /api/state build ${Math.round(elapsed)} ms (events ${Math.round(cost.events)} ms, tasks ${Math.round(cost.tasks)} ms, watch ${Math.round(cost.watch)} ms, rest ${Math.round(Math.max(0, elapsed - cost.events - cost.tasks - cost.watch))} ms)`);
+  }
+  return value;
+});
 const buildState = (only: string | null, tasksOnly = false) => {
   // Task detail shares the lane replay but never reads other projects or the
   // crew/session portion of the full board response.
@@ -1468,8 +1629,11 @@ const buildState = (only: string | null, tasksOnly = false) => {
       const p = projectOf(x);
       byProject[p] = mentioned(repoOf(p), x, byProject[p] ?? {});
     }
-  const watched = watchState(events, shownCrew.filter((c) => c.role !== "firstmate").map((c) => c.id), shownPending);
-  return { ...out, watch: watched, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
+  const input = { events, aboard: shownCrew.filter((c) => c.role !== "firstmate").map((c) => c.id), cards: shownPending };
+  const watched = timed("watch", () => watchState(input.events, input.aboard, input.cards));
+  const value = { ...out, watch: watched, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
+  watchInputs.set(value, input);
+  return value;
 };
 
 // whether `a` happened at or after `b`. Event stamps are whole seconds, so
@@ -1575,6 +1739,7 @@ const startOwned = (name: string, argv: string[], fd: number, env: Record<string
 // waiter the queue alone carries it. Nothing ever polls state/decisions.
 const WAKE_QUEUE = join(ROOT, "state/session/wake.jsonl");
 const pushWake = (id: string, reason: "answered" | "merge_settled", decision: unknown) => {
+  writeGeneration++;
   try {
     const dir = join(stateDir(ownerOf(id)?.project ?? defaultProject()), "session");
     mkdirSync(dir, { recursive: true });
@@ -1628,6 +1793,7 @@ const alive = (m: Marker | null): boolean => {
 };
 // write a record whole or not at all: a reader never sees half of one
 const rewrite = (file: string, record: unknown) => {
+  writeGeneration++;
   const temporary = join(dirname(file), `.${crypto.randomUUID()}.tmp`);
   writeFileSync(temporary, JSON.stringify(record) + "\n", { flag: "wx" });
   renameSync(temporary, file);
@@ -1637,6 +1803,7 @@ const ours = new Set<string>();
 // A running record's outcome, written once. The marker goes with it, so the
 // project's turn is free the moment the record says how it ended.
 const settle = (id: string, merge: "merged" | "failed", reason = "") => {
+  writeGeneration++;
   try { settleAvailable(id, merge, reason); }
   catch { unknownOutcome.add(id); }
 };
@@ -1652,6 +1819,7 @@ const mergeFailureTw = (reason: string): string => {
   return "合併未完成；請查看錯誤紀錄以確認原因";
 };
 const settleAvailable = (id: string, merge: "merged" | "failed", reason: string) => {
+  writeGeneration++;
   const file = responseFile(id);
   const d = readJson<Record<string, any>>(file);
   unknownOutcome.delete(id);
@@ -1684,6 +1852,7 @@ const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
 // with its output in a file: a board restarting under bun --watch neither
 // kills it nor leaves it writing into a closed pipe.
 const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false, expectedHead = "") => {
+  writeGeneration++;
   const merging = join(stateDir(project), "merging");
   mkdirSync(merging, { recursive: true });
   const log = join(merging, `${project || "_default"}.out`);
@@ -1718,6 +1887,7 @@ const decode = (b: Uint8Array | undefined) => new TextDecoder().decode(b ?? new 
 const lastLine = (s: string) => s.split("\n").filter((l) => l.trim()).pop() ?? "";
 // one captain event through the one writer of the log
 const emitCaptain = (args: string[]): { ok: boolean; error: string } => {
+  writeGeneration++;
   try {
     const r = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"), "--actor", "captain", ...args], { env: childEnv(), stdin: "ignore" });
     return { ok: r.exitCode === 0, error: r.exitCode === 0 ? "" : lastLine(decode(r.stderr)) || `fm-emit.sh exited ${r.exitCode}` };
@@ -1735,6 +1905,7 @@ const onProjectOf = (project: string) => project && project !== defaultProject()
 // The pull request is never touched.
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const stopCrew = (project: string, task: string): { stopped: string[]; failed: string[] } => {
+  writeGeneration++;
   const out = { stopped: [] as string[], failed: [] as string[] };
   if (!SAFE_NAME.test(task)) return out;
   let r;
@@ -1753,6 +1924,7 @@ type Carried = { outcome: "done" | "failed" | "recorded" | "running"; reason: st
 // park or drop: the parked or closed event, then the crew stopped. The event
 // first, so a crewman that dies saying something cannot move the task back.
 const setAside = (project: string, task: string, action: "park" | "drop", decision: string | null): Carried => {
+  writeGeneration++;
   const spec = ACTION_EVENT[action];
   const via = decision ? { en: ` (${decision})`, tw: `（${decision}）` } : { en: "", tw: "" };
   const r = emitCaptain(["--type", spec.type, "--task", task, ...onProjectOf(project),
@@ -1768,6 +1940,7 @@ const setAside = (project: string, task: string, action: "park" | "drop", decisi
 // and says which held it. It prints the id of a task it started. Awaited,
 // not spawnSync: a slow dispatcher must not freeze the rest of the board.
 const dispatchTask = async (project: string, task: string): Promise<Carried> => {
+  writeGeneration++;
   try {
     const child = Bun.spawn([join(ROOT, "bin/fm-dispatch.sh"), "--task", task, "--repo", ROOT],
       { env: { ...roundEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) },
@@ -1785,6 +1958,7 @@ const dispatchTask = async (project: string, task: string): Promise<Carried> => 
 // session, like a merge (T-151); a round that refuses within the first
 // seconds is reported with what it said.
 const sendBack = async (project: string, task: string, pr: number | null): Promise<Carried> => {
+  writeGeneration++;
   if (!SAFE_NAME.test(task)) return { outcome: "failed", reason: "no task to send back" };
   const dir = join(stateDir(project), "dispatch");
   mkdirSync(dir, { recursive: true });
@@ -2191,6 +2365,7 @@ const server = Bun.serve({
   fetch(req, server) {
     releaseExpiredDrain();
     return withStorage(() => {
+    if (req.method !== "GET" && req.method !== "HEAD") writeGeneration++;
     const url = new URL(req.url);
     // ?project= shows one project; without it, or with no project's name,
     // every project is on the board
@@ -2264,9 +2439,7 @@ const server = Bun.serve({
       const initial = state(only);
       // The log is not all the board shows: merge outcomes land in decision
       // records, and an unknown outcome is known only here.
-      const stamp = () => withStorage(() => stores().flatMap(dir => [join(dir, "events.jsonl"), join(dir, "decisions"), join(dir, "pending")])
-        .map((f) => { try { const s = statSync(f); return `${s.size}:${s.mtimeMs}`; } catch { return "-"; } })
-        .join("|") + `|${[...unknownOutcome].sort().join(",")}`);
+      const stamp = () => withStorage(stateStamp);
       let size = stamp();
       let stop = () => {};
       const stream = new ReadableStream({

@@ -1791,6 +1791,24 @@ last review, crew or badges trigger another task read. Browser tests verify
 interaction, focus, redraw persistence and the 390px viewport; bash tests supply
 the fail-first proof for the endpoint, validators, projections and diagrams.
 
+**State cost.** A steady `/api/state` build targets less than 500 ms at the
+current live data size. Four process-local caches check the registry once per
+request, reuse committed wake acknowledgements until their inputs change,
+refresh changed task lists asynchronously through the canonical `fm_tasks`
+reader after the first read, and parse event-log appends incrementally (with a
+4096-byte prefix check and full replay on replacement). HTTP requests and open
+streams share one build per project filter when the complete input stamp and
+write generation match and the result is less than 1000 ms old. Directory
+stamps include the files read beneath them, including pin subdirectories;
+storage validation still runs on every request, and watch liveness is always
+read afresh. No cache writes stored state. `FM_BOARD_COLD=1` disables these
+optimizations at startup. `FM_BOARD_BUDGET_MS` defaults to 1000; slower builds
+log `fm-board: /api/state build N ms (events A ms, tasks B ms, watch C ms, rest D ms)`
+once per 60 seconds, including in cold mode. The `fm_lifeline.py acknowledged`
+CLI retains its JSON output but exits 75 when the nonblocking acknowledgement
+lock is busy, so that unknown snapshot is never cached; library callers keep
+their existing conservative result.
+
 The lane order is sent by the server (`lanes`) so the page
 keeps no second copy. A task no event has moved yet is `ready` when every
 `depends_on` has merged, so it could be dispatched now, and `backlog` while
