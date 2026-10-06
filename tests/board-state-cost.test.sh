@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
 d="$(safe_tmpdir)"
-export XDG_CONFIG_HOME="$d/config"
+XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 mkdir -p "$d/bin" "$d/board/public" "$d/state/session/acknowledged" "$d/design/tasks" "$d/shims"
 cp -R "$ROOT/bin/lib" "$d/bin/"
 project_storage_fixture "$d/bin"
@@ -69,7 +69,7 @@ with (root/'state/session/wake.jsonl').open('w') as f:
         (root/f'state/session/acknowledged/wake-{i}.json').write_text('{"acknowledged":10}')
 PY
 : > "$d/pids"
-cleanup() { stop_pids "$d/pids"; safe_rm_rf "$(cat "$d/.fixture-fm-home")"; safe_rm_rf "$d"; }
+cleanup() { stop_pids "$d/pids"; safe_rm_rf "$(cat "$d/.fixture-fm-home")"; safe_rm_rf "$d"; safe_rm_rf "$XDG_CONFIG_HOME"; }
 trap cleanup EXIT
 start_board() {
   local tag="$1" cold="$2" budget="$3" board_root="${4:-$d}"
@@ -79,15 +79,24 @@ start_board() {
     python3 "$ROOT/bin/lib/fm_lifeline.py" keep --pid "$$" --name "cost-$tag" -- \
     bun run "$d/board/server.ts" > "$d/$tag.log" 2>&1 < /dev/null &
   local pid=$!; printf '%s\n' "$pid" >> "$d/pids"
-  board_port "$d/$tag.log" "$pid" > "$d/$tag.port"
+  board_port "$d/$tag.log" "$pid" > "$d/$tag.port"; local rc=$?
+  assert_eq 0 "$rc" "$tag board starts before state assertions"
+  if [ "$rc" -ne 0 ]; then cat "$d/$tag.log" >&2; finish; exit 1; fi
 }
 start_board cached 0 1
 PORT="$(cat "$d/cached.port")"
 get() { curl -sf --max-time 10 "http://127.0.0.1:$PORT/api/state${1-}"; }
-wait_for 60 get || { cat "$d/cached.log"; exit 1; }
+wait_for 60 get; rc=$?
+assert_eq 0 "$rc" "cached board answers its first 50000-event state request"
+if [ "$rc" -ne 0 ]; then cat "$d/cached.log" >&2; finish; exit 1; fi
 append_event() { printf '{"type":"progress","project":"alpha","task":"T-001","actor":"captain","data":{"cost":"%s"}}\n' "$1" >> "$d/state/events.jsonl"; }
 : > "$d/calls"
-for n in 1 2 3; do append_event "$n"; get > "$d/state.json" || exit 1; done
+for n in 1 2 3; do
+  append_event "$n"
+  get > "$d/state.json"; rc=$?
+  assert_eq 0 "$rc" "real rebuild $n answers before spawn counts"
+  if [ "$rc" -ne 0 ]; then finish; exit 1; fi
+done
 assert_eq 0 "$(grep -c 'fm_lifeline.py acknowledged' "$d/calls" || true)" "unchanged acknowledgements spawn no reader across real rebuilds"
 assert_eq 0 "$(grep -c 'fm_tasks' "$d/calls" || true)" "unchanged task lists spawn no reader across real rebuilds"
 assert_eq 1 "$(grep -c 'fm-board: /api/state build .* ms (events .* ms, tasks .* ms, watch .* ms, rest .* ms)' "$d/cached.log" || true)" "budget warning is emitted once within sixty seconds"
@@ -96,14 +105,14 @@ mkfifo "$d/release"; touch "$d/block"
 printf '{"id":"T-001","title":"new alpha title","depends_on":[]}\n' > "$d/design/tasks/T-001.json"
 get > "$d/stale.json"
 assert_eq 'alpha one' "$(jq -r '.tasks[]|select(.project=="alpha")|.title' "$d/stale.json")" "task refresh does not block the request"
-wait_for 10 grep -q 'blocked fm_tasks' "$d/calls"
+assert_ok "wait_for 10 grep -q 'blocked fm_tasks' '$d/calls'" "task reader reaches the controlled FIFO"
 python3 "$ROOT/bin/lib/fm_lifeline.py" keep --pid "$$" --name cost-stream -- \
   curl -sN --max-time 15 "http://127.0.0.1:$PORT/events" > "$d/stream" 2>/dev/null &
 printf '%s\n' "$!" >> "$d/pids"
-wait_for 5 grep -q 'event: state' "$d/stream"
+assert_ok "wait_for 5 grep -q 'event: state' '$d/stream'" "stream opens while task refresh is blocked"
 rm "$d/block"
 printf 'go\n' > "$d/release"
-wait_for 10 grep -q 'finished fm_tasks' "$d/calls"
+assert_ok "wait_for 10 grep -q 'finished fm_tasks' '$d/calls'" "released task reader finishes"
 assert_ok "wait_for 2 grep -q 'new alpha title' '$d/stream'" "async replacement reaches an open stream without another write"
 get > "$d/state.json"
 assert_eq 'new alpha title' "$(jq -r '.tasks[]|select(.project=="alpha")|.title' "$d/state.json")" "completed refresh replaces task definitions"
@@ -138,6 +147,25 @@ printf '{"type":"unparked","task":"T-001","project":"alpha"}\n{"type":"progress"
 assert_ok equal_cold "longer in-place rewrite fails the prefix check"
 printf '{"type":"progress","task":"T-001","project":"alpha"}\n{"type":"progress","actor":"captain"}\n' > "$d/state/events.jsonl"
 assert_ok equal_cold "same-size in-place rewrite replaces cached events"
+# A valid tail belongs to the response immediately, but stays buffered until
+# its newline arrives; finishing or extending it must never duplicate an event.
+printf '{"type":"parked","task":"T-001","project":"alpha"}' > "$d/state/events.jsonl"
+assert_ok equal_cold "complete final event without newline equals cold replay"
+sleep 1.1
+assert_ok equal_cold "unchanged unterminated event survives a real rebuild"
+mv "$d/state/events.jsonl" "$d/events.saved"
+assert_ok equal_cold "missing log retains its last valid unterminated event"
+mv "$d/events.saved" "$d/state/events.jsonl"
+printf '\n{"type":"unparked","task":"T-001","project":"alpha"}' >> "$d/state/events.jsonl"
+assert_ok equal_cold "appended unterminated event equals cold replay without duplicates"
+printf '\n{"type":"progress","task":"T-001","data":{"cost":"partial' >> "$d/state/events.jsonl"
+assert_ok equal_cold "incomplete final JSON is buffered without becoming an event"
+printf ' completed"}}' >> "$d/state/events.jsonl"
+assert_ok equal_cold "completing buffered JSON without newline equals cold replay"
+printf '\n' >> "$d/state/events.jsonl"
+assert_ok equal_cold "terminating buffered JSON does not duplicate its event"
+printf '\ninvalid JSON\n' >> "$d/state/events.jsonl"
+assert_ok equal_cold "blank and malformed final lines agree with cold replay"
 # Invalid lists settle to [], and their failed read is retained until a change.
 printf '{' > "$d/design/tasks/T-001.json"
 get > /dev/null
@@ -199,7 +227,7 @@ PYWATCH
 python3 "$ROOT/bin/lib/fm_lifeline.py" keep --pid "$$" --name cost-watch -- \
   python3 "$d/watch-reader.py" "$d" > "$d/reader.log" 2>&1 &
 watch_pid=$!; printf '%s\n' "$watch_pid" >> "$d/pids"
-wait_for 10 test -f "$d/reader-ready"
+assert_ok "wait_for 10 test -f '$d/reader-ready'" "watch reader opens its FIFO"
 jq -nc --arg bell "$d/state/session/wake.d/cost" '{bell:$bell,started:"2026-01-01T00:00:00Z",gen:1}' > "$d/state/watch/owner.json"
 assert_eq true "$(get | jq .watch.alive)" "watch FIFO reader is alive"
 kill "$watch_pid"; wait "$watch_pid" 2>/dev/null || true
@@ -247,5 +275,6 @@ mkdir -p "$d/small-root/board/public" "$d/small-root/state"
 start_board small 0 default "$d/small-root"
 SMALL_PORT="$(cat "$d/small.port")"
 curl -sf --max-time 30 "http://127.0.0.1:$SMALL_PORT/api/state" > /dev/null
+assert_eq 0 "$?" "small board answers before checking its budget log"
 assert_eq 0 "$(grep -c 'fm-board: /api/state build' "$d/small.log" || true)" "small default-budget build logs no warning"
 finish

@@ -39,6 +39,33 @@ assert_eq 28 "$rc" "quiet SSE stays open beyond the old ten-second idle limit"
 assert_contains "$(cat "$d/stream")" ': beat' "quiet SSE receives its fifteen-second heartbeat"
 assert_contains "$(cat "$d/stream")" 'event: state' "quiet SSE sends its initial state"
 
+python3 - "$d" "$PORT" <<'PYSTAMPS'
+import http.client, json, sys
+from pathlib import Path
+root, port = Path(sys.argv[1]), int(sys.argv[2])
+# Every directory input uses the same walk, including nested pins and tasks.
+for directory in ['design/tasks', 'state/pending', 'state/decisions', 'state/ready',
+                  'state/skill-updates', 'state/session/acknowledged', 'state/pins/T-001']:
+    folder = root / directory
+    folder.mkdir(parents=True, exist_ok=True)
+    entry = folder / '.atomic-writer.tmp'
+    entry.write_text('{}')
+    cases = [('lstatSync', entry), ('statSync', entry), ('lstatSync', folder), ('readdirSync', folder)]
+    for operation, path in cases:
+        (root / 'race.json').write_text(json.dumps({'operation': operation, 'path': str(path)}))
+        conn = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+        try:
+            conn.request('GET', '/api/state')
+            response = conn.getresponse()
+            body = json.loads(response.read())
+            assert not (root / 'race.json').exists(), ('stamp race not exercised', operation, path)
+            assert response.status == 200, (operation, path, response.status, body)
+        finally:
+            conn.close()
+    entry.unlink()
+PYSTAMPS
+assert_eq 0 "$?" "stamp walks tolerate entries and directories disappearing during reads"
+
 python3 - "$d" "$PORT" <<'PY'
 import http.client
 import json
@@ -64,8 +91,15 @@ assert status == 200 and original['engine']['vendor'] == 'codex'
 # The facade moves the actual file away immediately before the chosen fs
 # call, restores it in finally, and records proof that the race happened.
 for operation, path in [('statSync', 'config.yaml'), ('readFileSync', 'config.yaml'),
-                        ('readFileSync', 'state/events.jsonl'),
+                        ('openSync', 'state/events.jsonl'), ('fstatSync', 'state/events.jsonl'),
+                        ('readSync', 'state/events.jsonl'),
                         ('readdirSync', 'state/pending'), ('readdirSync', 'state/decisions')]:
+    # Expire the shared memo before arming the read. Descriptor byte reads
+    # also need new bytes so the incremental reader actually calls readSync.
+    time.sleep(1.1)
+    if path == 'state/events.jsonl':
+        with (root / path).open('a') as f:
+            f.write('{"type":"greenlit"}\n')
     (root / 'race.json').write_text(json.dumps({'operation': operation, 'path': str(root / path)}))
     status, data = state()
     assert not (root / 'race.json').exists(), ('race was not exercised', operation, path)
@@ -73,8 +107,9 @@ for operation, path in [('statSync', 'config.yaml'), ('readFileSync', 'config.ya
         assert status == 200 and data['engine'] == original['engine'], 'a config replacement must retain the last good read'
     assert state()[0] == 200, ('server did not recover', operation, path)
 
-# An initial stream read failure is a JSON response, not a broken HTTP body.
-(root / 'race.json').write_text(json.dumps({'operation': 'readdirSync', 'path': str(root / 'state/pending')}))
+# A non-missing initial stream read failure remains a JSON response. ENOENT
+# during a stamp walk is now tolerated, so use EACCES for this error boundary.
+(root / 'race.json').write_text(json.dumps({'operation': 'readdirSync', 'path': str(root / 'state/pending'), 'error': 'EACCES'}))
 conn = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
 try:
     conn.request('GET', '/events'); response = conn.getresponse()
@@ -121,7 +156,8 @@ running.unlink()
 # Keep a stream open while its timer encounters exactly the same failures.
 # A change to events forces the timer to rebuild state for directory reads.
 for operation, path in [('statSync', 'config.yaml'), ('readdirSync', 'state/pending'),
-                        ('readFileSync', 'state/events.jsonl'), ('readdirSync', 'state/decisions')]:
+                        ('openSync', 'state/events.jsonl'), ('fstatSync', 'state/events.jsonl'),
+                        ('readSync', 'state/events.jsonl'), ('readdirSync', 'state/decisions')]:
     conn = http.client.HTTPConnection('127.0.0.1', port, timeout=20)
     try:
         conn.request('GET', '/events'); stream = conn.getresponse()

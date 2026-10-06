@@ -101,13 +101,26 @@ const fileStamp = (file: string): string => {
 // Include files, not only their directory: in-place writes do not touch the parent.
 // Never descend through links. External stores have already passed validateStore.
 const directoryStamp = (dir: string, depth = 1): string => {
-  const stamp = fileStamp(dir);
-  if (stamp === "absent" || !lstatSync(dir).isDirectory()) return stamp;
-  const entries = readdirSync(dir).sort().map(name => {
-    const path = join(dir, name), st = lstatSync(path);
-    return [name, depth > 1 && st.isDirectory() ? directoryStamp(path, depth - 1) : fileStamp(path)];
-  });
-  return JSON.stringify([stamp, entries]);
+  try {
+    const stamp = fileStamp(dir);
+    if (stamp === "absent" || !lstatSync(dir).isDirectory()) return stamp;
+    const entries = readdirSync(dir).sort().map(name => {
+      const path = join(dir, name);
+      try {
+        const st = lstatSync(path);
+        return [name, depth > 1 && st.isDirectory() ? directoryStamp(path, depth - 1) : fileStamp(path)];
+      } catch (error) {
+        // Atomic writers can rename a listed temporary file before we stat it.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        return [name, "absent"];
+      }
+    });
+    return JSON.stringify([stamp, entries]);
+  } catch (error) {
+    // The directory itself can disappear between stat, lstat and readdir too.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return "absent";
+  }
 };
 const LOG = join(ROOT, "state/events.jsonl");
 const PUBLIC = join(ROOT, "board/public");
@@ -144,6 +157,9 @@ type EventRead = { ino: number; size: number; offset: number; mtimeMs: number; c
 const eventReads = new Map<string, EventRead>();
 const parseEvents = (text: string): Event[] => text.split("\n").filter(Boolean)
   .flatMap(line => { try { return [JSON.parse(line) as Event]; } catch { return []; } });
+// The base reader accepts a valid final JSON line even before its newline.
+// Keep that tail out of the committed prefix so completing it never duplicates it.
+const eventSnapshot = (read: EventRead): Event[] => read.events.concat(parseEvents(read.rest.toString("utf8")));
 const eventFile = (file: string): Event[] => {
   if (COLD) return parseEvents(readText(file));
   const previous = eventReads.get(file);
@@ -152,7 +168,7 @@ const eventFile = (file: string): Event[] => {
     fd = openSync(file, "r");
     const st = fstatSync(fd);
     if (previous && st.ino === previous.ino && st.size === previous.size
-      && st.mtimeMs === previous.mtimeMs && st.ctimeMs === previous.ctimeMs) return previous.events.slice();
+      && st.mtimeMs === previous.mtimeMs && st.ctimeMs === previous.ctimeMs) return eventSnapshot(previous);
     const bytes = (start: number, size: number) => {
       const buffer = Buffer.alloc(size);
       let n = 0;
@@ -168,13 +184,14 @@ const eventFile = (file: string): Event[] => {
     const from = append ? previous.offset : 0;
     const data = Buffer.concat([append ? previous.rest : Buffer.alloc(0), bytes(from, st.size - from)]);
     const newline = data.lastIndexOf(10);
-    const events = append ? previous.events : [];
+    const events = append ? previous.events.slice() : [];
     if (newline >= 0) for (const event of parseEvents(data.subarray(0, newline + 1).toString("utf8"))) events.push(event);
-    eventReads.set(file, { ino: st.ino, size: st.size, offset: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs,
-      events, rest: Buffer.from(data.subarray(newline + 1)), prefix: bytes(Math.max(0, st.size - 4096), Math.min(4096, st.size)) });
-    return events.slice();
+    const current = { ino: st.ino, size: st.size, offset: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs,
+      events, rest: Buffer.from(data.subarray(newline + 1)), prefix: bytes(Math.max(0, st.size - 4096), Math.min(4096, st.size)) };
+    eventReads.set(file, current);
+    return eventSnapshot(current);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return previous?.events.slice() ?? parseEvents(textReads.get(file) ?? "");
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return previous ? eventSnapshot(previous) : parseEvents(textReads.get(file) ?? "");
     eventReads.delete(file);
     // Other errors use the original read/error boundary, never a partial append.
     return parseEvents(readText(file));
