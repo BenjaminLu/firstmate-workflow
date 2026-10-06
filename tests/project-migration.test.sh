@@ -32,7 +32,7 @@ for store in mirrors evidence decision-ids context-packs wake recovery; do
   printf 'retained %s\n' "$store" > "$engine/state/$store/private-app/record.txt"
 done
 mkdir -p "$engine/state/session"
-printf '%s\n' '{"project":"private-app","reason":"private wake"}' '{"project":"self","reason":"self wake"}' > "$engine/state/session/wake.jsonl"
+printf '%s\n' '{"project":"private-app","reason":"private wake"}' '{"project":"self","reason":"self wake"}' '{"id":"private-app_worker-x","reason":"forwarded","origin_project":"private-app","origin_reason":"round_end","line":"finished: private-app T-001 worker-x ok"}' > "$engine/state/session/wake.jsonl"
 "$ROOT/bin/fm-project.sh" sync private-app --repo "$engine" > "$t/out" 2> "$t/err"; rc=$?
 assert_eq 65 "$rc" "legacy clone requires explicit migration approval"
 assert_ok "test -f '$legacy/state/evidence.txt'" "refused migration retains every source record"
@@ -54,7 +54,7 @@ for store in mirrors evidence decision-ids context-packs wake recovery; do
   assert_ok "test ! -e '$engine/state/$store/private-app'" "migration removes engine $store copy"
 done
 assert_eq 'private wake' "$(jq -r .reason "$project/state/session/wake.jsonl")" "migration partitions wake queue"
-assert_eq 'self wake' "$(jq -r .reason "$engine/state/session/wake.jsonl")" "migration preserves unrelated wake queue"
+assert_eq true "$(jq -sc 'length == 2 and .[0].reason == "self wake" and .[1].id == "private-app_worker-x" and .[1].reason == "forwarded" and .[1].line == "finished: private-app T-001 worker-x ok"' "$engine/state/session/wake.jsonl")" "migration preserves self and forwarded wakes in engine queue"
 "$ROOT/bin/fm-project.sh" history on private-app --repo "$engine" > "$t/out" 2> "$t/err"; rc=$?
 assert_eq 0 "$rc" "project can enable local spec history"
 assert_eq '' "$(git -C "$project" remote)" "history has no remote"

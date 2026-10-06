@@ -2867,7 +2867,14 @@ and `fm-review.sh` at a round's end, after its `agent_finished`
 <head> #9`); the deck reconcile for a lost run (`lost: T-134 <actor>`);
 `fm-emit.sh` for a gate result written from outside a round
 (`gate: T-134 failed gate 6 #9`); and the board, as above (`card: D-51
-answered A`, `merge: D-51 failed`). A lost spec preflight is the exception:
+answered A`, `merge: D-51 failed`). A wake pushed into an external project's
+store is also forwarded to the engine queue as one bounded item: `reason`
+`forwarded`, `origin_project`, `origin_reason`, and a line naming the project,
+with a namespaced id and timestamp. Its whitespace is collapsed and its line
+is limited to 300 characters. Only the engine's firstmate doorbells are rung,
+not its autopilot doorbells, so one watch hears every project. The original
+project queue and doorbells remain unchanged; existing wakes are not backfilled.
+A lost spec preflight is the exception:
 the deck reconcile writes `agent_lost` and its closing `agent_finished` with
 `data.mode: spec-preflight`, but pushes no `lost:` wake. The autopilot likewise
 queues no lost/failed-round wake for an actor whose event history carries that
@@ -4928,7 +4935,10 @@ must not receive their specs, worktrees or evidence. The local board on
 `127.0.0.1` shows and answers every registered project's records in full on one
 main page for the captain alone; `?project=` is an optional filter. External
 records stay stored privately under `FM_HOME`, never written into engine state
-or public diagrams. Posting is an explicit projection controlled by project
+or public diagrams. The one exception is the forwarded wake item in the
+engine queue: only its namespaced id, `reason` (`forwarded`), `origin_project`,
+`origin_reason`, projected line and time (`woken`) cross that boundary.
+Posting is an explicit projection controlled by project
 policy, not a prerequisite to retaining or gating local evidence.
 
 Cleanup, reconcile, worker, reviewer and gates take the same project context.
@@ -5397,7 +5407,10 @@ failures, findings, failed/lost rounds, unsent worker notes, B/C answers, readin
 drift persist reason lines under `state/wake-queue/` and enter the T-137 bridge.
 `autopilot_waiting` reports overdue judgment bilingually to the board and desktop;
 `conventions_drift` denotes policy requiring judgment. External records and FIFOs
-live only under `FM_HOME/projects/<name>/state/`. Queues, acknowledgements and
+live only under `FM_HOME/projects/<name>/state/`, except for the bounded,
+project-named forwarded wake line in the engine queue with its namespaced id,
+`reason` (`forwarded`), `origin_project`, `origin_reason` and `woken` time.
+Forwarding rings only the engine's firstmate doorbells. Queues, acknowledgements and
 notifications establish no model delivery: T-164 native loading, exact trust,
 reload and actual receipt remain independently verified requirements.
 
