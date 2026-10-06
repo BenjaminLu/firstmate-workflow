@@ -1807,7 +1807,8 @@ log `fm-board: /api/state build N ms (events A ms, tasks B ms, watch C ms, rest 
 once per 60 seconds, including in cold mode. The `fm_lifeline.py acknowledged`
 CLI retains its JSON output but exits 75 when the nonblocking acknowledgement
 lock is busy, so that unknown snapshot is never cached; library callers keep
-their existing conservative result.
+their existing conservative result. The reader resolves the record root once
+per call.
 
 The lane order is sent by the server (`lanes`) so the page
 keeps no second copy. A task no event has moved yet is `ready` when every
