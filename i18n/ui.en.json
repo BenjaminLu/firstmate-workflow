@@ -1,4 +1,11 @@
 {
+  "kindMerge": "Merge",
+  "kindDispatch": "Dispatch",
+  "kindRepin": "Repin",
+  "kindScope": "Scope",
+  "kindSkill": "Skill",
+  "kindSkillTitlePrefix": "Skill update",
+  "kindDecision": "Decision",
   "hostUnconfirmed": "{vendor} (unconfirmed)",
   "history": "Completed history (expand or collapse)",
   "laneClosed": "Closed",

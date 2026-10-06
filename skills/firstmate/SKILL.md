@@ -868,9 +868,13 @@ After preflight, a choice request uses:
 
 ```sh
 id="$(bin/fm-decide.sh --allocate --task T-004 --repo /absolute/repo)"
-bin/fm-decide.sh --request "$id" --task T-004 --kind choice \
+bin/fm-decide.sh --request "$id" --task T-004 --kind choice --purpose dispatch \
   --details /absolute/path/to/authored-details.json --repo /absolute/repo
 ```
+
+Pass the matching purpose on every choice card: `dispatch` for a
+dispatch/readiness card, `repin` for a repin approval, `scope` for a scope
+widening, `skill` for a skill update, and `decision` otherwise.
 
 For a merge, use `--kind merge --pr <actual-pr>` only after current-head gates,
 CI and reviewer provenance are verified. `fm-autopilot.sh` allocates the merge card's

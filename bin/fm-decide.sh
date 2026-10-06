@@ -5,6 +5,7 @@
 #                                   -> D-firstmate-workflow-T047-1, reserved
 #   fm-decide.sh --request D-firstmate-workflow-T047-1 --task T-047 --kind merge \
 #                --details details.json --pr 9 [--project <name>]
+#   fm-decide.sh --request <id> --task <id> --details details.json [--purpose <p>]
 #   fm-decide.sh --request D-SK-001 --task SK-001 --kind choice --title "..."
 #   fm-decide.sh --request D-1096 --kind merge-untracked --pr 96 --details details.json
 #   fm-decide.sh --await   D-firstmate-workflow-T047-1 [--timeout 3600]
@@ -44,7 +45,7 @@ set -uo pipefail
 # dispatches is missing it.
 exec < /dev/null
 
-REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=''; TIMEOUT=0; DETAILS=''
+REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=''; TIMEOUT=0; DETAILS=''; PURPOSE=''; PURPOSE_GIVEN=0
 PROJECT=''; ID_PROJECT=''; ID_TASK=''; ID_N=''; GH="${FM_GH:-gh}"
 # the registry library lives beside this script, wherever --repo points
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -83,6 +84,7 @@ while [ $# -gt 0 ]; do
     --allocate) MODE=allocate; shift ;;
     --project) need "$@"; PROJECT="${2-}"; shift 2 ;;
     --task)  need "$@"; TASK="${2-}";  shift 2 ;;
+    --purpose) need "$@"; PURPOSE="${2-}"; PURPOSE_GIVEN=1; shift 2 ;;
     --kind)  need "$@"; KIND="${2-}";  shift 2 ;;
     --title) need "$@"; TITLE="${2-}"; shift 2 ;;
     --details) need "$@"; DETAILS="${2-}"; shift 2 ;;
@@ -94,7 +96,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 { [ -n "$MODE" ] && { [ -n "$ID" ] || [ "$MODE" = allocate ]; }; } || {
-  echo "usage: fm-decide.sh --allocate --task <id> [--project <name>] | --request <id> --task <id> [--kind merge] | --request <D-digits> --kind merge-untracked --pr <n> | --await <id>" >&2; exit 64; }
+  echo "usage: fm-decide.sh --allocate --task <id> [--project <name>] | --request <id> --task <id> [--kind merge] [--purpose <p>] | --request <D-digits> --kind merge-untracked --pr <n> | --await <id>" >&2; exit 64; }
 cd "$REPO" || { echo "fm-decide: no repo at $REPO" >&2; exit 64; }
 
 owned() {       # owned <id>: sets ID_PROJECT ID_TASK ID_N when <id> is D-<project>-<task>-<n>
@@ -330,6 +332,10 @@ pr_agrees() {   # pr_agrees: returns when --pr is --task's pull request (none fo
 
 if [ "$MODE" = request ]; then
   case "$KIND" in choice|merge|merge-untracked) ;; *) echo 'fm-decide: bad kind' >&2; exit 64 ;; esac
+  if [ "$PURPOSE_GIVEN" = 1 ]; then
+    case "$PURPOSE" in dispatch|repin|scope|skill|decision) ;; *) echo "fm-decide: bad purpose $PURPOSE" >&2; exit 64 ;; esac
+    [ "$KIND" = choice ] || { echo 'fm-decide: --purpose applies only to a choice card' >&2; exit 64; }
+  fi
   fm_decision_id "$ID" || { echo 'fm-decide: bad decision id' >&2; exit 64; }
   if fm_decision_id "$ID" skill; then
     [ "$TASK" = "${ID#D-}" ] || { echo 'fm-decide: bad task' >&2; exit 64; }
@@ -431,10 +437,11 @@ if [ "$MODE" = request ]; then
         echo 'fm-decide: verified candidate SHA required' >&2; exit 65; }
     fi
     payload="$(jq -cn --arg expected_head "$EXPECTED_HEAD" --argjson binding "$binding" --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
-      --argjson ste "$ste" --arg project "$RECORD" --slurpfile details "$DETAILS" \
+      --arg purpose "$PURPOSE" --argjson ste "$ste" --arg project "$RECORD" --slurpfile details "$DETAILS" \
       '{id:$id,expected_head:$expected_head,binding:$binding}
        + (if $kind=="merge" then {gates:[true,true,null,true,true,true,true]} else {} end) + (if $task=="" then {} else {task:$task} end)
        + {kind:$kind,details:$details[0],title:$details[0].en.title}
+       + (if $purpose=="" then {} else {purpose:$purpose} end)
        + (if $ste==null then {} else {ste:$ste} end)
        + (if $project=="" then {} else {project:$project} end)
        + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
@@ -453,6 +460,7 @@ if [ "$MODE" = request ]; then
   # accept D-SK-* with matching SK-* task, persist the given title, invent
   # neither details nor a translation. Numeric title-only requests still fail.
   if fm_decision_id "$ID" skill; then
+    [ -z "$PURPOSE" ] || { echo 'fm-decide: --purpose requires --details' >&2; exit 64; }
     skill="${ID#D-}"
     [ "$TASK" = "$skill" ] || { echo 'fm-decide: bad task' >&2; exit 64; }
     # Title must be real text; never treat an empty --title as authored details.
