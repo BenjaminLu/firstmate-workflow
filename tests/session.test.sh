@@ -80,11 +80,14 @@ class Session(SessionFixture):
     def test_board_http_timeout_defaults_and_setup_budget(self):
         url = 'http://127.0.0.1:4173'
         with patch.object(m.urllib.request, 'urlopen') as opened:
-            m.http_get(url); opened.assert_called_with(url, timeout=2)
-            m.http_get(url, timeout=5); opened.assert_called_with(url, timeout=5)
+            m.http_get(url)
+            self.assertEqual(call(url, timeout=2), opened.call_args)
+            m.http_get(url, timeout=5)
+            self.assertEqual(call(url, timeout=5), opened.call_args)
         with patch.object(m.socket, 'create_connection'), patch.object(m, 'board_matches', return_value=True) as matches:
             m.board_check_port(self.repo, 4173)
-            matches.assert_called_once_with(self.repo.resolve(), url, budget=2)
+            self.assertEqual(call(self.repo.resolve(), url, budget=2), matches.call_args)
+            self.assertEqual(1, matches.call_count)
         with patch.object(m, 'http_get', side_effect=TimeoutError()) as get, \
              patch.object(m.time, 'monotonic', side_effect=[0, 0, 2]):
             self.assertFalse(m.board_matches(self.repo, url, budget=2))
@@ -105,7 +108,7 @@ class Session(SessionFixture):
              patch.object(m, 'board_open', return_value={}), patch.object(m, 'lifeline') as life:
             reply = m.board_start(self.repo)
             self.assertTrue(reply['reused']); self.assertTrue(reply['page_http_verified'])
-            life.return_value.start.assert_not_called()
+            self.assertEqual(0, life.return_value.start.call_count)
         self.assertEqual([5, 5, 5], [timeout for _, timeout in seen])
         self.assertEqual(seen[0][0], seen[1][0]); self.assertEqual(url, seen[2][0])
     def push(self, ident, reason='answered', **answer):
