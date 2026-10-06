@@ -41,6 +41,7 @@ def scenario(stop_owner=False, public_title=None):
         for directory in ('bin', 'skills', '.githooks'):
             shutil.copytree(root / directory, engine / directory,
                             ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copy(root / '.gitignore', engine / '.gitignore')
         # This adapter blocks on a FIFO, not a pid/file polling loop. The
         # launcher and lifeline remain the shipped implementations.
         adapter = engine / 'bin/adapters/mock.sh'
@@ -59,7 +60,7 @@ with open(sys.argv[4], 'a') as log:
         adapter.chmod(0o755)
         write_registry(engine)
         run(['git', 'init', '-q', '-b', 'main', str(engine)], env)
-        run(['git', '-C', str(engine), 'add', 'bin', 'skills', '.githooks', 'config.yaml'], env)
+        run(['git', '-C', str(engine), 'add', 'bin', 'skills', '.githooks', '.gitignore', 'config.yaml'], env)
         run(['git', '-C', str(engine), '-c', 'user.name=Fixture', '-c',
              'user.email=fixture@example.invalid', 'commit', '-qm', 'engine'], env)
         remote = scratch / 'remotes/owner/app.git'
