@@ -782,6 +782,14 @@ Every dispatch, merge and scope-widening card firstmate raises carries `intent`,
 `why`, `scope_in`, `scope_out`, `done`, and `before_nodes`/`after_nodes`. Add
 `notes` when there is a caution and `questions` for anything you are unsure of;
 a merge card always asks at least one question.
+A new task may keep this explanation in its spec's optional bilingual `explain`
+block: intent, why, scope_in, scope_out, done, notes and both node lists, without
+questions or change_table. It needs the same per-intent alignment and STE checks.
+After a spec with explain passes preflight, run `bin/fm-diagram.sh --task <id>
+[--project <name>]` to generate its three locale diagrams for the task panel.
+The panel uses the newest dispatch/repin/merge card's details when present and
+otherwise the spec explain; old tasks need no retroactive explain block.
+
 Pass check-details before raising the card. Fix a refusal by rewriting the text;
 never drop the intent fields to bypass it. Existing cards without these fields
 keep their current behavior.

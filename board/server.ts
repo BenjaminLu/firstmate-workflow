@@ -109,7 +109,7 @@ const readText = (file: string): string => {
   }
 };
 
-const readEvents = (): Event[] => stores().flatMap(dir => {
+const readEvents = (directories: string[] = stores()): Event[] => directories.flatMap(dir => {
   const file = join(dir, "events.jsonl");
   return readText(file).split("\n").filter(Boolean)
     .flatMap(line => { try { return [JSON.parse(line) as Event]; } catch { return []; } });
@@ -665,9 +665,17 @@ const responseFile = (id: string) => {
   return join(decisionDir(id), `${id}.json`);
 };
 
+// Authored history belongs only in the task detail endpoint. Keep all existing
+// answer projections stable, including the durable session wake payload.
+const publicDecision = (record: any) => {
+  if (!record || typeof record !== "object") return record;
+  const { details, purpose, title, ste, ...visible } = record;
+  return visible;
+};
+
 // The answered decisions on disk, whatever shape of id they carry.
 const RESPONSES = join(ROOT, "state/decisions");
-const readResponses = (): Array<Record<string, any>> => stores().flatMap(base => {
+const readResponses = (directories: string[] = stores()): Array<Record<string, any>> => directories.flatMap(base => {
   const dir = join(base, "decisions");
   return existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith(".json") && isDecisionId(f.slice(0, -5)))
     .flatMap(f => { try { return [JSON.parse(readFileSync(join(dir, f), "utf8"))]; } catch { return []; } }) : [];
@@ -685,7 +693,7 @@ const unknownOutcome = new Set<string>();
 
 // Each project's task list, as the registry names it: a directory of task
 // files (T-090). A tree with no registry has the one design/tasks/ it always had.
-const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknown>> }> => {
+const taskLists = (onlyProject?: string): Array<{ project: string; defs: Array<Record<string, unknown>> }> => {
   const reg = registry(), def = defaultProject();
   // The default project's list is design/tasks/ unless the registry names
   // one that exists: an entry that leaves `tasks` to its default
@@ -698,7 +706,7 @@ const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknow
     : [[def, "design/tasks"]];
   // the default project first, so a board of one project reads as before
   dirs.sort((a, b) => Number(b[0] === def) - Number(a[0] === def));
-  return dirs.map(([project, rel]) => {
+  return dirs.filter(([project]) => onlyProject === undefined || project === onlyProject).map(([project, rel]) => {
     try { stateDir(project); return { project, defs: taskDefs(rel) }; }
     catch { return { project, defs: [] }; }
   });
@@ -800,10 +808,13 @@ const watchState = (events: Event[], aboard: string[], cards: Array<{ ts?: unkno
 // `only` is ?project=: that project's work, cards and log, and the counts of
 // those. Without it, every project on one page (design section 15.10 point 4).
 const state = (only: string | null = null) => {
-  return withStorage(() => buildState(only));
+  return withStorage(() => buildState(only)) as Extract<ReturnType<typeof buildState>, { engine: unknown }>;
 };
-const buildState = (only: string | null) => {
-  const events = readEvents();
+const buildState = (only: string | null, tasksOnly = false) => {
+  // Task detail shares the lane replay but never reads other projects or the
+  // crew/session portion of the full board response.
+  const directories = tasksOnly ? [stateDir(only ?? "")] : undefined;
+  const events = readEvents(directories).filter(e => !tasksOnly || projectOf(e) === (only ?? ""));
   const def = defaultProject();
   // every record that carries a pr number carries its URL beside it, on its
   // own project's repository
@@ -816,12 +827,12 @@ const buildState = (only: string | null) => {
       (data?.evidence_event === 'brief_coverage' &&
         ['gaps', 'deferred', 'waived'].some(key => Array.isArray(coverage?.[key]) && coverage[key].length > 0));
   };
-  const pend = pending();
-  const responses = readResponses();
+  const pend = pending(directories).filter(d => !tasksOnly || projectOf(d) === (only ?? ""));
+  const responses = readResponses(directories).filter(d => !tasksOnly || projectOf(d) === (only ?? ""));
   // a task is its project and its id; `key` is how the rest of this reads one
   const definitions = new Map<string, Record<string, unknown>>();
   const taskIds: Array<{ project: string; id: string }> = [];
-  for (const list of taskLists()) for (const d of list.defs) {
+  for (const list of taskLists(tasksOnly ? only ?? "" : undefined)) for (const d of list.defs) {
     const k = keyOf(list.project, d.id);
     if (definitions.has(k)) continue;
     definitions.set(k, d);
@@ -1105,6 +1116,7 @@ const buildState = (only: string | null) => {
     // any round has ended
     last_review: lastReview.get(id) ?? null,
   }); });
+  if (tasksOnly) return { tasks };
   const taskAt = (project: string, id: unknown) =>
     tasks.find((x) => keyOf(x.project ?? "", x.id) === keyOf(project, id));
   // The crew are AGENTS, not tasks. A crewman on the deck is something
@@ -1350,7 +1362,7 @@ const buildState = (only: string | null) => {
     const overtaken = d.effect_outcome === "failed" && EFFECT_EVENT[d.effect] !== undefined
       && events.some((e) => e.type === EFFECT_EVENT[d.effect] && e.task != null && String(e.task) === String(d.task)
         && projectOf(e) === projectOf(d) && later(e.ts, d.ts));
-    const shown = { ...d, merge, ...(merge === "running" ? { merge_unknown: unknownOutcome.has(String(d.id)) } : {}),
+    const shown = { ...publicDecision(d), merge, ...(merge === "running" ? { merge_unknown: unknownOutcome.has(String(d.id)) } : {}),
       ...(d.effect_outcome === "failed" ? { effect_superseded: overtaken } : {}) };
     if (merge !== "failed") return shown;
     const sameWork = (o: Record<string, unknown>) => projectOf(o) === projectOf(d) && (
@@ -1474,9 +1486,9 @@ const firstSeen = new Map<string, number>();
 // happens whenever a merge goes through some other way - a decision file
 // outlives the thing it was asking about - and the captain is then offered
 // a choice that cannot be made.
-const pendingIn = (dir: string) => {
+const pendingIn = (dir: string, events?: Event[]) => {
   if (!existsSync(dir)) return [];
-  const logged = readEvents();
+  const logged = events ?? readEvents();
   const terminal = logged.filter((e) => e.type === "merged" || e.type === "closed");
   // (project, pr) and (project, task) are the keys: another project's merged
   // #7 does not settle this project's card for #7. Naming none is the default's.
@@ -1535,7 +1547,7 @@ const pendingIn = (dir: string) => {
   });
 };
 
-const pending = () => stores().flatMap(base => pendingIn(join(base, "pending")))
+const pending = (directories?: string[]) => (directories ?? stores()).flatMap(base => pendingIn(join(base, "pending"), directories ? readEvents([base]) : undefined))
   .sort((a, b) => a.at - b.at || String(a.card.id).localeCompare(String(b.card.id), "en", { numeric: true }))
   .map(x => x.card);
 
@@ -1566,7 +1578,7 @@ const pushWake = (id: string, reason: "answered" | "merge_settled", decision: un
   try {
     const dir = join(stateDir(ownerOf(id)?.project ?? defaultProject()), "session");
     mkdirSync(dir, { recursive: true });
-    appendFileSync(join(dir, "wake.jsonl"), JSON.stringify({ id, reason, decision, woken: Date.now() / 1000 }) + "\n");
+    appendFileSync(join(dir, "wake.jsonl"), JSON.stringify({ id, reason, decision: publicDecision(decision), woken: Date.now() / 1000 }) + "\n");
   } catch (e) { console.error(`wake queue not written for ${id}: ${(e as Error).message}`); }
   try {
     // ringing never blocks: every bell is opened O_NONBLOCK
@@ -2048,10 +2060,111 @@ const reloginRefusal = (now: number): Response | null => {
   return null;
 };
 
+// Read one task from its own registered store. Evidence is authenticated by
+// the read-only Python reader and reduced there before crossing into the board.
+const taskDetail = (project: string, id: string, locale: string) => {
+  if (!isTask(id) || (project && !registry().projects.has(project))) return null;
+  const spec = taskLists(project).find(list => list.project === project)?.defs.find(d => d.id === id);
+  if (!spec) return null;
+  const dir = stateDir(project), external = dir !== join(ROOT, "state");
+  const lang = ["en", "zh-TW", "zh-CN"].includes(locale) ? locale : "zh-TW";
+  const diagramDir = external ? join(dir, "diagrams") : join(PUBLIC, "diagrams");
+  const diagramName = `task-${project ? project + "-" : ""}${id}`;
+  const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter(v => typeof v === "string") : [];
+  const notes: string[] = [];
+  let records: any[] = [];
+  const result = Bun.spawnSync(["python3", join(ROOT, "bin/lib/fm_evidence.py"), "summary",
+    "--state", dir, "--project", project || defaultProject() || "self", "--task", id,
+    ...(external ? ["--external"] : [])], { env: childEnv(), cwd: ROOT, stdin: "ignore" });
+  if (result.exitCode === 0) {
+    try { records = JSON.parse(result.stdout.toString()); } catch { notes.push("evidence unreadable: invalid summary"); }
+  } else {
+    notes.push("evidence unreadable: " + result.stderr.toString().split(/\r?\n/)[0].slice(0, 200));
+  }
+  const readList = (folder: string) => {
+    const path = join(dir, folder);
+    if (!existsSync(path)) return [];
+    return readdirSync(path).filter(f => f.endsWith(".json")).flatMap(f => {
+      try {
+        const r = JSON.parse(readFileSync(join(path, f), "utf8"));
+        return r.task === id && projectOf(r) === project ? [r] : [];
+      } catch { return []; }
+    });
+  };
+  const cards = [...readList("pending"), ...readList("decisions")]
+    .filter(r => isDecisionId(r.id)).sort((a, b) => String(a.ts || "").localeCompare(String(b.ts || "")) || a.id.localeCompare(b.id))
+    .map(r => ({ id: r.id, kind: r.kind ?? null, purpose: r.purpose ?? null,
+      ...(r.title !== undefined ? { title: r.title } : {}),
+      chosen: r.chosen ?? null, ts: r.ts ?? null,
+      answers: Array.isArray(r.answers) ? r.answers.map((a: any) => ({ index: a.index, ok: a.ok,
+        ...(a.ok === false && typeof a.text === "string" ? { text: a.text } : {}) })) : [],
+      ...(r.details !== undefined ? { details: r.details } : {}),
+      ...(r.ste !== undefined ? { ste: r.ste } : {}),
+      ste_ok: typeof r.ste?.ok === "boolean" ? r.ste.ok : null,
+      diagram: existsSync(join(diagramDir, `${r.id}.${lang}.html`)) }));
+  const rounds = new Map<number, any>();
+  const atRound = (n: number) => {
+    if (!rounds.has(n)) rounds.set(n, { round: n, worker: null, reviewer: null, vendor: null,
+      worker_vendor: null, reviewer_vendor: null, head: null, worker_head: null, verdict: null });
+    return rounds.get(n);
+  };
+  const log = join(dir, "events.jsonl");
+  if (existsSync(log)) for (const line of readFileSync(log, "utf8").split("\n")) {
+    try {
+      const event = JSON.parse(line), identity = event.data?.identity;
+      if (event.task !== id || projectOf(event) !== project || !Number.isInteger(identity?.round) || identity.round < 1) continue;
+      const round = atRound(identity.round), role = identity.role ?? event.data?.role;
+      if (role === "worker" || role === "reviewer") {
+        round[role] = event.actor ?? null;
+        round[role + "_vendor"] = identity.vendor ?? null;
+        round.vendor = identity.vendor ?? round.vendor;
+      }
+    } catch { /* an incomplete final log line is not a round */ }
+  }
+  for (const record of records) {
+    if (!["worker-report", "verdict"].includes(record.kind) || !Number.isInteger(record.round)) continue;
+    const round = atRound(record.round);
+    if (record.kind === "verdict") { round.head = record.head || null; round.verdict = record.verdict ?? null; }
+    else round.worker_head = record.head || null;
+  }
+  for (const round of rounds.values()) round.head ??= round.worker_head;
+  const ready = records.filter(r => r.kind === "readiness").at(-1);
+  const readiness = ready ? { head: ready.head, gate_base: ready.gate_base, gates: ready.gates, checks: ready.checks, round: ready.round } : null;
+  const brief = records.filter(r => r.kind === "brief").at(-1)?.brief ?? null;
+  const current = buildState(project, true).tasks.find(t => t.id === id && (t.project || "") === project);
+  if (!rounds.size) notes.push("not dispatched yet");
+  if (!current?.pr) notes.push("no PR yet");
+  if (!readiness) notes.push("no readiness record yet");
+  const tests: Array<{ path: string; source: string }> = [], seen = new Set<string>();
+  for (const source of ["acceptance", "scope"]) for (const text of strings(spec[source])) {
+    for (const match of text.matchAll(/\btests?\/[A-Za-z0-9_.*?\/\[\]-]+/g)) {
+      const path = match[0].replace(/[.,;:]+$/, "");
+      if (!seen.has(path)) { seen.add(path); tests.push({ path, source }); }
+    }
+  }
+  let explainSte = null;
+  if ("explain" in spec) {
+    const taskDir = registry().projects.get(project)?.tasks || "design/tasks";
+    const file = join(isAbsolute(taskDir) ? taskDir : join(ROOT, taskDir), id + ".json");
+    const check = Bun.spawnSync(["python3", join(ROOT, "bin/lib/fm_ste.py"), "check-explain", file], { env: childEnv(), cwd: ROOT, stdin: "ignore" });
+    try { explainSte = JSON.parse(check.stdout.toString()); } catch { /* malformed explains have no STE report */ }
+  }
+  const title = typeof spec.title === "string" ? spec.title : "", colon = title.indexOf(":");
+  return { task: { id, project: project || null, stage: current?.stage ?? "queued", pr: current?.pr ?? null,
+    pr_url: current?.pr_url ?? null, title, headline: (colon < 0 ? title : title.slice(0, colon)).trim(),
+    detail: colon < 0 ? "" : title.slice(colon + 1).trim(), title_tw: spec.title_tw ?? current?.title_tw ?? null,
+    milestone: spec.milestone ?? null, depends_on: strings(spec.depends_on), scope: strings(spec.scope), acceptance: strings(spec.acceptance),
+    ...("explain" in spec ? { explain: spec.explain } : {}), explain_ste: explainSte,
+    diagram: existsSync(join(diagramDir, `${diagramName}.${lang}.html`)), diagram_name: diagramName },
+    cards, tests, readiness, rounds: [...rounds.values()].sort((a, b) => a.round - b.round), brief, notes };
+};
+
 const serveFile = (name: string) => {
   let base = PUBLIC, relative = name;
   const diagram = /^diagrams\/(D-[A-Za-z0-9-]+)\.(en|zh-TW|zh-CN)\.html$/.exec(name);
-  const project = diagram ? ownerOf(diagram[1])?.project : null;
+  const taskDiagram = /^diagrams\/task-(?:([a-z0-9-]{1,24})-)?((?:T|SK)-[0-9]{3,})\.(en|zh-TW|zh-CN)\.html$/.exec(name);
+  const project = taskDiagram ? (taskDiagram[1] || defaultProject()) : diagram ? ownerOf(diagram[1])?.project : null;
+  if (taskDiagram && project && !registry().projects.has(project)) return new Response("not found", { status: 404 });
   if (project && registry().projects.has(project) && stateDir(project) !== join(ROOT, "state")) {
     base = join(stateDir(project), "diagrams");
     relative = name.slice("diagrams/".length);
@@ -2083,6 +2196,11 @@ const server = Bun.serve({
     // every project is on the board
     const asked = url.searchParams.get("project") ?? "";
     const only = PROJECT_NAME.test(asked) ? asked : null;
+    if (url.pathname === "/api/task") {
+      if (req.method !== "GET") return json({ error: "GET only" }, 405);
+      const detail = taskDetail(asked || defaultProject(), url.searchParams.get("id") || "", url.searchParams.get("lang") || "zh-TW");
+      return detail ? json(detail) : json({ error: "unknown project or task" }, 404);
+    }
     if (url.pathname === "/api/state") return json(state(only));
 
     // whether this tab may write: the page disables its controls and says so
@@ -2245,7 +2363,7 @@ const server = Bun.serve({
             || (chosen === "custom" && decision.text !== text) || repeated === null
             || JSON.stringify(storedAnswers) !== JSON.stringify(repeated))
             return json({ error: "decision already recorded differently" }, 409);
-          return json({ ok: true, already: true, decision, merge: mergeOf(decision) });
+          return json({ ok: true, already: true, decision: publicDecision(decision), merge: mergeOf(decision) });
         }
         if (!p) return json({ error: "no pending decision" }, 404);
         const questions = p.details?.en?.questions;
@@ -2281,6 +2399,7 @@ const server = Bun.serve({
           return json({ error: "a merge is already running in this project", code: "mergeBusy", project: projectOf(p) || null }, 409);
         const decision: Record<string, unknown> = {
           id, chosen: recordedChoice,
+          ...Object.fromEntries(["details", "purpose", "title", "ste"].filter(k => k in p).map(k => [k, p[k]])),
           ...(changeRequested ? { picked: chosen } : {}),
           ...(Array.isArray(questions) ? { answers } : {}),
           expected_head: p.expected_head ?? null, binding: p.binding ?? null, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
@@ -2348,7 +2467,7 @@ const server = Bun.serve({
         const pf = join(stateDir(cardProject), "pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
         const stored = readJson<Record<string, unknown>>(file) ?? decision;
-        return json({ ok: true, decision: stored, merge: mergeOf(stored), eventRecorded,
+        return json({ ok: true, decision: publicDecision(stored), merge: mergeOf(stored), eventRecorded,
           effect, outcome: carried.outcome, ...(carried.reason ? { reason: carried.reason } : {}) });
       }).catch((e) => json({ error: e instanceof StorageError ? "project storage is unavailable" : "bad request" },
         e instanceof StorageError ? 503 : 400)).finally(() => { effectsInFlight--; });

@@ -122,13 +122,17 @@ assert_eq 'fact' "$(jq -r '.pending[]|select(.id=="D-beta-T001-1")|.details.en.q
 assert_contains "$(sh_ '?project=beta')" 'beta one' "selected project reads its private description locally"
 field_h() { jq -r --arg p "$1" --arg i "$2" ".tasks[]|select(.project==\$p and .id==\$i)|$3" <<<"$(sh_ "?project=$1")"; }
 
-for private in PRIVATE-EVENT PRIVATE-ACTIVITY PRIVATE-DETAIL PRIVATE-ACTION PRIVATE-BADGE PRIVATE-REVIEW PRIVATE-NESTED PRIVATE-PROGRESS; do
+for private in PRIVATE-EVENT PRIVATE-ACTIVITY PRIVATE-ACTION PRIVATE-BADGE PRIVATE-REVIEW PRIVATE-NESTED PRIVATE-PROGRESS; do
   assert_contains "$sh1" "$private" "main page retains $private"
 done
 selected="$(sh_ '?project=beta')"
-for private in PRIVATE-EVENT PRIVATE-ACTIVITY PRIVATE-DETAIL PRIVATE-ACTION PRIVATE-BADGE PRIVATE-REVIEW PRIVATE-NESTED; do
+for private in PRIVATE-EVENT PRIVATE-ACTIVITY PRIVATE-ACTION PRIVATE-BADGE PRIVATE-REVIEW PRIVATE-NESTED; do
   assert_contains "$selected" "$private" "selected project retains $private"
 done
+assert_eq 'false' "$(jq '.responses[]|select(.id=="D-beta-T099-1")|has("details")' <<<"$sh1")" "main page omits legacy answered details"
+assert_eq 'false' "$(jq '.responses[]|select(.id=="D-beta-T099-1")|has("details")' <<<"$selected")" "selected project omits legacy answered details"
+# T-099 has no spec in this fixture; the stored record retains its authored data.
+assert_eq 'PRIVATE-DETAIL' "$(jq -r '.details.secret' "$private_state/decisions/D-beta-T099-1.json")" "stored answer retains PRIVATE-DETAIL"
 rm "$private_state/decisions/D-beta-T099-1.json"
 # lane cards: two T-001s, each its own project's, title and pull request
 assert_eq "2" "$(jq '[.tasks[]|select(.id=="T-001")]|length' <<<"$sh1")" "two projects' T-001 are two lane cards, not one"

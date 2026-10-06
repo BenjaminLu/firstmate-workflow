@@ -94,10 +94,13 @@ assert_ok "test -x '$DG'" "the generator exists and is executable"
 R="$(newroot)"
 assert_ok "test -x '$R/bin/fm-emit.sh' && test -s '$R/i18n/tw2cn.tsv'" \
   "the scratch root really has its fixtures in it"
-for flag in --decision --event --wants --repo; do
+for flag in --task --project --decision --event --wants --repo; do
   bounded 5 "$DG" "$flag"
   assert_eq "64" "$?" "[$flag] with no value is refused, not spun on"
 done
+task_refusal="$(perl -e 'alarm shift; exec @ARGV; exit 127' 5 "$DG" --task 2>&1)"
+assert_eq "64" "$?" "task flag with no value is refused"
+assert_contains "$task_refusal" '--task needs a value' "task refusal reaches the value guard"
 bounded 5 "$DG" --repo "$R" --decision
 assert_eq "64" "$?" "a trailing flag after a good one is refused too"
 bounded 5 "$DG" --nonsense
@@ -107,7 +110,7 @@ assert_eq "64" "$?" "a --repo that is not a directory is refused"
 
 help="$("$DG" -h 2>&1)"
 assert_eq "0" "$?" "-h is help and exits clean"
-for f in --decision --event --wants; do
+for f in --task --decision --event --wants; do
   assert_contains "$help" "$f" "the help names $f"
 done
 assert_eq "$help" "$("$DG" --help 2>&1)" "--help says the same thing"

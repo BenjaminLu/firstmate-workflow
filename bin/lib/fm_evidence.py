@@ -307,9 +307,27 @@ def retain_verdict(store, args):
                         model=identity.get('model', 'unknown'))
 
 
+def summary(store):
+    """Read and authenticate all records before exposing an explicit projection."""
+    result = []
+    for record in store.records():
+        row = {key: record.get(key) for key in ('kind', 'round', 'actor', 'head', 'time')}
+        if record['kind'] == 'verdict':
+            row['verdict'] = record.get('verdict')
+        elif record['kind'] == 'brief':
+            lines = record.get('text', '').splitlines()
+            row['brief'] = lines[0] if lines else ''
+        elif record['kind'] == 'readiness':
+            row.update(gate_base=record.get('gate_base'), gates=record.get('gates', []),
+                       checks=[{key: check.get(key) for key in ('name', 'conclusion')}
+                               for check in record.get('checks', [])])
+        result.append(row)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin'])
+    parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin', 'summary'])
     parser.add_argument('--state', required=True)
     parser.add_argument('--project', required=True)
     parser.add_argument('--task', required=True)
@@ -324,9 +342,12 @@ def main():
     parser.add_argument('--code')
     parser.add_argument('--vendor', default='legacy')
     parser.add_argument('--reviewer', action='store_true')
+    parser.add_argument('--external', action='store_true', default=None)
     args = parser.parse_args()
-    store = Store(args.state, args.project, args.task)
-    if args.command == 'pin':
+    store = Store(args.state, args.project, args.task, external=args.external)
+    if args.command == 'summary':
+        print(json.dumps(summary(store), ensure_ascii=False))
+    elif args.command == 'pin':
         from fm_binding import source_binding
         binding = source_binding(args.task, args.head, args.base, args.code)
         if binding['patch'] != args.patch:
@@ -393,5 +414,7 @@ if __name__ == '__main__':
     try:
         sys.exit(main())
     except (ValueError, OSError, KeyError, TypeError) as error:
-        print('fm-evidence: ' + str(error), file=sys.stderr)
+        # Metadata readers need the failure reason, never a private key path.
+        message = (error.strerror or 'evidence read failed') if len(sys.argv) > 1 and sys.argv[1] == 'summary' and isinstance(error, OSError) else str(error)
+        print('fm-evidence: ' + message, file=sys.stderr)
         sys.exit(1)

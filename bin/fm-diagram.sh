@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Decision diagrams, and only for decisions.
+# Diagrams for decisions and task specs with explain.
 #
+#   bin/fm-diagram.sh --task T-001 [--project <p>]      render a spec explain
 #   bin/fm-diagram.sh --decision D-007 [--repo <root>]   render the three files
 #   bin/fm-diagram.sh --event <type> --decision D-007     render only if the
 #                                                         type is one the
@@ -8,8 +9,8 @@
 #   bin/fm-diagram.sh --wants <type>                      the ruling alone
 #
 # Q8, the second half: a drawing is made for a decision the captain must rule
-# on and for nothing else. A routine event - a dispatch, a push, a passing
-# gate - gets none, so --event is the entry point a caller can use blindly
+# on, or for a task spec with explain through --task <id>. A routine event -
+# a dispatch, a push, a passing gate - gets none, so --event is the entry point a caller can use blindly
 # for any type bin/fm-emit.sh will accept: it consults the same ruling
 # --wants reports and writes nothing for the rest. A type fm-emit would
 # itself refuse, or one nobody here has ruled on, is an error and not a quiet
@@ -54,18 +55,22 @@ die()   { printf 'fm-diagram: %s\n' "$1" >&2; exit "${2:-64}"; }
 # refuses before the shift rather than after it.
 need() { [ "$#" -ge 2 ] || die "$1 needs a value"; }
 
-MODE=''; ID=''; EVENT=''
+MODE=''; ID=''; EVENT=''; TASK_ID=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
+    --task)     need "$@"; MODE=task; TASK_ID="$2"; shift 2 ;;
     --decision) need "$@"; ID="$2";                shift 2 ;;
     --event)    need "$@"; MODE=event; EVENT="$2"; shift 2 ;;
     --wants)    need "$@"; MODE=wants; EVENT="$2"; shift 2 ;;
     --repo)     need "$@"; ROOT="$2";              shift 2 ;;
-    -h|--help)  sed -n '4,8p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)  sed -n '4,9p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+if [ -n "$TASK_ID" ]; then
+  [ "$MODE" = task ] && [ -z "$EVENT" ] && [ -z "$ID" ] || die "choose --task or a decision mode"
+fi
 [ -d "$ROOT" ] || die "no repo at $ROOT"
 ROOT="$(cd "$ROOT" && pwd)"
 
@@ -157,7 +162,12 @@ fi
 
 # the id reaches the filesystem, so its shape was checked above, before any
 # mode could act on it - the same shape the board's POST handler accepts
-[ -n "$ID" ] || die "--decision is required"
+if [ "$MODE" = task ]; then
+  fm_task_is "$TASK_ID" || die "not a task id: $TASK_ID"
+  [ -z "$ID" ] || die "choose --task or --decision"
+else
+  [ -n "$ID" ] || die "--decision is required"
+fi
 
 if [[ "$ID" =~ $FM_OWNED_ID ]]; then export FM_PROJECT="${BASH_REMATCH[1]}"; fi
 if declare -f fm_storage_init >/dev/null; then
@@ -170,12 +180,20 @@ if [ "$FM_EXTERNAL" = 1 ]; then
   OUT="$FM_STATE_DIR/diagrams"
   SRC="$FM_STATE_DIR/diagram-sources"
 fi
-FILE=''
-for c in "$FM_STATE_DIR/pending/$ID.json" "$FM_STATE_DIR/decisions/$ID.json"; do
-  [ -f "$c" ] && { FILE="$c"; break; }
-done
-[ -n "$FILE" ] || die "no decision $ID under state/pending or state/decisions" 66
 command -v jq >/dev/null 2>&1 || die "jq is required" 69
+FILE=''
+if [ "$MODE" = task ]; then
+  ID="task-${FM_PROJECT:+$FM_PROJECT-}$TASK_ID"
+  FILE="${FM_TASKS_DIR:-$ROOT/design/tasks}/$TASK_ID.json"
+  [ -f "$FILE" ] || die "no task spec: $TASK_ID" 66
+  jq -e '.explain | type == "object"' "$FILE" >/dev/null 2>&1 || die "task has no explain: $TASK_ID"
+  python3 "$HERE/lib/fm_ste.py" check-explain "$FILE" >/dev/null || exit $?
+else
+  for c in "$FM_STATE_DIR/pending/$ID.json" "$FM_STATE_DIR/decisions/$ID.json"; do
+    [ -f "$c" ] && { FILE="$c"; break; }
+  done
+  [ -n "$FILE" ] || die "no decision $ID under state/pending or state/decisions" 66
+fi
 # The file is read before it is believed. Every field below is `// ""`, so a
 # file jq cannot parse answers nothing for all of them and the card renders
 # blank, with exit 0 - the same failure as an absent dictionary, which is a
@@ -184,7 +202,8 @@ command -v jq >/dev/null 2>&1 || die "jq is required" 69
 jq -e 'type == "object"' "$FILE" >/dev/null 2>&1 \
   || die "not a readable decision file: $FILE" 66
 
-TASK="$(jq -r '.task // ""' "$FILE")"
+if [ "$MODE" = task ]; then TASK="$TASK_ID"
+else TASK="$(jq -r '.task // ""' "$FILE")"; fi
 # the task id is shown whatever it says, but it is only joined to a path when
 # it looks like one of ours
 TASKPATH="$TASK"
@@ -282,6 +301,7 @@ tier_answer() {  # tier_answer <stem> <lang> -> the file that serves that langua
 # the stem whose drawings this decision uses; empty means the built-in body
 TIER=''
 resolve_tier() {
+  [ "$MODE" != task ] || return 0
   local stem lang unanswered=''
   for stem in "$ID" ${TASKPATH:+"$TASKPATH"}; do
     [ -n "$(tier_files "$stem")" ] || continue
@@ -306,10 +326,10 @@ fragment() {
 # All record text passes through esc; states select only fixed drawing values.
 node_flow() {  # node_flow <lang> <field>
   local lang="$1" field="$2" count height row label state stroke fill dash mark y=6 i=0
-  count="$(jq --arg lang "$lang" --arg field "$field" '.details[$lang][$field]|length' "$FILE")"
+  count="$(jq --arg lang "$lang" --arg field "$field" '(.details // .explain)[$lang][$field]|length' "$FILE")"
   height=$((count * 36))
   printf '<svg role="img" viewBox="0 0 300 %s" style="width:100%%;display:block"><title>%s</title>\n' "$height" \
-    "$(esc "$(jq -r --arg lang "$lang" --arg field "$field" '[.details[$lang][$field][].label]|join(" → ")' "$FILE")")"
+    "$(esc "$(jq -r --arg lang "$lang" --arg field "$field" '[(.details // .explain)[$lang][$field][].label]|join(" → ")' "$FILE")")"
   while IFS= read -r row; do
     state="$(jq -r '.state' <<<"$row")"; label="$(jq -r '.label' <<<"$row")"
     stroke='var(--line)'; fill='none'; dash=''; mark=''
@@ -325,7 +345,7 @@ node_flow() {  # node_flow <lang> <field>
       printf '<path d="M150 %s v10 m-3 -3 l3 3 3 -3" fill="none" stroke="var(--fg3)"/>\n' "$((y + 25))"
     fi
     y=$((y + 36))
-  done < <(jq -c --arg lang "$lang" --arg field "$field" '.details[$lang][$field][]' "$FILE")
+  done < <(jq -c --arg lang "$lang" --arg field "$field" '(.details // .explain)[$lang][$field][]' "$FILE")
   printf '</svg>\n'
 }
 node_pair() {  # node_pair <lang>
@@ -336,10 +356,10 @@ node_pair() {  # node_pair <lang>
     [ "$side" = before ] || printf '<span aria-hidden="true">→</span>'
     printf '<section style="flex:1"><b>%s</b>' "$(dsc "$side")"
     node_flow "$lang" "${side}_nodes"
-    printf '<p>%s</p></section>' "$(esc "$(jq -r --arg lang "$lang" --arg side "$side" '.details[$lang][$side]' "$FILE")")"
+    printf '<p>%s</p></section>' "$(esc "$(jq -r --arg lang "$lang" --arg side "$side" '(.details // .explain)[$lang][$side] // ""' "$FILE")")"
   done
   printf '</div>\n<div class="node-legend"><span><i></i>%s</span><span><i style="border-color:var(--bad);border-style:dashed;background:rgba(242,100,90,.08)"></i>%s</span><span><i style="border-color:var(--brass);background:rgba(217,164,65,.08)"></i>%s</span></div>\n' "$(dsc lgSame)" "$(dsc lgGone)" "$(dsc lgNew)"
-  if jq -e --arg lang "$lang" '.details[$lang].change_table' "$FILE" >/dev/null; then
+  if jq -e --arg lang "$lang" '(.details // .explain)[$lang].change_table' "$FILE" >/dev/null; then
     printf '<table class="change-table"><thead><tr><th>%s</th><th>A</th><th>B</th><th>C</th></tr></thead><tbody>\n' "$(dsc change2)"
     while IFS= read -r row; do
       printf '<tr><td>%s</td>' "$(esc "$(jq -r '.text' <<<"$row")")"
@@ -349,7 +369,7 @@ node_pair() {  # node_pair <lang>
         printf '<td style="color:var(--%s)">%s</td>' "$color" "$(esc "$cell")"
       done
       printf '</tr>\n'
-    done < <(jq -c --arg lang "$lang" '.details[$lang].change_table[]' "$FILE")
+    done < <(jq -c --arg lang "$lang" '(.details // .explain)[$lang].change_table[]' "$FILE")
     printf '</tbody></table>\n'
   fi
 }
@@ -403,12 +423,12 @@ HTML
 
   if [ -n "$frag" ]; then
     printf '<div class="drawn">\n%s\n</div>\n' "$frag"
-  elif jq -e --arg lang "$3" '.details[$lang].before_nodes and .details[$lang].after_nodes' "$FILE" >/dev/null; then
+  elif jq -e --arg lang "$3" '(.details // .explain)[$lang].before_nodes and (.details // .explain)[$lang].after_nodes' "$FILE" >/dev/null; then
     node_pair "$3"
-  elif jq -e --arg lang "$3" '.details[$lang].before and .details[$lang].after' "$FILE" >/dev/null; then
+  elif jq -e --arg lang "$3" '(.details // .explain)[$lang].before and (.details // .explain)[$lang].after' "$FILE" >/dev/null; then
     printf '<div class="before-after" style="display:flex;gap:16px;align-items:center"><section style="flex:1"><b>%s</b><p>%s</p></section><span aria-hidden="true">→</span><section style="flex:1"><b>%s</b><p>%s</p></section></div>\n' \
-      "$(dsc before)" "$(esc "$(jq -r --arg lang "$3" '.details[$lang].before' "$FILE")")" \
-      "$(dsc after)" "$(esc "$(jq -r --arg lang "$3" '.details[$lang].after' "$FILE")")"
+      "$(dsc before)" "$(esc "$(jq -r --arg lang "$3" '(.details // .explain)[$lang].before' "$FILE")")" \
+      "$(dsc after)" "$(esc "$(jq -r --arg lang "$3" '(.details // .explain)[$lang].after' "$FILE")")"
   else
     printf '<p>%s</p>\n' "$(dsc missingDetails)"
   fi
