@@ -1110,12 +1110,9 @@ bring_up_to_date() {
     return 0
   fi
   # Squash merge checks committer identity too, even though it creates no
-  # commit. Resolve it before detaching and reuse it for commit-tree below.
+  # commit. Supply resolved values, otherwise leave git's environment fallback
+  # intact. The identity refusal belongs at commit-tree below.
   rb_name="$(fm_git_name "$tree")"; rb_email="$(fm_git_email "$tree")"
-  if [ -z "$rb_name" ] || [ -z "$rb_email" ]; then
-    echo "fm: set git user.name and user.email (or FM_GIT_NAME / FM_GIT_EMAIL) before committing" >&2
-    exit 70
-  fi
   rebuild_prev="$head"; rebuild_base="$(git rev-parse "$base_ref")"
   # Up before the worktree leaves the branch, not after the merge: a signal
   # in between must find it set, so the exit path publishes nothing from a
@@ -1123,7 +1120,7 @@ bring_up_to_date() {
   rebuilt=1
   git -C "$tree" checkout -q --detach "$rebuild_base" || {
     echo "fm-worker: could not detach $tree at $BASE" >&2; exit 70; }
-  git -C "$tree" -c user.name="$rb_name" -c user.email="$rb_email" \
+  git -C "$tree" ${rb_name:+-c user.name="$rb_name"} ${rb_email:+-c user.email="$rb_email"} \
     -c merge.conflictStyle=merge -c rerere.enabled=false \
     merge -q --squash "$head" >/dev/null 2>&1; rc=$?
   # a merge that failed without leaving a conflict did not merge at all,
