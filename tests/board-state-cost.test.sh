@@ -12,6 +12,17 @@ mkdir -p "$d/bin" "$d/board/public" "$d/state/session/acknowledged" "$d/design/t
 cp -R "$ROOT/bin/lib" "$d/bin/"
 project_storage_fixture "$d/bin"
 cp "$ROOT/board/server.ts" "$d/board/"
+# Literal helper dependency lets gate 5 select this consuming suite. The facade
+# delegates real I/O and wraps only the HTTP entrypoint to bound each count.
+cp "$ROOT/tests/lib/board-state-cost.ts" "$d/board/"
+python3 - "$d/board/server.ts" <<'PYFACADE'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+source = p.read_text().replace('from "node:fs"', 'from "./board-state-cost.ts"')
+source = 'import { costServe } from "./board-state-cost.ts";\n' + source.replace('Bun.serve({', 'costServe({')
+p.write_text(source)
+PYFACADE
 cat > "$d/config.yaml" <<'Y'
 vendor: mock
 default_project: alpha
@@ -99,6 +110,21 @@ wait_for 60 get; rc=$?
 assert_eq 0 "$rc" "cached board answers its first 50000-event state request"
 if [ "$rc" -ne 0 ]; then cat "$d/cached.log" >&2; finish; exit 1; fi
 append_event() { printf '{"type":"progress","project":"alpha","task":"T-001","actor":"captain","data":{"cost":"%s"}}\n' "$1" >> "$d/state/events.jsonl"; }
+# Deterministic proof for Why (b)/(d), before any SSE client can consume the
+# append first. Warm-up is complete; this one request must see the appended
+# marker, so a memo hit or an inert facade cannot satisfy the cost assertions.
+event_offset="$(wc -c < "$d/state/events.jsonl" | tr -d ' ')"
+append_event counted-rebuild
+appended_bytes=$(( $(wc -c < "$d/state/events.jsonl") - event_offset ))
+get '?cost_measure=1' > "$d/counted.json"
+assert_eq 0 "$?" "counted rebuild answers after one appended event"
+assert_eq counted-rebuild "$(jq -r '[.recent[]|select(.project=="alpha")][0].data.cost' "$d/counted.json")" "counted rebuild includes the appended event instead of a memo hit"
+assert_ok "jq -e '.configStats >= 1 and .configStats <= 2' '$d/state-cost.json' > /dev/null" "one real rebuild stats config.yaml at most twice"
+# The append reader checks the old 4096-byte prefix and saves the new one.
+# Everything else read from either event log must fit the one appended line;
+# base's readFileSync of the complete logs exceeds this deterministic bound.
+assert_ok "jq -e --argjson appended '$appended_bytes' '.eventBytes >= \$appended and .eventBytes <= (\$appended + 8192)' '$d/state-cost.json' > /dev/null" "one-line append reads only new event bytes plus bounded prefix windows"
+printf 'Counted rebuild: '; cat "$d/state-cost.json"
 : > "$d/calls"
 for n in 1 2 3; do
   append_event "$n"
