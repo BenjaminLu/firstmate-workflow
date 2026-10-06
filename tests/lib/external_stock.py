@@ -24,7 +24,7 @@ def run(argv, env, **kwargs):
     return result.stdout.strip()
 
 
-def scenario(stop_owner=False):
+def scenario(stop_owner=False, public_title=None):
     with tempfile.TemporaryDirectory(prefix='external-stock-') as tmp:
         scratch = Path(tmp)
         engine = scratch / 'engine'
@@ -85,6 +85,11 @@ with open(sys.argv[4], 'a') as log:
         (home / 'tasks/T-051.json').write_text(json.dumps(dict(id='T-051',
             title='Private title sentinel', depends_on=[], scope=['implementation'],
             acceptance=['Private acceptance sentinel'])))
+        if public_title is not None:
+            spec_path = home / 'tasks/T-051.json'
+            spec = json.loads(spec_path.read_text())
+            spec.update(public_title=public_title, public_summary='The fixture widget uses blue.')
+            spec_path.write_text(json.dumps(spec))
         (home / 'design.md').write_text('Private design sentinel\n')
         state = home / 'state'
         # Shared helper resolves the external Store layout under private state.
@@ -211,7 +216,10 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
                 paths = run(['git', '-C', str(remote), 'ls-tree', '-r', '--name-only', 't-051-work'], env)
                 assert paths.splitlines() == ['base-content', 'implementation'], paths
                 message = run(['git', '-C', str(target), 'log', '-1', '--format=%s'], env)
-                assert message == 'T-051: project work', message
+                if public_title is None:
+                    assert message == 'T-051: project work', message
+                else:
+                    assert message == 'T-051: ' + public_title, message
                 calls = [json.loads(line) for line in (scratch / 'gh.jsonl').read_text().splitlines()]
                 create = next(call for call in calls if call[:2] == ['pr', 'create'])
                 assert create[create.index('--repo')+1] == 'owner/app'
@@ -219,6 +227,26 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
                 assert 'Private' not in json.dumps(create), create
                 assert not (engine / 'state/worktrees/T-051').exists()
                 assert not (engine / 'state/runs').exists()
+                if public_title is not None:
+                    assert create[create.index('--title')+1] == 'T-051: ' + public_title
+                    assert create[create.index('--body')+1] == (
+                        'The fixture widget uses blue.\n\n'
+                        'Captain acceptance and evidence are retained privately.')
+                    assert run(['git', '-C', str(engine), 'status', '--porcelain'], env) == ''
+                    found = subprocess.run(['git', '-C', str(engine), 'grep', '-F', public_title],
+                                           env=env, text=True, capture_output=True)
+                    assert found.returncode == 1, found.stdout + found.stderr
+                    # Public prose may persist only in private runtime records,
+                    # the external commit objects and the PR stub's argv record.
+                    for path in scratch.rglob('*'):
+                        if not path.is_file() or path.is_symlink():
+                            continue
+                        if path.is_relative_to(scratch / 'private') or path == scratch / 'gh.jsonl':
+                            continue
+                        if path.is_relative_to(remote / 'objects'):
+                            continue
+                        assert public_title.encode() not in path.read_bytes(), str(path)
+
         finally:
             # On assertion failure the real worker is released and allowed to
             # finish before fixture removal; owner EOF is the final backstop.

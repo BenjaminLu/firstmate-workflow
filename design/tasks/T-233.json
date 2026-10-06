@@ -1,0 +1,214 @@
+{
+  "id": "T-233",
+  "title": "an external pull request and its commit carry a meaningful public title from the spec's validated public_title, while the private spec title still never reaches the external repository",
+  "milestone": "M2",
+  "depends_on": [
+    "T-231"
+  ],
+  "scope": [
+    "bin/lib/fm_public_text.py",
+    "bin/lib/fm_spec_preflight.py",
+    "bin/fm-worker.sh",
+    "tests/external-public-title.test.sh",
+    "tests/external-execution.test.sh",
+    "tests/spec-preflight.test.sh",
+    "tests/onboarding-crew.test.sh",
+    "tests/lib/**",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-233.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-06 the captain saw that the pull requests of an external project carry the title 'T-00N: project work' and that their squash commits keep the subject 'T-00N: project work (#N)', while self-project PRs carry the full task title. Diagnosis on main 068a791: bin/fm-worker.sh:2094-2095 sets commit_msg to \"$TASK: project work\" when FM_EXTERNAL=1, and bin/fm-worker.sh:2209-2214 sets pr_title \"$TASK: project work\" and pr_body \"Task $TASK. Captain acceptance and evidence are retained privately.\" for an external pull request. The reason is design §15.7 (on main near design.md:5244): 'External task branch names, commit subjects and PR titles carry generic task labels rather than private spec titles', because the private spec title can hold private captain design. The fix keeps that privacy rule and adds an explicit public text that the captain's spec authors for publication.",
+    "Spec field. An external task spec (FM_HOME/projects/<name>/tasks/<id>.json) gains two optional fields: `public_title` (string) and `public_summary` (string). They are the only spec text that may reach the external repository. A new module bin/lib/fm_public_text.py holds one function, `validate(title, summary)`, returning a list of problems (empty when valid), and a CLI `python3 bin/lib/fm_public_text.py check <spec.json>` that prints one problem per line and exits 0 when the spec has a valid public_title (summary optional), 65 otherwise. Rules: public_title is 8-80 characters after strip, one line, printable ASCII only (English; the external repository's public text stays English whatever posting_languages say), it does not start with the task id, and it contains no path-like token (any of '/', '\\\\', '.json', '.md', 'FM_HOME', '~/', 'design/', 'tasks/', 'state/'); public_summary, when present, is 1-600 characters, printable ASCII plus newlines, with the same path-like ban. Both pass bin/lib/fm_ste.py `check(text)` with no issue of severity 'fail' (the same STE rules the intent cards use; import fm_ste lazily inside validate so fixtures that do not copy fm_ste.py still load the module when only `check` is not called). Storage: public_title and public_summary exist only in the external task spec under FM_HOME/projects/<name>/tasks/<id>.json, which is outside the firstmate repository (captain 2026-10-06: these titles never enter firstmate version control). Firstmate code reads them from the pinned spec at publish time; it never copies them into a file the firstmate repository tracks. Nothing committed to the firstmate repository (code, docs, skills, tests, fixtures, task specs including this one) contains a real external task's public title or names an external repository; fixtures use invented titles and invented project names.",
+    "Preflight. bin/lib/fm_spec_preflight.py `prompt(task, data, base)` (:29-64) refuses with ValueError('external spec needs a valid public_title: <problems>') when the environment says FM_EXTERNAL=1 and fm_public_text.validate fails for the spec's public_title/public_summary; bin/lib/fm-spec-preflight.sh already turns a prompt failure into a non-zero exit before any reviewer starts (confirm the exact exit code and keep it). Self-project specs are unaffected. Since dispatch needs SPEC-OK on the exact spec bytes (skills/firstmate/SKILL.md 'Spec preflight before dispatch and repin'), every new external task now carries a valid public_title. Migration: tasks already pinned, dispatched or merged are not re-checked; their existing SPEC-OK records stay valid, and their rounds use the fallback below. fm_spec_preflight.py imports fm_public_text lazily inside prompt(), only on the FM_EXTERNAL=1 branch, never at module top level: the module is loaded by fm_evidence.py, fm_spec_pins.py, fm-canary.sh and the board e2e fixture (tests/e2e/lib/fixture.ts:104 copies a fixed library list without fm_public_text.py, checked by tests/e2e/board-crew.spec.ts:50), and those loaders must keep working unchanged.",
+    "Commit subject. bin/fm-worker.sh:2094-2095: for FM_EXTERNAL=1, commit_msg is \"$TASK: <public_title>\" when the pinned spec has a public_title that fm_public_text.validate accepts, else today's \"$TASK: project work\". The private spec title never appears. The self project keeps \"$TASK: <title>\".",
+    "New pull request. bin/fm-worker.sh:2209-2214: for FM_EXTERNAL=1, pr_title is \"$TASK: <public_title>\" and pr_body is the public_summary followed by one blank line and \"Captain acceptance and evidence are retained privately.\" when the spec has a valid public_title; else today's fallback title and body. The squash merge commit follows: GitHub uses the PR title for a multi-commit squash and the single commit's subject otherwise, and both now carry the public title, so bin/fm-merge.sh does not change. The public-title lookup is one helper call guarded so that an empty $spec, a missing public_title, or any failure of fm_public_text (module absent, python3 error) yields the fallback title, body and commit subject with no output and no exit.",
+    "Existing pull request. In a later external round that pushes to an existing PR ($num set, the `else` branch after pr create), when the spec has a valid public_title and the PR's current title (read with `fm_github pr view $num --json title,headRefName`) is exactly the fallback \"$TASK: project work\" and its headRefName equals $branch, the round runs `fm_github pr edit $num --title <new title> --body <new body>` once; a PR whose title is anything else (the captain or someone else edited it) is never retitled. A failed view or edit only prints a warning (en / zh-TW) and the round continues; it never changes the exit code. Self-project rounds never call pr edit.",
+    "Callers and tests. Every reader of the changed lines: bin/fm-worker.sh commit and publication blocks; tests/external-execution.test.sh:262-279 (test_external_branch_and_pr_title_do_not_publish_private_spec: keeps its fallback assertions for a spec without public_title, and gains a case where the spec has public_title 'Draw the fixture widget in blue' and the title becomes 'T-051: Draw the fixture widget in blue', the body starts with the summary, and 'Private launch strategy' still never appears); tests/lib/external_stock.py:214 (stock fixture spec has no public_title, so its 'T-051: project work' assertion stays); tests/onboarding-crew.test.sh:112-115 (test_pr_body_redacts_private_contract extracts the same publication section with no $spec and no FM_CODE_ROOT and asserts the fallback body exactly: the new code must fall back silently when $spec is empty, has no public_title, or fm_public_text cannot run (missing module or python3 error), so this assertion stays unchanged and passes; the worker states it ran the extraction logic against it); tests/conventions-publication.test.sh, tests/worker-rebuild-publication.test.sh and tests/worker-external-catchup.test.sh (read: no change expected; the worker must state it checked them); bin/lib/fm-spec-preflight.sh and tests/spec-preflight.test.sh (gain the external refusal case). New fail-first suite tests/external-public-title.test.sh: (a) fm_public_text check accepts a valid spec and rejects a missing title, a path-like title, a non-ASCII title, a title starting with the task id, a too-long summary and an STE-failing title (each with its own message); (b) the preflight prompt refuses an external spec without public_title and accepts the self spec; (c) the commit_msg and pr_title/pr_body sections (extracted with tests/lib/crew_blocks.py like external-execution does) produce the public title when present and the fallback when absent; (d) the later-round retitle block calls `pr edit` exactly once for a fallback-titled PR on the task branch, never for a PR with another title, never for a self project, and a failing `pr edit` stub leaves the round's exit code unchanged. (e) after a fixture external round whose spec has an invented public_title, the title text occurs only in the PR stub's recorded title/body, the commit subject in the external fixture repository and files under the fixture FM_HOME; the engine fixture's `git status --porcelain` is empty and `git grep -F <title>` in the engine fixture finds nothing. (a)-(e) fail on main.",
+    "Design and skills. design/design.md §15.7 (in place, at the sentence on generic task labels): external commit subjects and PR titles use the spec's validated public_title when present, else the generic label; public_summary is the only spec text in a PR body; preflight requires public_title for new external tasks. skills/firstmate/SKILL.md, in place under the heading 'Approved external roadmap and current-head acceptance (T-166)' (SKILL.md:973): when writing an external spec, add public_title (English, plain, no paths) and an optional public_summary.",
+    "Scope. bin/lib/fm_public_text.py (new), bin/lib/fm_spec_preflight.py, bin/fm-worker.sh, tests/external-public-title.test.sh (new), tests/external-execution.test.sh, tests/onboarding-crew.test.sh (only if its publication-section test needs an adjustment; its fallback assertion must keep its exact text), tests/spec-preflight.test.sh, tests/lib/** if a helper is needed, design/design.md §15.7, skills/firstmate/SKILL.md, design/tasks/T-233.json. T-231 is in flight on bin/fm-worker.sh, so this task depends on T-231 and rebases after it. Any other file needing a change: stop and name it."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "An external PR title and its commit use the spec public_title."
+        },
+        {
+          "kind": "fact",
+          "text": "The private spec title never reaches the external repository."
+        },
+        {
+          "kind": "fact",
+          "text": "Preflight refuses a new external spec without a valid public_title."
+        },
+        {
+          "kind": "fact",
+          "text": "The public title stays in the external spec under FM_HOME and never enters the firstmate repository."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The PRs and squash commits of an external project show only project work."
+        }
+      ],
+      "scope_in": [
+        "bin/fm-worker.sh",
+        "bin/lib/fm_public_text.py",
+        "bin/lib/fm_spec_preflight.py",
+        "tests",
+        "design section 15.7",
+        "skills"
+      ],
+      "scope_out": [
+        "bin/fm-merge.sh",
+        "Self project titles"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: commit_msg and pr_title read the validated public_title. Case c of tests/external-public-title.test.sh proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the private spec title is never in the title or the body. tests/external-execution.test.sh proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the preflight prompt raises an error for an external spec without public_title. Case b proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the worker reads the title from the pinned spec at publish time and writes it to no tracked engine file. Case e proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "A later round renames only a PR whose title is still the generic label."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Worker builds the PR"
+        },
+        {
+          "state": "gone",
+          "label": "Title is project work"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Worker builds the PR"
+        },
+        {
+          "state": "new",
+          "label": "Validate public_title"
+        },
+        {
+          "state": "new",
+          "label": "Title uses public_title"
+        },
+        {
+          "state": "new",
+          "label": "Rename generic PR once"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "外部 PR 標題和 commit 使用 spec 的 public_title。"
+        },
+        {
+          "kind": "fact",
+          "text": "私有 spec 標題絕不進外部 repo。"
+        },
+        {
+          "kind": "fact",
+          "text": "新的外部 spec 沒有有效的 public_title 時，預檢拒絕。"
+        },
+        {
+          "kind": "fact",
+          "text": "公開標題只放在 FM_HOME 的外部 spec，絕不進 firstmate repo。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "外部專案的 PR 和 squash commit 只寫 project work。"
+        }
+      ],
+      "scope_in": [
+        "bin/fm-worker.sh",
+        "bin/lib/fm_public_text.py",
+        "bin/lib/fm_spec_preflight.py",
+        "測試",
+        "design 第 15.7 節",
+        "skills"
+      ],
+      "scope_out": [
+        "bin/fm-merge.sh",
+        "本專案的標題"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：commit_msg 和 pr_title 讀取驗證過的 public_title。tests/external-public-title.test.sh 案例 c 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：私有 spec 標題不出現在標題和內文。tests/external-execution.test.sh 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：外部 spec 沒有 public_title 時，預檢 prompt 報錯。案例 b 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：worker 在發布時從固定的 spec 讀標題，不寫進任何 engine 追蹤的檔案。案例 e 證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "後續回合只改名標題仍是通用標籤的 PR。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "worker 建立 PR"
+        },
+        {
+          "state": "gone",
+          "label": "標題是 project work"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "worker 建立 PR"
+        },
+        {
+          "state": "new",
+          "label": "驗證 public_title"
+        },
+        {
+          "state": "new",
+          "label": "標題用 public_title"
+        },
+        {
+          "state": "new",
+          "label": "通用標題的 PR 改名一次"
+        }
+      ]
+    }
+  }
+}
