@@ -90,9 +90,9 @@ class Onboarding(unittest.TestCase):
             home=Path(t)
             p=approve(home,self.e,self.p,self.answers())
             self.assertEqual((home/'design.md').read_text(), design_seed(home.name, p, self.answers()['contract']))
-            (home/'design.md').write_text('captain edit\n')
+            (home/'design.md').write_text('firstmate edit\n')
             approve(home,self.e,self.p,self.answers())
-            self.assertEqual((home/'design.md').read_text(), 'captain edit\n')
+            self.assertEqual((home/'design.md').read_text(), 'firstmate edit\n')
             path=home/'CONVENTIONS.md'
             self.assertEqual(read_policy(path)['land'],'card')
             self.assertIn('unknown',path.read_text())
@@ -107,7 +107,7 @@ class Onboarding(unittest.TestCase):
             self.assertIn('required_approving_review_count',text)
             self.assertEqual(read_policy(path)['post'],'comments')
             self.assertEqual(drift(home,changed),'')  # debounce identical proposal
-            self.assertEqual((home/'design.md').read_text(), 'captain edit\n')
+            self.assertEqual((home/'design.md').read_text(), 'firstmate edit\n')
     def test_design_without_setup(self):
         with tempfile.TemporaryDirectory() as t:
             home=Path(t)

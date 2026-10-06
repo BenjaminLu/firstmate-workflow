@@ -22,10 +22,13 @@ EOF
 assert_eq 0 "$?" "explicit product remote and bootstrap contract permits onboarding"
 design="$FM_HOME/projects/seed/design.md"
 assert_ok "test -f '$design'" "confirmed onboarding creates the private design source"
-for expected in '# seed: private design' 'Private product brief' '- Check: npm test' '- Setup: npm ci' '- Repository: owner/product, base main' '## 4. Task intents'; do
+for expected in '# seed: private design' 'Private product brief' '- Check: npm test' '- Setup: npm ci' '- Repository: owner/product, base main' 'based_on: unrecorded'; do
   assert_contains "$(cat "$design")" "$expected" "private design records $expected"
 done
 assert_eq '0o600' "$(python3 -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode&0o777))' "$design")" "private design has owner-only permissions"
+assert_eq '---' "$(head -n 1 "$design")" "private design starts with front matter"
+assert_ok "! grep -q 'Task intents' '$design'" "private reference has no task-fill section"
+assert_ok "test ! -e '$FM_HOME/projects/seed/repo/design.md'" "design stays outside the repository"
 design_path="$(bash -c '. "$1/bin/fm-config.sh"; fm_project_get seed design "$2/config.yaml"' _ "$ROOT" "$eng")"
 assert_eq "$design" "$design_path" "registered external design resolves to the seeded source"
 assert_contains "$(cat "$FM_HOME/projects/seed/CONVENTIONS.md")" 'Private product brief' "private conventions record product intent"

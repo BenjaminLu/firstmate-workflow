@@ -247,8 +247,9 @@ def validate_merge_methods(p):
 
 
 def design_seed(name, p, contract):
-    lines = [f'# {name}: private design', '',
-             f"Written by fm project add at {p['confirmed_at']}. It is the approved design source every pin and round of this project reads. Firstmate edits it in place; onboarding never rewrites it.",
+    lines = ['---', 'based_on: unrecorded', 'checked_at: unrecorded', '---',
+             f'# {name}: private design', '',
+             f"Firstmate's private reference for this project, written by fm project add at {p['confirmed_at']}. It lives only under FM_HOME, never in the repository. based_on is the {p['base']} commit it was last checked against; when {p['base']} moves past it, fm project sync reports the commits and files so firstmate can correct this file and run fm-project.sh design-checked {name}. Onboarding never rewrites it.",
              '', '## 1. Product intent', '', p['product'], '',
              f"Captain intent ({p['confirmed_at']}): {p['captain']} — {p['intent']}",
              '', '## 2. Repository and checks', '',
@@ -260,8 +261,7 @@ def design_seed(name, p, contract):
                   '', '## 3. Policy', '',
                   f"- Land: {p['land']}; review: {p['review']}; post: {p['post']}",
                   f"- Merge method: {p['merge_method']}; delete branch: {p['delete_branch']}",
-                  '', '## 4. Task intents', '',
-                  'Firstmate adds one subsection per task before its spec is pinned.', ''])
+                  ''])
     return '\n'.join(lines)
 
 
