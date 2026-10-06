@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# fm-project.sh: the managed clone of a target and what a target needs
-# (design 15.1 and 15.6). Nothing here reaches the network: the clone comes
-# from a bare repository standing in for GitHub, and gh is the stub, which
-# answers the two API calls verify makes in the shapes GitHub returns.
+# T-226: private design bindings, stale reports and deduplicated engine wakes.
+# Exercise fm-project.sh sync and design-checked with a local bare remote
+# and a gh stub; nothing here reaches the network.
 set -uo pipefail
 # a live managed run exports FM_ROOT, FM_PROJECT and friends into this shell;
 # the fixture names its engine root and project itself
@@ -26,7 +25,7 @@ cp -R "$ROOT/.githooks" "$eng/.githooks"
   printf '  example-app:\n    github: example-org/example-app\n    base: trunk\n    required_check: check\n'
 } > "$eng/config.yaml"
 
-# GitHub, locally: example-org/example-app with a trunk and one other branch
+# GitHub, locally: example-org/example-app with its trunk base
 remotes="$t/remotes"
 bare="$remotes/example-org/example-app.git"
 mkdir -p "$bare"; git init -q --bare -b trunk "$bare"
@@ -34,15 +33,13 @@ seed="$t/seed"; git init -q -b trunk "$seed"
 git -C "$seed" config user.email a@b.c; git -C "$seed" config user.name t
 git -C "$seed" config core.hooksPath /dev/null
 echo app > "$seed/app.txt"; git -C "$seed" add -A; git -C "$seed" commit -qm init
-git -C "$seed" push -q "$bare" trunk trunk:old-branch
+git -C "$seed" push -q "$bare" trunk
 
 gh="$t/gh"; mkdir -p "$gh"
 export GHSTATE="$gh" FM_GH="$ROOT/tests/gh-stub.sh" FM_GITHUB_URL="$remotes"
 # run the way a caller does: by path, not through bash, so a lost
 # executable bit fails here rather than in the first script that calls it
 run() { "$P" "$@" > "$t/out" 2> "$t/err"; printf '%s' "$?"; }
-clone="$FM_HOME/projects/example-app/repo"
-
 
 home="$FM_HOME/projects/example-app"
 mkdir -p "$home"
