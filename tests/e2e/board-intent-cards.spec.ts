@@ -15,7 +15,7 @@ for (const missingRules of [false, true]) test(`intent sections and stored chips
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('#card-D-211');
     await expect(card.locator('.intent-alignment')).toBeVisible();
-    for (const text of ['Intent alignment (STE)', 'Board cards', 'Other pages', 'The card shows the result.', 'Check the scope.', 'Do not dispatch yet.']) await expect(card).toContainText(text);
+    for (const text of ['Intent', 'How it works', 'Alignment', 'Board cards', 'Other pages', 'The card shows the result.', 'Check the scope.', 'Do not dispatch yet.']) await expect(card).toContainText(text);
     await expect(card.locator('.ste-pill')).toHaveText('STE · 6/7');
     await expect(card.locator('.ste-chip').first()).toContainText('17/20');
     await expect(card.locator('.ste-sentence').filter({hasText:'The card stays small.'}).locator('.ste-chip')).toContainText('4/20');
