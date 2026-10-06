@@ -29,11 +29,12 @@ const DIAGRAM = (() => {
     || /^D-SK-[0-9]{3,}$/.test(String(id ?? ""));
   const owner = (id) => (G !== null ? G.ownerOf(id) : null);
 
+  const isDiagram = id => isDecision(id) || /^task-(?:[a-z0-9-]{1,24}-)?(?:T|SK)-[0-9]{3,}$/.test(String(id ?? ""));
   const src = (id, lang) =>
-    isDecision(id) ? DIR + id + "." + (LANGS.includes(lang) ? lang : "zh-TW") + ".html" : "";
+    isDiagram(id) ? DIR + id + "." + (LANGS.includes(lang) ? lang : "zh-TW") + ".html" : "";
 
   // hidden and without a src: mount decides whether it is shown at all
-  const embed = (id) => isDecision(id)
+  const embed = (id) => isDiagram(id)
     ? `<iframe class="dg" data-decision="${id}" title="${id}" hidden></iframe>`
     : "";
 

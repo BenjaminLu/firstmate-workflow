@@ -30,6 +30,14 @@ def prompt(task, data, base):
     spec = json.loads(data)
     if spec.get('id') != task or not spec.get('scope') or not spec.get('acceptance'):
         raise ValueError('preflight needs the task identity, scope and acceptance lines')
+    if 'explain' in spec:
+        try:
+            import fm_ste
+            report = fm_ste.check_explain(spec['explain'])
+            if not report['ok']:
+                raise ValueError('STE check failed')
+        except (ImportError, ValueError) as error:
+            raise ValueError('explain: ' + str(error)) from error
     return f'''# Spec preflight for {task}
 You are an isolated reviewer of a proposed spec, on current base {base}.
 Read-only review: inspect code and tests; do not edit files, run suites, dispatch

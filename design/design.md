@@ -251,6 +251,14 @@ adapters retain their documented combined-output limitation.
 `bin/fm-decide.sh --request <id>` writes a pending card, attempts its diagram
 and returns without waiting. The board POST writes the response file;
 `bin/fm-decide.sh --await <id>` waits for that file and returns its contents.
+The board also preserves the pending card's optional `details`, `purpose`,
+`title` and `ste` report in the answered record (T-230). Existing records stay
+unchanged on disk. A shared `publicDecision` projection removes those fields
+from every record, including records written before T-230, in
+`/api/state.responses`, SSE state, POST `/decisions` responses (including
+repeat answers), and `session/wake.jsonl`. Only `/api/task` exposes this authored
+history among board outputs. `fm-decide.sh --await` prints the record unchanged,
+including those fields, in firstmate's own terminal.
 Receiving a response is not itself approval; inspect the chosen option and context.
 
 ```jsonc
@@ -398,6 +406,19 @@ the mechanism step that meets the intent and its evidence; only the prefix is
 enforced, while the claim needs manual review. Other done items remain allowed.
 The other fields are optional except on merge intent cards, as below.
 Unknown locale keys remain forward compatible.
+
+A task spec may also carry an optional bilingual `explain` block (T-230), with
+`intent`, `why`, `scope_in`, `scope_out`, `done`, `notes`, `before_nodes` and
+`after_nodes`. It excludes decision questions and change tables. Both locales
+need intent, aligned done items and both node lists. `fm_ste.py check-explain
+<spec.json>` shares the field, sentence and node-label rules above; structural
+errors exit 64 and STE failures exit 65. No explain prints `{"explain": false}`
+and exits zero. Task validation and spec preflight import the checker lazily
+only for specs with explain, so older specs and isolated config readers keep
+working. After successful preflight, firstmate runs `fm-diagram.sh --task <id>
+[--project <name>]` to draw the explain nodes in all three locales. Task drawings
+use `task-<project>-<id>.<lang>.html`, or `task-<id>.<lang>.html` for a nameless
+default project, in the same self/external diagram stores as decision drawings.
 
 `bin/lib/fm_ste.py` is the single writing-rule and glossary source. Its
 `check-details [--kind <kind>] <file>` CLI validates the new fields and checks intent-card prose and
@@ -1717,7 +1738,41 @@ Crew vendor and model always come from the run's identity, in the board and
 in the voyage. Names are never hard-coded; no file or no top-level vendor is
 no badge.
 
-**Lanes and cards.** The lane order is sent by the server (`lanes`) so the page
+**Lanes and cards.** Clicking a card, or pressing Enter/Space on it, opens one
+task detail panel (T-230); another card replaces it. Close or Esc returns focus
+to its card. Menu buttons, PR links and dragging do not open the panel. It is a
+sibling of `#lanes`, outside the patched tree, and stays open through state
+updates. Below 760px it fills the width below the header with a sticky close
+control. Ready and finished tasks, including history cards, use the same panel.
+
+The panel reads GET `/api/task?project=<name>&id=<T-or-SK-id>&lang=<locale>`.
+An absent or empty project selects the default, including a nameless self
+installation; unknown project/task is JSON 404 and non-GET is 405. The read is
+open like `/api/state`. It joins that project's spec, pending and answered
+cards (not withdrawn archives), planned unique `test/` and `tests/` paths from
+acceptance then scope, readiness and round metadata. Evidence comes only through
+`fm_evidence.py summary`, which verifies `Store.records()` before projecting
+metadata and the latest brief's first line. No report/verdict body, readiness
+`review`, session data or credentials enter the response. A failed evidence read
+leaves readiness/brief null and event-only rounds with null heads, plus a bounded
+error note. The evidence namespace is the project name, default name, or `self`.
+Push events never supply a head: worker-report and verdict evidence do.
+
+The detail header shows lane, identity, project, PR, checks and the chosen
+source's stored STE status. It then uses `intentBody` in its existing order:
+intent, how, alignment, scope, notes; followed by Spec, Tests with readiness,
+and Progress with round actors/vendors/heads/verdicts, card choices and No-texts,
+and the brief headline. The newest dispatch/repin/merge card with details wins;
+otherwise the spec explain supplies the explanation. Legacy sources without a
+report show no STE badge; absent explanations and records have explicit empty
+notes. The diagram appears only when its locale file exists. Acceptance lines
+clamp to two lines and their expansion keys survive updates and locale changes.
+The open project/task key lives in page state; only changes to stage, PR,
+last review, crew or badges trigger another task read. Browser tests verify
+interaction, focus, redraw persistence and the 390px viewport; bash tests supply
+the fail-first proof for the endpoint, validators, projections and diagrams.
+
+The lane order is sent by the server (`lanes`) so the page
 keeps no second copy. A task no event has moved yet is `ready` when every
 `depends_on` has merged, so it could be dispatched now, and `backlog` while
 any has not; a dependency the log has never heard of is not merged. The server
