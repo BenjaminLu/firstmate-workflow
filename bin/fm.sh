@@ -714,7 +714,7 @@ cmd_selfupdate() {
   # the captain sees it as a card, through the same script every other
   # decision goes through. Nothing is dispatched: a greenlit event is the
   # eighth gate and it is not ours to emit.
-  "$repo/bin/fm-decide.sh" --request "D-$id" --task "$id" --kind choice --repo "$repo" \
+  "$repo/bin/fm-decide.sh" --request "D-$id" --task "$id" --kind choice --purpose skill --repo "$repo" \
     --details "$details" >/dev/null </dev/null \
     || die "self-update: could not put $id in front of the captain" 70
 

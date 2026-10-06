@@ -63,6 +63,34 @@ jq 'del(."zh-TW".options.B.cons)' "$d/details.json" > "$d/invalid.json"
 assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-98 --task T-1 --details '$d/invalid.json'" "incomplete localized tradeoffs fail"
 assert_fail "test -f '$d/state/pending/D-98.json'" "invalid payload creates no partial card"
 
+# T-227: purpose is optional, recorded only for choice cards with details.
+for purpose in dispatch repin scope skill decision; do
+  # Distinct ids even for equally long purpose names.
+  case "$purpose" in dispatch) purpose_id=2271;; repin) purpose_id=2272;; scope) purpose_id=2273;; skill) purpose_id=2274;; decision) purpose_id=2275;; esac
+  purpose_out="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request "D-$purpose_id" --task T-227 --details "$d/details.json" --purpose "$purpose" 2>&1)"
+  assert_eq 0 "$?" "choice request accepts purpose $purpose"
+  assert_eq "$purpose" "$(jq -r .purpose "$d/state/pending/D-$purpose_id.json")" "pending card records purpose $purpose"
+done
+FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-2276 --task T-227 --details "$d/details.json" >/dev/null
+assert_eq 0 "$?" 'choice request without purpose still succeeds'
+assert_eq false "$(jq 'has("purpose")' "$d/state/pending/D-2276.json")" 'omitted purpose writes no key'
+purpose_out="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-2277 --task T-227 --details "$d/details.json" --purpose bogus 2>&1)"
+assert_eq 64 "$?" 'unknown purpose is refused'
+assert_contains "$purpose_out" 'fm-decide: bad purpose bogus' 'refusal names the bad purpose'
+purpose_out="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-2277 --task T-227 --details "$d/details.json" --purpose '' 2>&1)"
+assert_eq 64 "$?" 'an explicitly empty purpose is invalid'
+assert_contains "$purpose_out" 'fm-decide: bad purpose ' 'empty purpose is not treated as omitted'
+for kind in merge merge-untracked; do
+  purpose_out="$(FM_GH="$d/gh" FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-2277 --task T-227 --kind "$kind" --pr 99 --details "$d/details.json" --purpose dispatch 2>&1)"
+  assert_eq 64 "$?" "$kind refuses a choice purpose"
+  assert_contains "$purpose_out" 'fm-decide: --purpose applies only to a choice card' 'kind refusal explains purpose restriction'
+done
+assert_fail "test -e '$d/ghcalls'" 'purpose validation happens before any GitHub read'
+purpose_out="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-2277 --purpose 2>&1)"
+assert_eq 64 "$?" 'purpose requires a value'
+assert_contains "$purpose_out" 'fm-decide: --purpose needs a value' 'purpose uses the value guard'
+assert_fail "test -e '$d/state/pending/D-2277.json'" 'refused purposes write no pending file'
+
 # T-210: request-time intent validation, using the shared STE fixture helper.
 ste_dir="$(fixture)"
 ste_id=2100
@@ -99,6 +127,10 @@ rm -rf "$ste_dir"
 
 # Legacy skill-update path: D-SK-* + matching SK-* + --title, no invented details.
 dleg="$(fixture)"
+purpose_out="$(FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-227 --task SK-227 --title t --purpose skill 2>&1)"
+assert_eq 64 "$?" 'legacy title-only path refuses purpose'
+assert_contains "$purpose_out" 'fm-decide: --purpose requires --details' 'legacy refusal names required details'
+assert_fail "test -e '$dleg/state/pending/D-SK-227.json'" 'legacy purpose refusal writes no card'
 leg_title='skill-update: worker - say the round-three rule once (A adopt it, B leave it)'
 leg="$(FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-001 --task SK-001 --kind choice --title "$leg_title")"
 assert_ok "test -f '$leg'" "legacy skill-update request writes a pending file"
