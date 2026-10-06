@@ -1077,6 +1077,15 @@ and pushes a bilingual wake. Keep the project watcher active; no agent memory
 is the scheduler. `bin/fm-project.sh drift <name> --repo <engine>` also proposes
 an immediate inspection. Review a proposal with the captain before changing
 CONVENTIONS.md; new bots or required approvals cannot grant permission.
+
+After onboarding (and once for a project whose design.md predates T-226), run
+`bin/fm-project.sh sync <name> --repo <engine>`, review the private design.md
+against the base, edit it in place, then run
+`bin/fm-project.sh design-checked <name> --repo <engine>`. On a `design_stale`
+wake, read the commits and files in the project's
+`state/onboarding/design-check.json`, correct the private reference, and run
+design-checked again. Never commit design.md into the project's repository.
+
 Every merge still needs the captain's intent card, authoritative head CI/check
 statuses, all six gates, and the project review. Handoff never calls engine
 merge. External stacking/rebuild remains held for T-143.

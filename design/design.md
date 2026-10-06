@@ -4901,6 +4901,7 @@ repository is accepted; HTTP 404 protection is unknown, never proof of absent
 protection. `fm project add` records a bounded inspection privately, offers at
 most three missing-contract question groups, then writes CONVENTIONS.md only
 with explicit captain-confirmed checks, policy, product intent and commands.
+The same confirmation writes an initial private design.md beside it (T-226): firstmate's own reference for the project, seeded from the confirmed product intent, captain intent, checks and policy, stored only under FM_HOME and refused by the publication guard if a round stages its bytes. Its front matter records based_on, the base commit it was last checked against. Every fm project sync (and so every external round, review and preflight, and the watcher's re-inspection) compares based_on with origin/<base>; when the base moved, it prints the commits and changed files, records them in state/onboarding/design-check.json and pushes one design_stale wake per new base, so firstmate reviews and corrects the file and runs fm-project.sh design-checked <name>. The check never blocks a dispatch and never edits the file; onboarding never overwrites an existing design.md.
 The public engine registry carries routing only; command configuration is
 `FM_HOME/projects/<name>/state/config.yaml`. Onboarding inserts the routing entry
 into the existing `projects:` block, allowing a trailing comment on its header
