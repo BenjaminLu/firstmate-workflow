@@ -85,6 +85,18 @@ while IFS=$'\t' read -r a b; do
 done < "$tbl"
 assert_ne "$(jq -r '.gate_scope' "$tw")" "$cnout" "converting zh-TW actually produces zh-CN"
 
+# T-232: every gate label shown on a zh-CN card must convert fully.
+for name in branch rebase scope fail-first ci approval; do
+  gate_cn="$(jq -r --arg key "gate_$name" '.[$key]' "$tw")"
+  while IFS=$'\t' read -r a b; do
+    case "$a" in '#'*|'') continue ;; esac
+    gate_cn="${gate_cn//$a/$b}"
+  done < "$tbl"
+  for traditional in 紅 綠 乾 淨; do
+    assert_lacks "$gate_cn" "$traditional" "zh-CN gate $name converts $traditional"
+  done
+done
+
 # Authored oracle, deliberately independent of the table under test. This
 # catches both overlap order (船員 before 船員名冊) and displayed characters
 # that a self-derived expectation silently preserves.

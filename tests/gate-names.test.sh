@@ -8,9 +8,12 @@ if command -v bun >/dev/null 2>&1; then
 else
   . "$ROOT/tests/lib.sh"
 fi
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 export HERDR_ENV=0
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+work="$(safe_tmpdir)"
+gate_config_home=''
+trap 'safe_rm_rf "$work"; [ -z "$gate_config_home" ] || safe_rm_rf "$gate_config_home"' EXIT
 export FM_GATE_LOCK="$work/gate.lock"
 unset FM_GATE_LOCK_HELD
 
@@ -157,6 +160,7 @@ out="$(FM_STATE_DIR="$work/review-state" TASK=T-X sha=abc bash "$work/bin/review
 assert_contains "$out" 'gate list unavailable (bin/lib/fm_gates.json missing); gate results unknown' 'j: review missing map'
 
 # (e,j) Emission validates names, preserves fixture legacy values and maps wakes.
+mkdir -p "$work/events"
 for value in 5 '"nope"'; do
   out="$(FM_ROOT="$work/events" bash "$ROOT/bin/fm-emit.sh" --actor autopilot --task T-X --type gate_failed --data "{\"gate\":$value}" 2>&1)"; rc=$?
   assert_eq 64 "$rc" "e: invalid new gate $value refused"
@@ -165,15 +169,20 @@ done
 FM_ROOT="$work/events" bash "$ROOT/bin/fm-emit.sh" --actor autopilot --task T-X --type gate_failed --data '{"gate":"ci"}'
 assert_eq 0 "$?" 'e: name accepted'
 assert_contains "$(cat "$work/events/state/session/wake.jsonl")" 'failed gate 5 (ci)' 'e: named wake'
+: > "$work/events/state/session/wake.jsonl"
 FM_EMIT_LEGACY_GATE=1 FM_ROOT="$work/events" bash "$ROOT/bin/fm-emit.sh" --actor autopilot --task T-X --type gate_failed --data '{"gate":6}'
+assert_eq 0 "$?" 'e: legacy emit accepted'
 assert_eq 6 "$(tail -1 "$work/events/state/events.jsonl" | jq .data.gate)" 'e: legacy number stored unchanged'
-assert_contains "$(tail -1 "$work/events/state/session/wake.jsonl")" 'failed gate 5 (ci)' 'e: legacy wake uses current identity'
-cp "$ROOT/bin/fm-emit.sh" "$work/bin/"
+assert_eq 1 "$(wc -l < "$work/events/state/session/wake.jsonl" | tr -d ' ')" 'e: legacy emit writes its own wake'
+assert_contains "$(cat "$work/events/state/session/wake.jsonl")" 'failed gate 5 (ci)' 'e: legacy wake uses current identity'
+project_storage_fixture "$work/bin"
+rm "$work/bin/lib/fm_gates.json"
 out="$(FM_ROOT="$work/events" bash "$work/bin/fm-emit.sh" --actor worker-fixture --task T-X --type gate_failed --data '{"gate":"ci"}' 2>&1)"; rc=$?
 assert_eq 70 "$rc" 'j: emitter missing map refuses gate payload'
 assert_contains "$out" 'bin/lib/fm_gates.json' 'j: emitter names missing mapping'
 FM_ROOT="$work/events" bash "$work/bin/fm-emit.sh" --actor worker-fixture --task T-X --type dispatched
 assert_eq 0 "$?" 'j: unrelated event survives missing map'
+assert_eq dispatched "$(tail -1 "$work/events/state/events.jsonl" | jq -r .type)" 'j: unrelated event is persisted without map'
 # (i) Selectors are normalized before binding and behind-base diagnostics.
 mkdir -p "$work/runner/bin/lib"
 cp "$ROOT/bin/fm-gate.sh" "$work/runner/bin/"
@@ -208,7 +217,8 @@ done
 
 # (g,j) Actual board API maps legacy events and starts without the list.
 if command -v bun >/dev/null 2>&1; then
-  . "$ROOT/tests/lib/project-storage.sh"
+  XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
+  gate_config_home="$XDG_CONFIG_HOME"
   boardroot="$work/board-fixture"
   mkdir -p "$boardroot/bin" "$boardroot/board/public" "$boardroot/design/tasks"
   cp -R "$ROOT/bin/lib" "$boardroot/bin/"
@@ -221,7 +231,7 @@ if command -v bun >/dev/null 2>&1; then
     [ "$missing" = no ] || rm "$boardroot/bin/lib/fm_gates.json"
     FM_ROOT="$boardroot" FM_PORT=0 python3 "$ROOT/bin/lib/fm_lifeline.py" keep --pid "$$" --name gate-names-board -- bun run "$boardroot/board/server.ts" > "$work/board-$missing.log" 2>&1 &
     pid=$!
-    trap 'kill "${pid:-}" 2>/dev/null || true; wait "${pid:-}" 2>/dev/null || true; rm -rf "$work"' EXIT
+    trap 'kill "${pid:-}" 2>/dev/null || true; wait "${pid:-}" 2>/dev/null || true; safe_rm_rf "$work" "$gate_config_home"' EXIT
     port="$(board_port "$work/board-$missing.log" "$pid")"
     if [ "$missing" = no ]; then
       assert_eq "$(jq -c .gates "$ROOT/bin/lib/fm_gates.json")" "$(curl -sf "http://127.0.0.1:$port/api/state" | jq -c .gates)" 'g: board agrees with canonical gates'

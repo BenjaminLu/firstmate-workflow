@@ -782,8 +782,8 @@ head_evidence() {
   # What is not there is then said by gate - fm-gate.sh stops at the first
   # red one, so a summary can end early, and an empty one lacks all six. The
   # identities come from the frozen canonical gate list.
-  local summary="$FM_STATE_DIR/gates/$TASK-$sha.txt" n name old pattern lacking=''
-  local gate_list="$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json"
+  local summary="$FM_STATE_DIR/gates/$TASK-$sha.txt" n name old pattern gate_list lacking=''
+  gate_list="$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json"
   if [ ! -r "$gate_list" ]; then
     printf '\ngate list unavailable (bin/lib/fm_gates.json missing); gate results unknown\n'
     return

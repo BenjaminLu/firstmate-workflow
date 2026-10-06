@@ -73,6 +73,6 @@ const open = async (page: Page, lang: string, how: "query" | "stored" = "query",
 }
 
 export const emit = (root:string, type:string, pr:number) => {
-  const r = spawnSync('bash',[join(root,'bin/fm-emit.sh'),'--actor','github','--type',type,'--task',`T-${pr}`,'--pr',String(pr),'--en','fixture outcome','--tw','測試結果'], {env:{...process.env,FM_ROOT:root,FM_EMIT_LEGACY_GATE: typeof (data as {gate?:unknown}).gate === "number" ? "1" : ""}});
+  const r = spawnSync('bash',[join(root,'bin/fm-emit.sh'),'--actor','github','--type',type,'--task',`T-${pr}`,'--pr',String(pr),'--en','fixture outcome','--tw','測試結果'], {env:{...process.env,FM_ROOT:root}});
   expect(r.status).toBe(0);
 };

@@ -80,6 +80,7 @@ assert_contains "$sent" "No gate summary for head $head1" "a missing gate summar
 # lines are written by fm-gate.sh's own say(), not by hand from the reader:
 # a fixture copied from the code that parses it proves only that the two agree
 eval "$(sed -n '/^say() {/,/^}/p' "$ROOT/bin/fm-gate.sh" | sed 's/^say()/gate_say()/')"
+# shellcheck disable=SC2034 # read by gate_say, eval'd from fm-gate.sh's say() above
 GATE_LIST="$ROOT/bin/lib/fm_gates.json"
 declare -F gate_say >/dev/null || { echo "fm-gate.sh has no say()" >&2; exit 1; }
 gates="$rc/state/gates/T-Z-$head1.txt"
