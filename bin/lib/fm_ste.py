@@ -145,6 +145,8 @@ def _validate(details):
         if (key in details['en']) != (key in details['zh-TW']):
             raise ValueError(key + ': required in both locales or neither')
         if key not in details['en']:
+            if key == 'done':
+                raise ValueError('en.done: required on an intent card')
             continue
         for lang in LOCALES:
             values = details[lang][key]
@@ -177,9 +179,24 @@ def _validate(details):
     return True
 
 
-def check_details(details):
+def check_details(details, kind=None):
     if not _validate(details):
         return {'intent_card': False}
+    for lang in LOCALES:
+        loc = details[lang]
+        if kind in ('merge', 'merge-untracked'):
+            for field in NEW_FIELDS:
+                if field != 'notes' and field not in loc:
+                    raise ValueError(lang + '.' + field + ': required on a merge intent card')
+            prefix = 'MERGE CARD — ' if lang == 'en' else '【合併卡】'
+            _text(loc.get('title'), lang + '.title')
+            if not loc['title'].startswith(prefix):
+                raise ValueError(lang + '.title: a merge card title starts with "' + prefix + '"')
+        for number in range(1, len(loc['intent']) + 1):
+            name = ('Intent ' if lang == 'en' else '意圖 ') + str(number)
+            prefixes = (name + ':',) if lang == 'en' else (name + '：', name + ':')
+            if not any(item['text'].startswith(prefixes) for item in loc['done']):
+                raise ValueError(lang + '.done: no alignment item for ' + name)
     report = dict(intent_card=True, ok=True, locales={}, labels={})
     for lang in LOCALES:
         loc = details[lang]
@@ -221,12 +238,18 @@ def main(argv):
     if argv == ['rules']:
         print(json.dumps(rules(), ensure_ascii=False))
         return 0
-    if len(argv) != 2 or argv[0] != 'check-details':
-        print('usage: fm_ste.py rules | check-details <file>', file=sys.stderr)
+    kind = None
+    if len(argv) == 4 and argv[:2] == ['check-details', '--kind'] and not argv[2].startswith('--'):
+        kind = argv[2]
+        filename = argv[3]
+    elif len(argv) == 2 and argv[0] == 'check-details' and argv[1] != '--kind':
+        filename = argv[1]
+    else:
+        print('usage: fm_ste.py rules | check-details [--kind <kind>] <file>', file=sys.stderr)
         return 64
     try:
-        with open(argv[1], encoding='utf-8') as stream:
-            report = check_details(json.load(stream))
+        with open(filename, encoding='utf-8') as stream:
+            report = check_details(json.load(stream), kind)
     except (ValueError, OSError) as error:
         print('fm_ste: ' + str(error), file=sys.stderr)
         return 64

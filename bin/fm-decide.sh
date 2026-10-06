@@ -415,7 +415,7 @@ if [ "$MODE" = request ]; then
         echo "fm-decide: missing $HERE/lib/fm_ste.py; nothing was written" >&2; exit 70;
       }
       ste_error="$(mktemp)" || exit 70
-      ste="$(python3 "$HERE/lib/fm_ste.py" check-details "$DETAILS" 2> "$ste_error")"
+      ste="$(python3 "$HERE/lib/fm_ste.py" check-details --kind "$KIND" "$DETAILS" 2> "$ste_error")"
       ste_rc=$?
       if [ "$ste_rc" -ne 0 ]; then
         if [ "$ste_rc" -eq 65 ]; then
