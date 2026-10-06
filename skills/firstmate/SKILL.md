@@ -328,8 +328,10 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   `bin/fm-decide.sh --authorize-merges --until <ISO-8601-with-offset> --quote "<captain's words>" --repo <root>`
   (include `--project <name>` for that project's window). Inspect it with
   `bin/fm-decide.sh --authorize-merges --show --repo <root>` and the same project.
-  Firstmate answers merge cards only inside the current recorded window; check
-  its expiry before each answer, and stop when it ends even if a wake is delayed.
+  The recorded window is the captain's stated merge period that the autopilot
+  reports on. Firstmate never answers merge cards, in or out of that window;
+  only the captain's board click merges. Nothing enforces this mechanically:
+  the board cannot distinguish a click from a firstmate POST with the same secret.
   A replacement supersedes the previous window. This session-state record is
   evidence and a timer: all merges still require a board card and current-head
   readiness. It grants no automatic merge path. The autopilot warns once an
@@ -461,6 +463,8 @@ set by the captain.
    head its card verified. Raise that project's next card only after the
    previous merge has settled and its head is verified again. Cards of other
    projects are not held by it (design §15.10, point 3).
+   The autopilot already enforces this through `merge_blocker` in
+   `bin/lib/fm_concurrent.py`; firstmate's hand-raised cards follow it too.
 2. `gh pr update-branch` exists to bring a branch up to date with its base;
    run it before or after an `APPROVE` or during a review round, since an
    update that brings no new conflict needs no re-review (the approval rule
@@ -727,11 +731,11 @@ translated dynamic content. The JSON file passed to `--details` has this shape
     "why": [{"kind": "fact", "text": "One view helps reviewers compare changes."}],
     "scope_in": ["Diagram layout"],
     "scope_out": ["Merge policy"],
-    "done": [{"kind": "fact", "text": "Both states fit in the chosen layout."}],
+    "done": [{"kind": "fact", "text": "Intent 1: The layout places both diagrams in one view. The layout test checks both states fit."}],
     "notes": [{"kind": "caution", "text": "Wide diagrams need more space."}],
     "questions": [{"kind": "fact", "text": "Does this match your goal?"}],
-    "before_nodes": [{"state": "gone", "label": "One diagram"}],
-    "after_nodes": [{"state": "new", "label": "Two diagrams"}],
+    "before_nodes": [{"state": "same", "label": "Read both states"}, {"state": "gone", "label": "Select one state"}, {"state": "gone", "label": "Draw one diagram"}],
+    "after_nodes": [{"state": "same", "label": "Read both states"}, {"state": "new", "label": "Place diagrams in one row"}, {"state": "new", "label": "Check both diagrams fit"}],
     "change_table": [{"text": "Both states stay visible.", "A": "✓", "B": "✓", "C": "—"}]
   },
   "zh-TW": {
@@ -749,11 +753,11 @@ translated dynamic content. The JSON file passed to `--details` has this shape
     "why": [{"kind": "fact", "text": "同一畫面方便審查者比較變更。"}],
     "scope_in": ["圖表版面"],
     "scope_out": ["合併政策"],
-    "done": [{"kind": "fact", "text": "兩種狀態都能放入選定版面。"}],
+    "done": [{"kind": "fact", "text": "意圖 1：版面把兩張圖表放在同一畫面。版面測試確認兩種狀態都能放入。"}],
     "notes": [{"kind": "caution", "text": "寬圖表需要更多空間。"}],
     "questions": [{"kind": "fact", "text": "這符合你的目標嗎？"}],
-    "before_nodes": [{"state": "gone", "label": "單張圖表"}],
-    "after_nodes": [{"state": "new", "label": "兩張圖表"}],
+    "before_nodes": [{"state": "same", "label": "讀取兩種狀態"}, {"state": "gone", "label": "選擇一種狀態"}, {"state": "gone", "label": "繪製一張圖表"}],
+    "after_nodes": [{"state": "same", "label": "讀取兩種狀態"}, {"state": "new", "label": "把圖表放在同一列"}, {"state": "new", "label": "檢查兩張圖表都能放入"}],
     "change_table": [{"text": "兩種狀態持續可見。", "A": "✓", "B": "✓", "C": "—"}]
   }
 }
@@ -766,19 +770,48 @@ listed here must be a string with a non-whitespace character and at most 2000
 Unicode code points (jq `length`), not an array. Extra keys are not rejected.
 The optional locale fields are `intent`, `why`, `scope_in`, `scope_out`, `done`,
 `notes`, `questions`, `before_nodes`, `after_nodes`, and `change_table`. Each is
-present in both locales or neither; any one makes `intent` mandatory in both.
+present in both locales or neither; any one makes `intent` and `done` mandatory
+in both.
 The checker in `bin/lib/fm_ste.py` owns their shapes and the writing rules.
-Run `python3 bin/lib/fm_ste.py check-details <file>` before `--request`.
+Run `python3 bin/lib/fm_ste.py check-details --kind <kind> <file>` before `--request`.
 Malformed new fields exit 64; text that fails STE exits 65. A passing intent
 card stores the checker's report as `ste` beside `details` in the pending record.
 Use `python3 bin/lib/fm_ste.py rules` for the bilingual rule table and word lists.
 
 Every dispatch, merge and scope-widening card firstmate raises carries `intent`,
 `why`, `scope_in`, `scope_out`, `done`, and `before_nodes`/`after_nodes`. Add
-`notes` when there is a caution and `questions` for anything you are unsure of.
+`notes` when there is a caution and `questions` for anything you are unsure of;
+a merge card always asks at least one question.
 Pass check-details before raising the card. Fix a refusal by rewriting the text;
 never drop the intent fields to bypass it. Existing cards without these fields
 keep their current behavior.
+
+A merge card carries the full intent-card details of the dispatch card it
+follows, never a stripped summary: `intent`, `why`, `scope_in`, `scope_out`,
+`done`, `questions`, `before_nodes`, `after_nodes`, and `change_table` in both
+locales (`notes` stays optional). Its title begins `【合併卡】合併 PR #N：` /
+`MERGE CARD — merge PR #N: `. The checker enforces the full field set and the
+`【合併卡】` / `MERGE CARD — ` labels for `merge` and `merge-untracked`.
+Dispatch titles begin `派工` / `Dispatch`; repin titles begin `重新固定` / `Repin`.
+Check those title conventions by eye.
+
+Draw how the change works in `before_nodes` and `after_nodes`: an ordered flow
+of components, checks and actions, with `gone` and `new` marking the steps that
+leave and arrive. A diagram of only the visible result is insufficient. Check
+the mechanism by eye; the checker cannot judge meaning.
+
+For every intent item N, its locale's `done` has an alignment item that starts
+with `Intent N:` / `意圖 N：` (also `意圖 N:`), using one ASCII space before N.
+Name the mechanism step that meets that intent and its evidence. The checker
+enforces the prefix for each position; check the claim and evidence by eye.
+Other done items are allowed. Firstmate never answers a merge card: only the
+captain's board click merges. This is an authoring and conduct rule, not a
+mechanical barrier: a firstmate POST with the board secret looks like a click.
+
+Existing pending and decided records are not re-checked. Before the autopilot
+requests any previously authored `state/decision-details/` merge file, rewrite
+it to these rules and run `python3 bin/lib/fm_ste.py check-details --kind merge <file>`.
+Otherwise the next request exits 64 and the autopilot reports the refusal.
 
 These validators do not assess truth, translation quality, diagram quality or
 compliance with rules marked for manual review. Check those yourself. Use one

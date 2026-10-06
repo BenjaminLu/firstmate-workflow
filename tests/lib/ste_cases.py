@@ -12,6 +12,8 @@ def card():
         result[lang]['options'] = {key: dict(description=text, pros=text, cons=text) for key in 'ABC'}
         for key in ('intent', 'why', 'done', 'questions'):
             result[lang][key] = [dict(kind='fact', text=text)]
+        alignment = 'Intent 1: The check passes.' if lang == 'en' else '意圖 1：檢查通過。'
+        result[lang]['done'].append(dict(kind='fact', text=alignment))
         result[lang].update(scope_in=['checker'], scope_out=[], notes=[dict(kind='caution', text=text)],
                             before_nodes=[dict(state='gone', label=text)],
                             after_nodes=[dict(state='new', label=text)],
@@ -21,6 +23,22 @@ def card():
 
 def fixture(mode):
     d = card()
+    if mode.startswith('merge-'):
+        d['en']['title'] = 'MERGE CARD — merge PR #1: The check passes.'
+        d['zh-TW']['title'] = '【合併卡】合併 PR #1：檢查通過。'
+    if mode == 'merge-label':
+        d['zh-TW']['title'] = '合併 PR #1：檢查通過。'
+    elif mode == 'merge-missing':
+        for loc in d.values():
+            del loc['change_table']
+    elif mode == 'align-missing':
+        for loc in d.values():
+            loc['intent'] *= 2
+    elif mode == 'align-zh':
+        d['zh-TW']['done'][1]['text'] = '意圖 1:檢查通過。'
+    elif mode == 'no-done':
+        for loc in d.values():
+            del loc['done']
     if mode == 'legacy':
         for loc in d.values():
             for key in list(loc):

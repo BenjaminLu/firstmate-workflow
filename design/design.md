@@ -381,7 +381,7 @@ The built-in diagram tier draws `before_nodes`/`after_nodes` when present, with
 a legend and optional change table; authored drawings still win, and the board
 records confirmation answers on the decision.
 
-Intent cards add optional locale fields (T-210): `intent`, `why`, `done` and
+Intent cards add locale fields (T-210, T-228): `intent`, `why`, `done` and
 `questions` hold `{kind: "step"|"fact", text}` items; `notes` holds
 `{kind: "note"|"caution", text}` items. These arrays hold 1–12 items, except
 questions hold 1–6. `scope_in` and `scope_out` are arrays of plain strings,
@@ -391,16 +391,30 @@ each 1–200 code points. `before_nodes` and `after_nodes` hold 1–8
 Other new text is 1–2000 code points; prohibited controls and lone surrogates
 are refused. Each field is present in both locales or neither; questions,
 node arrays and change-table rows have matching counts. Any new field requires
-`intent` in both locales. Unknown locale keys remain forward compatible.
+`intent` and `done` in both locales. Every intent item N (1-based in each locale)
+has an alignment item in that locale's `done` starting with `Intent N:` (en)
+or `意圖 N：` / `意圖 N:` (zh-TW), with one ASCII space before N. It names
+the mechanism step that meets the intent and its evidence; only the prefix is
+enforced, while the claim needs manual review. Other done items remain allowed.
+The other fields are optional except on merge intent cards, as below.
+Unknown locale keys remain forward compatible.
 
 `bin/lib/fm_ste.py` is the single writing-rule and glossary source. Its
-`check-details` CLI validates the new fields and checks intent-card prose and
+`check-details [--kind <kind>] <file>` CLI validates the new fields and checks intent-card prose and
 node labels before `fm-decide.sh` binds or writes a request. Malformed fields
 exit 64; STE failures exit 65 with each failing sentence and rule. Warnings do
 not refuse a card. A passing request stores the report in `ste` beside
 `details`, for read-only display. `rules` exports the bilingual rule table,
-limits and word lists. Legacy details and already-pending cards without new
-fields bypass this check and receive no `ste` key; no records are migrated.
+limits and word lists. With `--kind merge` or `--kind merge-untracked`, an intent
+card must carry `intent`, `why`, `scope_in`, `scope_out`, `done`, `questions`,
+`before_nodes`, `after_nodes`, and `change_table` in both locales; `notes` is
+optional. The title starts with `MERGE CARD — ` in en and `【合併卡】` in zh-TW.
+Missing fields or labels exit 64. Legacy details without any intent-card fields
+bypass this check and receive no `ste` key. Already-pending and decided records
+are never re-checked; no records are migrated. These rules apply at the next
+`--request`. Previously authored, unrequested `state/decision-details/` files
+must be rewritten and checked with `check-details --kind merge` before the
+autopilot requests them, or it reports the request's exit 64 refusal.
 
 The five defaults, each changeable by a later card, are: enforce STE when an
 intent card is raised; turn “No, change it” into a spec-change request (T-211);
@@ -5531,8 +5545,11 @@ with the appropriate repo/project context. `--show` prints the current record,
 or `none`. The atomic replacement lives in resolved runtime session state at
 `session/merge-authorization.json`, with a unique window id, quote, recorded time
 and expiry; external projects retain it outside their target repository.
-Firstmate answers board merge cards only within that recorded window. This is
-an evidence/timer facility, never a merge bypass or a replacement for gates.
+The window is the captain's stated merge period that the autopilot reports on.
+Firstmate answers no merge card, in or out of a window; only the captain's board
+click merges. Nothing enforces this mechanically, because a firstmate POST with
+the board secret looks like a click. This is an evidence/timer facility, never
+a merge bypass or a replacement for gates.
 
 The supervisor subscribes to the writer's existing local doorbell, caches the
 window on startup and pushed notifications, and includes its deadlines alongside

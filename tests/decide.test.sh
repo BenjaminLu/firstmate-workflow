@@ -116,6 +116,25 @@ for mode in pass fail missing counts state legacy; do
       fi;;
   esac
 done
+# T-228: refuse malformed intent cards before binding or writing anything.
+for mode in merge-label align-missing; do
+  python3 "$ROOT/tests/lib/ste_cases.py" fixture "$mode" > "$ste_dir/intent.json"
+  ste_kind=choice; ste_id=2281; ste_args=()
+  if [ "$mode" = merge-label ]; then
+    ste_kind=merge; ste_id=2282; ste_args=(--pr 228)
+  fi
+  : > "$ste_dir/ghcalls"
+  ste_before="$(ls "$ste_dir/state/pending")"
+  ste_out="$(FM_GH="$ste_dir/gh" FM_ROOT="$ste_dir" "$ste_dir/bin/fm-decide.sh" --request "D-$ste_id" --task T-228 --kind "$ste_kind" ${ste_args[@]+"${ste_args[@]}"} --details "$ste_dir/intent.json" 2>&1)"
+  assert_eq 64 "$?" "authoring refusal: $mode"
+  case "$mode" in
+    merge-label) assert_contains "$ste_out" 'zh-TW.title' 'request checks merge label';;
+    align-missing) assert_contains "$ste_out" 'en.done: no alignment item for Intent 2' 'request checks intent alignment';;
+  esac
+  assert_eq "$ste_before" "$(ls "$ste_dir/state/pending")" 'authoring refusal leaves pending store unchanged'
+  assert_fail "test -e '$ste_dir/state/pending/D-$ste_id.json'" 'authoring refusal creates no card'
+  assert_eq '' "$(cat "$ste_dir/ghcalls")" 'authoring refusal makes no GitHub call'
+done
 rm -f "$ste_dir/bin/lib/fm_ste.py"
 python3 "$ROOT/tests/lib/ste_cases.py" fixture pass > "$ste_dir/intent.json"
 ste_out="$(FM_ROOT="$ste_dir" "$ste_dir/bin/fm-decide.sh" --request D-2107 --task T-210 --details "$ste_dir/intent.json" 2>&1)"
