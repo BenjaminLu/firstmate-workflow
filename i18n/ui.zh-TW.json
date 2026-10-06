@@ -1,4 +1,10 @@
 {
+  "showMore": "展開（{n}）",
+  "notesHeading": "備註",
+  "optionsHeading": "選項",
+  "alignmentHeading": "對齊",
+  "scopeHeading": "範圍",
+  "howHeading": "怎麼做",
   "kindMerge": "合併",
   "kindDispatch": "派工",
   "kindRepin": "重新固定",
