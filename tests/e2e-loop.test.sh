@@ -103,7 +103,7 @@ assert_ok "git --git-dir='$bare' rev-parse --verify '$branch'" "and it was pushe
 
 # --- turn two: the gates run, gate 6 sends it to review -----------------
 out2="$(run python3 "$ROOT/tests/lib/autopilot_turn.py" "$r" 2>&1)"
-assert_contains "$out2" "sending it to review" "every gate before 7 passes and it goes to review"
+assert_contains "$out2" "sending it to review" "every gate before 6 passes and it goes to review"
 assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
 criteria="$(jq -r 'select(.kind=="verdict") | .text' "$r/state/evidence/self/T-101/"*.json)"
 assert_contains "$criteria" '1. open name the helper' 'the mock reviewer supplies numbered round-one criteria'

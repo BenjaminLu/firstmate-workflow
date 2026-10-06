@@ -1350,7 +1350,7 @@ reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
 CI, and green gates are not an approval. A head that changes after either
 check requires fresh gates, with the approval carry rule below. The autopilot
-sends a task to review once every gate before 7 is green. Firstmate writes
+sends a task to review once every gate before 6 is green. Firstmate writes
 the brief for any subsequent worker round.
 
 **The approval binds to the change; CI and the gates bind to the head
