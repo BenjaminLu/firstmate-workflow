@@ -24,9 +24,12 @@ class ExternalRebuild(unittest.TestCase):
         self.scratch = Path(temporary.name).resolve()
         self.engine = self.scratch / 'engine'
         self.engine.mkdir()
+        # The managed clone must rebuild without an identity in the host's HOME.
+        empty_home = self.scratch / 'empty-home'
+        empty_home.mkdir()
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(('FM_', 'HERDR_', 'GIT_')) and k != 'GH_REPO'}
-        self.env.update(FM_HOME=str(self.scratch / 'private'),
+        self.env.update(HOME=str(empty_home), FM_HOME=str(self.scratch / 'private'),
             FM_GITHUB_URL=str(self.scratch / 'remotes'), FM_ROOT=str(self.engine),
             FM_PROJECT='app', FM_SESSION_PID=str(os.getpid()), FM_HOST='none',
             FM_GIT_NAME='Fixture', FM_GIT_EMAIL='fixture@example.invalid',
