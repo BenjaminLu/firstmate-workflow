@@ -1,0 +1,306 @@
+{
+  "id": "T-231",
+  "title": "an external project's pull request that only falls behind its base catches up: a worker round rebuilds a behind external branch onto the base as it does a conflicting one, the autopilot finds a behind external PR from commit ancestry and updates it by rebase when the conventions allow force_with_lease, and the gates say when a branch is behind",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-worker.sh",
+    "bin/lib/fm_autopilot.py",
+    "bin/lib/fm_autopilot_branches.py",
+    "bin/fm-gate.sh",
+    "tests/worker-external-catchup.test.sh",
+    "tests/lib/external_rebuild.py",
+    "tests/lib/autopilot_cases.py",
+    "tests/lib/autopilot_branch_fixture.py",
+    "tests/autopilot.test.sh",
+    "tests/gate.test.sh",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "skills/worker/SKILL.md",
+    "design/tasks/T-231.json"
+  ],
+  "acceptance": [
+    "Why. 2026-10-06 agent-wardrobe (external project maker-founder, base master, conventions force_with_lease: true since T-223) PR #2 (T-005, branch t-005-work, head 70bd4b4) was two commits behind master 2207420 and did not conflict. The T-005 round 2 launch did not rebuild: bin/fm-worker.sh bring_up_to_date (main 068a791, :1060-1135) returns 0 when rebuild_rebases reports a clean replay (case 0 at :1089-1090), so only a conflicting branch is rebuilt; the worker answered WORKER_BLOCKED. agent-wardrobe has no branch protection, so GitHub reports mergeable_state clean/unstable, never behind, and the autopilot's update_branch (bin/lib/fm_autopilot_branches.py:131-170), called only when pr['mergeable_state'] == 'behind' (bin/lib/fm_autopilot.py:502-503), never fires. Firstmate repaired it by hand with `gh pr update-branch 2 -R BenjaminLu/agent-wardrobe --rebase`. A behind PR keeps a CI result from the old base, so a red base fix never reaches it.",
+    "Mechanism, worker (Change 1). In bring_up_to_date, for FM_EXTERNAL=1 only, a clean replay (rebuild_rebases rc 0) no longer returns early: by that point :1086 has already returned when the merge-base equals the base, so the branch is behind, and it continues into the existing rebuild path exactly as a conflicting branch does (ls-remote lease, bound-head check at :1104-1106, detach at the base, squash the old head, rebuilt=1, rebuild_args), with an empty conflict list. Self projects keep `case 0) return 0` unchanged, so tests/worker-rebuild.test.sh is unaffected. The policy checks at :1061-1072 (force_with_lease true, an open PR) still run first, so a project without force_with_lease stays held with today's message. Choice: the launcher still starts the agent after a clean external rebuild, with the rebuild facts in its prompt (conflicts: none). Justification: the commit, lease push, private rebuild note, worker report and review binding all already run after the adapter (bin/fm-worker.sh post-round block), so reusing the round keeps one evidence chain; a launcher-only path would need a second commit/push/report route and a synthetic final answer that gate 7 and the evidence store do not accept. The rebuilt prompt section says in one line that the replay was clean and that the round changes nothing unless the brief asks for it. A clean rebuild is published whatever the agent does (rebuild_publishes at :1456-1458, the gate at :1950), and rebuild_unresolved (:1453-1455) accepts the empty conflict list. The three texts that say the branch no longer rebased gain a clean variant chosen by a new flag rebuild_clean=1 (set when rebuild_rebases returned 0): the log line at :1159 says '$branch is behind $BASE and replays cleanly; rebuilt on … from …'; the prompt heading text at :1343 says '%s moved under this branch; the branch replays cleanly, so fm-worker.sh rebuilt it on the current base' and adds 'Nothing conflicts: change nothing unless the brief asks for it.'; the private note at :2244 says 'it was behind and replays cleanly.'. The conflicting wording stays for rebuild_clean=0. The new external_rebuild.py clean case asserts the note text and the prompt line.",
+    "Mechanism, autopilot (Change 2). In bin/lib/fm_autopilot.py's pull handling at :500-508, for ctx['external'] only, the self condition (mergeable_state == 'behind') is replaced by a new method external_behind(pr) in bin/lib/fm_autopilot_branches.py, called only when pr['mergeable'] is not False (True or null both allowed: GitHub reports null while it computes, and ancestry decides) and pr['draft'] is not true; a draft or a mergeable=False PR is never updated. external_behind does not call prepare_head (no API or gh pr view call): it reads the head with fetch_ref(self.ctx['target'], 'https://github.com/'+repository+'.git', 'refs/pull/<n>/head', runner=self.checked) exactly as sync_branch does at :82-83 (a fetched sha other than pr['head']['sha'] returns 'unknown'), reads the base tip the same way with source 'refs/heads/<pr base ref>' and uses that fetched tip itself (pr['base']['sha'] is not compared: GitHub does not move it when the base advances without a PR event), then runs `git -C <target> merge-base --is-ancestor <fetched base tip> <head sha>` through self.probe: exit 0 → 'current', exit 1 → 'behind', any other exit or an exception → 'unknown'. 'unknown' never updates and records a branch_failure('update', ...) under retry_due. 'behind' calls a new method update_external_branch(pr, task), which reuses update_branch's guards (round_live, busy, a pending update for the same head within 20 polls, retry_due on token update:<n>:<head>) and its raced-head recheck (:160-168), and then: (a) when policy force_with_lease is True, runs self.probe(self.gh('api','graphql','-f','query=mutation($id:ID!,$head:GitObjectID!){updatePullRequestBranch(input:{pullRequestId:$id,expectedHeadOid:$head,updateMethod:REBASE}){pullRequest{number}}}','-f','id='+pr['node_id'],'-f','head='+head)); exit 0 records data['updates'][<n>] = dict(head=<old head>, seq=poll_seq, method='rebase') (the REST 202 path keeps dict(head, seq) without method); (b) else when self.policy.get('merge_method') is 'merge' (DEFAULTS at fm_autopilot.py:35-37 lacks the key), calls the existing REST PUT update-branch with expected_head_sha (update_branch's body); (c) else makes no call and, at once and once per head, queues a wake with identity behind-held-<n>-<head> (self.queue(identity, task, '<task> #<n> is behind <base ref>: conventions allow neither force_with_lease nor merge updates', '<task> #<n> 落後 <base ref>：慣例不允許 force_with_lease 也不允許 merge 更新')); queue keys on the identity, so a repeated poll adds nothing. branch_failure is not used for (c). Self projects keep the mergeable_state == 'behind' REST path byte for byte; tests/lib/autopilot_cases.py test_only_mergeable_behind_is_updated_and_never_merged stays green unchanged. Local ref after a rebase (Change 2b). sync_branch (bin/lib/fm_autopilot_branches.py:59-130) today returns True without moving the local ref when it is not an ancestor of the new head (rc 1 at :87-92), which after a GitHub rebase would leave the local task ref on the old head and make fm_binding head (bin/lib/fm_binding.py:113-122) and fm-gate (:160-161) refuse the next round. New rule in that rc 1 branch, external contexts only: when data['updates'].get(number) has method 'rebase' and its head equals the local ref, sync_branch moves the ref to the new head under the same guards as the fast-forward path (round_live/busy return False; a dirty task worktree is held through the existing holds/ffhold path): with a task worktree it runs `git -C <worktree> reset -q --keep <new head>` (reset --keep refuses rather than lose local changes; a refusal is a branch_failure('sync', …)); without one it runs `git update-ref <ref> <new head> <local>` (compare-and-swap). On success it pops data['updates'][number]. Any other rc 1 case keeps today's behaviour (return True, ref unchanged). Self contexts are unchanged. prune_branches (bin/lib/fm_autopilot_branches.py:13-26), which pull() calls first (bin/lib/fm_autopilot.py:452) and which today deletes data['updates'][n] whenever its head differs from the PR head (:18-21), keeps an updates entry with method 'rebase' while the PR is open (head not None); a terminal prune (head None) still deletes it, and sync_branch pops it after moving the ref, so it lasts one rebase.",
+    "Gate messages (Change 3). bin/fm-gate.sh prints the behind line at most once per run: after gate 2 passes when gate 2 runs (g exits on a failed gate at :74, so a failed gate 2 prints only its failure, as intended), and before g 6 only in an --only 6 run (ONLY=6), so a red gate 6 still shows it. Runs with --only 1, 4, 5 or 7 never print it. The check resolves the base first: base_sha=\"$(git rev-parse \"$BASE^{commit}\")\" ($BASE is a branch name without --pr at :149-152 and a sha after --pr binding at :161-165), then if `git rev-list --count \"$BRANCH..$base_sha\"` is above 0 it prints to stderr: 'behind the base by N commits (base <first 12 chars of base_sha>); a red check can come from the old base - bring the branch up to date' and its zh-TW twin '落後 base N 個 commit（base <sha 前 12 碼>）；紅燈可能來自舊的 base，請先更新分支'. Tests assert this exact English text, N and the 12-character sha. The line goes to stderr only, not GATE_TRANSCRIPT (say at :60-65), so fm_binding ready --gate-report and bin/fm-review.sh:785 are unchanged, and tests/gate.test.sh:316-318 still matches only '+ gate' lines. The gates' pass/fail results do not change. Brace every variable before non-ASCII text (variable-boundary lint).",
+    "Explain. The task carries the `explain` object in en and zh-TW with every intent-card field (title, explanation, before, after, outcome, options, intent, why, scope_in, scope_out, done, notes, questions, before_nodes, after_nodes, change_table); `python3 bin/lib/fm_ste.py check-details` on the file holding exactly that {en, zh-TW} object exits 0.",
+    "Tests (fail-first; fail-first runs only *.test.sh). tests/worker-external-catchup.test.sh: rename test_clean_rebase_is_not_rewritten (:186-192) to test_clean_behind_external_branch_is_rebuilt and assert rebuilt=1, the tree detached at the base with the squashed change staged, an empty conflict list, and the bound-head lease recorded; add test_branch_containing_base_is_not_rebuilt (base not moved: head and remote unchanged, no --force-with-lease) and test_false_policy_holds_clean_behind_branch. tests/lib/external_rebuild.py (run by worker-external-catchup.test.sh:276): change the mock adapter at :51-52 so it asserts conflict markers only when the prompt lists conflicts, and add an end-to-end case where the base moves cleanly: exactly one push with --force-with-lease=refs/heads/<branch>:<bound head> (bin/fm-worker.sh:2153, as tests/lib/external_rebuild.py:190 already asserts), the pushed head contains the base, the private rebuild note lists no conflicts, the agent prompt says the replay was clean. tests/lib/autopilot_cases.py (run by tests/autopilot.test.sh) with tests/lib/autopilot_branch_fixture.py: branch_probe (:34-73) gains answers for `gh api graphql` (a configurable graphql_answer, default (0,'{}','')), gains pull_at(..., keep_local=False) so a second pull can leave the local ref on the old head (:76-77 sets it to the PR head only when keep_local is False), answers `merge-base --is-ancestor A B` from a dict self.ancestry keyed by (A, B) and falls back to self.ancestor (:55-56), accepts a fetch whose source is '+refs/heads/<base>' as well as '+refs/pull/' (:49), and answers `rev-parse refs/fm/fetch/…` (:51-53) by the source of the last fetch: self.fetch_head for a pull ref and a new self.base_tip for a base ref; the external cases build the pilot with external=True, then set pilot.policy_error = None and pilot.policy = {**DEFAULTS, 'force_with_lease': …, 'merge_method': …} after construction (reload_policy at fm_autopilot.py:131-146 would read a CONVENTIONS.md the cases do not create), and give the PR a node_id; cases: external behind with force_with_lease true → one graphql updatePullRequestBranch call with expectedHeadOid and updateMethod REBASE and no merge; external behind with force false and merge_method merge → the REST update-branch call; external behind with neither → no call and exactly one queued wake with identity behind-held-12-<head> after two polls; external up to date (ancestor) → no call; ancestry unknown (fixture ancestor 128) → no call and a branch_failure; external draft or mergeable=False behind → no call; external mergeable=None behind → the update runs; through pull_at → pull() twice (first the old head behind the base, then the rebased new head), the second pull keeps the rebase record past prune_branches and its sync_branch moves the local ref to the new head (update-ref with the old head as expected value when there is no worktree; `reset -q --keep <new head>` in a clean worktree, with branch_probe gaining an answer for `reset -q --keep`) and pops the update record, while a local ref that is not the recorded rebase head is left alone; a self case shows sync_branch's rc 1 behaviour unchanged; migration case: an external updates entry written before this change (dict(head, seq), no method) whose PR head has since moved is still deleted by prune_branches, and sync_branch rc 1 leaves the local ref alone; self behind case unchanged. tests/gate.test.sh: a behind but clean branch prints the 'behind the base by N commits (base <sha12>)' line once in a full run and once in an --only 6 run, also when gate 6 is red in that --only 6 run, and not in an --only 7 or --only 4 run, a branch name base without --pr resolves to its sha, and an up-to-date branch prints none. On base 068a791 the renamed worker case, the new external_rebuild case, the five external autopilot cases (force-with-lease, merge, neither allowed, ancestry unknown, mergeable=None) and the gate line cases fail.",
+    "Callers and mirrors. bring_up_to_date has one caller in bin/fm-worker.sh (the round setup); rebuild_rebases and the rebuild path are shared with self rounds and stay unchanged for them. update_branch's only caller is bin/lib/fm_autopilot.py:503; update_external_branch is called only beside it for external contexts. Fixtures: tests/lib/autopilot_cases.py PR dict (:15-22) gains node_id; tests/lib/autopilot_branch_fixture.py is shared with tests/lib/autopilot_loop.py, whose calls never reach the new answers (all its pull() calls use external=False), so it stays green; tests/lib/external_rebuild.py never runs the autopilot. No other caller reads mergeable_state. The 'project conventions do not allow force_with_lease' message is unchanged.",
+    "Migration. No stored record or schema changes; data['updates'] entries gain an optional method key that older entries lack (read with .get). An external PR already behind is updated at the next autopilot poll after this merges, and its local task ref follows at the next sync_branch; a PR whose conventions allow neither update gets one behind-held wake. In-flight self tasks are unaffected.",
+    "Design and skills. design/design.md §5.3.3 (design/design.md:1072-1080, the external rebuild paragraph from T-223) gains in place: an external branch that only falls behind is rebuilt the same way, and the autopilot brings a behind external PR up to date by rebase (force_with_lease) or merge update-branch, judged by ancestry because a repository without protection never reports behind. design §15.6 (design/design.md:5209-5211, the external rebuild force-with-lease rule from T-223) gains one sentence in place. skills/firstmate/SKILL.md:1091-1092 (the external rebuild bullet) and skills/worker/SKILL.md:100-126 (the rebuilt-round paragraph: a clean rebuild needs no change unless the brief asks) are updated in place.",
+    "Scope. bin/fm-worker.sh, bin/lib/fm_autopilot.py, bin/lib/fm_autopilot_branches.py, bin/fm-gate.sh, tests/worker-external-catchup.test.sh, tests/lib/external_rebuild.py, tests/lib/autopilot_cases.py, tests/lib/autopilot_branch_fixture.py, tests/autopilot.test.sh, tests/gate.test.sh, design/design.md, skills/firstmate/SKILL.md, skills/worker/SKILL.md, design/tasks/T-231.json. Any other file needing a change: stop and name it."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "An external branch that only falls behind its base is rebuilt on the base, like a conflicting branch."
+        },
+        {
+          "kind": "fact",
+          "text": "The autopilot finds a behind external PR from the commit ancestry, not from the GitHub merge state."
+        },
+        {
+          "kind": "fact",
+          "text": "The autopilot updates a behind external PR by a rebase when the conventions allow force_with_lease."
+        },
+        {
+          "kind": "fact",
+          "text": "The gates tell you when a branch is behind its base."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "Agent Wardrobe PR #2 stayed two commits behind master, and firstmate updated it by hand."
+        }
+      ],
+      "scope_in": [
+        "bin/fm-worker.sh",
+        "bin/lib/fm_autopilot.py and fm_autopilot_branches.py",
+        "bin/fm-gate.sh",
+        "tests, design and skills"
+      ],
+      "scope_out": [
+        "Self project rebuilds and updates"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: bring_up_to_date continues into the rebuild when an external head does not contain the base. test_clean_behind_external_branch_is_rebuilt proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the autopilot runs merge-base --is-ancestor on the head and the base. The external autopilot cases prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: update_external_branch calls updatePullRequestBranch with REBASE and the expected head. The autopilot rebase case proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the gates print one behind line, after gate 2 or before gate 6 in a gate 6 only run. The gate test cases prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "A clean rebuild still starts the worker, because the commit, push and evidence run after the agent."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Base moves without conflict"
+        },
+        {
+          "state": "gone",
+          "label": "Clean replay returns early"
+        },
+        {
+          "state": "gone",
+          "label": "GitHub never says behind"
+        },
+        {
+          "state": "gone",
+          "label": "PR keeps old base"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Base moves without conflict"
+        },
+        {
+          "state": "new",
+          "label": "Ancestry check finds behind"
+        },
+        {
+          "state": "new",
+          "label": "Autopilot rebases the PR"
+        },
+        {
+          "state": "new",
+          "label": "Round rebuilds with lease"
+        },
+        {
+          "state": "new",
+          "label": "Gates print behind line"
+        }
+      ],
+      "title": "T-231: a behind external PR catches up by a rebase",
+      "explanation": "An external PR that only falls behind its base keeps its old CI result, because no firstmate path updates it.",
+      "before": "A clean replay returns early, and GitHub never reports behind without branch protection.",
+      "after": "The worker rebuilds a behind branch, and the autopilot rebases a behind PR from the commit ancestry.",
+      "outcome": "Option A starts T-231.",
+      "options": {
+        "A": {
+          "description": "Dispatch T-231",
+          "pros": "External PRs follow their base without a hand step.",
+          "cons": "The worker, the autopilot and the gates change."
+        },
+        "B": {
+          "description": "Hold T-231",
+          "pros": "The code stays the same.",
+          "cons": "Firstmate updates behind PRs by hand."
+        },
+        "C": {
+          "description": "Change the spec",
+          "pros": "You can change the design.",
+          "cons": "The spec needs a new preflight."
+        }
+      },
+      "questions": [
+        {
+          "kind": "fact",
+          "text": "A clean rebuild of an external branch still starts the worker."
+        }
+      ],
+      "change_table": [
+        {
+          "text": "Behind external PRs catch up.",
+          "A": "✓",
+          "B": "—",
+          "C": "—"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "只落後 base 的外部分支，也像衝突的分支一樣在 base 上重建。"
+        },
+        {
+          "kind": "fact",
+          "text": "autopilot 用 commit 的祖先關係判斷外部 PR 落後，不看 GitHub 的合併狀態。"
+        },
+        {
+          "kind": "fact",
+          "text": "慣例允許 force_with_lease 時，autopilot 用 rebase 更新落後的外部 PR。"
+        },
+        {
+          "kind": "fact",
+          "text": "分支落後 base 時，關卡會說明。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "Agent Wardrobe 的 PR #2 一直落後 master 兩個 commit，firstmate 手動更新了它。"
+        }
+      ],
+      "scope_in": [
+        "bin/fm-worker.sh",
+        "bin/lib/fm_autopilot.py 和 fm_autopilot_branches.py",
+        "bin/fm-gate.sh",
+        "測試、design 和 skills"
+      ],
+      "scope_out": [
+        "本專案的重建和更新"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：外部 head 不含 base 時，bring_up_to_date 繼續進入重建。test_clean_behind_external_branch_is_rebuilt 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：autopilot 對 head 和 base 執行 merge-base --is-ancestor。外部 autopilot 案例證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：update_external_branch 用 REBASE 和預期 head 呼叫 updatePullRequestBranch。autopilot rebase 案例證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：關卡只印一行落後說明，位置在第 2 關後或第 6 關前。gate 測試案例證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "乾淨的重建仍然啟動 worker，因為 commit、推送和證據都在 agent 之後執行。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "base 前進且無衝突"
+        },
+        {
+          "state": "gone",
+          "label": "乾淨重播直接返回"
+        },
+        {
+          "state": "gone",
+          "label": "GitHub 不報落後"
+        },
+        {
+          "state": "gone",
+          "label": "PR 停在舊 base"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "base 前進且無衝突"
+        },
+        {
+          "state": "new",
+          "label": "祖先檢查發現落後"
+        },
+        {
+          "state": "new",
+          "label": "autopilot rebase PR"
+        },
+        {
+          "state": "new",
+          "label": "回合帶 lease 重建"
+        },
+        {
+          "state": "new",
+          "label": "關卡印出落後說明"
+        }
+      ],
+      "title": "T-231：落後的外部 PR 用 rebase 跟上",
+      "explanation": "只落後 base 的外部 PR 留著舊的 CI 結果，因為沒有 firstmate 流程會更新它。",
+      "before": "乾淨的重播直接返回，沒有分支保護時 GitHub 也不報落後。",
+      "after": "worker 重建落後的分支，autopilot 依 commit 祖先關係 rebase 落後的 PR。",
+      "outcome": "選項 A 開始 T-231。",
+      "options": {
+        "A": {
+          "description": "派工 T-231",
+          "pros": "外部 PR 不用手動就能跟上 base。",
+          "cons": "worker、autopilot 和關卡會改。"
+        },
+        "B": {
+          "description": "暫緩 T-231",
+          "pros": "程式維持原樣。",
+          "cons": "firstmate 要手動更新落後的 PR。"
+        },
+        "C": {
+          "description": "修改 spec",
+          "pros": "你可以改設計。",
+          "cons": "spec 需要重新預檢。"
+        }
+      },
+      "questions": [
+        {
+          "kind": "fact",
+          "text": "外部分支乾淨重建時仍然啟動 worker。"
+        }
+      ],
+      "change_table": [
+        {
+          "text": "落後的外部 PR 會跟上。",
+          "A": "✓",
+          "B": "—",
+          "C": "—"
+        }
+      ]
+    }
+  }
+}

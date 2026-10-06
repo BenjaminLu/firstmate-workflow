@@ -937,7 +937,7 @@ mirror_watch_stop() {
 # the branch ref never points at a half-rebuilt tree: a run that dies here
 # leaves the branch as it was, and fm-checkpoint.sh refuses a detached
 # HEAD. A commit made on it anyway is refused before the round's own.
-rebuilt=0; rebuild_prev=''; rebuild_lease=''; rebuild_base=''; rebuild_mark=''
+rebuilt=0; rebuild_clean=0; rebuild_prev=''; rebuild_lease=''; rebuild_base=''; rebuild_mark=''
 rebuild_entry=''; rebuild_probe=''
 rebuild_conflicts=(); rebuild_restore=()
 # Conflicts git could not write markers into - a binary file, or one side
@@ -1087,7 +1087,8 @@ bring_up_to_date() {
   [ "$mb" != "$(git rev-parse "$base_ref")" ] || return 0
   rebuild_rebases "$head" "$base_ref"; rc=$?
   case "$rc" in
-    0) return 0 ;;
+    0) [ "$FM_EXTERNAL" = 1 ] || return 0
+       rebuild_clean=1 ;;
     1) ;;
     *) echo "fm-worker: could not check whether $branch rebases onto $BASE; not rebuilding it" >&2
        return 0 ;;
@@ -1156,8 +1157,12 @@ bring_up_to_date() {
     [ -n "$f" ] && ! rebuild_unmerged "$f" && rebuild_restore+=("$f")
   done < <(rebuild_lost worktree)
   rebuild_mark="$(rebuild_fingerprint)"
-  echo "fm-worker: $branch no longer rebases onto $BASE; rebuilt on ${rebuild_base:0:12} from ${rebuild_prev:0:12}" \
-       "(${#rebuild_conflicts[@]} conflicting)" >&2
+  if [ "${rebuild_clean:-0}" = 1 ]; then
+    echo "fm-worker: $branch is behind $BASE and replays cleanly; rebuilt on ${rebuild_base:0:12} from ${rebuild_prev:0:12}" >&2
+  else
+    echo "fm-worker: $branch no longer rebases onto $BASE; rebuilt on ${rebuild_base:0:12} from ${rebuild_prev:0:12}" \
+         "(${#rebuild_conflicts[@]} conflicting)" >&2
+  fi
   emit_status "Rebuilt $branch on $BASE" "已把 $branch 重建在 $BASE 上"
 }
 if [ "$round_two" = 1 ]; then bring_up_to_date; fi
@@ -1341,8 +1346,14 @@ fm_round_pinned worker "$spec" || exit 65
   fi
   if [ "$rebuilt" = 1 ]; then
     printf '\n---\n\n# Your branch was rebuilt on the current %s\n\n' "$BASE"
-    printf '%s moved under this branch and the branch no longer rebased onto it,\n' "$BASE"
-    printf 'so fm-worker.sh rebuilt it: your change so far (previous head %s)\n' "$rebuild_prev"
+    if [ "${rebuild_clean:-0}" = 1 ]; then
+      printf '%s moved under this branch; the branch replays cleanly, so fm-worker.sh rebuilt it on the current base.\n' "$BASE"
+      printf 'Nothing conflicts: change nothing unless the brief asks for it.\n'
+      printf 'Your change so far (previous head %s)\n' "$rebuild_prev"
+    else
+      printf '%s moved under this branch and the branch no longer rebased onto it,\n' "$BASE"
+      printf 'so fm-worker.sh rebuilt it: your change so far (previous head %s)\n' "$rebuild_prev"
+    fi
     printf 'was applied three-way onto %s at %s. It is staged, not committed;\n' "$BASE" "$rebuild_base"
     printf 'fm-worker.sh commits it with this round as one commit on %s.\n' "$BASE"
     if [ "${#rebuild_conflicts[@]}" -gt 0 ]; then
@@ -2238,10 +2249,12 @@ if [ "$rebuilt" = 1 ]; then
     handed='none'
   fi
   if [ "$FM_EXTERNAL" = 1 ]; then
+    rebuild_reason='it no longer rebased onto it cleanly.'
+    [ "${rebuild_clean:-0}" != 1 ] || rebuild_reason='it was behind and replays cleanly.'
     if rebuild_note="$(scratch_new)" &&
        scratch_add "$rebuild_note" &&
        printf '%s\n' \
-         "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
+         "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: $rebuild_reason" \
          "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
          "Conflicts handed to the worker: $handed" > "$rebuild_note" &&
        fm_private_note rebuild "$TASK" "$rebuild_note"; then

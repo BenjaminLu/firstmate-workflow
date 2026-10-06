@@ -1090,7 +1090,11 @@ Every merge still needs the captain's intent card, authoritative head CI/check
 statuses, all six gates, and the project review. Handoff never calls engine
 merge. External stacking remains held for T-143; an external rebuild runs only
 when conventions set `force_with_lease: true`, force-pushed with a lease on the
-bound PR head (T-223).
+bound PR head (T-223). This includes a clean branch that only falls behind
+(T-231). Autopilot detects behind external PRs by fetched ancestry, then uses
+rebase with `force_with_lease: true` or merge update-branch with
+`merge_method: merge`; otherwise it queues one hold per head. A clean rebuilt
+round still runs the worker and publishes through the existing evidence path.
 
 ### T-138 signed evidence and merge candidates
 

@@ -17,7 +17,7 @@ import fm_autopilot as A
 from autopilot_branch_fixture import BranchFixture, response, recheck_response
 
 HEAD = 'a' * 40
-PR = dict(number=12, state='open', head=dict(sha=HEAD, ref='t-001-work'),
+PR = dict(number=12, node_id='PR_node_12', state='open', head=dict(sha=HEAD, ref='t-001-work'),
           base=dict(ref='main', sha='b' * 40), mergeable=True,
           mergeable_state='clean', draft=False)
 
@@ -82,6 +82,176 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.assertEqual(len(self.puts()), 1)
         self.assertNotIn('merge', [word for x in self.puts() for word in x])
         self.assertNotIn('actions', self.pilot.data)
+
+    def external_pilot(self, force=True, merge=None):
+        self.context['external'] = True
+        self.pilot = A.Pilot(self.context, clock=lambda: 1000)
+        self.pilot.policy_error = None
+        # This fixture supplies policy directly instead of a conventions file.
+        self.pilot.data['wakes'].clear()
+        self.pilot.policy = {**A.DEFAULTS, 'force_with_lease': force, 'merge_method': merge}
+        self.pilot.command = self.command
+        self.pilot.probe = self.probe
+        self.pilot.read_head_spec = lambda pr, task: dict(id=task)
+        self.pilot.advance = lambda *args: None
+        self.pilot.prepare_head = lambda *args: self.fail('ancestry must not prepare_head')
+        self.ancestry[(self.base_tip, HEAD)] = 1
+
+    def graphqls(self):
+        return [x for x in self.calls if isinstance(x, list) and x[1:3] == ['api', 'graphql']]
+
+    def test_external_behind_rebases_with_expected_head(self):
+        self.external_pilot()
+        self.base_tip = 'e' * 40  # REST base.sha stays stale while the base advances.
+        self.ancestry[(self.base_tip, HEAD)] = 1
+        self.pull_at(PR)
+        self.pull_at(PR)
+        self.assertEqual(len(self.graphqls()), 1)
+        call = self.graphqls()[0]
+        self.assertIn('id=PR_node_12', call)
+        self.assertIn('head=' + HEAD, call)
+        self.assertIn('expectedHeadOid:$head,updateMethod:REBASE', ' '.join(call))
+        self.assertEqual(self.puts(), [])
+        self.assertEqual(self.pilot.data['updates']['12'], dict(head=HEAD, seq=1, method='rebase'))
+        self.assertFalse(any(isinstance(x, list) and x[1:3] in
+                             (['pr', 'view'], ['pr', 'merge']) for x in self.calls))
+
+    def test_external_behind_merge_policy_uses_rest(self):
+        self.external_pilot(force=False, merge='merge')
+        self.pull_at(PR)
+        self.assertEqual(len(self.puts()), 1)
+        self.assertIn('expected_head_sha=' + HEAD, self.puts()[0])
+        self.assertEqual(self.graphqls(), [])
+        self.assertEqual(self.pilot.data['updates']['12'], dict(head=HEAD, seq=1))
+
+    def test_external_behind_without_update_policy_wakes_once(self):
+        self.external_pilot(force=False)
+        self.pull_at(PR)
+        self.pull_at(PR)
+        self.assertEqual(self.graphqls() + self.puts(), [])
+        self.assertEqual(list(self.pilot.data['wakes']), ['autopilot-' + A.key([self.context['project'], 'behind-held-12-' + HEAD])])
+        wake = self.pilot.data['wakes']['autopilot-' + A.key([self.context['project'], 'behind-held-12-' + HEAD])]
+        self.assertIn('conventions allow neither force_with_lease nor merge updates', str(wake))
+        self.assertEqual(self.pilot.data['retries'], {})
+
+    def test_external_current_draft_and_conflicting_prs_are_not_updated(self):
+        self.external_pilot()
+        self.ancestry[(self.base_tip, HEAD)] = 0
+        self.pull_at(PR)
+        self.ancestry[(self.base_tip, HEAD)] = 1
+        self.pull_at(dict(PR, draft=True))
+        self.pull_at(dict(PR, mergeable=False))
+        self.assertEqual(self.graphqls() + self.puts(), [])
+
+    def test_external_null_mergeability_still_uses_ancestry(self):
+        self.external_pilot()
+        self.pull_at(dict(PR, mergeable=None))
+        self.assertEqual(len(self.graphqls()), 1)
+
+    def test_external_unknown_ancestry_retries_without_update(self):
+        self.external_pilot()
+        self.ancestry.clear()
+        self.ancestor = 128
+        self.pull_at(PR)
+        self.assertEqual(self.graphqls() + self.puts(), [])
+        self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
+
+    def test_external_head_race_and_fetch_failure_are_unknown(self):
+        self.external_pilot()
+        self.fetch_head = 'f' * 40
+        self.assertEqual(self.pilot.external_behind(PR), 'unknown')
+        self.git_error = ('fetch', 128, '', 'fetch refused')
+        self.assertEqual(self.pilot.external_behind(PR), 'unknown')
+        self.assertEqual(self.graphqls() + self.puts(), [])
+
+    def test_external_rebase_obeys_live_busy_pending_and_retry_guards(self):
+        self.external_pilot()
+        for name in ('round_live', 'busy'):
+            with patch.object(self.pilot, name, return_value=True):
+                self.pull_at(PR)
+        self.assertEqual(self.graphqls(), [])
+        self.pilot.data['retries']['update:12:' + HEAD] = dict(count=3, due_seq=0)
+        self.pull_at(PR)
+        self.assertEqual(self.graphqls(), [])
+        self.pilot.data['retries'].clear()
+        self.pull_at(PR)
+        self.pull_at(PR)
+        self.assertEqual(len(self.graphqls()), 1)
+
+    def test_external_rebase_failure_rechecks_raced_head(self):
+        self.external_pilot()
+        self.graphql_answer = (1, '', 'GraphQL refused')
+        self.pull_at(PR)
+        self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
+        self.pilot.command = lambda argv: json.dumps(dict(headRefOid='f' * 40))
+        self.pull_at(PR)
+        self.assertNotIn('update:12:' + HEAD, self.pilot.data['retries'])
+        self.assertNotIn('12', self.pilot.data['updates'])
+
+    def rebase_second_pull(self, *, worktree=False, local=HEAD, method='rebase'):
+        self.external_pilot()
+        self.pull_at(PR)
+        if method is None:
+            self.pilot.data['updates']['12'].pop('method')
+        new = copy.deepcopy(PR)
+        new['head']['sha'] = 'c' * 40
+        self.local_refs[PR['head']['ref']] = local
+        self.ancestry[(local, new['head']['sha'])] = 1
+        self.ancestry[(self.base_tip, new['head']['sha'])] = 0
+        if worktree:
+            self.worktree = str(self.root / 'task-tree')
+        self.pull_at(new, keep_local=True)
+        return new
+
+    def test_external_rebased_head_syncs_ref_with_expected_old_head(self):
+        new = self.rebase_second_pull()
+        self.assertEqual(self.local_refs[PR['head']['ref']], new['head']['sha'])
+        self.assertIn(['git', '-C', str(self.root), 'update-ref',
+                       'refs/heads/' + PR['head']['ref'], new['head']['sha'], HEAD], self.calls)
+        self.assertNotIn('12', self.pilot.data['updates'])
+
+    def test_external_rebased_head_syncs_clean_worktree_with_keep(self):
+        new = self.rebase_second_pull(worktree=True)
+        self.assertEqual(self.local_refs[PR['head']['ref']], new['head']['sha'])
+        self.assertIn(['git', '-C', self.worktree, 'reset', '-q', '--keep', new['head']['sha']], self.calls)
+        self.assertNotIn('12', self.pilot.data['updates'])
+
+    def test_external_rebase_preserves_unrelated_local_work(self):
+        self.rebase_second_pull(local='d' * 40)
+        self.assertEqual(self.local_refs[PR['head']['ref']], 'd' * 40)
+        self.assertIn('12', self.pilot.data['updates'])
+        self.pilot.prune_branches('12')
+        self.assertNotIn('12', self.pilot.data['updates'])
+
+    def test_external_legacy_update_is_pruned_and_divergent_local_ref_stays(self):
+        self.rebase_second_pull(method=None)
+        self.assertEqual(self.local_refs[PR['head']['ref']], HEAD)
+        self.assertNotIn('12', self.pilot.data['updates'])
+
+    def test_self_divergent_local_ref_stays_even_with_rebase_record(self):
+        self.pilot.data['updates']['12'] = dict(head='d' * 40, seq=0, method='rebase')
+        self.local_refs[PR['head']['ref']] = 'd' * 40
+        self.ancestor = 1
+        self.pull_at(PR, keep_local=True)
+        self.assertEqual(self.local_refs[PR['head']['ref']], 'd' * 40)
+
+    def test_external_rebase_sync_holds_dirty_or_active_work_and_records_reset_failure(self):
+        self.dirty = True
+        new = self.rebase_second_pull(worktree=True)
+        for _ in range(2):
+            self.pull_at(new, keep_local=True)
+        self.assertEqual(self.local_refs[PR['head']['ref']], HEAD)
+        self.assertIn('autopilot-' + A.key([self.context['project'], 'ffhold-12-' + new['head']['sha']]), self.pilot.data['wakes'])
+        self.dirty = False
+        for name in ('round_live', 'busy'):
+            with patch.object(self.pilot, name, return_value=True):
+                self.pull_at(new, keep_local=True)
+        self.assertEqual(self.local_refs[PR['head']['ref']], HEAD)
+        self.git_error = ('reset', 1, '', 'cannot keep local changes')
+        self.pull_at(new, keep_local=True)
+        self.assertEqual(self.local_refs[PR['head']['ref']], HEAD)
+        self.assertIn('sync:12:' + new['head']['sha'], self.pilot.data['retries'])
+        self.assertIn('12', self.pilot.data['updates'])
 
     # Review eligibility formerly compared base-only patch metadata here.
     # T-175 delegates all eligibility to the real gates; the replacement

@@ -321,6 +321,40 @@ assert_eq "1 2 4 5 6 7" "$(sed -n 's/^  + gate \([0-9]*\): .*/\1/p' <<<"$out" | 
 assert_contains "$out" "all six gates green" "and the run says all six are green"
 assert_lacks "$out" "seven" "and nowhere seven"
 
+# T-231: ancestry diagnostics are stderr only and do not change gate outcomes.
+assert_lacks "$out" "behind the base by" "current branch has no behind diagnostic"
+echo base-addition > "$t5/base-only"
+git -C "$t5" add base-only; git -C "$t5" commit -qm "base moves without conflict"
+echo another-addition >> "$t5/base-only"
+git -C "$t5" commit -qam "base moves again"
+base_sha="$(git -C "$t5" rev-parse main)"
+behind_line="behind the base by 2 commits (base ${base_sha:0:12}); a red check can come from the old base - bring the branch up to date"
+head_binding_fixture "$t5" honest
+FM_GH="$t5/stub/head-gh" FM_REVIEWER_LOGIN=reviewer-1 \
+  "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 >"$t5/gate-out" 2>"$t5/gate-err"
+assert_eq "0" "$?" "behind clean branch still passes every gate"
+assert_eq "1" "$(grep -Fc "$behind_line" "$t5/gate-err")" "full run prints exact behind diagnostic once"
+assert_lacks "$(cat "$t5/gate-out")" "behind the base by" "diagnostic never enters gate stdout"
+assert_contains "$(cat "$t5/gate-err")" "落後 base 2 個 commit（base ${base_sha:0:12}）" "behind diagnostic includes Chinese and resolved base"
+for conclusion in success failure; do
+  head_binding_fixture "$t5" honest "$conclusion"
+  out="$(FM_GH="$t5/stub/head-gh" "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 --only 6 2>&1)"; rc=$?
+  expected=0; [ "$conclusion" = success ] || expected=6
+  assert_eq "$expected" "$rc" "behind diagnostic preserves gate 6 $conclusion outcome"
+  assert_eq "1" "$(grep -Fc "$behind_line" <<<"$out")" "gate 6 $conclusion prints exact behind diagnostic once"
+done
+for only in 1 4 5 7; do
+  out="$(FM_GH="$t5/stub/head-gh" FM_REVIEWER_LOGIN=reviewer-1 "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 --only "$only" 2>&1)"
+  assert_lacks "$out" "behind the base by" "only gate $only omits behind diagnostic"
+done
+out="$(said "$t5" honest 2)"
+assert_eq "1" "$(grep -Fc "$behind_line" <<<"$out")" "without PR, branch-name base resolves to SHA"
+# A conflicting gate 2 must stop before the diagnostic.
+echo conflict > "$t5/src/thing.sh"; git -C "$t5" commit -qam conflict
+out="$(said "$t5" honest 2)"; rc=$?
+assert_eq "2" "$rc" "conflicting gate 2 still fails"
+assert_lacks "$out" "behind the base by" "failed gate 2 prints only its failure"
+
 # --- gate runs on one machine never overlap (T-114) ---------------------
 # finishes <seconds> <command> ; true when it ended, with status 0, in time
 finishes() {

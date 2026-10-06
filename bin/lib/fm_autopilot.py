@@ -497,8 +497,22 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 batch = self.data['batches'].setdefault(batchkey, dict(task=task, lines=[]))
                 batch['lines'].append(f"{task} #{number} {reviewer}: {row.get('state') or kind} {row.get('html_url') or row.get('id')}")
                 batch['due'] = self.clock() + self.policy['debounce_seconds']
-        # REST mergeable=True is gh's MERGEABLE; unknown/null never authorizes.
-        if pr.get('mergeable') is True and pr.get('mergeable_state') == 'behind' and not pr.get('draft'):
+        # External repositories may never report BEHIND without protection.
+        if self.ctx['external']:
+            if pr.get('mergeable') is not False and not pr.get('draft'):
+                token = f'update:{number}:{head}'
+                if self.retry_due(token):
+                    try:
+                        behind = self.external_behind(pr)
+                        if behind == 'unknown':
+                            self.branch_failure('update', number, head, task, 'could not determine base ancestry')
+                        elif behind == 'behind':
+                            self.update_external_branch(pr, task)
+                    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+                        if self.retry_due(token):
+                            self.branch_failure('update', number, head, task, str(error))
+        # Self: REST mergeable=True is gh's MERGEABLE; unknown/null never authorizes.
+        elif pr.get('mergeable') is True and pr.get('mergeable_state') == 'behind' and not pr.get('draft'):
             try:
                 self.update_branch(pr, task)
             except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
