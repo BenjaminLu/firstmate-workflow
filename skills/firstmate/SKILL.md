@@ -1088,7 +1088,9 @@ design-checked again. Never commit design.md into the project's repository.
 
 Every merge still needs the captain's intent card, authoritative head CI/check
 statuses, all six gates, and the project review. Handoff never calls engine
-merge. External stacking/rebuild remains held for T-143.
+merge. External stacking remains held for T-143; an external rebuild runs only
+when conventions set `force_with_lease: true`, force-pushed with a lease on the
+bound PR head (T-223).
 
 ### T-138 signed evidence and merge candidates
 

@@ -1069,6 +1069,16 @@ goes into the round's `commit_pushed` (or `pr_opened`) event as
 `data.rebuilt.previous_head`, and onto the pull request as a comment for
 the reviewer, whose last reading of the branch no longer exists on it.
 
+An external round uses this same rebuild only when the project's confirmed
+conventions set `force_with_lease: true` (T-223; captain 2026-10-06,
+D-firstmate-workflow-T223-2). Its lease is the PR head the round was bound to;
+the rebuilt branch is pushed to the same PR with `--force-with-lease`, never
+to a protected base. With `force_with_lease: false`, the branch is held as
+before. The context pack, prompt identity and private worker report retain
+the previous PR head; progress projection waits for the pushed head. The
+rebuild note with previous head, new head and conflicts is retained privately
+rather than posted to the external PR.
+
 ### 5.3.4 A new script is committed executable
 
 The claude worker's sandbox refuses `chmod`, so every script a worker
@@ -5194,7 +5204,9 @@ target. Every GitHub operation names the repository. Credentials/settings are
 not changed as an incidental task side effect.
 
 No protected-base push or force push. A task-branch force-with-lease requires
-confirmed project policy and expected old head. Merge method and branch deletion
+confirmed project policy and expected old head (an external rebuild, T-223:
+conventions `force_with_lease: true`, expected old head = the bound PR head).
+Merge method and branch deletion
 follow conventions, never hardcoded squash/delete; retain branches used as open
 PR bases. Never auto-merge. Firstmate verifies actual current-head evidence and
 traceable captain approval before board merge (`land: card`) or team handoff.
