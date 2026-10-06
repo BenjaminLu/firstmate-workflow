@@ -51,7 +51,8 @@ assert_ok "test -f '$store/state/crew/rosters.json'" "external roster draw is re
 FM_PROJECT=private-app python3 "$ROOT/bin/lib/fm_lifeline.py" push "$eng" D-private-app-T001-1 answered private >/dev/null
 assert_eq 0 "$?" "private wake can be pushed without a waiter"
 assert_ok "test -f '$store/state/session/wake.jsonl'" "private wake is outside engine"
-assert_eq "dispatch.lock" "$(find "$eng/state" -type f -exec basename {} \;)" "allocation retains only the global lock, never private records, in engine state"
+assert_eq $'dispatch.lock\nwake.jsonl' "$(find "$eng/state" -type f -exec basename {} \; | sort)" "engine retains only the global lock and forwarded wake"
+assert_eq true "$(jq -sc 'length == 1 and (.[0] | .reason == "forwarded" and .origin_project == "private-app" and .line == "private-app: private" and (has("decision") | not) and (has("task") | not) and (has("project") | not))' "$eng/state/session/wake.jsonl")" "forwarded private wake contains no private record fields"
 out="$("$ROOT/bin/fm.sh" tasks --repo "$eng" --project private-app)"
 assert_eq 0 "$?" "tasks command accepts explicit external project"
 assert_contains "$out" 'Private task' "tasks command reads external specs"
