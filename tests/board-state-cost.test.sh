@@ -116,7 +116,7 @@ append_event() { printf '{"type":"progress","project":"alpha","task":"T-001","ac
 event_offset="$(wc -c < "$d/state/events.jsonl" | tr -d ' ')"
 append_event counted-rebuild
 appended_bytes=$(( $(wc -c < "$d/state/events.jsonl") - event_offset ))
-get '?cost_measure=1' > "$d/counted.json"
+get '?project=alpha&cost_measure=1' > "$d/counted.json"
 assert_eq 0 "$?" "counted rebuild answers after one appended event"
 assert_eq counted-rebuild "$(jq -r '[.recent[]|select(.project=="alpha")][0].data.cost' "$d/counted.json")" "counted rebuild includes the appended event instead of a memo hit"
 assert_ok "jq -e '.configStats >= 1 and .configStats <= 2' '$d/state-cost.json' > /dev/null" "one real rebuild stats config.yaml at most twice"
