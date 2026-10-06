@@ -2701,6 +2701,15 @@ exits 1 when the timeout ends first. `watch` and `stop` are gone and say so.
 Board reuse is verified with a fresh random file under the requested root and
 the board's existing `/file?path=<relative-path>` endpoint. An HTTP response on
 the configured port is insufficient; a different or unverifiable root is refused.
+`fm board` and session start wait for a busy board: each try lasts up to five
+seconds, repeated only after a timed-out try, for up to twenty seconds in all,
+because the board answers nothing while it builds `/api/state`. Each try uses
+the same nonce and at most the remaining budget; no new try starts after the
+deadline, but a reply from a started try is judged on its body even if it arrives
+after the deadline. Any answer other than the nonce, an HTTP error, any other
+connection failure (refused, reset or denied), or a malformed address ends the
+check at once as unverified, and so do twenty seconds of silence. Setup's port
+check keeps a single two-second try.
 A verified board retains its recorded `board/` and `i18n/` tree identities on
 reuse. If the clean checkout differs, `fm board` or session start asks the
 verified board to drain through secret-only `POST /drain`. A running merge in
