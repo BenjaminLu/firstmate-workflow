@@ -25,6 +25,7 @@ binding_service_fixture "$x"
 cp "$x/bin/fm-emit.sh" "$x/bin/fm-emit-real.sh"
 cat > "$x/bin/fm-emit.sh" <<'SH'
 #!/usr/bin/env bash
+if (return 0 2>/dev/null); then . "$(dirname "${BASH_SOURCE[0]}")/fm-emit-real.sh"; return; fi
 if [ -e "$FM_ROOT/refuse-dispatch-event" ]; then
   args=("$@")
   while [ $# -gt 0 ]; do
@@ -192,7 +193,7 @@ setaside() {   # setaside <task> <action> [extra JSON]: the HTTP status, the bod
 
 # The dispatch child must see the captain event in the external store first.
 assert_eq 200 "$(answer D-beta-T012-1 A)" 'external readiness answer is accepted'
-assert_eq done "$(jq -r .outcome "$x/post")" 'card-only external dispatch starts after its approval event'
+assert_eq 'done' "$(jq -r .outcome "$x/post")" 'card-only external dispatch starts after its approval event'
 assert_eq T-012 "$(cat "$x/external-dispatch-calls")" 'the external dispatcher was called'
 assert_eq 'running,done' "$(jq -rs '[.[]|select(.type=="decision_made")|.data.outcome]|join(",")' "$beta_state/events.jsonl")" 'dispatch records its start and final outcome'
 beta_view="$(sx)"
