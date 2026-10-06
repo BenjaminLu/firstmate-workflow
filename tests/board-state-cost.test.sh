@@ -54,17 +54,26 @@ esac
 exec "$COST_BASH" "$@"
 S
 chmod +x "$d/shims/"*
+# Match the measured Why-clause costs: (a) 1700 acknowledged wake IDs;
+# (b) mostly legacy events without project, forcing default-project lookup;
+# (c) both fm_tasks directories, with misses controlled by the FIFO below;
+# (d) 50000 log records, warmed before an append forces a real timed rebuild.
 python3 - "$d" "$beta" <<'PY'
 import json, sys
 from pathlib import Path
 root, beta = map(Path, sys.argv[1:])
-for project, state, tasks in [('alpha', root/'state', root/'design/tasks'), ('beta', beta, beta.parent/'tasks')]:
+for project, state, tasks, count in [('alpha', root/'state', root/'design/tasks', 45000), ('beta', beta, beta.parent/'tasks', 5000)]:
     (tasks/'T-001.json').write_text(json.dumps(dict(id='T-001',title=project+' one',milestone='M1',depends_on=[])))
     with (state/'events.jsonl').open('w') as f:
-        for i in range(25000):
-            f.write(json.dumps(dict(type='progress', task='T-001', project=project, actor='captain', ts='2026-01-01T00:00:00Z', data={'n':i}))+'\n')
+        for i in range(count):
+            event = dict(type='progress', task='T-001', actor='captain', ts='2026-01-01T00:00:00Z', data={'n':i})
+            # Untagged records belong to alpha, the configured default. Keep
+            # beta explicit so both stores still describe distinct projects.
+            if project == 'beta':
+                event['project'] = project
+            f.write(json.dumps(event)+'\n')
 with (root/'state/session/wake.jsonl').open('w') as f:
-    for i in range(200):
+    for i in range(1700):
         f.write(json.dumps(dict(id=f'wake-{i}',woken=10))+'\n')
         (root/f'state/session/acknowledged/wake-{i}.json').write_text('{"acknowledged":10}')
 PY
@@ -208,7 +217,7 @@ assert_eq parked "$(get | jq -r '.tasks[]|select(.project=="beta" and .id=="T-00
 # A busy answer cannot become a cached acknowledgement snapshot.
 : > "$d/calls"; touch "$d/ack-busy"
 printf '{"acknowledged":11}' > "$d/state/session/acknowledged/wake-0.json"
-assert_eq 200 "$(get | jq .watch.waiting)" "busy acknowledgement reader conservatively counts every wake"
+assert_eq 1700 "$(get | jq .watch.waiting)" "busy acknowledgement reader conservatively counts every wake"
 rm "$d/ack-busy"
 assert_eq 0 "$(get | jq .watch.waiting)" "the next request retries a busy acknowledgement snapshot"
 assert_eq 2 "$(grep -c 'fm_lifeline.py acknowledged' "$d/calls" || true)" "busy answer is not cached"
@@ -262,7 +271,7 @@ root, state = map(Path, sys.argv[1:])
 sys.path.insert(0, str(root/'bin/lib'))
 from fm_lifeline import record_root
 assert Path(record_root(root))/'state' == state
-for i in range(200):
+for i in range(1700):
     (state/f'session/acknowledged/wake-{i}.json').write_text('{"acknowledged":10}')
 PYROOT
 assert_eq 0 "$?" "external default record_root agrees with board registry storage"
