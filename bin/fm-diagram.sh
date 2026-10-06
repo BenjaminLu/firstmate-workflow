@@ -64,7 +64,7 @@ while [ $# -gt 0 ]; do
     --event)    need "$@"; MODE=event; EVENT="$2"; shift 2 ;;
     --wants)    need "$@"; MODE=wants; EVENT="$2"; shift 2 ;;
     --repo)     need "$@"; ROOT="$2";              shift 2 ;;
-    -h|--help)  sed -n '4,8p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)  sed -n '4,9p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done

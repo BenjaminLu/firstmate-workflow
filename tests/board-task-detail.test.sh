@@ -4,9 +4,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/board.sh"
 . "$ROOT/tests/lib/project-storage.sh"
 g="$(safe_tmpdir)"
-XDG_CONFIG_HOME="$g/config-home"; export XDG_CONFIG_HOME
+XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 pid=''
-trap 'if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; safe_rm_rf "$g"' EXIT
+trap 'if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; safe_rm_rf "$g"; safe_rm_rf "$XDG_CONFIG_HOME"' EXIT
 mkdir -p "$g/bin" "$g/board/public" "$g/state/pending" "$g/state/decisions" "$g/design/tasks"
 cp -R "$ROOT/bin/lib" "$g/bin/"
 project_storage_fixture "$g/bin"
@@ -65,6 +65,7 @@ for locale in en zh-TW zh-CN; do
 done
 bash "$g/bin/fm-diagram.sh" --repo "$g" --task T-002 > "$g/draw" 2>&1
 assert_eq 64 "$?" 'task without explain refuses a diagram'
+assert_contains "$(cat "$g/draw")" 'task has no explain' 'task diagram refusal names the missing explain'
 python3 - "$g/state" <<'PY'
 import json,sys
 from pathlib import Path

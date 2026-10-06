@@ -253,7 +253,8 @@ and returns without waiting. The board POST writes the response file;
 `bin/fm-decide.sh --await <id>` waits for that file and returns its contents.
 The board also preserves the pending card's optional `details`, `purpose`,
 `title` and `ste` report in the answered record (T-230). Existing records stay
-unchanged. A shared `publicDecision` projection removes those fields from
+unchanged on disk. A shared `publicDecision` projection removes those fields
+from every record, including records written before T-230, in
 `/api/state.responses`, SSE state, POST `/decisions` responses (including
 repeat answers), and `session/wake.jsonl`. Only `/api/task` exposes this authored
 history among board outputs. `fm-decide.sh --await` prints the record unchanged,

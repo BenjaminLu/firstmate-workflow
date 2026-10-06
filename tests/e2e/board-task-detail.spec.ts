@@ -45,6 +45,8 @@ test('task panel shares intent sections, keyboard/focus, replacement and persist
     await expect(panel.locator('.acceptance-text').first()).toHaveClass(/expanded/);
     await second.click();
     await expect(panel.locator('.intent-header')).toContainText('Next');
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(panel.locator('[data-close-task]')).toBeInViewport();
     await panel.locator('[data-close-task]').click();
     await expect(panel).toBeHidden();
     await expect(second).toBeFocused();

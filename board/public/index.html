@@ -874,8 +874,10 @@ let detailTrigger = null;
 let openTaskKey = null, detailState = null, detailData = null, detailRequest = 0;
 const expandedAcceptance = new Set();
 const detailPanel = document.getElementById('taskDetail');
-const positionTaskDetail = () => detailPanel.style.setProperty('--task-detail-top', Math.ceil(document.querySelector('.top').getBoundingClientRect().bottom) + 'px');
+const positionTaskDetail = () => detailPanel.style.setProperty('--task-detail-top', Math.max(0, Math.ceil(document.querySelector('.top').getBoundingClientRect().bottom)) + 'px');
 new ResizeObserver(positionTaskDetail).observe(document.querySelector('.top'));
+window.addEventListener('scroll', positionTaskDetail, { passive: true });
+window.addEventListener('resize', positionTaskDetail);
 const detailSignature = task => JSON.stringify(task ? [task.stage, task.pr, task.last_review, task.crew, task.badges] : null);
 const detailCard = key => document.querySelector(`.card[data-key="${CSS.escape(key)}"]`);
 function closeTaskDetail() {
@@ -1198,10 +1200,10 @@ board.addEventListener('keydown', e => {
 let pressedOn = null;
 board.addEventListener('pointerdown', e => { pressedOn = e.target; }, true);
 board.addEventListener('dragstart', e => {
+  if (e.target.closest?.('.card')) detailDragged = true;
   if (pressedOn?.closest?.('a[data-pr]')) { e.preventDefault(); return; }
   const cardEl = e.target.closest?.('.card[draggable="true"]');
   if (!cardEl) return;
-  detailDragged = true;
   dragging = cardEl.dataset.key || cardEl.dataset.task;
   e.dataTransfer.setData('text/plain', cardEl.dataset.task);
   e.dataTransfer.effectAllowed = 'move';
