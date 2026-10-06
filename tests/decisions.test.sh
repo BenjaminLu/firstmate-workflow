@@ -160,6 +160,26 @@ assert_eq '3' "$(jq -s 'map(select(.type=="decision_made"))|length' "$d/state/ev
 assert_contains "$(post '{"id":"D-3","chosen":"A"}')" 'already recorded differently' 'conflicting repeat is truthful'
 assert_contains "$(post '{"id":"D-404","chosen":"A"}')" 'no pending decision' 'unknown decision cannot be invented'
 
+# T-229: concurrent identical requests publish exactly one answer and event.
+printf '%s\n' '{"id":"D-229","kind":"choice","title":"Concurrent answer"}' > "$d/state/pending/D-229.json"
+for n in 1 2; do
+  python3 "$ROOT/bin/lib/fm_lifeline.py" keep --pid "$$" -- curl -sS \
+    -X POST "http://127.0.0.1:$PORT/decisions" -H 'content-type: application/json' \
+    -H "Origin: http://127.0.0.1:$PORT" \
+    -H "Authorization: Bearer $(cat "$XDG_CONFIG_HOME/firstmate/board-$PORT.secret")" \
+    -d '{"id":"D-229","chosen":"A"}' > "$d/concurrent-$n.json" &
+  if [ "$n" = 1 ]; then first_answer=$!; else second_answer=$!; fi
+done
+wait "$first_answer"; first_status=$?
+wait "$second_answer"; second_status=$?
+assert_eq '0 0' "$first_status $second_status" 'both concurrent requests finish'
+for n in 1 2; do
+  assert_eq true "$(jq -r .ok "$d/concurrent-$n.json")" 'both concurrent answers are ok'
+done
+assert_eq 1 "$(jq -s 'map(select(.already == true)) | length' "$d/concurrent-1.json" "$d/concurrent-2.json")" 'one concurrent answer is already recorded'
+assert_eq 1 "$(find "$d/state/decisions" -name 'D-229.json' | wc -l | tr -d ' ')" 'one concurrent decision record'
+assert_eq 1 "$(jq -s 'map(select(.type=="decision_made" and .data.decision=="D-229")) | length' "$d/state/events.jsonl")" 'one concurrent decision event'
+
 # --- T-047: a card whose id names its owner ------------------------------
 # listed with the project and task parsed out of its id, answered, and for a
 # merge handed to fm-merge.sh with the card's project

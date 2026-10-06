@@ -2129,8 +2129,9 @@ harmless and unused; no stored records need migration.
 
 ### Interaction
 
-Intent cards show intent, reason, scope in/out, completion conditions, notes,
-cautions and confirmation questions after the before/after drawing and outcome.
+Intent cards show a header with the kind badge, outcome and gate checklist;
+Intent with Why; How it works with the before/after drawing; Alignment; Scope;
+Notes; Options; Questions to confirm; and the confirm button, in that order.
 Before/after node flows include a state legend and the optional change table.
 Read-only sentence chips show kind, word count and rule results from the stored
 `ste` report; the header pill counts passing sentences for the reader's locale.
@@ -2143,6 +2144,8 @@ Each question offers “Yes, correct” and “No, change it”; No opens a boun
 correction field. Confirm remains disabled until every question has a valid
 answer and an option or custom choice is selected. Draft answers survive card
 refreshes and language switches, and locked/read-only cards disable all controls.
+An answered card stays locked from the confirm click until it leaves the deck
+and unlocks only on a refusal.
 Any No records a spec-change request (§5.2), wakes firstmate, and shows only
 “Change requested — firstmate revises the spec”. It carries out no option,
 shows no order cry or authored outcome, and queues no order animation in any
