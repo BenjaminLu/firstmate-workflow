@@ -1,0 +1,254 @@
+{
+  "id": "T-235",
+  "title": "the board's /api/state builds in under 500 ms and stays flat as the logs grow: registry stats config.yaml once per request, the acknowledged-wake and task-list readers stop spawning on every build, the event log is parsed incrementally, open tabs and probes share one build per change, and a slow build is logged",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "board/server.ts",
+    "bin/lib/fm_lifeline.py",
+    "tests/board-state-cost.test.sh",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-235.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-06 ~14:45 GET /api/state took 16.3 s on a board that had run for hours and 3.9 s right after a restart (2.2 s on the live board at 15:20). The build is synchronous (board/server.ts buildState :813 runs on the only thread). Its callers: the page on load (index.html :1254), on a language switch (:512) and after each action (:1119, :1139); every open /events stream, which re-runs state(only) whenever its 500 ms stamp check (server.ts :2267-2285) sees a change, once per open tab. `fm board`'s identity probe (bin/fm-herdr.py board_matches :2132-2150) sends GET /file?path=state/session/probe-… (server.ts :2575), which builds no state, but it waits in the same queue behind synchronous builds. With several tabs open each change costs several full builds, requests queue behind them, the board stops answering, and `fm board` cannot verify and replace it (T-225 only lengthened the identity probe). Measured on main 1b74163 with a copy of the live state (14 k events, 11.4 MB state/events.jsonl, 0.4 MB external log, 305 decisions, 1.7 k wake.jsonl lines, 2 projects), per request in steady state: (a) watchWaiting (:731) spawns `python3 bin/lib/fm_lifeline.py acknowledged` (:754) on every request: ~1.0 s with 1.7 k wake ids; (b) registry() (:389) runs statSync(config.yaml) and builds a stamp on every call, and projectOf/defaultProject call it ~580 k times per request (~41 per event): 0.6 s of stat alone; (c) taskDefs (:437) spawns `bash -c '. fm-config.sh && fm_tasks <dir>'` (:452) on any change to a task file in that directory: ~1.0 s per project, on the request thread; (d) readEvents (:112) re-reads and re-parses every events.jsonl in full: ~90 ms; (e) everything else, including JSON encoding: ~330 ms (measured with (a)-(c) removed). Totals: 2.2-3.1 s steady, 4-5 s after a task file changes, and more as the logs grow. In tests (a) and (c) each measured request is a real build: an event is appended before each request (or more than 1.1 s passes between requests), so the Change 5 memo alone cannot make them green.",
+    "Change 1, registry: registry() stats config.yaml at most once per state build (and once per other request), not once per call. Use the existing request scope (storageRequests / withStorage, :563-566): the first registry() call in a scope stats the file and stores the stamp check result in the scope; later calls in the same scope return registryRead without a stat. Outside a scope (startup, timers) behaviour stays as today. config.yaml edits still show on the next request.",
+    "Change 2, acknowledged wakes: watchWaiting keeps its exact result (count of pending wakes) but spawns the lifeline reader only when an input changed. Cache key: the stamps (ino:size:mtimeMs:ctimeMs, or 'absent') of ROOT/state/session/wake.jsonl (the file the board reads, :742), and of the two files the lifeline reads under record_root(ROOT) (bin/lib/fm_lifeline.py :640, :652, :722-724): the acknowledgement directory (ACK_DIR) and state/session/.ack-transaction.json, plus the set of wake ids passed. record_root(ROOT) is an external home when config.yaml's default_project names a project whose repo is not '.' (bin/lib/fm_project_paths.py :180-194); the board resolves the same root as stateDir(defaultProject()) and the worker verifies (with a test case for an external default_project) that this equals record_root(ROOT)/state, or else asks the lifeline once at startup for record_root and uses that. Same key, reuse the last `committed` map; a changed key runs the spawn as today. A spawn failure or a busy lock is not cached (the next request tries again), and an unknown answer still counts as pending, as today. Today a busy lock is indistinguishable from 'nothing acknowledged' (fm_lifeline.py acknowledged_many(..., blocking=False) returns every id as null with exit 0, :667-670, CLI :1153-1161). So the CLI mode `acknowledged` (its only caller is the board, server.ts :754) exits 75 when the non-blocking lock is busy, with the same stdout as today; library callers of acknowledged_many keep their exact behaviour (add an optional keyword, e.g. busy=None list, or a separate helper — the worker chooses and says which). The board caches only exit-0 answers. The acknowledged cache key covers the acknowledgement directory and the stamp (ino, size, mtimeMs, ctimeMs) of each <id>.json read for the ids passed, the same per-file rule as Change 5, so an ack file rewritten in place invalidates it; test (e) adds such an in-place rewrite.",
+    "Change 3, task lists off the request thread: taskDefs keeps fm_tasks as the only reader (the board and the dispatcher must not disagree), but a stamp miss on a directory that already has a cached answer no longer blocks: the request returns the last good defs and starts one asynchronous refresh (Bun.spawn, at most one in flight per directory; a refresh that finds the stamp changed again during its run refreshes once more). A refresh stores what a synchronous read stores today (:452-458): on exit 0 the parsed defs, on any other exit `[]` (a file that does not parse is no task list, never half of one, :431-436, as the dispatcher holds, tests/dispatch.test.sh:153-166), in both cases with the stamp it ran under, so a broken file does not cause a new spawn on every request; it is read again only when the directory's stamp changes. Any replacement whose value differs from the cached one increments the board's write generation (change 5), so the next request and open streams rebuild with it. Only the first read of a directory with no cached answer blocks as today. A new or edited task appears on the next poll after the refresh ends.",
+    "Change 4, incremental event reads: readEvents keeps a per-file parse cache {ino, size, offset, events, rest}. If the file's inode is unchanged, its size grew, and the last up to 4096 bytes before offset still equal the cached copy of those bytes (a prefix check, so an in-place rewrite to a longer log with `cp` or `jq … >` is detected, as tests/crew-end-to-end.test.sh:162-167 does), it reads only the bytes from offset; parses complete lines, keeps an unterminated last line in `rest` until its newline arrives, and appends; a failed prefix check, a shrink, an inode change or a read error discards the cache and re-reads the whole file as today. An absent file keeps the last good events (the readText rule, :100-110). Callers receive a fresh array each call (no caller mutates an event). The direct callers are buildState (:817), pendingIn's default path (`events ?? readEvents()`, :1489-1491, reached from pending() with no directories), pending (:1550, via pendingIn(..., readEvents([base]))) and the asynchronous merge-outcome sweep (:1859); taskDetail reaches it only through buildState/taskLists. The worker re-greps `readEvents(` and keeps every caller on the cached reader. The per-file cache also keeps mtimeMs and ctimeMs: when the size is unchanged but either time changed (an in-place rewrite such as tests/crew-end-to-end.test.sh:162-167 does), the whole file is read again. Test (c) also rewrites the file in place at the same size and compares /api/state with a cold board. The 4096-byte prefix window is an accepted heuristic for an append-only log.",
+    "Change 5, shared builds and budget: state(only) memoizes its last result per `only` key. Storage validation (stateDir → validateStore for every store involved, :575-633) runs on every request before a memo entry is reused, so a planted unsafe link still answers 503 with the memo warm. A memo entry is reused when all of these hold: its input stamp equals the current one, the board's write generation is unchanged, and it is less than 1000 ms old (some fields derive from the clock, so a stamp-equal result is still refreshed once a second). The input stamp extends the stream's stamp() (:2267-2269: each store's events.jsonl, decisions/ and pending/, plus unknownOutcome) with every other file input of buildState: state/session/wake.jsonl, the acknowledgement directory, state/session/.ack-transaction.json, config.yaml, each task directory's stamp, each store's ready/ (:955-957), pins/<task>/ (:1045-1060) and skill-updates/ (:1068-1071) entries, each project's design.md (:1412-1417, :1442) and whatever engine() (:348) reads, including state/session/host.json through firstmateHost (:638-639). Rule for every directory input: the stamp covers the directory itself and every file buildState reads from it (ino:size:mtimeMs:ctimeMs per file, including each pins/<task>/ subdirectory and its files), so a file added under an existing subdirectory or rewritten in place (fixtures write pins with `>`, tests/board-titles.test.sh:20-22) changes the stamp. decisions/ and pending/ follow the same rule. The worker greps buildState and its helpers for file reads and lists every input in the PR. Inputs that no file stamp can capture are never memoized: the `watch` field (watchState, :769-806: state/watch/owner.json, last-wake.json, wake/*.json, and whether the doorbell FIFO under state/session/wake.d has an open reader) is computed on every call and attached to the memoized rest. The write generation is a counter the board increments in every route and helper that writes (each non-GET route, settle/settleAvailable, startMerge, pushWake, emitCaptain, setAside, stopCrew, rewrite); the worker greps every write call in server.ts and lists them in the PR. /api/state and the /events streams' rebuilds both go through state(only), so open tabs share one build per change. The stream's 500 ms stamp (:2267-2269) also includes the write generation, so a background task refresh (change 3) reaches open tabs on the next tick, and fewer builds also shorten the queue that fm board's /file probe waits in. A build that takes longer than FM_BOARD_BUDGET_MS (default 1000, read at startup) prints one stderr line `fm-board: /api/state build N ms (events A ms, tasks B ms, watch C ms, rest D ms)`, at most once per 60 s, so a slow board shows in state/session/board.log.",
+    "Equality: every field and value of /api/state stays as today. A switch FM_BOARD_COLD=1 (read once at startup) turns off changes 1-4 and the memo of change 5; the budget line stays on. A test runs the same fixture through a cold board and a cached board and compares the two JSON bodies after removing the fields that derive from the clock (the test lists them, each with its reason).",
+    "Target: on a live-size copy of the state (14 k events, 2 projects) a steady /api/state build takes under 500 ms on a developer Mac; the worker measures it and puts the numbers in the PR body. CI never asserts wall time except one generous bound: after warm-up, the test appends one event and waits 1.1 s (so the timed request is a real build, not a memo hit), then one /api/state request on the 50 000-event fixture answers within 3 s (base: the stat storm and the acknowledged spawn alone exceed that on the fixture, so it is red on base).",
+    "Tests (fail-first; fail-first runs only *.test.sh): new tests/board-state-cost.test.sh, using tests/lib/board.sh (board_port, wcurl, wait_for, stop_pids) and a PATH shim directory placed first in PATH whose `python3` and `bash` record each invocation's argv to a log and exec the real binary (childEnv keeps PATH, :89-92). Fixture: a board root with a 2-project registry (self + an external project with its own state dir), 50 000 events across both logs, 200 wake.jsonl lines with acknowledgement records, task directories for both projects. Assertions: (a) after one warm-up request, three more /api/state requests make zero `fm_lifeline.py acknowledged` spawns and zero `fm_tasks` spawns (red on base: base spawns acknowledged on every request); (b) touching one task file while the shim's bash blocks every fm_tasks call on a FIFO the test controls: a /api/state request still answers (curl --max-time 10 succeeds while the shim is blocked), and after the test releases the FIFO and the refresh ends (wait_for on the shim log), the next request shows the new title, and an open /events stream receives a state frame with the new title within 2 s without any other write (red on base: base blocks until the FIFO is released); (c) a malformed task file: the cached and a cold board return equal bodies (that project's task list empty), and three further requests make no new fm_tasks spawn; appending 10 events makes the next response include them; replacing the log with a shorter valid log, and rewriting it in place (same inode) to a longer valid log with different earlier lines, each make the next response equal a cold board's; (d) cold vs cached JSON equality on the fixture; (e) memo: two requests with no input change return byte-equal bodies; writing an event, a pending card or an acknowledgement makes the very next request reflect it (stamp invalidation, no wait); a POST /tasks park on the cached board is visible in the very next /api/state (write generation); planting an unsafe routing link in an external store while the memo is warm answers 503 and removing it answers 200 (as tests/board-projects.test.sh:427-438); killing the watch owner (as tests/board-state.test.sh:153-158 does) makes the very next /api/state show watch.alive=false (watch is never memoized); writing a ready/ record, adding a second pin file under an existing pins/<task>/ directory, rewriting a pin file in place with `>`, and writing a skill-updates/<id>.json record each make the very next response reflect it; (f) budget line: a board started with FM_BOARD_BUDGET_MS=1 logs the budget line on its first build and not again within 60 s; a board with the default budget on the small part of the fixture logs none; (g) the 3 s bound from the Target line; (h) `fm_lifeline.py acknowledged` exits 75 while another process holds the ack lock exclusively, with the same stdout as an unlocked read of unacknowledged ids, and 0 otherwise. Existing suites that read /api/state (tests/board-*.test.sh, tests/crew-end-to-end.test.sh, tests/decisions.test.sh, tests/diagram.test.sh, tests/open.test.sh, tests/review-verdict.test.sh, tests/e2e/*) must pass unchanged: stamp and write-generation invalidation make a write-then-read see its write without waiting (for example tests/board-state.test.sh:84-99 changes acks and the transaction file and reads at once). If a suite still fails because of the memo, the worker fixes the invalidation, not the suite.",
+    "Design: edit design/design.md §8 'The captain's board' in place, adding one paragraph '**State cost.**' after the 'Lanes and cards' / task detail paragraphs (~:1740-1760) that states the per-request budget, the four caches, the shared-build memo with its stamp, write-generation and 1000 ms rules, FM_BOARD_COLD, FM_BOARD_BUDGET_MS and the budget log line, and the CLI exit 75 of `fm_lifeline.py acknowledged` on a busy lock. Do not append to the end of design.md.",
+    "Migration / in flight: no stored record or file format changes; nothing is written to state by the caches (they live in the board process and vanish on restart). T-232 (gate renumbering) will later touch board gate names in the same file; this task changes no gate code. Out of scope: the page's fetch calls, the stream's 500 ms tick period and 15 s heartbeat (its stamp gains the write generation, change 5), /api/task speed beyond sharing the caches, fm-config.sh, and fm_lifeline.py beyond the acknowledged CLI exit code.",
+    "Scope: board/server.ts, bin/lib/fm_lifeline.py (only the `acknowledged` CLI busy exit code and the helper it needs), tests/board-state-cost.test.sh (new), tests/** (only if an existing suite needs an exact-count update the worker names), design/design.md, design/tasks/T-235.json."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A steady state request answers in less than 500 ms at the current data size."
+        },
+        {
+          "kind": "fact",
+          "text": "A steady state request starts no child process."
+        },
+        {
+          "kind": "fact",
+          "text": "The response body stays the same as today."
+        },
+        {
+          "kind": "fact",
+          "text": "A slow build writes one line to the board log."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The board took 16 seconds for one state request, and fm board did not replace it."
+        }
+      ],
+      "scope_in": [
+        "board/server.ts",
+        "the acknowledged command of fm_lifeline.py",
+        "tests/board-state-cost.test.sh",
+        "design section 8"
+      ],
+      "scope_out": [
+        "The fetch calls of the page",
+        "fm-config.sh"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: registry stats config.yaml once for each request, and readEvents parses only new bytes. The 3 second bound on the 50 000 event fixture and the PR measurement prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: watchWaiting and taskDefs reuse their last result until an input file changes. The spawn count check in tests/board-state-cost.test.sh proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: a cold board and a cached board return the same body for the same fixture. The equality check proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: a build longer than FM_BOARD_BUDGET_MS prints a budget line. The budget line check proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "A new task title can show one poll later, because the task list refreshes in the background."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Tabs and probe ask for state"
+        },
+        {
+          "state": "gone",
+          "label": "Stat config 580 000 times"
+        },
+        {
+          "state": "gone",
+          "label": "Spawn acknowledged reader"
+        },
+        {
+          "state": "gone",
+          "label": "Spawn task reader on change"
+        },
+        {
+          "state": "gone",
+          "label": "Parse full event log"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Tabs and probe ask for state"
+        },
+        {
+          "state": "new",
+          "label": "Stat config once"
+        },
+        {
+          "state": "new",
+          "label": "Reuse acknowledged result"
+        },
+        {
+          "state": "new",
+          "label": "Refresh tasks in background"
+        },
+        {
+          "state": "new",
+          "label": "Parse only new events"
+        },
+        {
+          "state": "new",
+          "label": "Tabs share one build"
+        },
+        {
+          "state": "new",
+          "label": "Log slow builds"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "在目前的資料量下，穩定狀態的請求在 500 毫秒內回應。"
+        },
+        {
+          "kind": "fact",
+          "text": "穩定狀態的請求不啟動任何子程序。"
+        },
+        {
+          "kind": "fact",
+          "text": "回應內容和現在完全相同。"
+        },
+        {
+          "kind": "fact",
+          "text": "建構太慢時，看板記錄寫一行。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "看板一次狀態請求花了 16 秒，fm board 因此無法替換它。"
+        }
+      ],
+      "scope_in": [
+        "board/server.ts",
+        "fm_lifeline.py 的 acknowledged 指令",
+        "tests/board-state-cost.test.sh",
+        "design 第 8 節"
+      ],
+      "scope_out": [
+        "頁面的請求",
+        "fm-config.sh"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：每個請求只讀一次 config.yaml 的狀態，事件記錄只解析新增的部分。50,000 筆事件 fixture 的 3 秒上限和 PR 裡的實測證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：輸入檔沒變時，watchWaiting 和 taskDefs 沿用上次的結果。tests/board-state-cost.test.sh 的子程序計數檢查證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：同一個 fixture，冷啟動和有快取的看板回應相同。相等性檢查證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：建構超過 FM_BOARD_BUDGET_MS 時印出一行預算記錄。預算記錄檢查證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "任務清單在背景更新，所以新任務的標題會晚一次輪詢才出現。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "分頁和探測要求狀態"
+        },
+        {
+          "state": "gone",
+          "label": "讀 config 58 萬次"
+        },
+        {
+          "state": "gone",
+          "label": "啟動確認讀取程式"
+        },
+        {
+          "state": "gone",
+          "label": "任務變動就啟動讀取"
+        },
+        {
+          "state": "gone",
+          "label": "每次解析整份記錄"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "分頁和探測要求狀態"
+        },
+        {
+          "state": "new",
+          "label": "每請求讀一次 config"
+        },
+        {
+          "state": "new",
+          "label": "沿用確認結果"
+        },
+        {
+          "state": "new",
+          "label": "背景更新任務清單"
+        },
+        {
+          "state": "new",
+          "label": "只解析新事件"
+        },
+        {
+          "state": "new",
+          "label": "分頁共用一次建構"
+        },
+        {
+          "state": "new",
+          "label": "記錄慢的建構"
+        }
+      ]
+    }
+  }
+}
