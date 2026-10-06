@@ -175,7 +175,7 @@ class Store:
             elif record.get('kind') not in ('brief', 'pack', 'worker-report', 'ask', 'verdict') or 'binding' in record:
                 raise ValueError('unsigned evidence cannot claim source-bound authority')
             # Pre-T-138 records stay immutable and readable for the standing
-            # list. Only a new signed, source-bound verdict can authorize gate 7.
+            # list. Only a new signed, source-bound verdict can authorize gate 6.
 
             if record['project'] != self.project or record['task'] != self.task:
                 raise ValueError('record identity does not match its storage location')
@@ -309,6 +309,11 @@ def retain_verdict(store, args):
 
 def summary(store):
     """Read and authenticate all records before exposing an explicit projection."""
+    from fm_binding import gate_list, gate_entry
+    try:
+        mapping = gate_list()
+    except ValueError:
+        mapping = None
     result = []
     for record in store.records():
         row = {key: record.get(key) for key in ('kind', 'round', 'actor', 'head', 'time')}
@@ -321,6 +326,11 @@ def summary(store):
             row.update(gate_base=record.get('gate_base'), gates=record.get('gates', []),
                        checks=[{key: check.get(key) for key in ('name', 'conclusion')}
                                for check in record.get('checks', [])])
+            if mapping is None:
+                row['gates_unmapped'] = True
+            else:
+                row['gates'] = [gate for value in row['gates']
+                                if (gate := gate_entry(value, mapping)) is not None]
         result.append(row)
     return result
 

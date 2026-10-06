@@ -122,7 +122,7 @@ class PreflightLifecycle(unittest.TestCase):
         self.emit(actor,'crew_status',dict(role='reviewer',mode='spec-preflight'))
         pilot = A.Pilot(self.ctx)
         self.assertEqual(M.inventory(pilot),([],[],[]), 'preflight is not an implementation review in merge reminders')
-        self.assertEqual(store.verdicts(),[], 'gate 7 has no implementation verdict from a preflight receipt')
+        self.assertEqual(store.verdicts(),[], 'gate 6 has no implementation verdict from a preflight receipt')
         self.assertEqual(pilot.verdict('T-191'),{})
         self.emit(actor,'agent_finished',dict(role='reviewer',mode='spec-preflight',result='ok'))
         calls=[]

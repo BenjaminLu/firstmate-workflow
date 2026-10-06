@@ -365,7 +365,7 @@ for k in keys setup check test tests docs; do
 done
 assert_eq "bin/ci.sh" "$(fm_project check "$own")" "the top-level block still reads as before"
 assert_eq "3" "$(fm_cfg concurrency "$own")" "and the registry swallows nothing after it"
-# T-068: the community files are documentation to gate 5; config.yaml is not
+# T-068: the community files are documentation to gate 4; config.yaml is not
 # (each glob framed by newlines, so only a whole line matches)
 own_docs=$'\n'"$(fm_project docs "$own")"$'\n'
 for g in LICENSE CODE_OF_CONDUCT.md CONTRIBUTING.md SECURITY.md \

@@ -66,8 +66,8 @@ done
 assert_eq "" "$missing" "every code the server refuses with is translated in both dictionaries"
 assert_ok "jq -e 'has(\"readOnly\")' '$en' >/dev/null && jq -e 'has(\"readOnly\")' '$tw' >/dev/null" \
   "the read-only line is in both dictionaries"
-for n in 1 2 3 4 5 6 7; do
-  assert_ok "jq -e 'has(\"gate$n\")' '$en' >/dev/null" "gate $n has a label"
+for name in branch rebase scope fail-first ci approval; do
+  assert_ok "jq -e 'has(\"gate_$name\")' '$en' >/dev/null" "gate $name has a label"
 done
 
 # the table covers the terms that actually differ between the two vocabularies
@@ -78,12 +78,12 @@ assert_fail "grep -q . <<<\"\$(grep -vE '^#|^$' '$tbl' | awk -F'\t' 'NF!=2')\"" 
 assert_fail "grep -q . <<<\"\$(grep -vE '^#|^$' '$tbl' | cut -f1 | sort | uniq -d)\"" "no term is listed twice"
 
 # applying the table to the zh-TW dictionary must change something and break nothing
-cnout="$(jq -r '.gate4' "$tw")"
+cnout="$(jq -r '.gate_scope' "$tw")"
 while IFS=$'\t' read -r a b; do
   case "$a" in '#'*|'') continue ;; esac
   cnout="${cnout//$a/$b}"
 done < "$tbl"
-assert_ne "$(jq -r '.gate4' "$tw")" "$cnout" "converting zh-TW actually produces zh-CN"
+assert_ne "$(jq -r '.gate_scope' "$tw")" "$cnout" "converting zh-TW actually produces zh-CN"
 
 # Authored oracle, deliberately independent of the table under test. This
 # catches both overlap order (船員 before 船員名冊) and displayed characters

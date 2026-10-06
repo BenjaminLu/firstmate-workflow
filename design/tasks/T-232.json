@@ -1,0 +1,228 @@
+{
+ "id": "T-232",
+ "title": "the six gates are numbered 1-6 without a gap and carry stable names (branch, rebase, scope, fail-first, ci, approval) in fm-gate, readiness, the review prompt, events, the board, the skills and the design; records from before keep their old numbers and are read through one legacy map",
+ "milestone": "M2",
+ "depends_on": [
+  "T-230",
+  "T-231"
+ ],
+ "scope": [
+  "bin/lib/fm_gates.json",
+  "bin/fm-gate.sh",
+  "bin/lib/fm_binding.py",
+  "bin/lib/fm_autopilot_loop.py",
+  "bin/lib/fm_autopilot.py",
+  "bin/fm-review.sh",
+  "bin/fm-emit.sh",
+  "bin/fm-decide.sh",
+  "board/server.ts",
+  "board/public/index.html",
+  "i18n/ui.en.json",
+  "i18n/ui.zh-TW.json",
+  "i18n/tw2cn.tsv",
+  "skills/firstmate/SKILL.md",
+  "skills/firstmate/dispatch-crew/SKILL.md",
+  "skills/worker/SKILL.md",
+  "skills/reviewer/SKILL.md",
+  "design/design.md",
+  "tests/**",
+  "bin/fm-worker.sh",
+  "bin/fm-failfirst.sh",
+  "bin/lib/fm_evidence.py",
+  "README.md",
+  "CONTRIBUTING.md",
+  "docs/autopilot.md",
+  "docs/verification/supervision.md",
+  ".github/pull_request_template.md",
+  ".github/workflows/ci.yml",
+  "design/external-roadmap.md",
+  ".github/ISSUE_TEMPLATE/task-proposal.yml",
+  "design/tasks/T-232.json"
+ ],
+ "acceptance": [
+  "Why. 2026-10-06 the captain saw a merge card list 'gates 1, 2, 4, 5, 6, 7' and found the gap strange; gate 3 was retired on 2026-09-26 (T-114, design/design.md:1241-1250) and the other gates kept their numbers. He asked for a thorough fix in the skills and the design: the gates are numbered 1-6 without a gap everywhere, and each gate has a stable name so a number never has to change again.",
+  "Mapping. One canonical list, new file bin/lib/fm_gates.json: {\"version\":2,\"gates\":[{\"n\":1,\"name\":\"branch\"},{\"n\":2,\"name\":\"rebase\"},{\"n\":3,\"name\":\"scope\"},{\"n\":4,\"name\":\"fail-first\"},{\"n\":5,\"name\":\"ci\"},{\"n\":6,\"name\":\"approval\"}],\"legacy\":{\"1\":\"branch\",\"2\":\"rebase\",\"4\":\"scope\",\"5\":\"fail-first\",\"6\":\"ci\",\"7\":\"approval\"}}. Old to new: 1->1 branch exists and carries commits, 2->2 rebases cleanly onto the base, 4->3 diff inside the declared scope, 5->4 fail-first (reverting the implementation turns tests red), 6->5 required GitHub checks and statuses green, 7->6 bound reviewer approval. Old number 3 maps to nothing. Every reader below derives numbers and names from this file (bash via jq, Python via json, board/server.ts reads it once at start); no other file keeps a number list. A test asserts that bin/fm-gate.sh's g calls, the file and the board agree. Missing file: every reader refuses with a message naming bin/lib/fm_gates.json, never guessing numbers: bin/fm-gate.sh exits 70 before any gate (as its missing-library check at :79 does); fm_binding ready and candidate raise ValueError('gate list unavailable: bin/lib/fm_gates.json'), so readiness and merges refuse; fm-review.sh's gate section prints 'gate list unavailable (bin/lib/fm_gates.json missing); gate results unknown'; the autopilot's attention text falls back to 'stopped at gate N (gate list unavailable)'; fm_evidence's summary returns the stored gates unmapped with gates_unmapped: true; fm-emit and board/server.ts as stated below. tests/gate-names.test.sh case (j) removes the file from a copied bin/ and asserts each of these. Fixtures that copy single scripts into a temp bin/ (tests/stacking-binding.test.sh:13, tests/local-round-loop.test.sh:11, tests/lib/binding-fixture.sh:7) already copy all of bin/lib through tests/lib/review.sh:66 and tests/lib/worker.sh:61; any that do not add bin/lib/fm_gates.json.",
+  "bin/fm-gate.sh. The gate functions and their g calls use the new numbers (gate1, gate2, gate3 scope, gate4 fail-first, gate5 ci, gate6 approval); say() prints '  + gate N (name): description' (the name in parentheses after the number); a red gate N exits N (1-6). The fm_binding failures that today 'exit 6' (head, base, local-gate-base, ready; bin/fm-gate.sh:159-165, :274-275) exit 5, the new CI gate number, because they belong to the binding/CI check. --only takes a new number 1-6 or a name (--only scope, --only approval); a name is turned into its number right after argument parsing, before want() and before the head-binding checks, and those checks (:158 `[ \"$ONLY\" != 6 ]`, :161 `[ \"$ONLY\" = 6 ]`) use 5, the CI gate: --only 5 / --only ci binds the PR head, every other --only takes the local gate base; every other --only value (7, 0, 8, foo, empty) is a usage error (exit 64): 7 says 'gate numbers changed in T-232: approval is 6', the others name the valid numbers and names (today a value that matches no g call ends with 'all six gates green', exit 0, at :276-277); --only 3 now means scope. The gate transcript (state/gates/<task>-<head>.txt) gets a third header line 'GATES:2' after HEAD and BASE. The header comment (:1-19) and the gate-3 refusal (:57-58) are rewritten: the refusal goes, and the comment states the six gates and their names. T-231 added `if [ \"$ONLY\" = 6 ]; then behind_base; fi` (bin/fm-gate.sh, about :282 on main 2840cfa), tying the behind-base message to the CI gate: it becomes `[ \"$ONLY\" = 5 ]` (after name-to-number conversion, so --only ci also prints it). tests/gate.test.sh:341-346 (`--only 6`, expected=6, 'gate 6 … behind diagnostic', and `for only in 1 4 5 7`) change to --only 5 / expected=5 / 'gate 5 (ci)' and `for only in 1 3 4 6`, and test case (i) asserts that --only 5 and --only ci print the behind-base message and --only 6 does not.",
+  "Exit-code callers. bin/lib/fm_autopilot_loop.py:363-376: code 6 (was 7) launches the review; code 0 raises the merge card; codes 1-5 raise attention '<task>: stopped at gate N (name)' / '<task>：關卡 N（name）失敗，需要 firstmate 處理' with the name read from fm_gates.json; a code above 6 says 'gate run failed (exit N)' / '關卡執行失敗（exit N）' instead of naming a gate. bin/lib/fm_autopilot.py:659 treats a gate_failed event whose data.gate is 'approval' or the legacy number 7 as the review's own (reason None). Test stubs and cases that use the gate exit codes change with the numbering: tests/herdr/credentials.py:144 (exit 7 -> 6); tests/lib/autopilot_loop.py:122 (code=7 -> 6), :181 (def gate_result(self, code=7) -> code=6), :189 ('exit 7 must launch a review' -> exit 6), :253-255 (gate_result(5), 'gate 5' -> gate_result(4), 'gate 4 (fail-first)'), :396-400, :824 and :834 (gate_result(6), 'stopped at gate 6' -> gate_result(5), 'stopped at gate 5 (ci)'), :451 (7 -> 6) and :788 (`('gate', (0, 6, 7))` -> `('gate', (0, 5, 6))`); tests/lib/autopilot_cases.py:1072 (code=7 -> 6). The worker also greps tests/ for `code=[0-9]`, `gate_result\\(` and `exit [0-9]` near autopilot gate jobs, because the other greps do not catch these forms; tests/herdr/handoff.py:82 (exit 1) is unchanged. No version check is needed: the autopilot runs from its own code snapshot (fm-autopilot.sh:56 -> fm_freeze -> bin/fm-herdr.py snapshot() at :595-610 copies bin/ and skills/ into state/snapshots/code-*), and its gate jobs (fm_autopilot_loop.py:261-262) run that snapshot's fm-gate.sh, so the exit codes it reads always match its own numbering; the design states this in §6.",
+  "Readiness and merge (bin/lib/fm_binding.py). ready validates the transcript: it requires 'GATES:2' and '+ gate N (name):' lines for 1-6 and no 'x gate' line (today's regex at :362-366 for 1,2,4,5,6,7); it stores gates=['branch','rebase','scope','fail-first','ci','approval'] (names, not numbers) at :380. candidate (:337) accepts a readiness record whose gates is that name list OR the legacy list [1,2,4,5,6,7] (the same six checks under old numbers), so a merge card raised before T-232 merges still validates after it without a re-gate; no stored readiness record, gate transcript, event or decision is rewritten. 'review changed after gate 7' (:375) becomes 'review changed after the approval gate'. fm-merge needs no change beyond what candidate reads (grep confirms no gate numbers in bin/fm-merge.sh).",
+  "Review prompt (bin/fm-review.sh:779-799). The 'gates for this head' section checks a transcript by its header: with 'GATES:2' it looks for '+/x gate N (name):' for 1-6 and names missing gates by number and name; without it (a transcript written before T-232) it looks for the legacy numbers 1 2 4 5 6 7, prints one line 'this summary uses the old gate numbers (before T-232): 4 scope, 5 fail-first, 6 ci, 7 approval', and names missing gates with their new number and name. The comment ':784 numbers are fm-gate.sh's own: 3 is retired (T-114)' is rewritten.",
+  "Events and wakes. New gate_failed/gate_passed events that carry a gate carry its name in data.gate (a string). bin/fm-emit.sh refuses (exit 64, 'data.gate takes a gate name since T-232: branch, rebase, scope, fail-first, ci, approval') a gate_passed or gate_failed whose data.gate is a number or an unknown name, so no new event is written with a number, except under FM_EMIT_LEGACY_GATE=1, a test-fixture switch (documented in the usage comment as fixture-only) that stores a numeric data.gate unchanged so fixtures can write events in the pre-T-232 form through fm-emit; no bin/ script writes data.gate today (bin/fm-worker.sh:1956-2129 send no data), so only hand-run fm-emit calls are affected. A numeric data.gate can therefore only be an event written before T-232, and readers map it through fm_gates.json legacy (3 or unknown maps to no gate). wake_on_gate (:290-300) reads only the event being emitted, so it prints 'gate: <task> failed gate N (name)' for a name, and for a legacy number written under FM_EMIT_LEGACY_GATE it maps through legacy. If bin/lib/fm_gates.json is missing, fm-emit refuses an event that carries data.gate (exit 70, naming the file) and emits other events unchanged; board/server.ts with the file missing starts, sends an empty gates list and null badges, and logs one warning line. The usage comment (:7) shows --data '{\"gate\":\"fail-first\"}'.",
+  "Board. board/server.ts: GATE_NUMBERS (:271-273) goes; the server reads bin/lib/fm_gates.json and sends gates:[{n,name}] in /api/state. The gate badge (:962-971) keeps kind 'gate' and its gate field becomes {n,name} or null: data.gate as a name maps to its entry, a numeric data.gate (legacy numbering) maps through legacy, anything else (3, unknown, absent) is null. fm-decide.sh merge cards (bin/fm-decide.sh:442) record gates as an object by name {branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:true}. board/public/index.html: GATE_NUMBERS/GATES (:334-337) read the list from /api/state; the badge (:552) fills gateFailedN's {n} with gate.n and {label} with t('gate_'+gate.name), and a null gate shows gateFailed; the merge card gate list (:739, :760-761) renders when d.gates is either the by-name object (new: one tick per gate from its name key) or the legacy 7-slot array, and prints '1. <label>' … '6. <label>' for the six gates; a pending card whose gates is the legacy 7-slot array (index = old number - 1) is read through legacy so it renders the same six ticks. The badge text uses gateFailedN with the new number and the label. i18n/ui.en.json and ui.zh-TW.json: keys gate1-gate7 (:31-37) become gate_branch, gate_rebase, gate_scope, gate_fail-first, gate_ci, gate_approval (the retired gate3 key goes); gateFailedN becomes 'gate {n} ({label}) failed' / '第 {n} 道閘（{label}）未過'; i18n/tw2cn.tsv covers any new characters.",
+  "Task detail panel (T-230, on main). bin/lib/fm_evidence.py's summary (:321, `gates=record.get('gates', [])`) is the one place that normalises: it turns the stored gates into a list of {n,name} through bin/lib/fm_gates.json (a name list maps by name; the legacy number list [1,2,4,5,6,7] maps through legacy; old 3 or unknown entries are dropped); nothing stored is rewritten. board/server.ts's /api/task builds its records from that summary (:2076-2080) and passes `gates` through unchanged (:2131-2132), including the form {gates: <stored list>, gates_unmapped: true} that the summary returns when bin/lib/fm_gates.json is missing. board/public/index.html's readiness line (:956, today `(readiness.gates || []).join(', ')`) prints each {n,name} as 'N name' with the i18n label (and the stored values as they are, marked 'gate list unavailable', when gates_unmapped is true), e.g. '1 branch · 2 rebase · 3 scope · 4 fail-first · 5 ci · 6 approval', for both a legacy and a new record. Tests: tests/board-task-detail.test.sh:43 (today asserts '[1,2,4,5,6,7]') asserts the mapped list for a legacy fixture and adds a name-list fixture with the same output; tests/lib/task_detail_fixture.py:33 keeps one legacy record and gains one name-list record; tests/lib/evidence_summary.py:18 and :26 assert the normalised {n,name} list for both forms; tests/diagram.test.sh:448 (`jq -r .gate5`) reads the new key gate_ci.",
+  "Skills and design, rewritten in place. skills/firstmate/SKILL.md (lines with gate numbers, incl. :240-243, :309, :354, :408, :504, :592, :982, :1032-1034, :1155), skills/firstmate/dispatch-crew/SKILL.md:69, skills/worker/SKILL.md (:26-32, :42, :227, :249-251, :286) and skills/reviewer/SKILL.md (:267, :293, :297) use the new numbers, and the first mention in each file names the six gates with numbers and names. design/design.md: every gate-number mention (58 lines on main 2840cfa, counting :5601, in §5, §6, §7, §8, §10, §11, §14 and §15, each section edited in place) uses the new number, including dated history, and the §5 event example at :195 becomes \"data\":{\"gate\":\"fail-first\"}, so one number means one gate everywhere; the gate table in '## 6. Lifecycle and the gates' (design/design.md:1128, the table at :1230-1240) lists six rows 1-6 with names; the T-114 retirement note and the merge-card paragraph after it (:1241-1253, including 'A merge card's `gates` list keeps seven slots … gates[n-1]') become one history line plus one sentence that a merge card stores gates by name and the board reads a legacy 7-slot array through the legacy map. The history line: 'Gate 3 (a local whole-project check) was retired on 2026-09-26 (T-114); T-232 (2026-10-06) renumbered the gates 1-6 and named them (old 4-7 are new 3-6). Records written before T-232 keep the old numbers and are read through bin/lib/fm_gates.json legacy.' design/tasks/*.json are pinned history and are not edited. Other prose with live gate numbers is rewritten the same way: bin/fm-worker.sh:376 (comment) and the user-facing messages :1181 and :1189 ('gate 4 will refuse' becomes 'gate 3 (scope) will refuse'; T-231 also edits this file, which is why T-232 depends on it), bin/fm-review.sh:263, :268, :374, :1171, :1239, :1251, :1289 comments, bin/fm-failfirst.sh:144, bin/lib/fm_evidence.py:178, bin/lib/fm_autopilot_loop.py:137, bin/lib/fm_binding.py:281, README.md (:210, :234-237, :253), CONTRIBUTING.md (:28, :65, :94), docs/autopilot.md (:37, :82), docs/verification/supervision.md:36, .github/pull_request_template.md:43-50 (its gate checklist lists six gates 1-6 with names and no local gate 3), .github/workflows/ci.yml comments :7, :11, :269, design/external-roadmap.md:48. .github/ISSUE_TEMPLATE/task-proposal.yml:31 ('scope globs that gate 4 enforces') becomes gate 3 (scope). §7's description of the gate output (design/design.md:1521 and :1685: '  + gate N: …' / '  x gate N: …') documents the new line form '  + gate N (name): …' and the GATES:2 transcript header.",
+  "Completeness rule. Every live mention of a gate number outside design/tasks/*.json, design/proposals/, design/T-165-validation.md and design/t130-pr-body.md (dated records) and state/ is renumbered, in code, comments, docs, templates and tests. The authoritative list is the output of: git grep -nP '[Gg]ate[ -][1-7]\\b|[Gg]ates? 1, ?2, ?4|1/2/4/5/6/7|1 2 4 5 6 7|\\[1, ?2, ?4, ?5, ?6, ?7\\]|--only [1-7]|gate[1-7]\\b|\\{gate: ?[1-7]\\}|\"gate\": ?[1-7]|gateFailedN|GATE_NUMBERS|gates?:? ?\\(?1, ?2, ?4|gates: [0-9]|\\b(fifth|sixth|seventh) gate\\b|[Gg]ates [1-7] (and|or) [1-7]|[Gg]ate exits? [1-7]\\b' -- . ':!design/tasks' ':!design/proposals' ':!design/T-165-validation.md' ':!design/t130-pr-body.md' ; (-P, so \\b means a word boundary on every platform; design/tasks, design/proposals, design/T-165-validation.md and design/t130-pr-body.md are dated records and are not edited); the worker runs it on the rebased base, fixes every hit that means a gate (including ones T-230 or T-231 add), and lists in the PR any hit left unchanged and why (for example tests/lib/sandbox-os.sh:64 exit 7, which is not a gate). Examples the list must include: README.md:455 ('six gates (1,2,4,5,6,7)'), bin/fm-gate.sh:2, tests/e2e-loop.test.sh:64 ('the fifth gate', fail-first, now gate 4), tests/review-evidence.test.sh:103 and :111, bin/fm-emit.sh:283, bin/fm-review.sh:268 (a user-facing echo: 'gate 4 will refuse it' becomes 'gate 3 (scope) will refuse it'), bin/lib/fm_autopilot_loop.py:5, CONTRIBUTING.md:53, .github/pull_request_template.md:20, .github/ISSUE_TEMPLATE/task-proposal.yml:31 ('scope globs that gate 4 enforces' becomes gate 3 (scope)), design/external-roadmap.md:48, :67, :73, skills/worker/SKILL.md:166, skills/firstmate/SKILL.md:132, :287, :591, tests/review-diff.test.sh:79, tests/session.test.sh:1018, tests/lib/spec-preflight.sh:9, tests/e2e/board-layout.spec.ts:23, :78, :144 (legacy {gate:5} events now render as gate 4 (fail-first) with the label), tests/e2e/lib/board.ts:13, :23 (the zh-CN gateFailedN string) and tests/e2e/board-locales.spec.ts:88 (the badge is {kind:'gate',gate:{n,name}}). Because git grep works line by line, the worker also runs a wrapped-line pass over the same files (POSIX awk, no \\b, which macOS awk does not support; for example: awk 'prev ~ /[Gg]ates?$/ && $0 ~ /^[[:space:]]*[1-7]([^0-9]|$)/ {print FILENAME\":\"FNR} {prev=$0}') and fixes its hits; on base it finds design/design.md:5160-5161 on main 2840cfa ('so gate / 4 refuses the changed task entry', the scope gate, now gate 3). tests/gate.test.sh:140 ('gates 6 and 7: gh is injectable') becomes 'gates 5 and 6'. The list includes design/design.md:5601 ('Gate exit 7 launches the next review round') and skills/firstmate/SKILL.md:230 ('review after gate exit 7'), both becoming exit 6; the T-232 sweep in tests/gate.test.sh also rejects `gate exits? 7([^0-9]|$)`.",
+  "Migration. Nothing stored is rewritten: readiness records keep gates [1,2,4,5,6,7] and stay valid (candidate accepts both forms); old transcripts are read by their missing GATES:2 header; old events with a numeric data.gate are mapped through legacy; decisions raised before T-232 with a 7-slot gates array render through legacy. Rounds already running finish on their frozen launcher snapshots (old numbers) and their gate runs are the autopilot's own snapshot, so no mixed exit codes are read. The first full gate run after T-232 writes a GATES:2 transcript and a name-list readiness record.",
+  "Tests (fail-first: only *.test.sh runs on base, so every new assertion is in a bash suite). New tests/gate-names.test.sh, red on base: (a) bin/lib/fm_gates.json has 6 gates numbered 1-6 with the six names and the legacy map; (b) bin/fm-gate.sh's g calls use exactly 1-6 and say() prints '(name)'; --only 7 exits 64 with the T-232 message, --only 8 and --only foo exit 64, --only approval works; (c) fm_binding ready writes the name list, and candidate accepts a fixture readiness record with gates [1,2,4,5,6,7]; (d) fm-review's gate section reads a legacy transcript and a GATES:2 transcript correctly; (e) fm-emit refuses a gate_failed with data.gate 5 or 'nope' (exit 64), accepts 'ci' with the wake line 'gate 5 (ci)', and under FM_EMIT_LEGACY_GATE=1 stores data.gate 6 unchanged with the wake line 'gate 5 (ci)'; (f) the autopilot launches a review on code 6, raises 'stopped at gate N (name)' for codes 1-5 (asserted for 3 and 5), and 'gate run failed (exit 70)' for 70; (g) /api/state's badge for a gate_failed event maps data.gate 'ci' and legacy 6 to gate 5 (ci), legacy 7 to gate 6 (approval), and legacy 3 to null (fixture events through the board server, as tests/board-readiness.test.sh starts it); (h) fm_autopilot's event filter treats data.gate 'approval' and legacy 7 as the review's own (reason None); (i) --only 5 and --only ci take the head-binding path and --only 6 / approval does not (stub as in stacking-binding.test.sh). e2e (tests/e2e/board-decisions.spec.ts): a pending merge decision with the by-name gates object and one with the legacy 7-slot array each render the six ticks 1-6 with names. Updated in place (each listed with its old-number assertions): tests/gate.test.sh:469-472 and the gate blocks, local-round-loop.test.sh (--only 7 -> 6), stacking-binding.test.sh (--only 6/7 and exit codes), gate-project-base.test.sh, self-contract-migration.test.sh and pinned-gate-contract.test.sh (--only 5 -> 4), review-evidence.test.sh, diagram.test.sh:269-272, board-readiness.test.sh, emit.test.sh, watch.test.sh, selfupdate.test.sh, spec-pin-*.test.sh, config.test.sh, standing-list.test.sh, worker-rebuild.test.sh/lib/worker-rebuild.sh, gate-check-evidence.test.sh, worker-mirror.test.sh, ci-sharding.test.sh, option-loop.test.sh, skills-contract.test.sh, external-reviews.test.sh, local-round-records.test.sh, board-live-stream.test.sh, e2e-loop.test.sh, tests/gh-stub.sh, tests/lib/{evidence_binding.py,autopilot_loop.py,autopilot_cases.py,preflight_lifecycle.py,binding-fixture.sh,autopilot_sync.py,spec_pins_cases.py}, tests/herdr/credentials.py, tests/e2e/board-locales.spec.ts and board-decisions.spec.ts, and tests/i18n.test.sh:81 and :86 (they read .gate4 from ui.zh-TW.json; that key becomes gate_scope). The worker greps tests/ for 'gate [1-7]', '1, 2, 4', '1 2 4 5 6 7', '--only [0-9]', 'exit 7' and 'gate[1-7]' keys (tests/lib/sandbox-os.sh:64 and tests/sandbox-os.test.sh:530 use exit 7 for something else and stay) and updates every hit that means a gate number. tests/gate.test.sh changes as follows: the agreement block (:466-480) compares the g calls, fm_gates.json and the board against 1-6; the label block (:482-491) requires gate_<name> keys in every ui.*.json and drops the gate3 'retired' checks (the key is gone); the T-114 sweep (:492-523) becomes a T-232 sweep: its pattern drops the alternative `gates? *(1|one) *(-|–|to|through) *(6|six|7|seven)` (gates 1-6 is now correct text) and keeps the seven-gates alternatives, adds `(^|[^0-9A-Za-z])gate 7([^0-9]|$)` and `gate 3 (runs|is) the (whole|project|local) check` outside the dated records (so 'gate 3 checks the scope' stays allowed); the sweep keeps git grep -niE and uses only POSIX ERE (no \\b, which git grep -E ignores on macOS), and its phrase self-check runs the same patterns through the same git grep -niE on a fixture repository (as the sweep_root fixture at :513-522 does), not plain grep, so a pattern that matches nothing on one platform fails the self-check there, the allowlist drops the 'keeps seven slots' entry (that paragraph is replaced), and its own phrase checks change accordingly ('gates 1-6 are green' is no longer caught; 'The seven gates', 'all 7 gates', 'gate 7 sends it' still are); the shape block (:525-548) asserts that the board reads a merge card's gates by name (and a legacy 7-slot array through the legacy map, never by position), that every merge-card gates producer in bin/ and board/ is the by-name object with exactly the six names; the existing 7-slot e2e fixtures (tests/e2e/board-card-effects.spec.ts:30 and :248, board-merges.spec.ts:66, board-pr-links.spec.ts:42 and :139, board-projects.spec.ts:32, tests/e2e/lib/fixture.ts:132) become by-name objects, and the one deliberate legacy fixture in board-decisions.spec.ts carries the comment marker 'legacy-gates (T-232)' on its line, which the shape assertion exempts (any other 7-slot array fails it), and that the end-to-end suite still expects six gate lines (toHaveCount(6)). tests/i18n.test.sh:69-71 requires gate_branch … gate_approval instead of gate1-gate7. Fixtures that write old-numbered events set FM_EMIT_LEGACY_GATE=1: tests/e2e/lib/board.ts emitFixture (:42-46) passes it when its data carries a numeric gate (used by tests/e2e/board-layout.spec.ts:23 with {gate:5}, which then renders as gate 4 (fail-first)), tests/board-readiness.test.sh:160 ({\"gate\":5}) and the case (g) events (legacy 6, 7, 3); tests/emit.test.sh:228 ({\"gate\":6}) becomes a name case ('ci') plus one FM_EMIT_LEGACY_GATE case. tests/e2e/lib/fixture.ts:95-104 adds bin/lib/fm_gates.json to the copied bin/lib files; bash board suites that copy all of bin/lib need nothing.",
+  "Scope and order. depends_on T-230 (board task detail, PR #217, touches board/ and i18n) and T-231 (external catch-up, touches bin/fm-worker.sh and the autopilot); T-232 rebases after both and changes only gate numbering and naming, nothing else. Not in scope: renaming gate concepts, changing what any gate checks, the board layout beyond the gate list and badge. Line numbers in this spec are from main 068a791-2840cfa and may have moved (for example fm-gate.sh :274-277 is now :286-290, fm_autopilot.py:659 is :673, design §6 starts at :1168, index.html :552 is :565, server.ts :962-971 is :971-981, fm-worker.sh :1181/:1189 are :1186/:1194); the quoted text is authoritative and the worker finds each place by it."
+ ],
+ "explain": {
+  "en": {
+   "intent": [
+    {
+     "kind": "fact",
+     "text": "The gates have the numbers 1 to 6 without a gap."
+    },
+    {
+     "kind": "fact",
+     "text": "Each gate has a stable name: branch, rebase, scope, fail-first, ci and approval."
+    },
+    {
+     "kind": "fact",
+     "text": "Records from before this change keep their old numbers and stay valid."
+    }
+   ],
+   "why": [
+    {
+     "kind": "fact",
+     "text": "You found the list 1, 2, 4, 5, 6, 7 on a merge card strange."
+    }
+   ],
+   "scope_in": [
+    "fm-gate.sh, readiness and the autopilot",
+    "the review prompt and events",
+    "the board and i18n",
+    "skills and design"
+   ],
+   "scope_out": [
+    "What each gate checks",
+    "Pinned task specs"
+   ],
+   "done": [
+    {
+     "kind": "fact",
+     "text": "Intent 1: fm-gate.sh numbers its gates 1 to 6 from fm_gates.json. tests/gate-names.test.sh case b proves it."
+    },
+    {
+     "kind": "fact",
+     "text": "Intent 2: readiness records store the gate names, and the board shows the names. Cases a and c and case g with the e2e gate list prove it."
+    },
+    {
+     "kind": "fact",
+     "text": "Intent 3: candidate accepts the legacy list 1, 2, 4, 5, 6, 7. Case c proves it."
+    }
+   ],
+   "notes": [
+    {
+     "kind": "caution",
+     "text": "Old gate 4 becomes gate 3, so an old number has a new meaning."
+    }
+   ],
+   "before_nodes": [
+    {
+     "state": "gone",
+     "label": "Gate numbers skip 3"
+    },
+    {
+     "state": "same",
+     "label": "fm-gate runs six checks"
+    },
+    {
+     "state": "gone",
+     "label": "Number lists in many files"
+    }
+   ],
+   "after_nodes": [
+    {
+     "state": "new",
+     "label": "One list in fm_gates.json"
+    },
+    {
+     "state": "same",
+     "label": "fm-gate runs six checks"
+    },
+    {
+     "state": "new",
+     "label": "Gates 1 to 6 with names"
+    },
+    {
+     "state": "new",
+     "label": "Legacy map reads old records"
+    }
+   ]
+  },
+  "zh-TW": {
+   "intent": [
+    {
+     "kind": "fact",
+     "text": "關卡編號是 1 到 6，沒有跳號。"
+    },
+    {
+     "kind": "fact",
+     "text": "每道關卡有固定名稱：branch、rebase、scope、fail-first、ci、approval。"
+    },
+    {
+     "kind": "fact",
+     "text": "改動前的紀錄保留舊編號，照樣有效。"
+    }
+   ],
+   "why": [
+    {
+     "kind": "fact",
+     "text": "你覺得合併卡上的 1、2、4、5、6、7 很奇怪。"
+    }
+   ],
+   "scope_in": [
+    "fm-gate.sh、就緒紀錄和 autopilot",
+    "review 提示和事件",
+    "看板和 i18n",
+    "skills 和 design"
+   ],
+   "scope_out": [
+    "每道關卡檢查的內容",
+    "已固定的任務 spec"
+   ],
+   "done": [
+    {
+     "kind": "fact",
+     "text": "意圖 1：fm-gate.sh 依 fm_gates.json 把關卡編成 1 到 6。tests/gate-names.test.sh 案例 b 證明。"
+    },
+    {
+     "kind": "fact",
+     "text": "意圖 2：就緒紀錄存關卡名稱，看板顯示名稱。案例 a、c，以及案例 g 和 e2e 關卡清單證明。"
+    },
+    {
+     "kind": "fact",
+     "text": "意圖 3：candidate 接受舊清單 1、2、4、5、6、7。案例 c 證明。"
+    }
+   ],
+   "notes": [
+    {
+     "kind": "caution",
+     "text": "舊的第 4 關變成第 3 關，所以舊編號有新意思。"
+    }
+   ],
+   "before_nodes": [
+    {
+     "state": "gone",
+     "label": "關卡編號跳過 3"
+    },
+    {
+     "state": "same",
+     "label": "fm-gate 跑六項檢查"
+    },
+    {
+     "state": "gone",
+     "label": "編號散在多個檔案"
+    }
+   ],
+   "after_nodes": [
+    {
+     "state": "new",
+     "label": "fm_gates.json 單一清單"
+    },
+    {
+     "state": "same",
+     "label": "fm-gate 跑六項檢查"
+    },
+    {
+     "state": "new",
+     "label": "關卡 1 到 6 有名稱"
+    },
+    {
+     "state": "new",
+     "label": "舊編號對照表讀舊紀錄"
+    }
+   ]
+  }
+ }
+}

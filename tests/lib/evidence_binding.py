@@ -122,7 +122,8 @@ binding_command = [sys.executable, str(code / 'bin/lib/fm_binding.py')]
 assert subprocess.run(binding_command + ['ready','--task','T-138','--pr','9','--head',changed], capture_output=True).returncode != 0, 'no readiness without six-gate transcript'
 gate_report=root/'state/gates'/('T-138-'+changed+'.txt')
 gate_report.parent.mkdir(parents=True)
-gate_report.write_text('HEAD:'+changed+'\n'+''.join('  + gate '+str(n)+': fixture gate passed\n' for n in (1,2,4,5,6,7)))
+mapping=json.loads((code/'bin/lib/fm_gates.json').read_text())
+gate_report.write_text('HEAD:'+changed+'\nGATES:2\n'+''.join(f"  + gate {g['n']} ({g['name']}): fixture gate passed\n" for g in mapping['gates']))
 assert subprocess.run(binding_command + ['ready', '--task', 'T-138', '--pr', '9', '--head', changed, '--gate-report', str(gate_report)], capture_output=True).returncode != 0, 'readiness must bind the base used by the gates'
 gate_report.write_text(gate_report.read_text().replace('HEAD:'+changed+'\n', 'HEAD:'+changed+'\nBASE:'+git('rev-parse','main')+'\n'))
 subprocess.run(binding_command + ['ready', '--task', 'T-138', '--pr', '9', '--head', changed, '--gate-report', str(gate_report)], check=True, capture_output=True)
@@ -139,7 +140,7 @@ card = subprocess.run(allocate+['--request',ident,'--pr','9','--expected-head',c
 assert card.returncode == 0, card.stderr
 payload = json.loads((root/'state/pending'/(ident+'.json')).read_text())
 assert payload['expected_head'] == changed and payload['binding']['head'] == changed
-assert payload['binding']['signature'] and payload['gates'] == [True,True,None,True,True,True,True]
+assert payload['binding']['signature'] and payload['gates'] == {g['name']: True for g in mapping['gates']}
 missing_id = subprocess.check_output(allocate+['--allocate'],text=True).strip()
 missing = subprocess.run(allocate+['--request',missing_id,'--pr','9','--details',str(details)], capture_output=True)
 assert missing.returncode != 0 and not (root/'state/pending'/(missing_id+'.json')).exists()

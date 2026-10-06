@@ -5,6 +5,8 @@ description: Assess a dispatched task artifact against its specification and clo
 
 # Reviewer
 
+The six gates are 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci, 6 approval.
+
 The launcher supplies your role and exact project/task identity. An explicitly
 dispatched role overrides native startup routing. The complete approved spec, design, conventions and gate contract are in the
 round's read-only `pinned/` folder. Use the absolute paths, pin version, hashes
@@ -264,7 +266,7 @@ Require the diff, task spec, acceptance, relevant design contract and the
 standing list; ask for missing context instead of inventing it, and do not
 request worker reasoning or logs. Say which commands you executed in a checkout
 and which claims you only read; in diff mode you ran none. Judge current
-verdict evidence, not stale approvals. T-163 managed Codex authenticates final-output provenance, but legacy gate 7
+verdict evidence, not stale approvals. T-163 managed Codex authenticates final-output provenance, but legacy gate 6
 is not sufficient proof of it or authoritative remote-head freshness, and the protocol checker proves neither that a finding matches
 the item it cites nor that a regression or new ground is real; report those limits to [firstmate](../firstmate/SKILL.md),
 which keeps the evidence, board-progress and Herdr pane rules once.
@@ -290,11 +292,11 @@ These merge-evidence checks do not add green CI to the review's standing list.
 Test organization follows T-130: feature-owned suites, at most 1200 lines per
 test file, shared fixtures in tests/lib/ or tests/e2e/lib/ and literal helper
 references. Instruction-only metadata checks prove structure, not model
-compliance; identify that limit without waiving gate 5 or inventing a test run.
+compliance; identify that limit without waiving gate 4 or inventing a test run.
 
 
 T-135 provenance contract (captain, 2026-10-02): local verdict records carry
-`authenticated` for managed Codex finals or `legacy` for other adapters. Gate 7
+`authenticated` for managed Codex finals or `legacy` for other adapters. Gate 6
 and the protocol reader accept both; legacy remains explicitly labelled and
 cannot claim T-163 authentication. Optional comments never replace local records.
 

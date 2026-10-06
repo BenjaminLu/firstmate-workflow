@@ -28,7 +28,7 @@ body:
     id: scope
     attributes:
       label: Likely scope
-      description: The files the change would touch, one per line. These become the task's scope globs that gate 4 enforces.
+      description: The files the change would touch, one per line. These become the task's scope globs that gate 3 (scope) enforces.
       placeholder: |
         bin/fm-....sh
         tests/....test.sh

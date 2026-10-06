@@ -1,21 +1,14 @@
 #!/usr/bin/env bash
-# The six gates: 1, 2, 4, 5, 6 and 7. Every one of them reads the
+# The six gates: 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci, 6 approval.
+# Every one of them reads the
 # filesystem, git, or an exit code. None of them reads what a model said
 # about its own work.
 #
-#   fm-gate.sh --task T-004 --repo <dir> --branch <name> [--pr 9] [--only N]
+#   fm-gate.sh --task T-004 --repo <dir> --branch <name> [--pr 9] [--only N|name]
 #
 # Exits 0 when all six pass, otherwise the number of the gate that failed.
 # The exit code is the gate number so a caller can tell "the tests are vacuous"
 # from "the reviewer never signed".
-#
-# Gate 3 is retired, and its number with it (T-114). It ran the whole
-# project.check locally, which is what the required GitHub check already runs
-# on the same head and gate 6 already reads; run beside other checks on one
-# machine it overran its budget and held heads CI had passed. No gate runs the
-# whole check any more, except gate 5 when it cannot tell which suites the
-# diff touches, and then it says so. Nothing exits 3, and `--only 3` is
-# refused rather than reported green.
 #
 # Gate runs on one machine are serialized: a run holds FM_GATE_LOCK (by
 # default /tmp/fm-gate.lock, the same path whatever TMPDIR the caller has)
@@ -32,7 +25,7 @@ exec < /dev/null
 # kept whole: the lock below re-runs this script once, with the lock open
 _fm_argv=("$@")
 
-REPO=''; TASK=''; BRANCH=''; PR=''; ONLY=''
+REPO=''; TASK=''; BRANCH=''; PR=''; ONLY=''; ONLY_SET=0
 BASE="${FM_BASE:-main}"
 
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
@@ -47,20 +40,30 @@ while [ $# -gt 0 ]; do
     --repo) need "$@"; REPO="${2-}"; shift 2 ;;
     --branch) need "$@"; BRANCH="${2-}"; shift 2 ;;
     --pr) need "$@"; PR="${2-}"; shift 2 ;;
-    --only) need "$@"; ONLY="${2-}"; shift 2 ;;
+    --only) need "$@"; ONLY_SET=1; ONLY="${2-}"; shift 2 ;;
     *) echo "fm-gate: unknown argument $1" >&2; exit 64 ;;
   esac
 done
 [ -n "$TASK" ] && [ -n "$REPO" ] && [ -n "$BRANCH" ] || {
-  echo "usage: fm-gate.sh --task <id> --repo <dir> --branch <name> [--pr N] [--only N]" >&2; exit 64; }
+  echo "usage: fm-gate.sh --task <id> --repo <dir> --branch <name> [--pr N] [--only N|name]" >&2; exit 64; }
 
-[ "$ONLY" != 3 ] || {
-  echo "fm-gate: gate 3 is retired; the required GitHub check it duplicated is gate 6" >&2; exit 64; }
+GATE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE_LIST="$GATE_BIN/lib/fm_gates.json"
+[ -r "$GATE_LIST" ] || { echo 'fm-gate: gate list unavailable: bin/lib/fm_gates.json' >&2; exit 70; }
+if [ "$ONLY_SET" = 1 ]; then
+  [ "$ONLY" != 7 ] || { echo 'fm-gate: gate numbers changed in T-232: approval is 6' >&2; exit 64; }
+  selected="$(jq -r --arg only "$ONLY" '.gates[] | select(.name == $only or (.n|tostring) == $only) | .n' "$GATE_LIST")"
+  [ -n "$selected" ] || {
+    echo "fm-gate: --only takes $(jq -r '[.gates[].n|tostring]|join(", ")' "$GATE_LIST") or $(jq -r '[.gates[].name]|join(", ")' "$GATE_LIST")" >&2; exit 64;
+  }
+  ONLY="$selected"
+fi
 
 say() {
-  printf '  %s gate %s: %s\n' "$1" "$2" "$3"
+  local name; name="$(jq -r --argjson n "$2" '.gates[] | select(.n == $n) | .name' "$GATE_LIST")"
+  printf '  %s gate %s (%s): %s\n' "$1" "$2" "$name" "$3"
   if [ -n "${GATE_TRANSCRIPT:-}" ]; then
-    printf '  %s gate %s: %s\n' "$1" "$2" "$3" >> "$GATE_TRANSCRIPT"
+    printf '  %s gate %s (%s): %s\n' "$1" "$2" "$name" "$3" >> "$GATE_TRANSCRIPT"
   fi
 }
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
@@ -74,7 +77,6 @@ g() {   # g <n> <description> ; body reads stdin-free, returns 0/1
   say 'x' "$n" "$desc"; exit "$n"
 }
 
-GATE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _fm_lib="$GATE_BIN/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "fm-gate: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
@@ -155,18 +157,18 @@ cd "$FM_TARGET_ROOT" || { echo "fm-gate: no repo at $FM_TARGET_ROOT" >&2; exit 6
 # Freeze every gate to the same authoritative SHA. A stale local task ref is
 # refused, never silently replaced by a newer, ungated candidate.
 VERIFIED_HEAD=''; TASK_REF="$BRANCH"
-if [ -n "$PR" ] && [ -n "$ONLY" ] && [ "$ONLY" != 6 ]; then
-  BASE="$(fm_binding local-gate-base --task "$TASK" --pr "$PR" --project-base "$BASE")" || exit 6
+if [ -n "$PR" ] && [ -n "$ONLY" ] && [ "$ONLY" != 5 ]; then
+  BASE="$(fm_binding local-gate-base --task "$TASK" --pr "$PR" --project-base "$BASE")" || exit 5
 fi
-if [ -n "$PR" ] && { [ -z "$ONLY" ] || [ "$ONLY" = 6 ]; }; then
-  VERIFIED_HEAD="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || exit 6
+if [ -n "$PR" ] && { [ -z "$ONLY" ] || [ "$ONLY" = 5 ]; }; then
+  VERIFIED_HEAD="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || exit 5
   BRANCH="$VERIFIED_HEAD"
-  BASE="$(fm_binding base --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD")" || exit 6
-  BASE="$(git rev-parse "$BASE^{commit}")" || exit 6
+  BASE="$(fm_binding base --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD")" || exit 5
+  BASE="$(git rev-parse "$BASE^{commit}")" || exit 5
   if [ -z "$ONLY" ]; then
     mkdir -p "$FM_STATE_DIR/gates" || exit 70
     GATE_TRANSCRIPT="$FM_STATE_DIR/gates/.$TASK-$VERIFIED_HEAD-$$.txt"
-    printf 'HEAD:%s\nBASE:%s\n' "$VERIFIED_HEAD" "$BASE" > "$GATE_TRANSCRIPT"
+    printf 'HEAD:%s\nBASE:%s\nGATES:2\n' "$VERIFIED_HEAD" "$BASE" > "$GATE_TRANSCRIPT"
     trap 'mv "$GATE_TRANSCRIPT" "$FM_STATE_DIR/gates/$TASK-$VERIFIED_HEAD.txt"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -200,20 +202,16 @@ gate2() {
   return "$rc"
 }
 
-# ---- 3. retired (T-114) --------------------------------------------------
-# It ran the whole project.check; gate 6 reads the required GitHub check that
-# runs the same thing on the same head.
-
 changed() { git diff --name-only "$BASE...$BRANCH"; }
-# ---- 4. the diff stays inside the task's declared scope ------------------
-gate4() {
+# ---- 3. the diff stays inside the task's declared scope ------------------
+gate3() {
   fm_pin scope --task "$TASK" --head "$BRANCH" --base "$BASE" >/dev/null
 }
 
-# ---- 5. the new tests are not vacuous ------------------------------------
+# ---- 4. the new tests are not vacuous ------------------------------------
 # Keep gate policy (declared docs and check fallback) in the shared engine.
 # The lock descriptor belongs to this launcher, never to its test children.
-gate5() {
+gate4() {
   local contract pin rc
   mkdir -p "$FM_STATE_DIR/tmp" || return 1
   pin="$(fm_pin resolve --task "$TASK")" || return 1
@@ -231,15 +229,15 @@ gate5() {
   return "$rc"
 }
 
-# ---- 6. the required GitHub check is green -------------------------------
+# ---- 5. the required GitHub check is green -------------------------------
 is_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
-gate6() {
+gate5() {
   is_num "$PR" || return 1
   fm_binding checks --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD" >/dev/null
 }
 
-# ---- 7. trusted local final verdict under the project's review policy ----
+# ---- 6. trusted local final verdict under the project's review policy ----
 # The signed local verdict must cover this head or its unchanged stable patch,
 # with no later rejection. Its source hashes, reviewer and final-answer
 # provenance are verified by the shared evidence reader. Comments are never
@@ -248,7 +246,7 @@ patch_of() {  # patch_of <base> <head>
   git diff-tree -r -p --no-renames "$1" "$2" 2>/dev/null | git patch-id --stable | cut -d' ' -f1
 }
 refused() { echo "      $1; a real re-review is needed" >&2; return 1; }
-gate7() {
+gate6() {
   local head mb patch
   head="$(git rev-parse --verify -q "$BRANCH^{commit}")" || return 1
   mb="$(git merge-base "$BASE" "$BRANCH")" || return 1
@@ -277,14 +275,14 @@ behind_base() {
 g 1 "branch exists and carries commits"          gate1
 g 2 "rebases onto $BASE cleanly"                 gate2
 if want 2; then behind_base; fi
-g 4 "diff stays inside the declared scope"       gate4
-g 5 "reverting the implementation turns tests red" gate5
-if [ "$ONLY" = 6 ]; then behind_base; fi
-g 6 "the required GitHub check is green"         gate6
-g 7 "bound reviewer approval:$TASK"          gate7
+g 3 "diff stays inside the declared scope"       gate3
+g 4 "reverting the implementation turns tests red" gate4
+if [ "$ONLY" = 5 ]; then behind_base; fi
+g 5 "the required GitHub check is green"         gate5
+g 6 "bound reviewer approval:$TASK"          gate6
 if [ -z "$ONLY" ] && [ -n "$PR" ]; then
-  [ "$(git rev-parse "$TASK_REF^{commit}")" = "$VERIFIED_HEAD" ] || exit 6
-  fm_binding ready --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD" --gate-report "$GATE_TRANSCRIPT" >/dev/null || exit 6
+  [ "$(git rev-parse "$TASK_REF^{commit}")" = "$VERIFIED_HEAD" ] || exit 5
+  fm_binding ready --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD" --gate-report "$GATE_TRANSCRIPT" >/dev/null || exit 5
 fi
 echo "  all six gates green"
 exit 0

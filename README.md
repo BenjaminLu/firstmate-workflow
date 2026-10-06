@@ -207,7 +207,7 @@ is an error. Session
 start/status use the same parser. External contracts are approved privately
 under `FM_HOME/projects/<name>/state/config.yaml`, never in the public registry.
 
-Gate 5 reads the complete verified contract snapshot in the task's approved
+Gate 4 reads the complete verified contract snapshot in the task's approved
 pin, including `docs` and `check_env`. It never reads the tested branch's
 contract or the mutable engine config. Old self pins read their recorded
 commit and location without repinning. Allowing a task to edit config does
@@ -231,10 +231,8 @@ indicator such as `*`. An unknown key, a `test` without `{file}` or a malformed
 block is an error, not an empty declaration.
 
 - **No gate runs the whole `check`** as a matter of course. The gates are
-  numbered 1, 2, 4, 5, 6 and 7: gate 3, which ran `check` locally, is
-  retired, because the required GitHub check runs it on the same head and
-  gate 6 reads that.
-- **Gate 5** classifies the diff with `tests`, reverts the implementation, runs
+  numbered 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci and 6 approval.
+- **Gate 4** classifies the diff with `tests`, reverts the implementation, runs
   `setup`, then runs through `test` only the suites the diff touches: each
   changed test, then each other test file that names one of them (a suite
   sourcing a changed helper). It requires green on head and red on base. When no suite can be run that
@@ -250,7 +248,7 @@ block is an error, not an empty declaration.
   unreadable protection needs confirmed checks and policy. Missing or running
   evidence is pending, failures are failed, unreadable evidence is unknown.
   Gate transcripts and signed readiness also bind the exact PR base tip;
-  head/base movement invalidates readiness. Gate 7 reads signed local final
+  head/base movement invalidates readiness. Gate 6 reads signed local final
   verdicts under the project review policy; comments alone carry no authority.
 - **Gate runs are serialized** on one machine by a kernel lock on a file
   (`FM_GATE_LOCK`, by default `/tmp/fm-gate.lock`, whatever `TMPDIR` is): a
@@ -452,7 +450,7 @@ the engine. Self-project compatibility remains. Migration requires approval;
 unreadable protection is unknown and requires confirmed project checks/policy.
 
 Acceptance binds GitHub's authoritative PR head to the local task ref, isolated
-checkout, check-runs plus commit statuses, six gates (1,2,4,5,6,7), authenticated
+checkout, check-runs plus commit statuses, six gates (1,2,3,4,5,6), authenticated
 review and merge candidate. Private local evidence is authoritative; GitHub
 posting follows project conventions. Merge/handoff, retention and stacking obey
 the approved contract, with captain approval and no automatic merge.

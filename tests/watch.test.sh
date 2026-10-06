@@ -161,7 +161,7 @@ class Wakes(Watch):
                   ('reviewer-c-t1-r1', 'verdict', 'review: T-1 APPROVE 4ea1ec2 #9'),
                   ('reviewer-d-t1-r2', 'verdict', 'review: T-1 REJECT 4ea1ec2 #9'),
                   ('worker-e-t1-r3', 'lost', 'lost: T-1 worker-e-t1-r3'),
-                  ('gate-T1-1', 'gate', 'gate: T-1 failed gate 6 #9')]
+                  ('gate-T1-1', 'gate', 'gate: T-1 failed gate 5 (ci) #9')]
         for item in pushed:
             self.push(*item)
         # the board's own items carry their decision, and the line is read from it

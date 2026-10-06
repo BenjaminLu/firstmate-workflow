@@ -40,10 +40,11 @@ assert_eq APPROVE "$(jq -r '.rounds[0].verdict' "$g/merged")" 'verdict marker is
 assert_eq codex "$(jq -r '.rounds[0].worker_vendor' "$g/merged")" 'round vendor comes from the identity payload'
 assert_eq 'Brief headline' "$(jq -r '.brief' "$g/merged")" 'only brief first line is public'
 assert_eq SUCCESS "$(jq -r '.readiness.checks[0].conclusion' "$g/merged")" 'readiness checks survive projection'
-assert_eq '[1,2,4,5,6,7]' "$(jq -c '.readiness.gates' "$g/merged")" 'readiness gates survive projection'
+assert_eq "$(jq -c .gates "$ROOT/bin/lib/fm_gates.json")" "$(jq -c '.readiness.gates' "$g/merged")" 'readiness gates survive projection'
 assert_eq false "$(jq '[..|strings|select(contains("BEGIN") or contains("evidence-signing"))]|length>0' "$g/merged")" 'no private evidence bodies'
 assert_eq false "$(jq '.readiness|has("review")' "$g/merged")" 'readiness review body is absent'
 curl -s "$url/api/task?id=T-001" > "$g/detail"
+assert_eq "$(jq -c .gates "$ROOT/bin/lib/fm_gates.json")" "$(jq -c .readiness.gates "$g/detail")" 'name-list readiness matches legacy projection'
 assert_eq '["D-1"]' "$(jq -c '[.cards[].id]' "$g/detail")" 'withdrawn cards stay out of history'
 assert_eq true "$(jq '.cards[0].ste_ok' "$g/detail")" 'pending card keeps STE status'
 wcurl "$port" -s -H 'Content-Type: application/json' -d '{"id":"D-1","chosen":"C","answers":[{"index":0,"ok":true}]}' "$url/decisions" > "$g/answer"

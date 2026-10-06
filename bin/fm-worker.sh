@@ -373,7 +373,7 @@ trap '' HUP
 
 
 # Resolve an existing pin before any branch-owned task lookup. An absent pin
-# keeps legacy unauthorised rounds readable; gate 4 will explicitly reject it.
+# keeps legacy unauthorised rounds readable; gate 3 will explicitly reject it.
 FM_SPEC_PIN_JSON=''
 FM_SPEC_PIN_JSON="$(fm_pin_existing "$TASK")"; pin_rc=$?
 case "$pin_rc" in 0|3) ;; *) exit "$pin_rc" ;; esac
@@ -1183,7 +1183,7 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
     0) spec="$(jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON")"
        set_crew_activity "$spec"
        emit --type spec_pinned --en "Approved task snapshot pinned" --tw "已固定核准的任務快照" ;;
-    3) echo 'fm-worker: no pin; gate 4 will refuse this round' >&2 ;;
+    3) echo 'fm-worker: no pin; gate 3 (scope) will refuse this round' >&2 ;;
     66) exit 65 ;; # An exact-snapshot refusal must not fall back to other bytes.
     *) # A failed first creation is not a corrupt existing pin. Recheck in
        # case a concurrent creator published a record while we collected.
@@ -1191,7 +1191,7 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
        case "$pin_existing_rc" in
          0) spec="$(jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON")"
             set_crew_activity "$spec" ;;
-         3) pin_warning='fm-worker: first pin could not be created; no pin; gate 4 will refuse this round'
+         3) pin_warning='fm-worker: first pin could not be created; no pin; gate 3 (scope) will refuse this round'
             echo "$pin_warning" >&2 ;;
          *) exit "$pin_existing_rc" ;;
        esac ;;

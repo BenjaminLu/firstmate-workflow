@@ -394,12 +394,12 @@ echo design > "$g/design/design.md"
 cp "$d/state/skill-updates/SK-001.json" "$g/design/tasks/SK-001.json"
 printf '# Worker\n' > "$g/skills/worker/SKILL.md"
 printf 'x\n' > "$g/bin/thing.sh"
-# gate 5 runs whatever bin/ci.sh the branch carries when it declares no
+# gate 4 runs whatever bin/ci.sh the branch carries when it declares no
 # project.test, so the fixture needs a real one: a gate that cannot run is
 # not a gate a skill-update passed
 printf '#!/usr/bin/env bash\nset -uo pipefail\nR="${FM_ROOT:-.}"\nrc=0\nfor t in "$R"/tests/*.test.sh; do\n  [ -f "$t" ] || continue\n  FM_ROOT="$R" bash "$t" || rc=1\ndone\nexit "$rc"\n' > "$g/bin/ci.sh"
 chmod +x "$g/bin/ci.sh"
-# and gate 5 runs only what the project declares, so it declares that
+# and gate 4 runs only what the project declares, so it declares that
 printf 'project:\n  check: bin/ci.sh\n' > "$g/config.yaml"
 # Private local records must survive every branch checkout below.
 printf 'state/\n' > "$g/.gitignore"
@@ -423,8 +423,8 @@ gate="GHSTATE='$GHSTATE' FM_GH='$GH' FM_REVIEWER_LOGIN=reviewer-1 FM_GATE_LOCK='
 assert_ok "$gate --branch sk-001-skill --pr $pr" \
   "a skill-update passes all six gates, markdown diff and all"
 said="$(eval "$gate --branch sk-001-skill --pr $pr" 2>&1)"
-assert_eq "1 2 4 5 6 7" "$(sed -n 's/^  + gate \([0-9]*\): .*/\1/p' <<<"$said" | tr '\n' ' ' | sed 's/ $//')" \
-  "and those six are gates 1, 2, 4, 5, 6 and 7, each said once, in that order"
+assert_eq "1 2 3 4 5 6" "$(sed -n 's/^  + gate \([0-9]*\) ([^)]*): .*/\1/p' <<<"$said" | tr '\n' ' ' | sed 's/ $//')" \
+  "and those six are gates 1, 2, 3, 4, 5 and 6, each said once, in that order"
 assert_contains "$said" "all six gates green" "and it says all six are green"
 
 # and each of the six, shown blocking. A gate nobody has seen go red is a
@@ -440,15 +440,13 @@ git -C "$g" commit -qam moved
 assert_fail "$gate --branch sk-001-conflict --pr $pr --only 2" "2 blocks one that will not rebase"
 git -C "$g" reset -q --hard HEAD~1
 
-# gate 3 is retired (T-114): the required check, gate 6, reads the suite.
-# Asking for it is refused, not reported green.
-assert_fail "$gate --branch sk-001-skill --pr $pr --only 3" "3 is retired, and asking for it is refused"
+
 
 git -C "$g" checkout -q -b sk-001-code main
 printf 'y\n' > "$g/bin/thing.sh"; git -C "$g" commit -qam code; git -C "$g" checkout -q main
-assert_fail "$gate --branch sk-001-code --pr $pr --only 4" "4 blocks one that reaches into bin/"
+assert_fail "$gate --branch sk-001-code --pr $pr --only 3" "3 blocks one that reaches into bin/"
 
-# Gate 5 is the other one a skill-update could have slipped past. A skill
+# Gate 4 is the other one a skill-update could have slipped past. A skill
 # changes no code, only markdown, and a gate that read "markdown is not
 # implementation" would wave every skill-update through untested.
 git -C "$g" checkout -q -b sk-001-vacuous main
@@ -459,21 +457,21 @@ git -C "$g" add -A; git -C "$g" commit -qm vacuous; git -C "$g" checkout -q main
 assert_eq "" "$(git -C "$g" ls-tree -r --name-only sk-001-vacuous -- state/)" \
   "fixture commits never track local round records"
 assert_ok "test -d '$g/state/evidence'" "branch switching retains seeded local records"
-assert_fail "$gate --branch sk-001-vacuous --pr $pr --only 5" "5 blocks one whose test passes without the change"
+assert_fail "$gate --branch sk-001-vacuous --pr $pr --only 4" "4 blocks one whose test passes without the change"
 
 : > "$GHSTATE/red"
-assert_fail "$gate --branch sk-001-skill --pr $pr --only 6" "6 blocks when the required check is red"
+assert_fail "$gate --branch sk-001-skill --pr $pr --only 5" "5 blocks when the required check is red"
 rm -f "$GHSTATE/red"
 
 # The required check still needs a PR. Local review approval is independent
 # of comment transport and remains bound to the approved branch's change.
-assert_fail "$gate --branch sk-001-skill --only 6" "6 blocks a skill-update with no pull request at all"
-assert_ok "$gate --branch sk-001-skill --only 7" "7 reads local approval without a pull request"
+assert_fail "$gate --branch sk-001-skill --only 5" "5 blocks a skill-update with no pull request at all"
+assert_ok "$gate --branch sk-001-skill --only 6" "6 reads local approval without a pull request"
 
 pr2="$("$GH" pr create --head sk-001-code --title 'another' | sed 's|.*/||')"
-assert_fail "$gate --branch sk-001-code --pr $pr2 --only 7" "7 blocks a pull request nobody approved"
+assert_fail "$gate --branch sk-001-code --pr $pr2 --only 6" "6 blocks a pull request nobody approved"
 seed_local_approval "$g" SK-001 sk-001-code someone-else
-assert_fail "$gate --branch sk-001-code --pr $pr2 --only 7" "7 blocks an approval from the wrong account"
+assert_fail "$gate --branch sk-001-code --pr $pr2 --only 6" "6 blocks an approval from the wrong account"
 rm -rf "$gate_code"
 
 fi

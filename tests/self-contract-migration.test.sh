@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise the shipped self contract through session, gate 5 and CI readers.
+# Exercise the shipped self contract through session, gate 4 and CI readers.
 set -uo pipefail
 for key in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do unset "$key" || true; done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -85,8 +85,8 @@ cat > "$d/tests/value.test.sh" <<'TEST'
 test "$FM_CI_MAX_SECONDS" = 600 && test -f installed && test -f browser-installed && test "$(cat bin/value)" = new
 TEST
 git -C "$d" add -A; git -C "$d" commit -qm feature
-run_gate() { "$ROOT/bin/fm-gate.sh" --repo "$d" --task T-X --branch work --only 5 > "$d.gate" 2>&1; }
-assert_ok run_gate "gate 5 runs the shipped registry contract snapshot"
+run_gate() { "$ROOT/bin/fm-gate.sh" --repo "$d" --task T-X --branch work --only 4 > "$d.gate" 2>&1; }
+assert_ok run_gate "gate 4 runs the shipped registry contract snapshot"
 run_failfirst() { (cd "$d" && bash "$ROOT/bin/fm-failfirst.sh" main) > "$d.report" 2>&1; }
 assert_ok run_failfirst "standalone fail-first runs the shipped registry contract"
 printf '\nproject:\n  check: false\n' >> "$d/config.yaml"

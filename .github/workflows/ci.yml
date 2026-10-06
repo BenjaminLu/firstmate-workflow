@@ -4,11 +4,11 @@ name: ci
 # sharded across N jobs, the bun tests, and the browser tests. Do not add a
 # step here that is not in that script, or the two will disagree about what
 # green means. One group of jobs is not a piece of that script: fail-first
-# runs bin/fm-failfirst.sh on a pull request (T-153), which is gate 5's
+# runs bin/fm-failfirst.sh on a pull request (T-153), which is gate 4's
 # question asked by the machine, not a stage of the check - sharded like the
 # bash suites, and merged by the `fail-first` job (T-158). The final `ci` job is the one required status check; it
 # needs every other job and fails if any of them failed or was skipped, so
-# branch protection and gate 6 read the same thing they always did (T-134).
+# branch protection and gate 5 read the same thing they always did (T-134).
 # The ci job also checks that every suite ran exactly once.
 on:
   push:
@@ -266,7 +266,7 @@ jobs:
           path: /tmp/fail-first.md
           if-no-files-found: ignore
 
-  # The one required status check (gate 6, branch protection): it needs
+  # The one required status check (gate 5, branch protection): it needs
   # every job above and fails if any of them failed or was skipped, so a
   # required check that stays named `ci` still means every stage passed.
   # fail-first alone may be skipped, and only where it does not run: on a

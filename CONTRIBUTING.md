@@ -25,7 +25,7 @@ tasks` prints one on demand. A pull request implements one task.
 - **To report a defect**, open a *bug* issue.
 - **A new task defines itself on its own branch.** Its file
   `design/tasks/<id>.json` is committed in the same pull request that
-  implements it. Gate 4 reads the scope from the branch under test.
+  implements it. Gate 3 reads the scope from the branch under test.
 
 ## Who does what
 
@@ -50,7 +50,7 @@ tasks` prints one on demand. A pull request implements one task.
 ## The gates
 
 Every pull request, human or agent, must pass the six gates of
-`design/design.md` section 6 before it is merged: 1, 2, 4, 5, 6 and 7.
+`design/design.md` section 6 before it is merged: 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci and 6 approval.
 `bin/fm-gate.sh` checks them and exits with the number of the first gate that
 failed. Each reads git, the filesystem, an exit code or GitHub; none reads
 what the author said about the work. Gates run one at a time on a machine:
@@ -62,7 +62,7 @@ that holds the same lock is refused.
 1. The branch exists and `git rev-list --count main..<branch>` is above 0.
 2. It rebases onto `main` without conflict, tried in a scratch worktree.
 3. *Retired (T-114).* It ran the whole project check locally, which the
-   required GitHub check (gate 6) already runs on the same head. The number
+   required GitHub check (gate 5) already runs on the same head. The number
    is kept so the other gates keep theirs.
 4. **The diff stays in scope**: every changed path matches a glob in the
    task's `scope`, read from `design/tasks/<id>.json` on the branch. A scope
@@ -91,7 +91,7 @@ that holds the same lock is refused.
 What "green" means is not hard-coded. It is the `project:` block of
 [`config.yaml`](config.yaml), described in the README: `setup` prepares a
 fresh checkout, `check` is the gate, `tests` and `docs` classify changed
-paths for gate 5. For this repository `check` is `bin/ci.sh`, the same file
+paths for gate 4. For this repository `check` is `bin/ci.sh`, the same file
 GitHub Actions runs, and `setup` is `bun install --frozen-lockfile` followed by
 the Playwright browser install. A fresh worktree has no `node_modules`; without
 `node_modules/@playwright`, `bin/ci.sh` skips its end-to-end stage instead of

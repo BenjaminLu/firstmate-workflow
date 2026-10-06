@@ -353,9 +353,15 @@ const reopens = (e: Event): boolean => {
 // dispatched now: backlog still waits on a dependency, ready waits on nobody.
 const LANES = ["backlog", "ready", "working", "gate", "review", "captain", "merged"] as const;
 
-// The numbers bin/fm-gate.sh gives its gates. 3 is retired (T-114), so a
-// failure naming it names no gate that exists.
-const GATE_NUMBERS = [1, 2, 4, 5, 6, 7];
+type Gate = { n: number; name: string };
+const gateList: { gates: Gate[]; legacy: Record<string, string> } = (() => {
+  try { return JSON.parse(readFileSync(join(ROOT, "bin/lib/fm_gates.json"), "utf8")); }
+  catch { console.warn("gate list unavailable: bin/lib/fm_gates.json"); return { gates: [], legacy: {} }; }
+})();
+const gateEntry = (value: unknown): Gate | null => {
+  const name = typeof value === "number" ? gateList.legacy[String(value)] : value;
+  return gateList.gates.find(gate => gate.name === name) ?? null;
+};
 
 // What the captain may do to a card, by where it sits (T-058, T-118). Any
 // unfinished task can be set aside: park is reversible, drop is the closed
@@ -1131,7 +1137,7 @@ const buildState = (only: string | null, tasksOnly = false) => {
   // The badges a card carries. Only what an event or a pending record says:
   // the gate that failed when the failure named it, an open ASK-PASS-CRITERIA,
   // and a waiting decision with the number of options it actually offers.
-  type Badge = { kind: "gate"; gate: number | null } | { kind: "ask" }
+  type Badge = { kind: "gate"; gate: Gate | null } | { kind: "ask" }
     | { kind: "decision"; id: string; options: number | null }
     | { kind: "lost"; actor: string } | { kind: "parked" };
   const badgesOf = (id: string, at: string): Badge[] => {
@@ -1139,7 +1145,7 @@ const buildState = (only: string | null, tasksOnly = false) => {
     const last = moved.get(id);
     if (at === "gate" && last?.type === "gate_failed") {
       const n = (last.data as { gate?: unknown } | undefined)?.gate;
-      out.push({ kind: "gate", gate: GATE_NUMBERS.includes(n as number) ? n as number : null });
+      out.push({ kind: "gate", gate: gateEntry(n) });
     }
     // T-118: blocked because its crewman was lost, which the card names
     if (at === "gate" && last?.type === "agent_lost") out.push({ kind: "lost", actor: String(last.actor ?? "") });
@@ -1579,6 +1585,8 @@ const buildState = (only: string | null, tasksOnly = false) => {
     engine: engine(),
     engineLive,
     lanes: LANES,
+    gates: gateList.gates,
+    gateLegacy: gateList.legacy,
     projects,
     // what a record naming no project belongs to, and the filter in force
     default_project: def || null,
@@ -2303,7 +2311,7 @@ const taskDetail = (project: string, id: string, locale: string) => {
   }
   for (const round of rounds.values()) round.head ??= round.worker_head;
   const ready = records.filter(r => r.kind === "readiness").at(-1);
-  const readiness = ready ? { head: ready.head, gate_base: ready.gate_base, gates: ready.gates, checks: ready.checks, round: ready.round } : null;
+  const readiness = ready ? { head: ready.head, gate_base: ready.gate_base, gates: ready.gates, ...(ready.gates_unmapped ? { gates_unmapped: true } : {}), checks: ready.checks, round: ready.round } : null;
   const brief = records.filter(r => r.kind === "brief").at(-1)?.brief ?? null;
   const current = buildState(project, true).tasks.find(t => t.id === id && (t.project || "") === project);
   if (!rounds.size) notes.push("not dispatched yet");

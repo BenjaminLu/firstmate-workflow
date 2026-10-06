@@ -81,9 +81,9 @@ assert_eq true "$(jq -s 'any(.[]; .data.evidence_event == "brief_round_finished"
 printf '1. fix src/feature:1\n' > "$d/brief.md"
 (cd "$repo" && bash bin/lib/fm-evidence.sh brief --task T-Z --round 2 --head "$head" --file "$d/brief.md")
 assert_eq 0 "$?" 'operator records an approved brief without a PR comment'
-(cd "$repo" && bin/fm-gate.sh --task T-Z --repo "$repo" --branch "$branch" --only 7 --pr 42) > "$d/gate.out" 2>&1
-assert_eq 7 "$?" 'gate 7 refuses a missing local verdict'
-assert_contains "$(cat "$d/gate.out")" 'missing local verdict' 'gate 7 names the missing evidence'
+(cd "$repo" && bin/fm-gate.sh --task T-Z --repo "$repo" --branch "$branch" --only 6 --pr 42) > "$d/gate.out" 2>&1
+assert_eq 6 "$?" 'gate 6 refuses a missing local verdict'
+assert_contains "$(cat "$d/gate.out")" 'missing local verdict' 'gate 6 names the missing evidence'
 export FM_CAPTURE="$d/review-prompt.md" FM_TEST_VERDICT=reject
 (cd "$repo" && bin/fm-review.sh --task T-Z --branch "$branch" --round 1 --pr 42) > "$d/review.out" 2>&1
 assert_eq 0 "$?" 'round-one legacy rejection is retained'
@@ -101,13 +101,13 @@ export FM_TEST_VERDICT=approve
 assert_eq 0 "$?" 'round-two local review completes'
 assert_contains "$(cat "$d/review-prompt.md")" '1. open fix src/feature:1' 'round two receives the local standing list'
 assert_lacks "$(cat "$d/review-prompt.md")" PRIVATE_WORKER_REASONING 'reviewer receives no worker reasoning'
-(cd "$repo" && bin/fm-gate.sh --task T-Z --repo "$repo" --branch "$branch" --only 7 --pr 42) > "$d/gate.out" 2>&1
-assert_eq 0 "$?" 'gate 7 accepts the latest local approval despite stale contradictory comments'
-assert_contains "$(cat "$d/gate.out")" provenance=legacy 'gate 7 states the provenance level'
+(cd "$repo" && bin/fm-gate.sh --task T-Z --repo "$repo" --branch "$branch" --only 6 --pr 42) > "$d/gate.out" 2>&1
+assert_eq 0 "$?" 'gate 6 accepts the latest local approval despite stale contradictory comments'
+assert_contains "$(cat "$d/gate.out")" provenance=legacy 'gate 6 states the provenance level'
 export FM_TEST_VERDICT=reject
 (cd "$repo" && bin/fm-review.sh --task T-Z --branch "$branch" --round 3 --pr 42) > "$d/review.out" 2>&1
-(cd "$repo" && bin/fm-gate.sh --task T-Z --repo "$repo" --branch "$branch" --only 7 --pr 42) > "$d/gate.out" 2>&1
-assert_eq 7 "$?" 'a later local rejection supersedes the local approval'
+(cd "$repo" && bin/fm-gate.sh --task T-Z --repo "$repo" --branch "$branch" --only 6 --pr 42) > "$d/gate.out" 2>&1
+assert_eq 6 "$?" 'a later local rejection supersedes the local approval'
 assert_fail "grep -q '^pr comment' '$d/calls'" 'local projection attempts no comment writes'
 rm -rf "$d"
 finish

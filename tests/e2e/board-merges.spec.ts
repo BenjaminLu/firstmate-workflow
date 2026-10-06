@@ -63,7 +63,7 @@ test('a second merge in the same project is refused while one runs, and its card
   test.setTimeout(60_000);
   const root = makeRoot(['working']);   // D-1, a merge of #99
   const second = join(root,'state/pending/D-2.json');
-  writeFileSync(second, JSON.stringify({id:'D-2',kind:'merge',task:'T-XB',pr:98,details,gates:[1,1,1,1,1,1,1]}));
+  writeFileSync(second, JSON.stringify({id:'D-2',kind:'merge',task:'T-XB',pr:98,details,gates:{branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:true}}));
   utimesSync(join(root,'state/pending/D-1.json'), new Date('2026-09-24T09:00:00Z'), new Date('2026-09-24T09:00:00Z'));
   utimesSync(second, new Date('2026-09-24T09:05:00Z'), new Date('2026-09-24T09:05:00Z'));
   const hold = join(root,'hold-merge');

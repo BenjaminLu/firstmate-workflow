@@ -10,7 +10,7 @@ export const TW = JSON.parse(readFileSync(join(ROOT, "i18n/ui.zh-TW.json"), "utf
 // made an incorrect or incomplete table prove itself correct.
 export const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',aboard:'在船上',
   roster:'船员名册',descriptionUnavailable:'尚无工作说明',waitingOnYou:'等你拍板',
-  titleMissing:'任务文件未列出标题',blockedOn:'卡在',gateFailedN:'第 {n} 道闸未过',
+  titleMissing:'任务文件未列出标题',blockedOn:'卡在',gateFailedN:'第 {n} 道闸（{label}）未过',
   optionsN:'{n} 个选项',rosterBtn:'名册',crossVendor:'跨供应商审核',mergedMore:'另 {n} 个在已完成历史中',
   alsoWaiting:'其他待决（点开就地展开）',
   engine:'引擎',gateFailed:'闸门未过',viewDesign:'design.md',
@@ -42,7 +42,7 @@ export const CREW = ["working", "gate", "review", "working", "gate"] as const;
 export function emitFixture(root:string, actor:string, task:string, type:string, en='', tw='', data={}) {
   const args=[join(root,'bin/fm-emit.sh'),'--actor',actor,'--task',task,'--type',type,'--data',JSON.stringify(data)];
   if(en)args.push('--en',en,'--tw',tw);
-  const result=spawnSync('bash',args,{env:{...process.env,FM_ROOT:root}});
+  const result=spawnSync('bash',args,{env:{...process.env,FM_ROOT:root,FM_EMIT_LEGACY_GATE: typeof (data as {gate?:unknown}).gate === "number" ? "1" : ""}});
   expect(result.status,result.stderr.toString()).toBe(0);
 }
 
@@ -73,6 +73,6 @@ const open = async (page: Page, lang: string, how: "query" | "stored" = "query",
 }
 
 export const emit = (root:string, type:string, pr:number) => {
-  const r = spawnSync('bash',[join(root,'bin/fm-emit.sh'),'--actor','github','--type',type,'--task',`T-${pr}`,'--pr',String(pr),'--en','fixture outcome','--tw','測試結果'], {env:{...process.env,FM_ROOT:root}});
+  const r = spawnSync('bash',[join(root,'bin/fm-emit.sh'),'--actor','github','--type',type,'--task',`T-${pr}`,'--pr',String(pr),'--en','fixture outcome','--tw','測試結果'], {env:{...process.env,FM_ROOT:root,FM_EMIT_LEGACY_GATE: typeof (data as {gate?:unknown}).gate === "number" ? "1" : ""}});
   expect(r.status).toBe(0);
 };
