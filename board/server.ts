@@ -1395,6 +1395,13 @@ const buildState = (only: string | null) => {
     ? [...vendorCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .map(([vendor, count]) => ({ vendor, count }))
     : null;
+  const designDocs: Record<string, string> = {};
+  for (const project of new Set([def, ...registry().projects.keys()])) {
+    const external = registry().projects.has(project) && stateDir(project) !== join(ROOT, "state");
+    const path = external ? "design.md" : "design/design.md";
+    if (existsSync(external ? join(dirname(stateDir(project)), path) : join(ROOT, path)))
+      designDocs[project] = path;
+  }
   const out = {
     engine: engine(),
     engineLive,
@@ -1424,6 +1431,7 @@ const buildState = (only: string | null) => {
     ste_rules: steRules,
     tasks: shownTasks,
     // design.md is linked from a card only when there is one to open
+    design_docs: designDocs,
     designDoc: existsSync(only && registry().projects.has(only) && stateDir(only) !== join(ROOT, "state")
       ? join(dirname(stateDir(only)), "design.md") : join(ROOT, "design/design.md")),
     designPath: only && registry().projects.has(only) && stateDir(only) !== join(ROOT, "state") ? "design.md" : "design/design.md",
@@ -1438,47 +1446,6 @@ const buildState = (only: string | null) => {
     recent: events.filter((e) => mine(e) && !closesLoss.has(e)).slice(-40).reverse().map(e => linked({ ...e, evidence_warning: evidenceWarning(e) })),
     pending: shownPending.map(linked),
   };
-  // The engine-wide view is an allow-listed metadata projection. Private
-  // descriptions and arbitrary event payloads are available only in an
-  // explicitly selected project's local view, never in aggregation.
-  if (!only) {
-    const keys = new Set(["id", "key", "project", "task", "pr", "pr_url", "type", "ts", "actor",
-      "role", "stage", "state", "kind", "chosen", "merge", "merge_unknown", "owner", "task_final", "identity",
-      "confirm", "merged_seq", "crew_name", "name", "mode", "round", "attempt", "vendor", "model", "model_source",
-      "model_requested", "cli_version", "model_mismatch", "host_recorded", "host_confirmed", "progress", "window_expected"]);
-    const metadata = (value: Record<string, any>) => {
-      const project = projectOf(value), entry = registry().projects.get(project);
-      if (!entry || entry.state === join(ROOT, "state")) return value;
-      const safe = Object.fromEntries(Object.entries(value).filter(([key, item]) =>
-        keys.has(key) && (item === null || ["string", "number", "boolean"].includes(typeof item))));
-      // Nested values are constructed by schema, never copied from records.
-      for (const key of ["depends_on", "blocked_on", "blocked_by"]) {
-        if (Array.isArray(value[key])) safe[key] = value[key].filter((x: unknown) => typeof x === "string" && isTask(x));
-      }
-      safe.badges = [];
-      safe.crew = Array.isArray(value.crew) ? value.crew.filter((x: unknown) => typeof x === "string" && /^[a-zA-Z0-9_-]+$/.test(x)) : [];
-      safe.actions = Array.isArray(value.actions) ? value.actions.filter((x: unknown) =>
-        typeof x === "string" && ["park", "unpark", "drop", "dispatch", "send_back"].includes(x)) : [];
-      const progress = value.progress;
-      if (progress && Number.isFinite(progress.done) && Number.isFinite(progress.total)
-          && progress.total > 0 && progress.done >= 0 && progress.done <= progress.total)
-        safe.progress = { done: progress.done, total: progress.total };
-      if (typeof safe.identity === "string")
-        safe.identity = "external:" + createHash("sha256").update(safe.identity).digest("hex");
-      else if (value.identity && typeof value.identity === "object")
-        safe.identity = identityOf(value.identity);
-      safe.title = null;
-      if ("answerable" in value) safe.answerable = false;
-      const pr = prNumber(value.pr);
-      safe.summary = value.type === "autopilot_waiting"
-        ? { en: "Project judgment is overdue; firstmate attention is needed.", "zh-TW": "專案判斷已逾時；需要 firstmate 處理。" }
-        : { en: `External project update${pr ? ` #${pr}` : ""}`,
-            "zh-TW": `外部專案狀態更新${pr ? ` #${pr}` : ""}` };
-      return safe;
-    };
-    for (const key of ["tasks", "crew", "pending", "responses", "recent", "outcomes", "handoffs"] as const)
-      out[key] = out[key].map(item => metadata(item as Record<string, any>)) as never;
-  }
   // Every #n in text links to its own project's pull request: a log line,
   // a card and a crewman's activity each read the map of the project they
   // belong to. `pr_urls` is the default project's, which is every #n on a

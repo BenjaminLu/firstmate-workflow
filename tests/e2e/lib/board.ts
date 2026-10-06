@@ -10,7 +10,7 @@ export const TW = JSON.parse(readFileSync(join(ROOT, "i18n/ui.zh-TW.json"), "utf
 // made an incorrect or incomplete table prove itself correct.
 export const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',aboard:'在船上',
   roster:'船员名册',descriptionUnavailable:'尚无工作说明',waitingOnYou:'等你拍板',
-  titleMissing:'design/tasks.json 未列出标题',blockedOn:'卡在',gateFailedN:'第 {n} 道闸未过',
+  titleMissing:'任务文件未列出标题',blockedOn:'卡在',gateFailedN:'第 {n} 道闸未过',
   optionsN:'{n} 个选项',rosterBtn:'名册',crossVendor:'跨供应商审核',mergedMore:'另 {n} 个在已完成历史中',
   alsoWaiting:'其他待决（点开就地展开）',
   engine:'引擎',gateFailed:'闸门未过',viewDesign:'design.md',

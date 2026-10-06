@@ -6,7 +6,7 @@ import { expect, type Page } from "@playwright/test";
 import { test, makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, projectState, readTasks, writeTasks, ROOT, details, scriptHeaders, signInAddress, tabToken } from "./lib/fixture";
 import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimesSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { EN, TW, CN, T040_KEYS, T057_KEYS, CN_ACTIVITY, CN_DETAILS, CREW, emitFixture, emit, CN_T058, useBoard } from "./lib/board";
 test('two projects on one board: chips everywhere, one answer leaves the other card, a merge runs in the background', async ({page}) => {
   test.setTimeout(90_000);
@@ -32,6 +32,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     writeFileSync(file, JSON.stringify({id, project, task:'T-001', kind:'merge', pr:7, details, gates:[1,1,1,1,1,1,1]}));
     return file;
   };
+  writeFileSync(join(dirname(projectState(root, 'beta')), 'design.md'), 'Beta design\n');
   const older = card('D-beta-T001-1','beta'), newer = card('D-alpha-T001-1','alpha');
   utimesSync(older, new Date('2026-09-24T09:00:00Z'), new Date('2026-09-24T09:00:00Z'));
   utimesSync(newer, new Date('2026-09-24T09:05:00Z'), new Date('2026-09-24T09:05:00Z'));
@@ -50,7 +51,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
       await expect(lane(p).locator('.hd a[data-pr]')).toHaveAttribute('href', `https://github.com/example-org/${repo}/pull/7`);
     }
     await expect(lane('alpha').locator('.t')).toHaveText('alpha one');
-    await expect(lane('beta').locator('.t')).not.toContainText('beta one');
+    await expect(lane('beta').locator('.t')).toHaveText('beta one');
     // crew roster: each crewman says whose task it is on
     await expect(page.locator('[data-roster="worker-a"] .pchip')).toHaveText('alpha');
     await expect(page.locator('[data-roster="worker-b"] .pchip')).toHaveText('beta');
@@ -60,6 +61,10 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await expect(page.locator('#card-D-beta-T001-1 > .meta .pchip')).toHaveText('beta');
     await expect(page.locator('#card-D-beta-T001-1 .links a[data-pr]')).toHaveAttribute('href', 'https://github.com/example-org/beta-app/pull/7');
     await expect(page.locator('#strip-D-alpha-T001-1 > summary .pchip')).toHaveText('alpha');
+    for (const choice of ['A', 'B'] as const)
+      await expect(page.locator(`#card-D-beta-T001-1 [data-c="${choice}"]`)).toContainText(details.en.options[choice].description);
+    await expect(page.locator('#card-D-beta-T001-1 .links a[data-open="design.md"]'))
+      .toHaveAttribute('href', '/file?path=design.md&project=beta');
     // the chip's label is the dictionary's; the name is data and stays as written
     await page.locator('#langs [data-l="zh-TW"]').click();
     await expect(lane('beta').locator('.pchip')).toHaveAttribute('title', TW.projectChip);
@@ -68,7 +73,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
 
     // answer beta's merge while its helper is held: the answer comes back, the
     // board says the merge is running, and alpha's card is still pending
-    await page.goto(`${b.url}/?lang=en&project=beta`);
+    await page.goto(`${b.url}/?lang=en`);
     writeFileSync(hold, '');
     await page.locator('#card-D-beta-T001-1 [data-c="A"]').click();
     await page.locator('#card-D-beta-T001-1 .confirm').click();
@@ -76,8 +81,8 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await expect(page.locator('#merging-D-beta-T001-1 .pchip')).toHaveText('beta');
     await expect(page.locator('#card-D-beta-T001-1')).toHaveCount(0);
     expect(existsSync(join(root, 'state/pending/D-alpha-T001-1.json'))).toBe(true);
-    // The selected project has no pending cards; the badge renders zero as empty.
-    await expect(page.locator('#pcount')).toHaveText('');
+    // Alpha's card is still pending on the one main page.
+    await expect(page.locator('#pcount')).toHaveText('1');
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '', {timeout:15_000})
       .toContain('--project beta');
     expect(JSON.parse(readFileSync(join(projectState(root, 'beta'),'decisions/D-beta-T001-1.json'),'utf8')).merge).toBe('running');
@@ -87,6 +92,12 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await expect.poll(() => JSON.parse(readFileSync(join(projectState(root, 'beta'),'decisions/D-beta-T001-1.json'),'utf8')).merge,
       {timeout:15_000}).toBe('merged');
     expect(existsSync(join(root, 'state/pending/D-alpha-T001-1.json'))).toBe(true);
+
+    // The optional beta filter is read-only here; the answer was made on the main page.
+    await page.goto(`${b.url}/?lang=en&project=beta`);
+    await expect(page.locator('#lanes [data-task="T-001"] .t')).toHaveText('beta one');
+    await expect(page.locator('#pcount')).toHaveText('');
+    await expect(page.locator('#deck .dcard')).toHaveCount(0);
 
     // ?project= shows one project: its cards, its crew and its count
     await page.goto(`${b.url}/?lang=en&project=alpha`);

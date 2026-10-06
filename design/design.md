@@ -1745,8 +1745,12 @@ title comes first from its `design/tasks/` definition, then its newest numeric
 dispatch pin, then its skill-update proposal, then the earliest
 `decision_requested` English summary (first line, dispatch and task-id prefixes
 removed, at most 200 characters plus an ellipsis), else the explicit missing-title
-label. Titles are read from the task's own project state; external project titles
-are sent only in that project's selected view, never in the engine-wide view.
+label. Titles are read from the task's own project state. The board is a local
+page on `127.0.0.1` for the captain alone: its one main page shows and answers
+every registered project's records in full, including external titles and
+bilingual decision details. `?project=` is an optional filter only. Each card's
+design link uses its project's `design_docs` entry when the document exists;
+`designDoc` and `designPath` remain for compatibility.
 `title_tw` carries the Chinese summary when the title came from a decision,
 and is null for the other sources; the page converts it for zh-CN. The merged
 lane shows the latest few merges, newest first, and counts the rest into the
@@ -2355,8 +2359,8 @@ localStorage. No stage animation or audio survives that document's removal.
 `BoardSource` consumes the host's existing `/api/state` and `/events` snapshots
 through a same-origin subscription. It does not open a second subscription or
 fetch an unfiltered project. Project keys identify tasks; real crew drive the
-ship. The adapter derives review streaks from allowed event/handoff records;
-opaque external aggregate identities disclose no private review payload. The
+ship. The adapter derives review streaks from every project's event/handoff
+records; external handoff identities retain the original event like self ones. The
 recent-event window may have gaps, so task snapshots reconcile parked/final
 states. Approvals alone unlock Live victory; simulated ticks cannot approve,
 dispatch or merge real work. Playground staging hooks and mini-games are absent
@@ -4952,9 +4956,11 @@ six-gate evidence.
 
 All external records in the tree above remain private, including events,
 decisions, diagrams, mirrors, context packs and unsent recovery. Engine state
-must not receive their specs, worktrees or evidence. The global board may
-aggregate authorized metadata without copying private content into engine
-state/public diagrams. Posting is an explicit projection controlled by project
+must not receive their specs, worktrees or evidence. The local board on
+`127.0.0.1` shows and answers every registered project's records in full on one
+main page for the captain alone; `?project=` is an optional filter. External
+records stay stored privately under `FM_HOME`, never written into engine state
+or public diagrams. Posting is an explicit projection controlled by project
 policy, not a prerequisite to retaining or gating local evidence.
 
 Cleanup, reconcile, worker, reviewer and gates take the same project context.

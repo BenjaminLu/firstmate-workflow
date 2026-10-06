@@ -67,7 +67,7 @@ test('preflight crew remains labelled through warnings, never creates tasks or c
   } finally { await stopBoard(b); }
 });
 
-test('external preflight mode survives the aggregate metadata projection', async ({page})=> {
+test('external preflight mode is visible on the main page', async ({page})=> {
   test.setTimeout(90_000);
   const root=makeRoot([],false);
   writeTasks(root,[]);
