@@ -30,6 +30,11 @@ def prompt(task, data, base):
     spec = json.loads(data)
     if spec.get('id') != task or not spec.get('scope') or not spec.get('acceptance'):
         raise ValueError('preflight needs the task identity, scope and acceptance lines')
+    if os.environ.get('FM_EXTERNAL') == '1':
+        from fm_public_text import validate
+        problems = validate(spec.get('public_title'), spec.get('public_summary'))
+        if problems:
+            raise ValueError('external spec needs a valid public_title: ' + '; '.join(problems))
     if 'explain' in spec:
         try:
             import fm_ste

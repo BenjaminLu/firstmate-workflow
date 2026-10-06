@@ -5339,8 +5339,16 @@ T-051's target execution path synchronizes and verifies the managed external
 clone before launch, using frozen engine scripts. A clean checked-out base may
 fast-forward to the fetched base; divergent or unpublished local work is retained
 and requires synchronization before launch. New task worktrees start at the
-fetched confirmed base. External task branch names, commit subjects and PR titles
-carry generic task labels rather than private spec titles, and PR/Actions requests
+fetched confirmed base. External task branch names carry generic task labels.
+External commit subjects and PR titles use the spec's validated `public_title`
+when present, else the generic task label; private spec titles stay private.
+Only `public_summary` supplies spec prose in the PR body. New external specs
+need a valid `public_title` at preflight; existing SPEC-OK receipts and pinned
+rounds keep the generic fallback without a new check. Both public fields live
+only in external specs under `FM_HOME/projects/<name>/tasks/`, never in tracked
+engine files. Public prose is plain English with no paths, regardless of posting
+languages. Later rounds rename only a PR whose title is still the exact generic
+label and whose head branch matches the task branch. PR/Actions requests
 name the selected repository. Both initial and rebuilt isolated review checkouts
 clone the target repository with their own objects and no remote. External review
 requires a PR and compares its authoritative head and fresh base with local refs

@@ -103,6 +103,31 @@ class Preflight(unittest.TestCase):
         self.record(self.spec + b' ')
         require_ok(self.store, self.spec + b' ')
 
+    def test_external_public_title_refusal_preserves_existing_receipts(self):
+        self.record()
+        with patch.dict(os.environ, FM_EXTERNAL='1'):
+            with self.assertRaisesRegex(ValueError, 'external spec needs a valid public_title:'):
+                prompt('T-X', self.spec, 'a' * 40)
+            # Existing SPEC-OK records remain valid without a new prompt.
+            self.assertEqual('SPEC-OK', require_ok(self.store, self.spec)['verdict'])
+            data = dict(json.loads(self.spec), public_title='Draw the fixture widget in blue')
+            self.assertIn('SPEC-OK:T-X', prompt('T-X', json.dumps(data).encode(), 'a' * 40))
+
+    def test_external_prompt_failure_keeps_launcher_exit_65(self):
+        path = self.root / 'spec.json'
+        path.write_bytes(self.spec)
+        launcher = (ROOT / 'bin/lib/fm-spec-preflight.sh').read_text()
+        start = launcher.index('python3 "$preflight_py" prompt ')
+        block = launcher[start:launcher.index('# An independent clone', start)]
+        result = subprocess.run(['bash', '-c',
+            'preflight_py="$1/bin/lib/fm_spec_preflight.py"; TASK=T-X; '
+            'FM_PINNED_DIR="$2"; base_head=base; preflight="$2"; ' + block +
+            '\nprintf launched > "$2/launched"', '_', str(ROOT), str(self.root)],
+            env=dict(os.environ, FM_EXTERNAL='1'), capture_output=True, text=True)
+        self.assertEqual(65, result.returncode, result.stderr)
+        self.assertIn('external spec needs a valid public_title:', result.stderr)
+        self.assertFalse((self.root / 'launched').exists())
+
     def test_prompt_four_checks_and_closing_rule(self):
         body = prompt('T-X', self.spec, 'a' * 40)
         for part in ('declared scope', 'caller, mirror, fixture', 'ids, formats, paths',

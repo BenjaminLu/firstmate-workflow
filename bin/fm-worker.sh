@@ -2102,8 +2102,29 @@ fi || { echo "fm-worker: could not set the executable bit on a new script on $br
 # a failed record - relies on that. Left on the base with the rebuild
 # staged, the next round would take a pushed or refused commit for an
 # uncommitted round and rescue it as crashed work.
-commit_msg="$TASK: $(jq -r .title <<<"$spec")"
-[ "$FM_EXTERNAL" = 0 ] || commit_msg="$TASK: project work"
+commit_msg="$TASK: project work"
+public_text=''
+if [ "$FM_EXTERNAL" = 0 ]; then
+  commit_msg="$TASK: $(jq -r .title <<<"$spec")"
+elif [ -n "${spec:-}" ] && [ -n "${FM_CODE_ROOT:-}" ]; then
+  # One guarded lookup from the pinned spec already held by this round.
+  # Keep validated public prose in memory, never in an engine-tracked file.
+  public_text="$(python3 -c '
+import json, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from fm_public_text import validate
+spec = json.load(sys.stdin)
+if validate(spec.get("public_title"), spec.get("public_summary")):
+    sys.exit(65)
+summary = spec.get("public_summary") or ""
+body = (summary + "\n\n" if summary else "") + "Captain acceptance and evidence are retained privately."
+print(json.dumps(dict(title=spec["public_title"].strip(), body=body)))
+' "$FM_CODE_ROOT/bin/lib" <<<"$spec" 2>/dev/null)" || public_text=''
+  if [ -n "$public_text" ]; then
+    commit_msg="$TASK: $(jq -r .title <<<"$public_text")"
+  fi
+fi
 fm_private_stage "$tree" || exit 65
 rebuilt_head=''; commit_ok=0
 if [ "$rebuilt" = 1 ]; then
@@ -2218,10 +2239,15 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   draft_args=()
   if first_round_question; then draft_args=(--draft); fi
   pr_body="Dispatched by firstmate for $TASK. Acceptance is in design/tasks/$TASK.json."
-  pr_title="$TASK: $(jq -r .title <<<"$spec")"
-  if [ "$FM_EXTERNAL" = 1 ]; then
-    pr_title="$TASK: project work"
+  pr_title="$TASK: project work"
+  if [ "$FM_EXTERNAL" = 0 ]; then
+    pr_title="$TASK: $(jq -r .title <<<"$spec")"
+  else
     pr_body="Task $TASK. Captain acceptance and evidence are retained privately."
+    if [ -n "${public_text:-}" ]; then
+      pr_title="$TASK: $(jq -r .title <<<"$public_text")"
+      pr_body="$(jq -r .body <<<"$public_text")"
+    fi
   fi
   url="$(fm_github pr create ${draft_args[@]+"${draft_args[@]}"} --head "$branch" --base "$BASE" \
         --title "$pr_title" \
@@ -2235,6 +2261,23 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   emit --type pr_opened --pr "$num" ${rebuild_args[@]+"${rebuild_args[@]}"} \
        --en "opened #$num" --tw "已開 #$num"
 else
+  # Upgrade only the untouched external fallback title. Never replace a title
+  # chosen by the captain, or one belonging to a different branch.
+  if [ "$FM_EXTERNAL" = 1 ] && [ -n "${public_text:-}" ]; then
+    if current_pr="$(fm_github pr view "$num" --json title,headRefName 2>/dev/null)" &&
+       jq -e 'type == "object" and (.title | type == "string") and (.headRefName | type == "string")' \
+         <<<"$current_pr" >/dev/null 2>&1; then
+      if jq -e --arg title "$TASK: project work" --arg branch "$branch" \
+           '.title == $title and .headRefName == $branch' <<<"$current_pr" >/dev/null; then
+        if ! fm_github pr edit "$num" --title "$TASK: $(jq -r .title <<<"$public_text")" \
+             --body "$(jq -r .body <<<"$public_text")" >/dev/null 2>&1; then
+          echo 'fm-worker: could not update the public PR title / 無法更新公開 PR 標題' >&2
+        fi
+      fi
+    else
+      echo 'fm-worker: could not read the PR title for update / 無法讀取待更新的 PR 標題' >&2
+    fi
+  fi
   emit_status "Pushed another round to #$num" "已推第二輪到 #$num"
   emit --type commit_pushed --pr "$num" ${rebuild_args[@]+"${rebuild_args[@]}"} \
        --en "pushed another round to #$num" --tw "第二輪已推上 #$num"
