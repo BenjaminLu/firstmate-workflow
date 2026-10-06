@@ -246,6 +246,25 @@ def validate_merge_methods(p):
         raise ValueError('merge method disabled by repository')
 
 
+def design_seed(name, p, contract):
+    lines = [f'# {name}: private design', '',
+             f"Written by fm project add at {p['confirmed_at']}. It is the approved design source every pin and round of this project reads. Firstmate edits it in place; onboarding never rewrites it.",
+             '', '## 1. Product intent', '', p['product'], '',
+             f"Captain intent ({p['confirmed_at']}): {p['captain']} — {p['intent']}",
+             '', '## 2. Repository and checks', '',
+             f"- Repository: {p['repository']}, base {p['base']}",
+             f"- Check: {contract['check']}"]
+    if contract.get('setup'):
+        lines.append(f"- Setup: {contract['setup']}")
+    lines.extend(['- Required checks: ' + ', '.join(p['required_checks']),
+                  '', '## 3. Policy', '',
+                  f"- Land: {p['land']}; review: {p['review']}; post: {p['post']}",
+                  f"- Merge method: {p['merge_method']}; delete branch: {p['delete_branch']}",
+                  '', '## 4. Task intents', '',
+                  'Firstmate adds one subsection per task before its spec is pinned.', ''])
+    return '\n'.join(lines)
+
+
 def approve(home, e, p, answers):
     if answers.get('confirmed') is not True or answers.get('policy_confirmed') is not True:
         raise ValueError('explicit captain confirmation required')
@@ -280,6 +299,11 @@ def approve(home, e, p, answers):
     # owns interpretation, including test globs and commands.
     atomic(home/'state/config.yaml', contract_text)
     atomic(home/'CONVENTIONS.md', render(p))
+    design = home/'design.md'
+    if design.is_symlink():
+        raise ValueError('refusing symlink: ' + str(design))
+    if not design.exists():
+        atomic(design, design_seed(home.name, p, contract))
     return p
 
 

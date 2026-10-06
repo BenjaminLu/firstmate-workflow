@@ -4868,6 +4868,7 @@ repository is accepted; HTTP 404 protection is unknown, never proof of absent
 protection. `fm project add` records a bounded inspection privately, offers at
 most three missing-contract question groups, then writes CONVENTIONS.md only
 with explicit captain-confirmed checks, policy, product intent and commands.
+The same confirmation writes an initial private design.md beside it (T-226), seeded from the confirmed product intent, captain intent, check, setup, required checks and policy, with an empty task-intents section; it is the project's approved design source for every pin, and onboarding never overwrites an existing one.
 The public engine registry carries routing only; command configuration is
 `FM_HOME/projects/<name>/state/config.yaml`. Onboarding inserts the routing entry
 into the existing `projects:` block, allowing a trailing comment on its header
