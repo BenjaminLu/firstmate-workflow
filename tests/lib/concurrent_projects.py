@@ -12,6 +12,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
@@ -224,6 +225,79 @@ exec python3 -c 'import time; time.sleep(120)'
         self.assertNotEqual(0, out.returncode)
         self.assertEqual([], self.receipts())
         self.assertIn('verify beta', (self.home / 'verification.log').read_text())
+
+    def card_only(self, task='T-012', **changes):
+        card = 'D-beta-' + task.replace('-', '') + '-1'
+        event = dict(type='decision_made', actor='captain', project='beta', task=task,
+                     ts='2026-10-06T00:00:00Z', data=dict(decision=card, chosen='A'))
+        event.update(changes)
+        (self.state('beta') / 'events.jsonl').write_text(json.dumps(event) + '\n')
+        return card
+
+    def stock_preview(self, *args):
+        return subprocess.run(['bash', str(self.engine / 'bin/fm-dispatch.sh'),
+                               '--repo', str(self.engine), '--project', 'beta',
+                               '--dry-run', *args], env=self.env,
+                              capture_output=True, text=True, timeout=40)
+
+    def test_readiness_card_greenlights_external_stock_dispatch(self):
+        self.card_only()
+        out = self.stock_preview('--task', 'T-012')
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn('T-012', out.stdout)
+        out = self.stock_preview()
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn('T-012', out.stdout)
+        self.assertNotIn('T-013', out.stdout)
+        self.assertNotIn('T-014', out.stdout)
+
+    def test_uncarded_order_is_held_when_another_task_has_authority(self):
+        self.card_only('T-013')
+        out = self.stock_preview('--task', 'T-012')
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertNotIn('T-012', out.stdout)
+        self.assertIn('fm-dispatch: T-012 has no greenlit event and no captain A card', out.stderr)
+        self.assertIn('fm-dispatch: nothing is ready', out.stdout)
+
+    def test_invalid_readiness_cards_do_not_greenlight_project(self):
+        for invalid in ('event_B', 'actor', 'decision', 'task', 'project', 'event_project', 'symlink', 'timestamp'):
+            with self.subTest(invalid=invalid):
+                self.clear('beta', 'T-012')
+                card = self.card_only()
+                path = self.state('beta') / 'decisions' / (card + '.json')
+                event_path = self.state('beta') / 'events.jsonl'
+                event = json.loads(event_path.read_text())
+                answer = json.loads(path.read_text())
+                if invalid == 'event_B': event['data']['chosen'] = 'B'
+                if invalid == 'actor': event['actor'] = 'firstmate'
+                if invalid == 'decision':
+                    event['data']['decision'] = 'D-other'
+                    other = dict(answer, id='D-other')
+                    (path.parent / 'D-other.json').write_text(json.dumps(other))
+                if invalid == 'task': answer['task'] = 'T-013'
+                if invalid == 'project': answer['project'] = 'alpha'
+                if invalid == 'event_project': event['project'] = 'alpha'
+                if invalid == 'timestamp': event.pop('ts')
+                path.write_text(json.dumps(answer))
+                if invalid == 'symlink':
+                    target = path.with_suffix('.target')
+                    path.rename(target); path.symlink_to(target)
+                event_path.write_text(json.dumps(event) + '\n')
+                out = self.stock_preview('--task', 'T-012')
+                self.assertNotEqual(0, out.returncode)
+                if invalid == 'symlink':
+                    # Registry validation refuses symlinked records before
+                    # prepare is reached. Check that boundary, then exercise
+                    # prepare's card check with an already resolved route.
+                    self.assertIn('must not be a symlink', out.stderr)
+                    route = dict(name='beta', state=str(self.state('beta')),
+                                 tasks=str(self.home / 'projects/beta/tasks'))
+                    with patch.object(module, 'shell', return_value=json.dumps(dict(id='T-012'))):
+                        with self.assertRaisesRegex(ValueError, 'no greenlit event'):
+                            module.prepare(self.engine, route, 'alpha', 'T-012')
+                else:
+                    self.assertIn('no greenlit event', out.stderr)
+                path.unlink()
 
     def test_freed_slot_goes_to_project_with_fewer_live_runs(self):
         first = self.dispatch('--project', 'alpha', '--limit', '2')

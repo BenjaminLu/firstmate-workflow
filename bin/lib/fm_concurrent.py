@@ -117,7 +117,16 @@ fm_tasks "$FM_TASKS_DIR"''', name)
     if ordered and not any(t['id'] == ordered for t in tasks):
         raise ValueError('--task ' + ordered + ' has no file in ' + route['tasks'])
     events = read_events(route, default)
-    if not any(e.get('type') == 'greenlit' for e in events):
+    greenlit = any(e.get('type') == 'greenlit' for e in events)
+    carded = set()
+    if not greenlit:
+        # File-path imports of this coordinator need no pin dependencies until
+        # dispatch actually checks card authority.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from fm_spec_pins import readiness_card_approval
+        carded = {t['id'] for t in tasks if readiness_card_approval(
+            events, Path(route['state']), name or 'firstmate-workflow', t['id'])}
+    if not greenlit and not carded:
         raise ValueError('no greenlit event - nothing is dispatched for ' + (name or 'self'))
     done = {e.get('task') for e in events if e.get('type') == 'merged'}
     closed = {e.get('task') for e in events if e.get('type') == 'closed'}
@@ -140,6 +149,8 @@ fm_tasks "$FM_TASKS_DIR"''', name)
         elif task_id in closed: why = 'is closed'
         elif task_id in touched: why = 'is already in flight'
         elif parks.get(task_id): why = 'is parked'
+        elif not greenlit and task_id not in carded:
+            why = 'has no greenlit event and no captain A card'
         else:
             unmet = [d for d in task.get('depends_on', []) if d not in done]
             if unmet:

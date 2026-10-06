@@ -457,13 +457,12 @@ review and merge candidate. Private local evidence is authoritative; GitHub
 posting follows project conventions. Merge/handoff, retention and stacking obey
 the approved contract, with captain approval and no automatic merge.
 
-The basic pilot is the actual empty `/Users/benjamin/Desktop/maker-founder` repo,
-observed with HEAD master and no commits or remote. Its product/remote contract
-and bootstrap must be approved before a real scoped task is dispatched via
-the stock dispatcher to a visible owned Codex Herdr run. Capture isolated review,
-checks/gates, outputs and cleanup/retention evidence. A mock fixture or manual
-relaunch after dead dispatch is insufficient. Advanced external reviewers,
-stacking and autopilot (T-140/T-143/T-141) are separate from the basic pilot.
+The external-project flow has run end to end on a private repository: onboarding,
+private conventions and design under `FM_HOME`, dispatch by the captain's cards,
+isolated worker rounds and reviews, wakes forwarded to firstmate, catch-up
+rebuild with a lease, the six gates on the authoritative head, and landing by
+the captain's card. External reviewers, stacking and autopilot
+(T-140/T-143/T-141) remain advanced integrations.
 
 ### External project storage (T-142)
 
