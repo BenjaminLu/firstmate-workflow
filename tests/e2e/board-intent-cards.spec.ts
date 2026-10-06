@@ -4,6 +4,40 @@ import { intentCard } from './lib/intent-card';
 import { writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
+for (const empty of [false, true]) test(`intent-only card omits optional content; empty fields ${empty}`, async ({page}) => {
+  const root = makeRoot([], false), d = intentCard();
+  for (const locale of ['en', 'zh-TW']) {
+    for (const field of ['why', 'done', 'scope_in', 'scope_out', 'notes', 'questions', 'outcome']) {
+      if (empty) d.details[locale][field] = field === 'outcome' ? '' : [];
+      else delete d.details[locale][field];
+    }
+  }
+  writeFileSync(join(root, 'state/pending/D-211.json'), JSON.stringify(d));
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const card = page.locator('#card-D-211');
+    await expect(card.locator('h4')).toHaveText(['Intent', 'How it works', 'Options']);
+    await expect(card.locator('.intent-why, .intent-outcome, .intent-scope, .confirm-questions')).toHaveCount(0);
+    await expect(card.locator('.confirm')).toBeDisabled();
+    await card.locator('[data-c="A"]').click();
+    await expect(card.locator('.confirm')).toBeEnabled();
+  } finally {await stopBoard(b);}
+});
+
+for (const field of ['scope_in', 'scope_out']) test(`one-sided scope renders only ${field}`, async ({page}) => {
+  const root = makeRoot([], false), d = intentCard();
+  for (const locale of ['en', 'zh-TW']) delete d.details[locale][field === 'scope_in' ? 'scope_out' : 'scope_in'];
+  writeFileSync(join(root, 'state/pending/D-211.json'), JSON.stringify(d));
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const scope = page.locator('#card-D-211 .intent-scope');
+    await expect(scope.locator('h5')).toHaveCount(1);
+    await expect(scope.locator('li')).toHaveText([field === 'scope_in' ? 'Board cards' : 'Other pages']);
+  } finally {await stopBoard(b);}
+});
+
 for (const missingRules of [false, true]) test(`intent sections and stored chips; rules ${missingRules ? 'absent' : 'present'}`, async ({page}) => {
   const root = makeRoot([], false), d = intentCard();
   writeTasks(root,[{id:'T-211',title:'Intent cards',depends_on:[]}]);

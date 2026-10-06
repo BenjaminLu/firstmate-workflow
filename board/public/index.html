@@ -756,7 +756,7 @@ function render(s) {
       links(d) +
       `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'), d)}</p>` +
       (content?.intent ? '' : DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after), d)}</p></section></div>` : '')) +
-      (content?.intent ? `<p class="intent-outcome">${said(words(content.outcome || ''), d)}</p>` : '') +
+      (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome), d)}</p>` : '') +
       (d.kind === "merge" && gates.length
         ? `<ul class="gates">${GATES().map((g,i)=>{const n=GATE_NUMBERS[i], ok=gates[n-1];return `<li class="${ok?"y":"n"}"><i>${ok?"&#10003;":"&#8211;"}</i>${n}. ${g}</li>`;}).join("")}</ul>`
         : "") +
@@ -895,6 +895,7 @@ function sectionItems(d, section, items, draw, wrap = html => html) {
 function intentBody(d, content, locked) {
   const pick = picks.get(d.id);
   const list = html => `<ul>${html}</ul>`;
+  const hasItems = field => Array.isArray(content[field]) && content[field].length > 0;
   const sentences = (field, numbered = false) => sectionItems(d, field, content[field] || [], (item, index) =>
     `<li>${numbered ? `<b>${esc(t('intentHeading'))} ${index + 1}</b> · ` : ''}${steSentence(d, field, index, item.text)}</li>`, list);
   const controls = index => {
@@ -903,18 +904,18 @@ function intentBody(d, content, locked) {
       `<label ${a?.ok === false ? '' : 'hidden'}>${esc(t('answerText'))}<textarea data-id="${esc(d.id)}" data-question="${index}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(a?.text || '')}</textarea></label></div>`;
   };
   const intent = `<section><h4>${esc(t('intentHeading'))}</h4>${sentences('intent', true)}` +
-    `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${steSentence(d,'why',index,item.text)}</span>`)}</div></section>`;
+    (hasItems('why') ? `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${steSentence(d,'why',index,item.text)}</span>`)}</div>` : '') + '</section>';
   const how = `<section class="intent-how"><h4>${esc(t('howHeading'))}</h4>` +
     DIAGRAM.embed(d.id) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after), d)}</p></section></div></section>`;
-  const alignment = `<section><h4>${esc(t('alignmentHeading'))}</h4>${sentences('done')}</section>`;
+  const alignment = hasItems('done') ? `<section><h4>${esc(t('alignmentHeading'))}</h4>${sentences('done')}</section>` : '';
   const scopeItems = ['scope_in','scope_out'].flatMap(field => (content[field] || []).map(text => ({field, text})));
   const scopeKey = JSON.stringify([d.id, 'scope']);
   const shownScope = revealedSections.has(scopeKey) ? scopeItems : scopeItems.slice(0,6);
-  const scope = `<section><h4>${esc(t('scopeHeading'))}</h4><div class="intent-scope">` +
-    ['scope_in','scope_out'].map(field => `<div><h5>${esc(t(field === 'scope_in' ? 'scopeIn' : 'scopeOut'))}</h5><ul>${shownScope.filter(item => item.field === field).map(item => `<li>${said(words(item.text),d)}</li>`).join('')}</ul></div>`).join('') +
-    `</div>${shownScope.length < scopeItems.length ? `<button type="button" class="show-more" data-reveal="${esc(scopeKey)}">${esc(t('showMore').replace('{n}',scopeItems.length - shownScope.length))}</button>` : ''}</section>`;
-  const notes = `<section><h4>${esc(t('notesHeading'))}</h4>` +
-    sectionItems(d, 'notes', content.notes || [], (note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${steSentence(d,'notes',index,note.text)}</p></aside>`) + '</section>';
+  const scope = scopeItems.length ? `<section><h4>${esc(t('scopeHeading'))}</h4><div class="intent-scope">` +
+    ['scope_in','scope_out'].filter(hasItems).map(field => `<div><h5>${esc(t(field === 'scope_in' ? 'scopeIn' : 'scopeOut'))}</h5><ul>${shownScope.filter(item => item.field === field).map(item => `<li>${said(words(item.text),d)}</li>`).join('')}</ul></div>`).join('') +
+    `</div>${shownScope.length < scopeItems.length ? `<button type="button" class="show-more" data-reveal="${esc(scopeKey)}">${esc(t('showMore').replace('{n}',scopeItems.length - shownScope.length))}</button>` : ''}</section>` : '';
+  const notes = hasItems('notes') ? `<section><h4>${esc(t('notesHeading'))}</h4>` +
+    sectionItems(d, 'notes', content.notes || [], (note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${steSentence(d,'notes',index,note.text)}</p></aside>`) + '</section>' : '';
   const options = `<section class="acts intent-options"><h4>${esc(t('optionsHeading'))}</h4>` +
     ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content.options?.[k];
@@ -924,8 +925,8 @@ function intentBody(d, content, locked) {
     }).join('') +
     `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t('customChoice'))}</button>` +
     `<label ${pick === 'custom' ? '' : 'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label></section>`;
-  const questions = `<section class="confirm-questions"><h4>${esc(t('confirmQuestions'))}</h4>` +
-    sectionItems(d, 'questions', content.questions || [], (q,index) => `<div class="confirm-question"><p>${steSentence(d,'questions',index,q.text)}</p>${controls(index)}</div>`) + '</section>';
+  const questions = hasItems('questions') ? `<section class="confirm-questions"><h4>${esc(t('confirmQuestions'))}</h4>` +
+    sectionItems(d, 'questions', content.questions || [], (q,index) => `<div class="confirm-question"><p>${steSentence(d,'questions',index,q.text)}</p>${controls(index)}</div>`) + '</section>' : '';
   const footer = `<footer class="acts intent-footer"><span class="validation" id="validation-${esc(d.id)}"></span>` +
     (refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : '') +
     `<button class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(sent.has(d.id) ? t('sending') : t('confirmOrder'))}</button></footer>`;
