@@ -91,7 +91,7 @@ with open(sys.argv[4], 'a') as log:
         (self.home / 'design.md').write_text('Private design.\n')
         self.state = self.home / 'state'
         Store(self.state, 'app', 'T-223', external=True).append('spec-preflight', 1,
-            'reviewer-fixture', 'a' * 40, 'SPEC-OK:T-223',
+            'reviewer-fixture', 'a' * 40, '1. Fixture acceptance checked.\nSPEC-OK:T-223',
             spec_sha256=hashlib.sha256(spec.encode()).hexdigest(), verdict='SPEC-OK',
             provenance={'level': 'legacy', 'vendor': 'claude'})
         (self.state / 'events.jsonl').write_text(json.dumps(dict(type='greenlit',

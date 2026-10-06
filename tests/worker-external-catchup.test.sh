@@ -226,6 +226,36 @@ command git --git-dir="$work/origin.git" update-ref refs/heads/task "$rebuild_ba
         self.assertEqual(self.remote_head(), self.prev)
         self.assertNotIn(' push ', (self.home / 'gitcalls').read_text())
 
+    def test_failed_private_rebuild_note_still_projects_pushed_head(self):
+        self.base_moves('conflict')
+        post_push = section(worker, '# The reviewer reads the pull request,',
+                            '# the note refused above still requires')
+        for failure in ('fm_private_note() { return 1; }',
+                        'scratch_new() { return 1; }',
+                        'scratch_new() { echo "$work/missing/note"; }'):
+            with self.subTest(failure=failure):
+                self.git('checkout', '-f', 'task')
+                p = self.run_body('bring_up_to_date\n' + self.resolve() +
+                    self.precommit() + self.commit_block() + self.publication() +
+                    failure + '\n' + post_push + '\necho completed', r'''
+num=9; projection=summary
+fm_private_note() { echo unexpected-retention; return 0; }
+fm_external() { printf 'projection %s\n' "$*"; }
+fm_github() { echo forbidden-public-note; return 1; }
+''')
+                self.check_ok(p)
+                self.assertIn('could not retain the private rebuild note', p.stderr)
+                self.assertEqual(self.remote_head(), self.head())
+                self.assertEqual(self.git('show', '-s', '--format=%P'), self.base)
+                self.assertEqual(p.stdout.count('projection project --pr 9 --head ' +
+                                               self.head() + ' --stage worker'), 1)
+                self.assertIn('completed', p.stdout)
+                self.assertNotIn('forbidden-public-note', p.stdout)
+                self.assertNotIn('unexpected-retention', p.stdout)
+                # Start the next failure case from the same conflicting task head.
+                self.git('reset', '--hard', self.prev)
+                self.git('push', '--force', 'origin', 'task')
+
     def test_rebuilt_note_does_not_project_before_push(self):
         self.base_moves('conflict')
         p = self.run_body('bring_up_to_date\n' + function(worker, 'post_note') + r'''

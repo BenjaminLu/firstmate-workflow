@@ -2234,14 +2234,17 @@ if [ "$rebuilt" = 1 ]; then
     handed='none'
   fi
   if [ "$FM_EXTERNAL" = 1 ]; then
-    rebuild_note="$(scratch_new)" || exit 70
-    scratch_add "$rebuild_note"
-    printf '%s\n' "$(printf '%s\n' \
-       "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
-       "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
-       "Conflicts handed to the worker: $handed")" > "$rebuild_note"
-    fm_private_note rebuild "$TASK" "$rebuild_note" || {
-      echo 'fm-worker: could not retain the private rebuild note' >&2; exit 65; }
+    if rebuild_note="$(scratch_new)" &&
+       scratch_add "$rebuild_note" &&
+       printf '%s\n' \
+         "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
+         "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
+         "Conflicts handed to the worker: $handed" > "$rebuild_note" &&
+       fm_private_note rebuild "$TASK" "$rebuild_note"; then
+      :
+    else
+      echo 'fm-worker: could not retain the private rebuild note / 無法保留私密重建記錄' >&2
+    fi
   else
     if ! fm_github pr comment "$num" --body "$(printf '%s\n' \
          "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
