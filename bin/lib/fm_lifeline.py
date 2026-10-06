@@ -55,6 +55,9 @@ and confirm every group member's exit before recording successful drainage.
                                  <root>/state/session/wake.d; print how many
   fm_lifeline.py push <root> <id> <reason> <line> [json]
                                  append a wake to the queue, then ring (T-137)
+  fm_lifeline.py forward <root> <project> <id> <reason> <line>
+                                 append a bounded external wake to the engine
+                                 queue and ring only firstmate's doorbells
   fm_lifeline.py await <root> <file> [seconds]
                                  register a doorbell, then wait until <file>
                                  exists (0) or the seconds run out (1)
@@ -562,6 +565,33 @@ def _ring_directory(directory, line):
 WAKE_QUEUE = 'state/session/wake.jsonl'
 
 
+def forward(root, project, ident, reason, line):
+    """Project one external wake onto the engine queue and firstmate bells."""
+    import fcntl
+    import json
+    from pathlib import Path
+    if not re.fullmatch(r'[a-z0-9-]{1,24}', str(project)):
+        raise ValueError('a project name is 1-24 lowercase letters, digits and -')
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(ident)):
+        raise ValueError('a wake id is letters, digits, - and _')
+    line = ' '.join(str(line).split())
+    match = re.fullmatch(r'([A-Za-z][A-Za-z -]*): (.*)', line)
+    line = (f'{match[1]}: {project} {match[2]}' if match else f'{project}: {line}')[:300]
+    engine = Path(root).resolve()
+    item = dict(id=f'{project}_{ident}', reason='forwarded', origin_project=str(project),
+                origin_reason=str(reason), line=line, woken=time.time())
+    path = engine / WAKE_QUEUE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, (json.dumps(item) + '\n').encode())
+    finally:
+        os.close(fd)
+    # Never notify the engine autopilot about another project's event.
+    return _ring_directory(str(engine / 'state/session/wake.d'), line)
+
+
 def push(root, ident, reason, line, extra=None):
     """Push one wake (T-137): append it to the wake queue, then ring every
     doorbell. The writer of the event is the one that calls this - a round
@@ -585,7 +615,14 @@ def push(root, ident, reason, line, extra=None):
         os.write(fd, (json.dumps(item) + '\n').encode())
     finally:
         os.close(fd)
-    return ring(root, line)
+    rang = ring(root, line)
+    from pathlib import Path
+    if os.environ.get('FM_PROJECT') and Path(record_root(root)).resolve() != Path(root).resolve():
+        try:
+            forward(root, os.environ['FM_PROJECT'], ident, reason, line)
+        except Exception as error:
+            print(f'fm: the wake for {ident} was not forwarded to firstmate: {error}', file=sys.stderr)
+    return rang
 
 
 # One record of what firstmate has been given (T-137). Every reader of the
@@ -1140,6 +1177,11 @@ def main(args):
         if not isinstance(extra, dict):
             raise ValueError('the extra fields of a wake are a JSON object')
         print(push(args[0], args[1], args[2], args[3], extra))
+        return 0
+    if mode == 'forward':
+        if len(args) != 5 or not args[0]:
+            return _usage()
+        print(forward(*args))
         return 0
     if mode == 'await':
         if len(args) not in (2, 3) or not args[0]:
