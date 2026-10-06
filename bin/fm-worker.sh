@@ -229,7 +229,7 @@ publish_wip_if_dirty() {
   [ "${_fm_wip_done}" = 1 ] && return 0
   [ -n "${tree:-}" ] && [ -d "$tree" ] && [ -n "${branch:-}" ] && [ -n "${TASK:-}" ] || return 0
   case "$branch" in main|master|HEAD|'') return 0 ;; esac
-  fm_publication_policy "$tree" || return 1
+  fm_publication_policy "$tree" "$branch" || return 1
   if [ "${pin_post_adapter:-0}" = 0 ] && [ -n "${pinned_path:-}" ] \
       && { [ "${pin_synced:-0}" = 1 ] || [ "${pin_start_copy:-0}" = 1 ]; }; then
     if git -C "$tree" cat-file -e "HEAD:${pinned_path:-}" 2>/dev/null; then
@@ -572,6 +572,7 @@ fi
 # see them. Tonight that nearly cost two finished tasks.
 leftover_dirty=0
 branch_existed=0
+bound_head=''
 if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
      -- . ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
   leftover_dirty=1
@@ -628,7 +629,7 @@ fi
 # A stale ephemeral question is not this round's answer, including when
 # preserving a dirty tree in place.
 if [ "$FM_EXTERNAL" = 1 ] && [ -n "$PR" ]; then
-  fm_binding head --task "$TASK" --pr "$PR" --branch "$branch" >/dev/null || exit 65
+  bound_head="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$branch")" || exit 65
 fi
 rm -f "$tree/.fm-say.md" "$tree/.fm-prompt.md"
 
@@ -1058,8 +1059,15 @@ rebuild_probe_drop() {
 }
 bring_up_to_date() {
   if [ "$FM_EXTERNAL" = 1 ]; then
-    echo 'fm-worker: external rewrites require the explicit restack helper and expected-head lease / 外部重寫需要明確的重新堆疊工具與預期版本租約' >&2
-    return 0
+    local force_policy
+    if ! force_policy="$(fm_stack_policy force_with_lease)" || [ "$force_policy" != true ]; then
+      echo "fm-worker: the project conventions do not allow force_with_lease; ${branch} is not rebuilt / 專案慣例不允許 force_with_lease；不重建 ${branch}" >&2
+      return 0
+    fi
+    if [ -z "$PR" ]; then
+      echo "fm-worker: no open PR; ${branch} is not rebuilt this round / 沒有開啟的 PR；本輪不重建 ${branch}" >&2
+      return 0
+    fi
   fi
   local base_ref="refs/remotes/origin/$BASE" head mb ls rc f side
   # The worktree was just made from the branch, so it is clean. Were it
@@ -1093,10 +1101,18 @@ bring_up_to_date() {
     2) rebuild_lease='' ;;
     *) echo "fm-worker: could not read origin's $branch; not rebuilding it" >&2; return 0 ;;
   esac
+  if [ "$FM_EXTERNAL" = 1 ] && [ "$rebuild_lease" != "$bound_head" ]; then
+    echo "fm-worker: origin's ${branch} is not the head this round was bound to; not rebuilding it / ${branch} 並非本輪綁定的版本；不重建" >&2
+    return 0
+  fi
   if [ -n "$rebuild_lease" ] && ! git merge-base --is-ancestor "$rebuild_lease" "$head" 2>/dev/null; then
     echo "fm-worker: origin's $branch has commits this worktree lacks; not rebuilding it" >&2
     return 0
   fi
+  # Squash merge checks committer identity too, even though it creates no
+  # commit. Supply resolved values, otherwise leave git's environment fallback
+  # intact. The identity refusal belongs at commit-tree below.
+  rb_name="$(fm_git_name "$tree")"; rb_email="$(fm_git_email "$tree")"
   rebuild_prev="$head"; rebuild_base="$(git rev-parse "$base_ref")"
   # Up before the worktree leaves the branch, not after the merge: a signal
   # in between must find it set, so the exit path publishes nothing from a
@@ -1104,7 +1120,8 @@ bring_up_to_date() {
   rebuilt=1
   git -C "$tree" checkout -q --detach "$rebuild_base" || {
     echo "fm-worker: could not detach $tree at $BASE" >&2; exit 70; }
-  git -C "$tree" -c merge.conflictStyle=merge -c rerere.enabled=false \
+  git -C "$tree" ${rb_name:+-c user.name="$rb_name"} ${rb_email:+-c user.email="$rb_email"} \
+    -c merge.conflictStyle=merge -c rerere.enabled=false \
     merge -q --squash "$head" >/dev/null 2>&1; rc=$?
   # a merge that failed without leaving a conflict did not merge at all,
   # and the worker must not be handed the bare base as though it were
@@ -1229,6 +1246,9 @@ round_head="$(git -C "$tree" rev-parse HEAD)" || {
   round_head=''
   echo "fm-worker: round head unavailable; evidence coverage is unknown" >&2
 }
+if [ "$FM_EXTERNAL" = 1 ] && [ "$rebuilt" = 1 ]; then
+  round_head="$rebuild_prev"
+fi
 round_context="$FM_RUN_DIR/context.md"
 round_coverage="$FM_RUN_DIR/coverage.json"
 printf '%s\n' "$spec" > "$FM_RUN_DIR/context-spec.json"
@@ -1361,12 +1381,14 @@ fm_round_pinned worker "$spec" || exit 65
         printf '\nPut it back exactly as it is at %s, keeping %s'"'"'s other changes.\n' "$rebuild_prev" "$BASE"
       fi
     fi
-    if [ -n "$pinned_path" ]; then
-      printf '\nYour task file design/tasks/%s.json must come through exactly as pin v%s has it; a rebuilt round that changes it is refused, like one that leaves a conflict marker.\n' "$TASK" "$pinned_version"
-    else
-      printf '\nYour task file design/tasks/%s.json must come through exactly as it\n' "$TASK"
-      printf 'is at %s; a rebuilt round that changes it is refused, like one\n' "$rebuild_prev"
-      printf 'that leaves a conflict marker.\n'
+    if [ "$FM_EXTERNAL" = 0 ]; then
+      if [ -n "$pinned_path" ]; then
+        printf '\nYour task file design/tasks/%s.json must come through exactly as pin v%s has it; a rebuilt round that changes it is refused, like one that leaves a conflict marker.\n' "$TASK" "$pinned_version"
+      else
+        printf '\nYour task file design/tasks/%s.json must come through exactly as it\n' "$TASK"
+        printf 'is at %s; a rebuilt round that changes it is refused, like one\n' "$rebuild_prev"
+        printf 'that leaves a conflict marker.\n'
+      fi
     fi
     printf '\nThe worktree is detached until fm-worker.sh commits; fm-worker.sh pushes the\n'
     printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
@@ -1652,7 +1674,7 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
     fm_private_note worker-report "$TASK" "$1" || return 1
     if [ "$projection" != comments ]; then
       # Changed work projects only after publication, at its fixing head.
-      if ! worker_changed_files; then
+      if [ "${rebuilt:-0}" != 1 ] && ! worker_changed_files; then
         fm_external project --pr "$2" --head "$round_head" --stage worker || {
           echo 'fm-worker: optional projection failed; local report retained' >&2
           FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' \
@@ -2081,7 +2103,6 @@ if [ "$rebuilt" = 1 ]; then
   # one line. commit also signs when commit.gpgSign says to; commit-tree,
   # being plumbing, ignores that setting, so it is read here and passed
   # on as -S.
-  rb_name="$(fm_git_name "$tree")"; rb_email="$(fm_git_email "$tree")"
   rb_sign=''
   [ "$(git -C "$tree" config --bool commit.gpgSign 2>/dev/null)" != true ] || rb_sign=-S
   if [ -z "$rb_name" ] || [ -z "$rb_email" ]; then
@@ -2119,8 +2140,15 @@ if [ "$rebuilt" = 1 ]; then
   # anything pushed to the branch since is refused rather than overwritten.
   # An empty lease means the branch must still not exist on origin.
   if [ "$FM_EXTERNAL" = 1 ]; then
-    echo 'fm-worker: task force-push needs confirmed project policy; rebuild retained for recovery' >&2
-    exit 65
+    if ! force_policy="$(fm_stack_policy force_with_lease)" || [ "$force_policy" != true ]; then
+      echo 'fm-worker: the project conventions do not allow force_with_lease; rebuild retained for recovery / 專案慣例不允許 force_with_lease；保留重建結果以便復原' >&2
+      exit 65
+    fi
+    if [ -z "$rebuild_lease" ] || [ "$rebuild_lease" != "$bound_head" ]; then
+      echo 'fm-worker: an external branch that is not the head the round was bound to / 外部分支並非本輪綁定的版本' >&2
+      exit 65
+    fi
+    fm_publication_policy "$tree" "$branch" || exit 65
   fi
   if ! git -C "$tree" push -q --force-with-lease="refs/heads/$branch:$rebuild_lease" \
        origin "$rebuilt_head:refs/heads/$branch" 2>/dev/null; then
@@ -2209,12 +2237,26 @@ if [ "$rebuilt" = 1 ]; then
   else
     handed='none'
   fi
-  if ! fm_github pr comment "$num" --body "$(printf '%s\n' \
-       "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
-       "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
-       "Conflicts handed to the worker: $handed")" \
-       >/dev/null 2>&1 </dev/null; then
-    echo "fm-worker: could not note the rebuild on #$num; the previous head was ${rebuild_prev}" >&2
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    if rebuild_note="$(scratch_new)" &&
+       scratch_add "$rebuild_note" &&
+       printf '%s\n' \
+         "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
+         "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
+         "Conflicts handed to the worker: $handed" > "$rebuild_note" &&
+       fm_private_note rebuild "$TASK" "$rebuild_note"; then
+      :
+    else
+      echo 'fm-worker: could not retain the private rebuild note / 無法保留私密重建記錄' >&2
+    fi
+  else
+    if ! fm_github pr comment "$num" --body "$(printf '%s\n' \
+         "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
+         "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
+         "Conflicts handed to the worker: $handed")" \
+         >/dev/null 2>&1 </dev/null; then
+      echo "fm-worker: could not note the rebuild on #$num; the previous head was ${rebuild_prev}" >&2
+    fi
   fi
 fi
 # The held note now has a PR. Use the pre-commit work observation: a clean

@@ -151,12 +151,17 @@ else: sys.exit(2)
         self.assertFalse((self.home/'tree').exists())
     def test_external_rebuild_is_held_and_never_reads_public_spec(self):
         body=function(worker,'bring_up_to_date')+'bring_up_to_date'
-        self.run_block(body,'git() { echo git >> "$work/gitcalls"; return 1; }')
+        p=shell(root,self.home,body,'fm_stack_policy() { echo false; }; '
+            'fm_task() { echo spec-read >> "$work/gitcalls"; return 1; }; '
+            'git() { echo git >> "$work/gitcalls"; return 1; }')
+        self.assertEqual(p.returncode,0,p.stderr)
+        self.assertIn('conventions do not allow force_with_lease',p.stderr)
         self.assertFalse((self.home/'gitcalls').exists())
         # The defence remains even if a caller hands publication a rebuilt tree.
         block=section(worker,'_fm_wip_done=1\nif [ "$rebuilt" = 1 ]; then','# Only now: a push')
-        p=shell(root,self.home,block,'rebuilt=1; FM_TARGET_ROOT="$work/tree"; rebuilt_head=abc; git() { echo "$*" >> "$work/gitcalls"; }')
+        p=shell(root,self.home,block,'fm_stack_policy() { echo false; }; rebuilt=1; FM_TARGET_ROOT="$work/tree"; rebuilt_head=abc; git() { echo "$*" >> "$work/gitcalls"; }')
         self.assertEqual(p.returncode,65,p.stderr)
+        self.assertIn('conventions do not allow force_with_lease',p.stderr)
         self.assertNotIn(' push ',(self.home/'gitcalls').read_text())
         self.assertIn('update-ref',(self.home/'gitcalls').read_text())
     def test_external_question_is_not_a_draft_candidate(self):
