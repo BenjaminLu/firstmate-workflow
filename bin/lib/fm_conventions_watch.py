@@ -23,6 +23,17 @@ def project_names(engine):
     return result.stdout.splitlines()
 
 
+def design_sync(engine, name, run=subprocess.run):
+    home = Path(registry_value(engine, name, 'home'))
+    code = Path(__file__).resolve().parents[1]/'fm-project.sh'
+    try:
+        return run([str(code), 'sync', name, '--repo', str(engine)],
+                   stdin=subprocess.DEVNULL, timeout=300).returncode
+    except (subprocess.TimeoutExpired, OSError) as error:
+        atomic(home/'state/onboarding/inspection-error.txt', str(error)+'\n')
+        return 70
+
+
 def tick(engine, *, clock=time.time, inspect=inspect_remote, wake=None, owner=None):
     """Schedule every registered external policy with independent deadlines.
 
@@ -94,3 +105,4 @@ if __name__ == '__main__':
     engine=Path(sys.argv[1]); name=sys.argv[2]
     home=Path(registry_value(engine,name,'home'))
     inspect_and_propose(engine,home,read_policy(home/'CONVENTIONS.md'),name,inspect_remote,life.push)
+    design_sync(engine, name)

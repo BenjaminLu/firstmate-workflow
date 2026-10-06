@@ -1128,7 +1128,7 @@ fm_private_stage() {
   [ "${FM_EXTERNAL:-0}" = 1 ] || return 0
   (
   set -o pipefail
-  git -C "$1" diff --cached --name-only -z --diff-filter=ACMRTUXB | python3 "$_fm_code_dir/lib/fm_config_runtime.py" private-stage
+  git -C "$1" diff --cached --name-only -z --diff-filter=ACMRTUXB | python3 "$_fm_code_dir/lib/fm_config_runtime.py" private-stage "$1"
   )
 }
 

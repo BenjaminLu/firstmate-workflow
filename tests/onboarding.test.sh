@@ -21,7 +21,7 @@ import tempfile
 import unittest
 sys.dont_write_bytecode = True
 root = Path(sys.argv[1]); sys.path.insert(0, str(root / 'bin/lib'))
-from fm_onboard import inspect_remote, infer, questions, render, approve, edit, drift, inspect_local
+from fm_onboard import inspect_remote, infer, questions, render, approve, edit, drift, inspect_local, design_seed
 from fm_conventions import read_policy, validate
 fixtures = root / 'tests/lib/onboarding'
 def payload(name): return json.loads((fixtures / (name + '.json')).read_text())
@@ -89,6 +89,10 @@ class Onboarding(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             home=Path(t)
             p=approve(home,self.e,self.p,self.answers())
+            self.assertEqual((home/'design.md').read_text(), design_seed(home.name, p, self.answers()['contract']))
+            (home/'design.md').write_text('firstmate edit\n')
+            approve(home,self.e,self.p,self.answers())
+            self.assertEqual((home/'design.md').read_text(), 'firstmate edit\n')
             path=home/'CONVENTIONS.md'
             self.assertEqual(read_policy(path)['land'],'card')
             self.assertIn('unknown',path.read_text())
@@ -103,6 +107,33 @@ class Onboarding(unittest.TestCase):
             self.assertIn('required_approving_review_count',text)
             self.assertEqual(read_policy(path)['post'],'comments')
             self.assertEqual(drift(home,changed),'')  # debounce identical proposal
+            self.assertEqual((home/'design.md').read_text(), 'firstmate edit\n')
+    def test_design_without_setup(self):
+        with tempfile.TemporaryDirectory() as t:
+            home=Path(t)
+            answers=dict(self.answers(), contract={'check':'npm test'})
+            p=approve(home,self.e,self.p,answers)
+            text=(home/'design.md').read_text()
+            self.assertEqual(text, design_seed(home.name, p, answers['contract']))
+            self.assertNotIn('- Setup:', text)
+            self.assertIn('- Check: npm test\n- Required checks: continuous-integration/drone/pr\n', text)
+            self.assertEqual(design_seed(home.name, p, {'check':'npm test','setup':''}), text)
+    def test_design_symlink_refused(self):
+        for dangling in (False, True):
+            with self.subTest(dangling=dangling), tempfile.TemporaryDirectory() as t:
+                home=Path(t)/'project'
+                home.mkdir()
+                target=Path(t)/'target.md'
+                if not dangling:
+                    target.write_text('untouched\n')
+                (home/'design.md').symlink_to(target)
+                with self.assertRaisesRegex(ValueError, 'refusing symlink:'):
+                    approve(home,self.e,self.p,self.answers())
+                self.assertTrue((home/'design.md').is_symlink())
+                if dangling:
+                    self.assertFalse(target.exists())
+                else:
+                    self.assertEqual(target.read_text(), 'untouched\n')
     def test_fail_closed_policy(self):
         with tempfile.TemporaryDirectory() as t:
             home=Path(t)
