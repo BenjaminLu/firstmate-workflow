@@ -47,7 +47,7 @@ from pathlib import Path
 prompt = Path(sys.argv[2]).read_text()
 Path(os.environ['FM_TEST_PROMPT']).write_text(prompt)
 tree = Path(sys.argv[3])
-if '# Your branch was rebuilt' in prompt:
+if 'These files conflict and carry standard conflict markers:' in prompt:
     assert '<<<<<<<' in (tree/'app').read_text(), 'worker received no conflict markers'
     (tree/'app').write_text('base intent and task intent\\n')
     (tree/'.fm-say.md').write_text('Resolved both intentions.\\n')
@@ -204,6 +204,38 @@ os.execv(os.environ['FM_TEST_REAL_GIT'], [os.environ['FM_TEST_REAL_GIT'], *sys.a
         texts = [path.read_text() for path in notes if path.is_file()]
         self.assertTrue(any(self.prev in text and head in text and 'Conflicts handed to the worker: `app`' in text
                             for text in texts), texts)
+
+    def test_clean_behind_external_rebuild_publishes_with_no_agent_change(self):
+        # Replace the fixture's conflicting base with an unrelated addition.
+        self.git('reset', '--hard', 'trunk^')
+        (self.seed / 'base-only').write_text('base addition\n')
+        self.commit('clean base move')
+        self.base = self.git('rev-parse', 'HEAD')
+        self.git('push', '--force', 'origin', 'trunk')
+        (self.scratch / 'git.jsonl').write_text('')
+        p = self.launch()
+        self.assertEqual(p.returncode, 0, self.output)
+        head = self.run_ok('git', '--git-dir=' + str(self.remote), 'rev-parse', 't-223-work')
+        self.assertNotEqual(head, self.prev)
+        self.assertEqual(self.run_ok('git', '--git-dir=' + str(self.remote), 'show',
+                                    '-s', '--format=%P', head), self.base)
+        self.assertEqual(self.run_ok('git', '--git-dir=' + str(self.remote), 'show', head + ':app'),
+                         'task intent')
+        pushes = [json.loads(line) for line in (self.scratch / 'git.jsonl').read_text().splitlines()
+                  if 'push' in json.loads(line)]
+        self.assertEqual(len(pushes), 1, pushes)
+        self.assertIn('--force-with-lease=refs/heads/t-223-work:' + self.prev, pushes[0])
+        prompt = (self.scratch / 'prompt.md').read_text().split('# Your branch was rebuilt', 1)[1]
+        self.assertIn('the branch replays cleanly', prompt)
+        self.assertIn('Nothing conflicts: change nothing unless the brief asks for it.', prompt)
+        notes = list((self.state / 'notes/T-223').glob('rebuild-*.md'))
+        self.assertEqual(len(notes), 1)
+        self.assertIn('it was behind and replays cleanly.', notes[0].read_text())
+        self.assertIn('Conflicts handed to the worker: none', notes[0].read_text())
+        events = [json.loads(line) for line in (self.state / 'events.jsonl').read_text().splitlines()]
+        rebuilt = [e['data']['rebuilt'] for e in events if e.get('data', {}).get('rebuilt')]
+        self.assertEqual(rebuilt, [dict(previous_head=self.prev, base='trunk',
+                                       base_head=self.base, head=head, conflicts=[])])
 
     def test_projection_occurs_once_after_push_with_pushed_head(self):
         self.policy(True, 'summary')

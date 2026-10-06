@@ -183,9 +183,32 @@ command git --git-dir="$work/origin.git" update-ref refs/heads/task "$rebuild_ba
                     self.assertIn('not the head the round was bound to', p.stderr)
         self.assertNotIn('--force-with-lease', (self.home / 'gitcalls').read_text())
 
-    def test_clean_rebase_is_not_rewritten(self):
+    def test_clean_behind_external_branch_is_rebuilt(self):
         self.base_moves()
-        p = self.run_body('bring_up_to_date')
+        p = self.run_body('bring_up_to_date\n' + r'''
+[ "$rebuilt" = 1 ] && [ "$rebuild_clean" = 1 ] || exit 91
+[ "${#rebuild_conflicts[@]}" = 0 ] || exit 92
+[ "$rebuild_lease" = "$bound_head" ] || exit 93
+''')
+        self.check_ok(p)
+        self.assertEqual(self.head(), self.base)
+        self.assertEqual(self.git('symbolic-ref', '-q', 'HEAD', check=False), '')
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'app')
+        self.assertEqual((self.tree / 'app').read_text(), 'task intent\n')
+        self.assertEqual(self.remote_head(), self.prev)
+        self.assertIn('is behind main and replays cleanly', p.stderr)
+
+    def test_false_policy_holds_clean_behind_branch(self):
+        self.base_moves()
+        p = self.run_body('bring_up_to_date', 'fm_stack_policy() { echo false; }\n')
+        self.check_ok(p)
+        self.assertIn('conventions do not allow force_with_lease', p.stderr)
+        self.assertEqual(self.head(), self.prev)
+        self.assertEqual(self.remote_head(), self.prev)
+        self.assertFalse((self.home / 'gitcalls').exists())
+
+    def test_branch_containing_base_is_not_rebuilt(self):
+        p = self.run_body('bring_up_to_date\n[ "$rebuilt" = 0 ]')
         self.check_ok(p)
         self.assertEqual(self.head(), self.prev)
         self.assertEqual(self.remote_head(), self.prev)

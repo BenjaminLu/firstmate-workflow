@@ -264,10 +264,22 @@ gate7() {
   fm_evidence gate --head "$head" --base "$mb" --patch "$patch" --code "${FM_CODE_ROOT:-$REPO}"
 }
 
+behind_base() {
+  local base_sha count
+  base_sha="$(git rev-parse "$BASE^{commit}")" || return 0
+  count="$(git rev-list --count "$BRANCH..$base_sha")" || return 0
+  if [ "$count" -gt 0 ]; then
+    printf '%s\n' "behind the base by $count commits (base ${base_sha:0:12}); a red check can come from the old base - bring the branch up to date" \
+      "落後 base ${count} 個 commit（base ${base_sha:0:12}）；紅燈可能來自舊的 base，請先更新分支" >&2
+  fi
+}
+
 g 1 "branch exists and carries commits"          gate1
 g 2 "rebases onto $BASE cleanly"                 gate2
+if want 2; then behind_base; fi
 g 4 "diff stays inside the declared scope"       gate4
 g 5 "reverting the implementation turns tests red" gate5
+if [ "$ONLY" = 6 ]; then behind_base; fi
 g 6 "the required GitHub check is green"         gate6
 g 7 "bound reviewer approval:$TASK"          gate7
 if [ -z "$ONLY" ] && [ -n "$PR" ]; then

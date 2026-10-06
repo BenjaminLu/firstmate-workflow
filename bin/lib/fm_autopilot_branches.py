@@ -18,7 +18,9 @@ class BranchUpdates:
                 del self.data['retries'][token]
         for name in ('holds', 'updates', 'advanced', 'rechecked'):
             item = self.data[name].get(number)
-            if item and (head is None or item['head'] != head):
+            keep_rebase = (name == 'updates' and self.ctx['external'] and item
+                           and item.get('method') == 'rebase' and head is not None)
+            if item and not keep_rebase and (head is None or item['head'] != head):
                 del self.data[name][number]
         item = self.data['restacks'].get(number)
         if item and (head is None or (item['head'] != head and item['outcome'] not in ('published', 'started'))):
@@ -83,14 +85,18 @@ class BranchUpdates:
                                 'refs/pull/' + number + '/head', runner=self.checked)
             if fetched != head:
                 return False
+            rebased = False
             if local:
                 argv = [*git, 'merge-base', '--is-ancestor', local, head]
                 rc, out, err = self.probe(argv)
-                if rc == 1:
+                pending = self.data['updates'].get(number, {})
+                rebased = (rc == 1 and self.ctx['external']
+                           and pending.get('method') == 'rebase' and pending.get('head') == local)
+                if rc == 1 and not rebased:
                     self.data['retries'].pop(token, None)
                     self.data['holds'].pop(number, None)
                     return True  # Binding still refuses unpublished local work.
-                if rc != 0:
+                if rc not in (0, 1):
                     raise self.probe_error(argv, err)
                 # Active work takes precedence over a dirty worktree.
                 if self.round_live(task) or self.busy(task):
@@ -115,11 +121,16 @@ class BranchUpdates:
                                        f'{task} #{number}: dirty task worktree holds fast-forward: {worktree}',
                                        f'{task} #{number}：任務工作樹尚有變更，暫停快轉：{worktree}')
                         return False
-                    self.checked(['git', '-C', worktree, 'merge', '--ff-only', head])
+                    if rebased:
+                        self.checked(['git', '-C', worktree, 'reset', '-q', '--keep', head])
+                    else:
+                        self.checked(['git', '-C', worktree, 'merge', '--ff-only', head])
                 else:
                     self.checked([*git, 'update-ref', ref, head, local])
             else:
                 self.checked([*git, 'update-ref', ref, head, ''])
+            if rebased:
+                self.data['updates'].pop(number, None)
             self.data['retries'].pop(token, None)
             self.data['holds'].pop(number, None)
             return True
@@ -157,6 +168,63 @@ class BranchUpdates:
         except ERRORS as error:
             line = str(error)
         # No ETag cache: distinguish a raced head from a failed operation.
+        try:
+            current = json.loads(self.command(self.gh('pr', 'view', number, '--repo',
+                self.ctx['repository'], '--json', 'headRefOid,mergeable,mergeStateStatus')))
+            if current['headRefOid'] != head:
+                self.data['retries'].pop(token, None)
+                return
+        except ERRORS + (KeyError,):
+            pass
+        self.branch_failure('update', number, head, task, line)
+
+    def external_behind(self, pr):
+        """Use freshly fetched ancestry; REST base.sha can lag the base tip."""
+        try:
+            url = 'https://github.com/' + self.ctx['repository'] + '.git'
+            head = fetch_ref(self.ctx['target'], url, 'refs/pull/' + str(pr['number']) + '/head',
+                             runner=self.checked)
+            if head != pr['head']['sha']:
+                return 'unknown'
+            base = fetch_ref(self.ctx['target'], url, 'refs/heads/' + pr['base']['ref'],
+                             runner=self.checked)
+            rc, _, _ = self.probe(['git', '-C', self.ctx['target'], 'merge-base',
+                                   '--is-ancestor', base, head])
+            return {0: 'current', 1: 'behind'}.get(rc, 'unknown')
+        except ERRORS:
+            return 'unknown'
+
+    def update_external_branch(self, pr, task):
+        number, head = str(pr['number']), pr['head']['sha']
+        token = f'update:{number}:{head}'
+        if self.round_live(task) or self.busy(task):
+            return
+        pending = self.data['updates'].get(number)
+        if pending and pending['head'] == head and self.data['poll_seq'] - pending['seq'] < 20:
+            return
+        if not self.retry_due(token):
+            return
+        if self.policy.get('force_with_lease') is not True:
+            if self.policy.get('merge_method') == 'merge':
+                self.update_branch(pr, task)
+            else:
+                base = pr['base']['ref']
+                self.queue(f'behind-held-{number}-{head}', task,
+                           f'{task} #{number} is behind {base}: conventions allow neither force_with_lease nor merge updates',
+                           f'{task} #{number} 落後 {base}：慣例不允許 force_with_lease 也不允許 merge 更新')
+            return
+        try:
+            rc, out, err = self.probe(self.gh('api', 'graphql', '-f',
+                'query=mutation($id:ID!,$head:GitObjectID!){updatePullRequestBranch(input:{pullRequestId:$id,expectedHeadOid:$head,updateMethod:REBASE}){pullRequest{number}}}',
+                '-f', 'id=' + pr['node_id'], '-f', 'head=' + head))
+            if rc == 0:
+                self.data['updates'][number] = dict(head=head, seq=self.data['poll_seq'], method='rebase')
+                self.data['retries'].pop(token, None)
+                return
+            line = err.strip() or out.strip() or 'GraphQL branch update failed'
+        except ERRORS as error:
+            line = str(error)
+        # The failed mutation may have raced a new remote head.
         try:
             current = json.loads(self.command(self.gh('pr', 'view', number, '--repo',
                 self.ctx['repository'], '--json', 'headRefOid,mergeable,mergeStateStatus')))

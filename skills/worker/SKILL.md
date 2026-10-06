@@ -99,7 +99,11 @@ the restore.
 
 On a later round `fm-worker.sh` may rebuild your branch as one change on the
 current base before you start, and the prompt then says so and lists every
-file it could not merge. Those files carry standard conflict markers
+file it could not merge. An external branch that only falls behind can also
+be rebuilt cleanly: the prompt says the replay was clean and lists no conflicts.
+In that case, change nothing unless the brief asks for it; the launcher still
+commits and publishes the rebuild through the same round (T-231).
+Conflicting files carry standard conflict markers
 (`<<<<<<<`, `=======`, `>>>>>>>`). Resolve every listed file before any other
 work:
 

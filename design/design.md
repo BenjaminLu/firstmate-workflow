@@ -981,8 +981,10 @@ reused — first fast-forwards the local branch to `origin`'s when it can
 question the way gate 2 asks it: does the branch `git rebase` onto the base,
 commit by commit, in a scratch worktree? A squashed patch can apply where
 that replay does not, and a branch this step left alone while gate 2 stayed
-red could never be fixed by anything. If it rebases, nothing changes: the
-round builds on the branch as it is. If it does not, the branch is rebuilt.
+red could never be fixed by anything. For self projects, if it rebases, nothing
+changes: the round builds on the branch as it is. If it does not, the branch
+is rebuilt. External projects also rebuild a clean branch that is behind, as
+described below.
 The worktree is detached at the fetched base and the branch's own change,
 `merge-base..branch`, is squash-merged onto it, three-way: clean files are
 staged, conflicting files keep standard conflict markers, and the prompt
@@ -1098,7 +1100,24 @@ to a protected base. With `force_with_lease: false`, the branch is held as
 before. The context pack, prompt identity and private worker report retain
 the previous PR head; progress projection waits for the pushed head. The
 rebuild note with previous head, new head and conflicts is retained privately
-rather than posted to the external PR.
+rather than posted to the external PR. An external branch that only falls
+behind is rebuilt the same way (T-231), with an empty conflict list. Its prompt
+says the replay was clean: change nothing unless the brief asks for it. The
+agent still runs, so the existing commit, lease push, private note and worker
+report keep one evidence chain; a clean rebuild publishes even without edits.
+
+Autopilot judges external PRs by fetched commit ancestry, because repositories
+without branch protection do not report `behind`. Open, non-draft PRs with
+mergeability true or unknown can update when the fetched base is not an
+ancestor of the verified fetched head; a conflicting PR is held. Confirmed
+`force_with_lease: true` selects a GitHub rebase with `expectedHeadOid`;
+otherwise `merge_method: merge` selects REST update-branch. Conventions allowing
+neither queue one bilingual hold per head. Unknown ancestry retries without an
+update. After a rebase, the local task ref follows only when it still equals
+the recorded old head, with no live round or busy job and no dirty worktree.
+A worktree uses `reset --keep`; a bare ref uses compare-and-swap. The pending
+rebase record survives the remote head change until synchronization or closure.
+Self updates retain their mergeable-and-behind REST path.
 
 ### 5.3.4 A new script is committed executable
 
@@ -5253,6 +5272,9 @@ statuses**, gate 7 authenticated review under project policy. Required names
 come from readable protection and confirmed conventions. Missing/pending checks
 are pending, failed checks are failed, unreadable evidence is unknown. Bounded
 CI wait does not turn pending into failure or approval.
+A behind branch gets one bilingual stderr diagnostic after a passing gate 2,
+or before gate 6 in an `--only 6` run, with the commit count and resolved base
+SHA. The diagnostic changes no gate result and does not enter the gate report.
 
 Private repositories are accepted. Unreadable protection (including 404) means
 unknown, never unprotected, rejected merely for privacy, or implicitly safe.
@@ -5264,6 +5286,9 @@ not changed as an incidental task side effect.
 No protected-base push or force push. A task-branch force-with-lease requires
 confirmed project policy and expected old head (an external rebuild, T-223:
 conventions `force_with_lease: true`, expected old head = the bound PR head).
+This includes clean external branches behind their base; autopilot may rebase
+them under that policy or use merge update-branch when conventions allow merge
+(T-231).
 Merge method and branch deletion
 follow conventions, never hardcoded squash/delete; retain branches used as open
 PR bases. Never auto-merge. Firstmate verifies actual current-head evidence and
@@ -5437,13 +5462,15 @@ notifications. Only GitHub is polled, with endpoint ETags, confirmed convention
 cadence and bounded network backoff. Per-reviewer quiet periods batch findings;
 no idle timer invokes a model.
 
-Mechanical branch updates require an open, non-draft PR observed as mergeable
-and behind; unknown mergeability never authorizes an update. With no live round
-or busy autopilot job for the task, REST `PUT /repos/{repo}/pulls/{n}/update-branch`
+Self-project mechanical branch updates require an open, non-draft PR observed
+as mergeable and behind; unknown mergeability never authorizes a self update.
+External updates use ancestry and convention-selected rebase or merge (§5.3.3).
+With no live round or busy autopilot job for the task, REST `PUT /repos/{repo}/pulls/{n}/update-branch`
 uses `expected_head_sha` as GitHub's compare-and-swap. HTTP 202 stores a
 `{head, seq}` pending marker, suppressing another PUT for 20 poll steps on that
-head. An expected-head 422 means a race and is re-decided next poll without a
-wake. Other responses use an uncached PR re-read: a changed head means a race;
+head. External rebase updates also store `method: rebase`; that marker survives
+a head change until local synchronization or terminal pruning. An expected-head
+422 means a race and is re-decided next poll without a wake. Other responses use an uncached PR re-read: a changed head means a race;
 an unchanged head or failed re-read retries at poll offsets 0, 1 and 3, then
 wakes once with the last HTTP status or transport error. Update failures stay
 isolated to their PR. The persistent poll sequence advances even on policy or
