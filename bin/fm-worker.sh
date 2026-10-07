@@ -435,11 +435,11 @@ adopt_refuse() {
   emit --type worker_crashed --en "$1" --tw "接手 PR 遭拒：$1"
   exit 65
 }
-if [ -n "$adopt_pr" ]; then
+if [ -n "${adopt_pr:-}" ]; then
   [ "$FM_EXTERNAL" = 1 ] || adopt_refuse 'adopt is only supported for external projects'
-  [ -z "$PR" ] || [ "$PR" = "$adopt_pr" ] || adopt_refuse 'caller --pr differs from adopt.pr'
-  PR="$adopt_pr"
-  adopt_data_args=(--data "$(jq -cn --argjson pr "$adopt_pr" '{adopt_pr:$pr}')")
+  [ -z "$PR" ] || [ "$PR" = "${adopt_pr:-}" ] || adopt_refuse 'caller --pr differs from adopt.pr'
+  PR="${adopt_pr:-}"
+  adopt_data_args=(--data "$(jq -cn --argjson pr "${adopt_pr:-}" '{adopt_pr:$pr}')")
 fi
 
 # A task's title is mutable; its branch name, once created, is not re-derived
@@ -459,7 +459,7 @@ elif [ "$FM_EXTERNAL" = 1 ]; then
 else
   branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
 fi
-if [ -n "$adopt_pr" ]; then
+if [ -n "${adopt_pr:-}" ]; then
   adopt_branch="$(fm_github pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null)" \
     || adopt_refuse 'cannot verify adopted PR branch'
   [ -n "$adopt_branch" ] && [ "$branch" = "$adopt_branch" ] \
@@ -650,7 +650,7 @@ fi
 if [ "$FM_EXTERNAL" = 1 ] && [ -n "$PR" ]; then
   bound_head="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$branch")" || exit 65
 fi
-if [ -n "$adopt_pr" ]; then
+if [ -n "${adopt_pr:-}" ]; then
   adopt_check_args=()
   if python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_adopt.py" pushed --task "$TASK" --pr "$PR"; then
     adopt_check_args+=(--pushed)
@@ -1226,7 +1226,7 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
   esac
 fi
 
-if [ -n "$adopt_pr" ] && [ -n "$FM_SPEC_PIN_JSON" ]; then
+if [ -n "${adopt_pr:-}" ] && [ -n "$FM_SPEC_PIN_JSON" ]; then
   adopt_error="$(fm_pin scope --task "$TASK" --head "$branch" --base "$BASE" 2>&1)" \
     || adopt_refuse "$adopt_error"
 fi
@@ -1438,7 +1438,7 @@ fm_round_pinned worker "$spec" || exit 65
     printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
     printf 'is refused.\n'
   fi
-  if [ -n "$adopt_pr" ]; then
+  if [ -n "${adopt_pr:-}" ]; then
     printf '\n# Adopted pull request\n\n'
     printf 'A person opened this pull request. The commits up to %s are theirs.\n' "$(jq -r .adopt.head <<<"$spec")"
     printf 'Build on them, do not revert their changes, and keep their conventions.\n'
