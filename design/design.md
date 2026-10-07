@@ -1209,10 +1209,11 @@ The transient `.fm-say.md` is never committed. Publication failures retain
 the note through the existing `state/unsent/` recovery path. Ordinary notes
 without a request marker and without work retain the premature-note failure.
 
-**`fm-dispatch.sh` dispatches nothing until a `greenlit` event exists.**
-It checks for any such event, not a match to the proposed work. Firstmate must
-verify that authorization covers the work. Dependencies and capacity are read
-from events, so reconcile these with current PRs and live processes before launch.
+**`fm-dispatch.sh` requires a project-store `greenlit` event or the captain's A
+on the task's readiness card, using the same rule as pin `approval(None)`.**
+A project-wide event need not match the proposed work; firstmate must verify
+that authorization covers it. Dependencies, parks, closed and in-flight tasks,
+readiness clearance and live owned capacity still govern launch.
 
 The captain's word on untouched work is read from events too (T-058). A task
 whose last `parked`/`unparked` event is `parked` is never started, and starts
@@ -4937,8 +4938,9 @@ existing PR 130/131/132 repairs precede external implementation. It neither
 implements external execution nor waives acceptance. T-163 enables independent
 Codex reviews; T-167 preserves truthful availability and completion ownership.
 See [the adoption ledger](external-roadmap.md) for replacements and deferrals.
-Sections 5–13 describe shipped self behavior; this section defines the intended
-external contracts. Until each task passes, report unsupported paths honestly.
+Sections 5–13 describe shipped self behavior. The basic external flow is proven;
+this section also records planned advanced reviewer and stacking contracts,
+and autopilot work beyond T-141/T-231. Report unsupported paths honestly.
 
 ### 15.1 Roots and project resolution
 
@@ -5428,15 +5430,13 @@ and reasoning.
 
 ### 15.8 Pilot and advanced integration
 
-T-055 requires the actual `/Users/benjamin/Desktop/maker-founder` pilot. Its
-planning observation is empty git, HEAD master, no commits or remote; re-inspect.
-Authorization is for a fresh repository, not a product brief or remote visibility.
-Resolve at most three missing contract choices, approve bootstrap, create/approve
-a scoped task, pin privately, dispatch real visible owned Codex worker, review
-in isolation and capture outputs plus current-head checks/statuses and all gates.
-Verify captain landing/handoff, cleanup/retention and no project data leakage.
-Mock fixtures support regressions but cannot replace live proof. Publish only
-an approved redacted summary; retain raw evidence privately.
+The basic external flow has run end to end on a private repository: onboarding,
+private conventions and design under `FM_HOME`, captain-card dispatch, isolated
+worker rounds and reviews, wakes forwarded to firstmate, catch-up rebuild with
+a lease, six gates on the authoritative head, and captain-card landing. Advanced
+reviewers, stacking and autopilot beyond T-141/T-231 retain their planned
+contracts. Keep repository-specific observations and raw evidence privately
+under `FM_HOME`; public documentation describes the flow generically.
 
 T-140 external reviewers, T-143 stacking and T-141 autopilot are advanced
 integrations, not basic-pilot dependencies. Named
@@ -5712,8 +5712,10 @@ A single global capacity counts actual live owned rounds, not open PRs or
 historical dispatch events. A short dispatch lock recounts/reserves slots;
 identity locks allocate actors; slow verification happens before locking.
 Recover reservations through owner completion. Same task ID in two projects
-counts twice. No-project dispatch fairly assigns each free slot to eligible
-ready/cleared, greenlit, verified project with fewest live runs, ties by name;
+counts twice. No-project dispatch fairly assigns each free slot to an eligible
+ready/cleared task in the verified project with fewest live runs, ties by name.
+The project store must contain a `greenlit` event or the captain's A on that
+task's readiness card as pin `approval(None)` accepts it;
 explicit project dispatch shares the same limit. Do not preempt live work.
 
 Each project has one merge turn: take it when card is requested; release on

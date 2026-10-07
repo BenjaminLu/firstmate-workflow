@@ -24,7 +24,7 @@ def run(argv, env, **kwargs):
     return result.stdout.strip()
 
 
-def scenario(stop_owner=False, public_title=None):
+def scenario(stop_owner=False, public_title=None, card_only=False):
     with tempfile.TemporaryDirectory(prefix='external-stock-') as tmp:
         scratch = Path(tmp)
         engine = scratch / 'engine'
@@ -101,6 +101,17 @@ with open(sys.argv[4], 'a') as log:
              'seed-preflight', str(root), str(engine), str(home)], env)
         (state / 'events.jsonl').write_text(json.dumps(dict(type='greenlit', actor='captain',
             project='app', ts='2026-10-02T00:00:00Z', data={}))+'\n')
+        if card_only:
+            decision = 'D-app-T051-1'
+            (state / 'ready').mkdir(exist_ok=True)
+            (state / 'decisions').mkdir(exist_ok=True)
+            (state / 'ready/T-051.json').write_text(json.dumps(dict(
+                task='T-051', episode='ready-1', decision=decision)))
+            (state / 'decisions' / (decision + '.json')).write_text(json.dumps(dict(
+                id=decision, task='T-051', project='app', kind='choice', chosen='A')))
+            (state / 'events.jsonl').write_text(json.dumps(dict(type='decision_made',
+                actor='captain', project='app', task='T-051', ts='2026-10-06T00:00:00Z',
+                data=dict(decision=decision, chosen='A')))+'\n')
         gh = scratch / 'gh'
         gh.write_text('''#!/usr/bin/env python3
 import json,os,sys
@@ -184,6 +195,12 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
                 worker_exit = ProcessExit(launch['keeper'])
                 assert select.select([ready_fd], [], [], 90)[0], (state / 'dispatch/T-051.log').read_text()
                 receipt = json.loads(os.read(ready_fd, 65536))
+                if card_only:
+                    pins = list((state / 'pins/T-051').glob('*.json'))
+                    assert pins, 'card-only stock worker must create its pin'
+                    pin = json.loads(pins[-1].read_text())
+                    assert pin['approval']['kind'] == 'choice', pin
+                    assert pin['approval']['decision'] == 'D-app-T051-1', pin
                 run_dir = Path(receipt['run'])
                 assert run_dir.is_relative_to(state / 'runs'), run_dir
                 identity = json.loads((run_dir / 'identity.json').read_text())
@@ -266,4 +283,5 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
 
 if __name__ == '__main__':
     scenario()
+    scenario(card_only=True)
     scenario(stop_owner=True)

@@ -2,7 +2,8 @@
 # Decides what may start. Five things can stop it and all five are checks
 # against the log or the filesystem, never a judgement call:
 #
-#   - no greenlit event for the work      -> nothing starts (the eighth gate)
+#   - no project greenlit event or captain A on the task's readiness card
+#     (as pin approval(None) accepts it)   -> that task waits
 #   - a dependency is not merged yet      -> that task waits
 #   - the captain parked or dropped it    -> it waits until unparked, or never
 #   - concurrency is already spent        -> the rest wait
