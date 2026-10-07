@@ -99,7 +99,9 @@ def structure(answer, task, acceptance_count, previous=None):
         if not match:
             refuse('each numbered item needs a status word and colon')
         parsed.append(dict(n=int(match[1]), status=match[2], label=match[3], text=line))
-    if not parsed or [item['n'] for item in parsed] != list(range(1, len(parsed) + 1)):
+    if not parsed:
+        refuse('requires a final numbered block before the marker')
+    if [item['n'] for item in parsed] != list(range(1, len(parsed) + 1)):
         refuse('the final numbered block must keep numbers 1..N in order')
     if len(parsed) < acceptance_count:
         refuse('requires at least one item per acceptance line')
@@ -107,19 +109,27 @@ def structure(answer, task, acceptance_count, previous=None):
     if (verdict == 'SPEC-GAPS') != gaps:
         refuse('verdict does not match gap/open statuses')
     if previous is None:
-        if any(item['status'] not in ('ok', 'gap') or item['label'] for item in parsed):
-            refuse('first pass uses only ok or gap without amendment labels')
+        if any(item['status'] not in ('ok', 'gap') for item in parsed):
+            refuse('first pass uses only ok or gap')
+        if any(item['label'] for item in parsed):
+            refuse('first-pass items cannot carry amendment labels')
     else:
         prior = previous['standing']
         if len(parsed) < len(prior):
             refuse('re-issue must retain every earlier number')
         for old, new in zip(prior, parsed):
             allowed = ('done', 'open') if old['status'] in ('gap', 'open') else ('ok', 'open')
-            if old['n'] != new['n'] or new['status'] not in allowed or new['label']:
+            if old['n'] != new['n']:
+                refuse('kept item numbers must match the previous list')
+            if new['status'] not in allowed:
                 refuse('kept items must follow the done/open/ok transition rules')
+            if new['label']:
+                refuse('kept items cannot carry amendment labels')
         for item in parsed[len(prior):]:
-            if item['status'] != 'gap' or item['label'] not in ('NEW-GROUND', 'MISSED'):
-                refuse('appended items require gap NEW-GROUND or gap MISSED')
+            if item['status'] != 'gap':
+                refuse('appended items must have gap status')
+            if item['label'] not in ('NEW-GROUND', 'MISSED'):
+                refuse('appended items require a NEW-GROUND or MISSED label')
     return parsed
 
 

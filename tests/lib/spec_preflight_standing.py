@@ -33,28 +33,52 @@ class Standing(unittest.TestCase):
         return P.retain(self.store, self.data if data is None else data, 'a' * 40,
                         actor, 1, answer, {'level': 'legacy'})
 
-    def refused(self, answer):
+    def refused(self, valid, answer, reason):
+        # Prove the control passes every structure rule before changing one thing.
+        P.structure(valid, 'T-X', 2, P.standing(self.store))
         before = self.store.records()
-        with self.assertRaisesRegex(ValueError, 'PREFLIGHT-COMPLETE'):
+        with self.assertRaises(ValueError) as raised:
             self.retain(answer)
+        self.assertEqual('PREFLIGHT-COMPLETE:T-X: ' + reason, str(raised.exception))
         self.assertEqual(before, self.store.records())
 
     def test_missing_marker(self):
-        self.refused('1. ok: src/a:1 one\n2. ok: src/b:2 two\nSPEC-OK:T-X')
+        valid = self.answer('1. ok: src/a:1 one\n2. ok: src/b:2 two')
+        self.refused(valid, valid.replace('PREFLIGHT-COMPLETE:T-X\n', ''),
+                     'requires the standalone marker immediately before the verdict')
+
+    def test_missing_verdict(self):
+        valid = self.answer('1. ok: src/a:1 one\n2. ok: src/b:2 two')
+        self.refused(valid, valid.replace('SPEC-OK:T-X', 'SPEC-UNKNOWN:T-X'),
+                     'requires a numbered list and closing SPEC-OK/SPEC-GAPS')
 
     def test_verdict_must_match_statuses(self):
-        self.refused(self.answer('1. gap: src/a:1 fix one\n2. ok: src/b:2 two'))
-        self.refused(self.answer('1. ok: src/a:1 one\n2. ok: src/b:2 two', 'SPEC-GAPS'))
+        for status, verdict, wrong in (('gap', 'SPEC-GAPS', 'SPEC-OK'),
+                                       ('ok', 'SPEC-OK', 'SPEC-GAPS')):
+            valid = self.answer(f'1. {status}: src/a:1 one\n2. ok: src/b:2 two', verdict)
+            self.refused(valid, valid.replace(verdict, wrong),
+                         'verdict does not match gap/open statuses')
 
     def test_status_and_acceptance_coverage_required(self):
-        self.refused(self.answer('1. src/a:1 one\n2. ok: src/b:2 two'))
-        self.refused(self.answer('1. ok: src/a:1 one'))
+        valid = self.answer('1. ok: src/a:1 one\n2. ok: src/b:2 two')
+        self.refused(valid, valid.replace('1. ok:', '1.'),
+                     'each numbered item needs a status word and colon')
+        self.refused(valid, valid.replace('2. ok: src/b:2 two\n', ''),
+                     'requires at least one item per acceptance line')
 
     def test_first_pass_statuses(self):
-        for status in ('done', 'open'):
-            with self.subTest(status=status):
-                self.refused(self.answer(f'1. {status}: src/a:1 one\n2. ok: src/b:2 two',
-                                         'SPEC-GAPS' if status == 'open' else 'SPEC-OK'))
+        for old, new, verdict in (('ok', 'done', 'SPEC-OK'), ('gap', 'open', 'SPEC-GAPS')):
+            with self.subTest(status=new):
+                valid = self.answer(f'1. {old}: src/a:1 one\n2. ok: src/b:2 two', verdict)
+                self.refused(valid, valid.replace(f'1. {old}:', f'1. {new}:'),
+                             'first pass uses only ok or gap')
+
+    def test_first_pass_labels(self):
+        valid = self.answer('1. gap: src/a:1 fix one\n2. ok: src/b:2 two', 'SPEC-GAPS')
+        for label in ('NEW-GROUND', 'MISSED'):
+            with self.subTest(label=label):
+                self.refused(valid, valid.replace('1. gap:', f'1. gap {label}:'),
+                             'first-pass items cannot carry amendment labels')
 
     def test_prompt_preserves_previous_block_and_rules(self):
         block = ('**1.** **gap**: src/a:1 fix one\n  Evidence continues.\n- A fixture too.\n'
@@ -89,18 +113,33 @@ class Standing(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'external spec needs a valid public_title:'):
                 P.main()
 
+    def test_reissue_drops_item_at_acceptance_count(self):
+        self.retain(self.answer('1. gap: src/a:1 fix one\n2. ok: src/b:2 two\n'
+                                '3. ok: src/c:3 three', 'SPEC-GAPS'))
+        valid = self.answer('1. open: src/a:1 fix one\n2. ok: src/b:2 two\n'
+                            '3. ok: src/c:3 three', 'SPEC-GAPS')
+        # Drop item 2 and compact item 3: still two acceptance items, in order.
+        dropped = valid.replace('2. ok: src/b:2 two\n', '').replace('3. ok:', '2. ok:')
+        self.refused(valid, dropped, 're-issue must retain every earlier number')
+
     def test_reissue_keeps_numbers_and_labels_and_counts_missed(self):
         self.retain(self.answer('1. gap: src/a:1 fix one\n2. ok: src/b:2 two', 'SPEC-GAPS'))
-        for lines in ('1. open: src/a:1 one',
-                      '1. open: src/a:1 one\n3. ok: src/b:2 two',
-                      '2. ok: src/b:2 two\n1. open: src/a:1 one',
-                      '1. open: src/a:1 one\n2. ok: src/b:2 two\n3. gap: src/c:3 fix three',
-                      '1. open: src/a:1 one\n2. ok: src/b:2 two\n3. ok MISSED: src/c:3 three',
-                      '1. open: src/a:1 one\n2. ok: src/b:2 two\n3. open NEW-GROUND: src/c:3 three'):
-            with self.subTest(lines=lines):
-                self.refused(self.answer(lines, 'SPEC-GAPS'))
-        record = self.retain(self.answer('1. open: src/a:1 one\n2. ok: src/b:2 two\n'
-                            '3. gap MISSED: src/c:3 fix three\n'
+        kept = '1. open: src/a:1 one\n2. ok: src/b:2 two'
+        valid = self.answer(kept, 'SPEC-GAPS')
+        for lines in (kept.replace('2. ok:', '3. ok:'),
+                      '2. ok: src/b:2 two\n1. open: src/a:1 one'):
+            self.refused(valid, self.answer(lines, 'SPEC-GAPS'),
+                         'the final numbered block must keep numbers 1..N in order')
+        for label in ('NEW-GROUND', 'MISSED'):
+            self.refused(valid, valid.replace('1. open:', f'1. open {label}:'),
+                         'kept items cannot carry amendment labels')
+        appended = self.answer(kept + '\n3. gap MISSED: src/c:3 fix three', 'SPEC-GAPS')
+        self.refused(appended, appended.replace('gap MISSED:', 'gap:'),
+                     'appended items require a NEW-GROUND or MISSED label')
+        for status in ('ok', 'open', 'done'):
+            self.refused(appended, appended.replace('3. gap', f'3. {status}'),
+                         'appended items must have gap status')
+        record = self.retain(self.answer(kept + '\n3. gap MISSED: src/c:3 fix three\n'
                             '4. gap NEW-GROUND: src/d:4 fix four', 'SPEC-GAPS'))
         self.assertEqual(1, record['missed'])
         self.assertEqual(dict(n=3, status='gap', label='MISSED',
@@ -109,24 +148,28 @@ class Standing(unittest.TestCase):
 
     def test_transition_matrix(self):
         for old in ('gap', 'open', 'ok', 'done'):
-            previous = {'standing': [dict(n=1, status=old)]}
+            previous = {'standing': [dict(n=1, status=old), dict(n=2, status='ok')]}
+            control = self.answer('1. open: src/a:1 check\n2. open: src/b:2 check', 'SPEC-GAPS')
+            P.structure(control, 'T-X', 2, previous)
             allowed = ('done', 'open') if old in ('gap', 'open') else ('ok', 'open')
             for new in ('gap', 'open', 'ok', 'done'):
-                answer = self.answer(f'1. {new}: src/a:1 check',
-                                     'SPEC-GAPS' if new in ('gap', 'open') else 'SPEC-OK')
+                answer = control.replace('1. open:', f'1. {new}:')
                 with self.subTest(old=old, new=new):
                     if new in allowed:
-                        self.assertEqual(new, P.structure(answer, 'T-X', 1, previous)[0]['status'])
+                        self.assertEqual(new, P.structure(answer, 'T-X', 2, previous)[0]['status'])
                     else:
-                        with self.assertRaisesRegex(ValueError, 'PREFLIGHT-COMPLETE'):
-                            P.structure(answer, 'T-X', 1, previous)
+                        with self.assertRaises(ValueError) as raised:
+                            P.structure(answer, 'T-X', 2, previous)
+                        self.assertEqual('PREFLIGHT-COMPLETE:T-X: kept items must follow '
+                                         'the done/open/ok transition rules', str(raised.exception))
 
     def test_retain_checks_transitions(self):
         self.retain(self.answer('1. gap: src/a:1 fix one\n2. ok: src/b:2 two', 'SPEC-GAPS'))
-        for lines in ('1. gap: src/a:1 fix one\n2. ok: src/b:2 two',
-                      '1. ok: src/a:1 one\n2. open: src/b:2 fix two',
-                      '1. open: src/a:1 fix one\n2. done: src/b:2 two'):
-            self.refused(self.answer(lines, 'SPEC-GAPS'))
+        valid = self.answer('1. open: src/a:1 fix one\n2. open: src/b:2 fix two', 'SPEC-GAPS')
+        for old, new in (('1. open:', '1. gap:'), ('1. open:', '1. ok:'),
+                         ('2. open:', '2. done:')):
+            self.refused(valid, valid.replace(old, new),
+                         'kept items must follow the done/open/ok transition rules')
         fixed = self.retain(self.answer('1. done: src/a:1 one\n2. ok: src/b:2 two'), self.data + b' ')
         self.assertEqual(fixed, P.standing(self.store))
         self.assertIn('1. done: src/a:1 one', P.prompt('T-X', self.data, '', P.standing(self.store)))
@@ -169,11 +212,15 @@ class Standing(unittest.TestCase):
         self.assertEqual([1, 2], [item['n'] for item in record['standing']])
         self.assertIn(block, P.prompt('T-X', self.data, '', P.standing(self.store)))
         for suffix in ('\n## Another section', '\n\nUnrelated paragraph'):
-            self.refused(self.answer('1. ok: a\n2. ok: b' + suffix))
+            valid = self.answer('1. ok: a\n2. ok: b')
+            self.refused(valid, self.answer('1. ok: a\n2. ok: b' + suffix),
+                         'requires a final numbered block before the marker')
         for marker in ('> PREFLIGHT-COMPLETE:T-X', '**PREFLIGHT-COMPLETE:T-X**',
                        ' PREFLIGHT-COMPLETE:T-X', 'PREFLIGHT-COMPLETE:T-Y',
                        '```\nPREFLIGHT-COMPLETE:T-X\n```'):
-            self.refused('1. ok: a\n2. ok: b\n' + marker + '\nSPEC-OK:T-X')
+            valid = self.answer('1. ok: a\n2. ok: b')
+            self.refused(valid, valid.replace('PREFLIGHT-COMPLETE:T-X', marker),
+                         'requires the standalone marker immediately before the verdict')
 
     def test_first_prompt_exhaustive_categories(self):
         body = P.prompt('T-X', self.data, '')
