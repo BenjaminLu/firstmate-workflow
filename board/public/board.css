@@ -32,7 +32,7 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 #themeToggle{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;
   padding:0;font:20px var(--sans);border:1px solid var(--line);border-radius:var(--r-chip);
   background:var(--bg3);color:var(--fg);cursor:pointer}
-#voyage-stage{transition:height .2s}
+#voyage.voyage-resizing #voyage-stage{transition:height .2s}
 #voyage-bar #voyage-size{flex:none;width:44px;padding:0;font-size:20px}
 #voyage-size[hidden]{display:none}
 #voyage.voyage-strip:not(.voyage-full *) #voyage-stage{height:88px}
@@ -40,4 +40,4 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
   #voyage.voyage-strip:not(.voyage-full *) #voyage-stage{height:72px}
 }
 .voyage-full #voyage-stage{height:100%}
-@media(prefers-reduced-motion:reduce){#voyage-stage{transition:none}}
+@media(prefers-reduced-motion:reduce){#voyage.voyage-resizing #voyage-stage{transition:none}}

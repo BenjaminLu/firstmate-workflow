@@ -117,7 +117,7 @@
     key, fight(on){fighting=on;}, get fighting(){return fighting;},get hidden(){return hidden;}
   };
   toggle.onclick=()=>{if(hidden){hidden=false;put(localStorage,'board.voyage.hidden','0');render();}else key('f');};
-  sizeButton.onclick=()=>{size=isStrip()?'full-size':'strip';put(localStorage,'board.voyage.size',size);render();};
+  sizeButton.onclick=()=>{size=isStrip()?'full-size':'strip';put(localStorage,'board.voyage.size',size);panel.classList.add('voyage-resizing');render();setTimeout(()=>panel.classList.remove('voyage-resizing'),250);};
   narrow.addEventListener('change',()=>{if(size===null)render();});
   drawerButton.onclick=()=>{drawer.hidden=!drawer.hidden;drawerButton.setAttribute('aria-expanded',String(!drawer.hidden));};
   // Capture the open control before the board's bubbling handler closes it.
