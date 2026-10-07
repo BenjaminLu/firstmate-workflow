@@ -5124,6 +5124,19 @@ T-141 never auto-merges. A recorded order is not proof of a successful merge.
 
 ### 15.5 Immutable pins and authoritative heads
 
+An external task may adopt one human-opened PR with `adopt: {pr, head, base}`:
+record its number, the full commit the captain saw, and its base branch. The
+captain's readiness A pins those spec bytes; the pinned spec is the sole
+adoption authority for workers, autopilot, bindings and merge ownership.
+Before a pin exists, readers use the private draft. Gates and review cover the
+whole PR from its own base, including the human commits. The external catch-up
+rule still applies: rebuilding under `force_with_lease: true` rewrites human
+commits on the same PR. Refuse closed PRs, forks, stacked PRs (T-239), protected
+head branches, changed bases, branch/title ownership conflicts, duplicate
+adoptions and history that lost the approved head before the first adopted
+push. A retarget needs a new spec and A card. Unreadable adoption authority
+blocks the affected PR while other tasks continue.
+
 T-049 pins append-only snapshots of approved spec, design, conventions and full
 gate contract with SHA-256, project/task, approval author/time/decision, source
 version, engine code commit and base commit. External local approvals need no

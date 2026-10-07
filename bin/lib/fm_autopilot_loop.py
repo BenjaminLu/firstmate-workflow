@@ -55,7 +55,32 @@ class MechanicalLoop:
                     return True
         return False
 
+    def adoption_env(self):
+        return dict(FM_ENGINE_ROOT=str(self.root), FM_TARGET_ROOT=self.ctx['target'],
+                    FM_STATE_DIR=str(self.state), FM_TASKS_DIR=self.ctx['tasks'],
+                    FM_PROJECT=self.ctx['project'], FM_BASE=self.ctx['base'],
+                    FM_EXTERNAL='1' if self.ctx['external'] else '0',
+                    FM_DESIGN=self.ctx.get('design') or str(self.state.parent / 'design.md'
+                              if self.ctx['external'] else self.root / 'design/design.md'))
+
+    def adoptions(self):
+        import fm_adopt
+        single, duplicates, errors = fm_adopt.scan(self.adoption_env())
+        for task, reason in errors.items():
+            self.queue('adopt-error-' + task, task,
+                       'Cannot read PR adoption: ' + reason, '無法讀取 PR 接手設定：' + reason)
+        return single, duplicates
+
     def pr_task(self, pr):
+        self._adopt_reason = ''
+        if self.ctx['external']:
+            import fm_adopt
+            single, duplicates = self.adoptions()
+            if pr['number'] in duplicates:
+                self._adopt_reason = fm_adopt.duplicate_reason(duplicates[pr['number']])
+                return ''
+            if pr['number'] in single:
+                return single[pr['number']]
         # Call the canonical shell grammar, including legacy t004 branches,
         # title fallback and the deliberate exclusion of Revert titles.
         result = subprocess.run(['bash', '-c', '. "$1"; fm_task_of_pr "$2" "$3" || true',
