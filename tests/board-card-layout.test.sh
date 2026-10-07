@@ -13,7 +13,7 @@ def body(name):
     return match.group(1) if match else ''
 answer = body('answer')
 intent = body('intentBody')
-keys = ['intentHeading', 'howHeading', 'alignmentHeading', 'scopeHeading', 'notesHeading', 'optionsHeading', 'confirmQuestions', 'confirmOrder']
+keys = ['intentHeading', 'howHeading', 'alignmentHeading', 'scopeHeading', 'notesHeading']
 positions = [intent.find("t('" + key + "')") for key in keys]
 checks = [
     ('answered set declared', bool(re.search(r'\banswered\s*=\s*new Set\(\)', html))),
@@ -22,14 +22,16 @@ checks = [
     ('successful answer locks before clearing sent', bool(re.search(r'if \(!r.error\) answered.add\(id\);\s*sent.delete\(id\)', answer))),
     ('validate retains answer lock', 'answered.has(id)' in body('validate')),
     ('render retires absent answered ids', bool(re.search(r'for \(const id of answered\).*?pendingIds.has\(id\).*?answered.delete\(id\)', html))),
-    ('intentBody headings are complete and ordered', all(p >= 0 for p in positions) and positions == sorted(positions)),
+    ('detailOnly keeps intent/how/alignment/scope/notes', 'if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`' in intent),
+    ('captain body keeps intent/how/scope/notes', '<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>' in intent),
+    ('detail headings are complete and ordered', all(p >= 0 for p in positions) and positions == sorted(positions)),
     ('intentBody replaces old alignment title', bool(intent) and "t('intentAlignment')" not in intent),
     ('optional Why line requires items', "hasItems('why') ?" in intent),
     ('optional alignment requires items', "const alignment = hasItems('done') ?" in intent),
     ('optional scope requires items', 'const scope = scopeItems.length ?' in intent),
     ('optional scope columns require items', "['scope_in','scope_out'].filter(hasItems).map" in intent),
     ('optional notes require items', "const notes = hasItems('notes') ?" in intent),
-    ('optional questions require items', "const questions = hasItems('questions') ?" in intent),
+    ('optional questions require items', "const questions = hasItems('questions') ?" in body('decisionSheet')),
     ('optional outcome requires nonempty text', "content?.intent && content.outcome?.trim() ?" in html),
 ]
 for locale in ['en', 'zh-TW']:
