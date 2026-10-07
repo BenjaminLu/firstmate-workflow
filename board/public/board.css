@@ -27,6 +27,13 @@ html[data-theme=light] :is(.counts span,#merging li){color:var(--fg2)}
 html[data-theme=light] .vend.x,html[data-theme=light] .pchip,html[data-theme=light] #merging li.unknown{color:var(--warn)}
 html[data-theme=light] #pcount{color:#FFFFFF}
 html[data-theme=light] .capstage .lbl{color:#d9a441}
+html[data-theme=light] .acts .opt{color:var(--fg);background:var(--bg3);border:1px solid var(--line)}
+html[data-theme=light] .acts .opt:disabled{color:var(--fg2)}
+
+@media(max-width:640px){
+  .roster li.rrow{grid-template-columns:8px minmax(0,1fr);
+    grid-template-areas:"av nm" ". st" ". rl" ". pj" ". rd" ". pr" ". jb" ". rv" ". rm" ". rc"}
+}
 
 #themeToggle{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;
   padding:0;font:20px var(--sans);border:1px solid var(--line);border-radius:var(--r-chip);
