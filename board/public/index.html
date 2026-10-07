@@ -200,7 +200,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 #voyage{margin:12px 20px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg2)}
 #voyage-bar{display:flex;gap:8px;padding:8px}
 #voyage-bar button{font:inherit;min-height:44px;padding:6px 14px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;cursor:pointer}
-#voyage-stage{display:block;width:100%;height:420px;border:0}
+#voyage-stage{display:block;width:100%;height:clamp(270px, 36vh, 440px);border:0}
 #voyage-drawer[hidden],#voyage-mount[hidden],#voyage-workflow[hidden]{display:none}
 .voyage-full{overflow:hidden}
 .voyage-full #voyage{position:fixed;inset:0;margin:0;z-index:1000;border-radius:0;
@@ -221,9 +221,8 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 /* Reorder visually: moving an iframe's parent in the DOM reloads its stage. */
 @media(max-width:650px){
   body{display:flex;flex-direction:column}
-  body>#voyage{order:1}
   body>#shipregion,body>.lanes-wrap,body>.logwrap{order:2}
-  #voyage-stage{height:330px}
+  #voyage-stage{height:270px}
   .voyage-full #voyage{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,2fr) minmax(0,3fr)}
   .voyage-full #voyage:has(#voyage-drawer[hidden]){grid-template-rows:auto minmax(0,1fr)}
 }
@@ -277,6 +276,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 .card[tabindex]{cursor:pointer}.card[tabindex]:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 @media(max-width:759px){.task-detail{left:0;right:0;top:var(--task-detail-top,64px);bottom:0;width:100%;max-width:100%;border-radius:0}}
 </style>
+<link rel="stylesheet" href="board.css">
 </head>
 <body>
 <div class="top">
@@ -285,6 +285,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <span class="spacer"></span>
   <span class="vend" id="engine" hidden></span>
   <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
+  <button id="themeToggle" type="button"><span aria-hidden="true">◐</span></button>
   <span class="langs" id="langs"></span>
 </div>
 <!-- T-122: a tab without the captain's credential says so, once, and writes nothing.
@@ -338,8 +339,9 @@ const laneKey = k => "lane" + k[0].toUpperCase() + k.slice(1);
 // from zh-TW by the table, so there is no third file to keep in step
 const DEFAULT_LANGUAGE = document.documentElement.dataset.defaultLanguage || "en";
 const LANGS = [DEFAULT_LANGUAGE, ...["en", "zh-TW", "zh-CN"].filter(l => l !== DEFAULT_LANGUAGE)], LANGNAME = { "en": "EN", "zh-TW": "\u7e41", "zh-CN": "\u7b80" };
-let lang = new URLSearchParams(location.search).get("lang") ||
-  localStorage.getItem("board.lang") || DEFAULT_LANGUAGE;
+let storedLanguage;
+try { storedLanguage = localStorage.getItem("board.lang"); } catch {}
+let lang = new URLSearchParams(location.search).get("lang") || storedLanguage || DEFAULT_LANGUAGE;
 if (!LANGS.includes(lang)) lang = DEFAULT_LANGUAGE;
 let DICT = { en: {}, "zh-TW": {}, tw2cn: [] };
 const cn = (x) => DICT.tw2cn.reduce((acc, pair) => acc.split(pair[0]).join(pair[1]), x);
@@ -559,6 +561,7 @@ function pose() {
 }
 
 function chrome() {
+  const themeToggle = document.getElementById("themeToggle"); themeToggle.title = t("themeToggle"); themeToggle.setAttribute("aria-label", t("themeToggle"));
   document.getElementById("h-brand").innerHTML =
     esc(t("brand")) + "<small>" + esc(t("sub")) + "</small>";
   document.getElementById("awaiting").textContent = t("awaiting");
@@ -567,7 +570,7 @@ function chrome() {
   SHIP.patch(document.getElementById("langs"), LANGS.map(l =>
     `<button aria-pressed="${l === lang}" data-l="${l}">${LANGNAME[l]}</button>`).join(""));
   document.getElementById("langs").querySelectorAll("button").forEach(b =>
-    b.onclick = () => { lang = b.dataset.l; localStorage.setItem("board.lang", lang);
+    b.onclick = () => { lang = b.dataset.l; try { localStorage.setItem("board.lang", lang); } catch {}
       document.documentElement.lang = lang; chrome();
       drawTaskDetail();
       // straight away, so the drawing changes language with the chrome
@@ -1317,5 +1320,6 @@ fetch("/api/i18n").then(r => r.json()).then(dd => { DICT = dd; })
     fetch(STATE_URL).then(r => r.json()).then(render).catch(() => {});
   });
 </script>
+<script src="board.js"></script>
 </body>
 </html>

@@ -194,7 +194,7 @@ for (const project of [null, 'beta']) test('Live commands use only authenticated
     });
     // Drain requests already scheduled by the completed commands before auditing.
     await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
-    const reads=new Set(['/', '/ship.css', '/ship.js', '/diagram.js', '/watch.js', '/game.js',
+    const reads=new Set(['/', '/board.css', '/board.js', '/ship.css', '/ship.js', '/diagram.js', '/watch.js', '/game.js',
       '/api/i18n', '/api/session', '/api/state', '/events', '/voyage2d/captain.webp']);
     // Only the fixture's own diagrams are expected. HEAD belongs to the board;
     // GET belongs to its diagram iframe, never to the voyage frame.
@@ -281,7 +281,7 @@ test('voyage follows the responsive decision order without reloading its stage',
     expect((await panel.boundingBox())!.y).toBeLessThan((await card.boundingBox())!.y);
     for(const width of [650,390]) {
       await page.setViewportSize({width,height:844});
-      await expect.poll(async()=> (await panel.boundingBox())!.y > (await card.boundingBox())!.y).toBe(true);
+      await expect.poll(async()=> (await panel.boundingBox())!.y < (await card.boundingBox())!.y).toBe(true);
       expect((await card.boundingBox())!.y).toBeLessThan(844);
       expect((await panel.boundingBox())!.y).toBeLessThan((await page.locator('.lanes-wrap').boundingBox())!.y);
     }
