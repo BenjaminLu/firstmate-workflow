@@ -1,0 +1,198 @@
+{
+  "id": "T-236",
+  "title": "the acknowledged-wake reader resolves the record root once per call instead of twice per wake id, so the board's first state request after a config or acknowledgement change answers in well under a second with 1700 wakes and board-state-cost stops timing out on a loaded CI runner",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_lifeline.py",
+    "tests/board-state-cost.test.sh",
+    "tests/lifeline-ack-root.test.sh",
+    "design/design.md",
+    "design/tasks/T-236.json"
+  ],
+  "acceptance": [
+    "Why. Main has been red since T-235 merged (run 37438665674 on 0790d5a, job 112186750970, shard 4/6). tests/board-state-cost.test.sh:304 'config edit changes the next request's default' got [] instead of [beta], and :307 'external acknowledgement rewrite invalidates the reader' got [] instead of [1]. PR #222 (run 37442256652) failed the same :304 case, while T-235's last PR run and T-232's run passed it. The failure is intermittent, but its cause is deterministic. get() at :108 is `curl -sf --max-time 10`, so [] means the request took longer than 10 s. Reproduced in docker (fm-ci-audit2, --cpus 2) with board/server.ts instrumented. With 1700 wake ids, both requests spend their time in watchWaiting's spawn of `fm_lifeline.py acknowledged` (board/server.ts:873): watch=1857 ms and 1871 ms idle, and about 4.7 s and 4.0 s per request with three CPU burners. A runner already running four suites in parallel (bin/ci.sh pool) pushes this past 10 s. The fixture at :297-301 writes 1700 acknowledgement files, and :86-89 writes 1700 wake.jsonl lines.",
+    "Root cause. bin/lib/fm_lifeline.py _ack_record (:636-656) calls record_root(root) twice for every identifier: once at :638 for state/session/.ack-transaction.json and once at :652 for the acknowledgement file. acknowledged_many (:658-686) calls it once more at :667 and then _ack_record per id at :679. record_root (:105-113) delegates to fm_project_paths.record_root (bin/lib/fm_project_paths.py:119+), which resolves the root and parses and validates config.yaml's projects block on every call. 1700 ids therefore cost 3400 config parses. With the scratch fix below the same loaded docker run measured watch=106-160 ms and the requests passed.",
+    "Change in bin/lib/fm_lifeline.py only. (a) _ack_record takes an optional third parameter, the already-resolved record root, and uses it for both paths. With no third argument it calls record_root(root) once, not twice. (b) acknowledged_many resolves record_root(root) once before taking the lock and passes it to every _ack_record call. (c) acknowledge_batch (:710+) already computes the record root at :723-724: reuse one resolved value for base, directory and its _ack_record call at :754, instead of three or more resolutions. (d) Optional, if it stays small: read state/session/.ack-transaction.json once per acknowledged_many call instead of once per id, keeping the same 'unknown transaction state hides tentative watermarks' semantics (an unreadable or non-dict transaction makes every id None). Keep the CLI output, the exit 75 busy path, the lock order and every return value byte-identical. Callers that patch record_root (tests/self-contract.test.sh:63, tests/external-execution.test.sh:205, tests/self-contract-migration.test.sh:52) must keep working, so keep calling the module-level record_root and do not cache it across calls.",
+    "Tests. Add tests/lifeline-ack-root.test.sh (python3 driven, the same style as the other lifeline suites). It builds a temp root with N=200 acknowledgement files, patches fm_lifeline.record_root with a counting wrapper around the real function, and asserts: acknowledged_many(root, ids) calls it exactly once and returns the same dict as before; acknowledge_batch on 50 items calls it at most once per call; with a .ack-transaction.json present the results are unchanged (transaction values win, a malformed transaction yields None for every id). The count assertions fail on base 0790d5a (401 calls) and pass after the change. Do not raise the --max-time in tests/board-state-cost.test.sh, and do not add timing assertions; the call count is the deterministic proof.",
+    "Out of scope, noted only. tests/board-state-cost.test.sh:149 `printf 'go\\n' > \"$d/release\"` writes a FIFO with no timeout. In one loaded docker run the blocked task reader never opened it, and the suite hung until killed. Do not fix it in this task.",
+    "Design. In design/design.md section 8 (the paragraph at about :1800-1810 that describes the `fm_lifeline.py acknowledged` CLI), add one sentence: the reader resolves the record root once per call. Edit in place; no new section.",
+    "Callers. bin/fm-herdr.py:2052 and tests/codex-hooks.test.sh:261 call acknowledged_many with the same signature. Both need no change, and the new optional parameter is on _ack_record only."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "The board answers the first state request after a change in less than one second with 1700 wakes."
+        },
+        {
+          "kind": "fact",
+          "text": "The acknowledged reader returns the same values as today."
+        },
+        {
+          "kind": "fact",
+          "text": "Main is green again on the board cost suite."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "Main went red after T-235, because one state request took more than 10 seconds on a busy runner."
+        },
+        {
+          "kind": "fact",
+          "text": "The acknowledged reader parses config.yaml twice for each wake id."
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_lifeline.py",
+        "a new lifeline suite",
+        "design section 8"
+      ],
+      "scope_out": [
+        "board/server.ts",
+        "the FIFO wait in the board cost suite"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: acknowledged_many resolves the record root once for each call. The call count check in the new suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the new suite compares the results with and without a transaction file."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: CI on the pull request runs the board cost suite on Linux."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "The board cost suite can still hang on its release FIFO. A later task fixes that wait."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Board asks acknowledged reader"
+        },
+        {
+          "state": "gone",
+          "label": "Parse config twice for each id"
+        },
+        {
+          "state": "gone",
+          "label": "Busy CI request passes 10 s"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Board asks acknowledged reader"
+        },
+        {
+          "state": "new",
+          "label": "Resolve record root once"
+        },
+        {
+          "state": "new",
+          "label": "Read each record file"
+        },
+        {
+          "state": "new",
+          "label": "Request answers under 1 s"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "有 1700 個喚醒時，變更後第一次狀態請求在一秒內回應。"
+        },
+        {
+          "kind": "fact",
+          "text": "已確認讀取器回傳的值和現在相同。"
+        },
+        {
+          "kind": "fact",
+          "text": "主線的看板成本測試恢復綠燈。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "T-235 合併後主線變紅，因為忙碌的執行器上一次請求超過 10 秒。"
+        },
+        {
+          "kind": "fact",
+          "text": "已確認讀取器對每個喚醒 id 解析兩次 config.yaml。"
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_lifeline.py",
+        "一個新的 lifeline 測試",
+        "設計第 8 節"
+      ],
+      "scope_out": [
+        "board/server.ts",
+        "看板成本測試裡的 FIFO 等待"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：acknowledged_many 每次呼叫只解析一次紀錄根目錄。新測試的呼叫次數檢查證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：新測試比對有無交易檔時的結果。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：PR 的 CI 在 Linux 上執行看板成本測試。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "看板成本測試的 release FIFO 仍會卡住，由後續任務處理。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "看板詢問已確認讀取器"
+        },
+        {
+          "state": "gone",
+          "label": "每個 id 解析兩次設定"
+        },
+        {
+          "state": "gone",
+          "label": "忙碌 CI 上請求超過 10 秒"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "看板詢問已確認讀取器"
+        },
+        {
+          "state": "new",
+          "label": "紀錄根目錄只解析一次"
+        },
+        {
+          "state": "new",
+          "label": "逐一讀取紀錄檔"
+        },
+        {
+          "state": "new",
+          "label": "請求在 1 秒內回應"
+        }
+      ]
+    }
+  }
+}
