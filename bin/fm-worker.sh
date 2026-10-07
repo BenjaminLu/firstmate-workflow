@@ -275,7 +275,7 @@ publish_wip_if_dirty() {
     return 1
   fi
   _fm_wip_done=1
-  emit --type commit_pushed ${PR:+--pr "$PR"} \
+  emit --type commit_pushed ${PR:+--pr "$PR"} ${adopt_data_args[@]+"${adopt_data_args[@]}"} \
     --en "checkpoint on $branch ($reason)" --tw "已 checkpoint $branch ($reason)"
   return 0
 }
@@ -428,6 +428,19 @@ fi
 spec="$(task_spec "$TASK" "$branch_guess")"
 [ -n "$spec" ] || { echo "fm-worker: no task $TASK: no design/tasks/$TASK.json" >&2; exit 65; }
 set_crew_activity "$spec"
+adopt_pr="$(jq -r '.adopt.pr // empty' <<<"$spec")"
+adopt_data_args=()
+adopt_refuse() {
+  echo "fm-worker: $1" >&2
+  emit --type worker_crashed --en "$1" --tw "接手 PR 遭拒：$1"
+  exit 65
+}
+if [ -n "$adopt_pr" ]; then
+  [ "$FM_EXTERNAL" = 1 ] || adopt_refuse 'adopt is only supported for external projects'
+  [ -z "$PR" ] || [ "$PR" = "$adopt_pr" ] || adopt_refuse 'caller --pr differs from adopt.pr'
+  PR="$adopt_pr"
+  adopt_data_args=(--data "$(jq -cn --argjson pr "$adopt_pr" '{adopt_pr:$pr}')")
+fi
 
 # A task's title is mutable; its branch name, once created, is not re-derived
 # from it (T-037). Prefer an explicit --pr headRefName when valid (T-035).
@@ -445,6 +458,12 @@ elif [ "$FM_EXTERNAL" = 1 ]; then
   branch="$slug-work"
 else
   branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
+fi
+if [ -n "$adopt_pr" ]; then
+  adopt_branch="$(fm_github pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null)" \
+    || adopt_refuse 'cannot verify adopted PR branch'
+  [ -n "$adopt_branch" ] && [ "$branch" = "$adopt_branch" ] \
+    || adopt_refuse 'selected branch differs from adopted PR branch'
 fi
 case "$branch" in main|master|"$BASE") echo 'fm-worker: refusing protected project base' >&2; exit 65 ;; esac
 [[ "$TASK" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || exit 65
@@ -630,6 +649,15 @@ fi
 # preserving a dirty tree in place.
 if [ "$FM_EXTERNAL" = 1 ] && [ -n "$PR" ]; then
   bound_head="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$branch")" || exit 65
+fi
+if [ -n "$adopt_pr" ]; then
+  adopt_check_args=()
+  if python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_adopt.py" pushed --task "$TASK" --pr "$PR"; then
+    adopt_check_args+=(--pushed)
+  fi
+  adopt_error="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_adopt.py" check \
+    --task "$TASK" --pr "$PR" --root "$FM_TARGET_ROOT" ${adopt_check_args[@]+"${adopt_check_args[@]}"} 2>&1)" \
+    || adopt_refuse "$adopt_error"
 fi
 rm -f "$tree/.fm-say.md" "$tree/.fm-prompt.md"
 
@@ -1198,6 +1226,11 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
   esac
 fi
 
+if [ -n "$adopt_pr" ] && [ -n "$FM_SPEC_PIN_JSON" ]; then
+  adopt_error="$(fm_pin scope --task "$TASK" --head "$branch" --base "$BASE" 2>&1)" \
+    || adopt_refuse "$adopt_error"
+fi
+
 # T-207: the self branch carries the pin verbatim. Rebuilds already restored
 # their frozen entry before taking the rebuild fingerprint.
 pin_self_metadata || exit 65
@@ -1404,6 +1437,11 @@ fm_round_pinned worker "$spec" || exit 65
     printf '\nThe worktree is detached until fm-worker.sh commits; fm-worker.sh pushes the\n'
     printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
     printf 'is refused.\n'
+  fi
+  if [ -n "$adopt_pr" ]; then
+    printf '\n# Adopted pull request\n\n'
+    printf 'A person opened this pull request. The commits up to %s are theirs.\n' "$(jq -r .adopt.head <<<"$spec")"
+    printf 'Build on them, do not revert their changes, and keep their conventions.\n'
   fi
   # T-117: a crew round runs inside the OS sandbox, whose write roots are
   # the worktree and the round's own temp directory. The worktree's git
@@ -2208,14 +2246,14 @@ fi
 # Only now: a push that was refused - a lease above, or a plain one - left
 # a commit that is not on origin, and the log must not say it was pushed.
 emit_status "Commit pushed on $branch" "已在 $branch 上推送 commit"
-emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"
+emit --type commit_pushed ${adopt_data_args[@]+"${adopt_data_args[@]}"} --en "committed on $branch" --tw "已在 $branch 上 commit"
 note_unsent_published
-rebuild_args=()
+rebuild_args=(${adopt_data_args[@]+"${adopt_data_args[@]}"})
 if [ "$rebuilt" = 1 ]; then
   rebuild_args=(--data "$(jq -cn --arg prev "$rebuild_prev" --arg base "$BASE" \
-    --arg base_head "$rebuild_base" --arg head "$(git -C "$tree" rev-parse HEAD)" \
+    --arg base_head "$rebuild_base" --arg head "$(git -C "$tree" rev-parse HEAD)" --arg adopt_pr "$adopt_pr" \
     '{rebuilt:{previous_head:$prev,base:$base,base_head:$base_head,head:$head,
-      conflicts:$ARGS.positional}}' --args ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"})")
+      conflicts:$ARGS.positional}} + (if $adopt_pr == "" then {} else {adopt_pr:($adopt_pr|tonumber)} end)' --args ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"})")
 fi
 
 # On a later round the pull request is already open and `pr create` fails.
@@ -2263,7 +2301,7 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
 else
   # Upgrade only the untouched external fallback title. Never replace a title
   # chosen by the captain, or one belonging to a different branch.
-  if [ "$FM_EXTERNAL" = 1 ] && [ -n "${public_text:-}" ]; then
+  if [ "$FM_EXTERNAL" = 1 ] && [ -z "$adopt_pr" ] && [ -n "${public_text:-}" ]; then
     if current_pr="$(fm_github pr view "$num" --json title,headRefName 2>/dev/null)" &&
        jq -e 'type == "object" and (.title | type == "string") and (.headRefName | type == "string")' \
          <<<"$current_pr" >/dev/null 2>&1; then

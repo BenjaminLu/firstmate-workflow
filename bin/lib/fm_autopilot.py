@@ -274,7 +274,9 @@ class Pilot(BranchUpdates, MechanicalLoop):
 
     def task(self, pr):
         task = self.pr_task(pr)
-        reason = 'branch/title does not identify a task'
+        reason = getattr(self, '_adopt_reason', '') or 'branch/title does not identify a task'
+        if task and self.ctx['external'] and self.adoptions()[0].get(pr['number']) == task:
+            return task
         if task:
             try:
                 spec = self.read_head_spec(pr, task)
@@ -285,12 +287,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 reason = str(error)
             try:
                 from fm_spec_pins import Pins
-                env = dict(FM_ENGINE_ROOT=str(self.root), FM_TARGET_ROOT=self.ctx['target'],
-                           FM_STATE_DIR=str(self.state), FM_TASKS_DIR=self.ctx['tasks'],
-                           FM_PROJECT=self.ctx['project'], FM_BASE=self.ctx['base'],
-                           FM_EXTERNAL='1' if self.ctx['external'] else '0',
-                           FM_DESIGN=self.ctx.get('design') or str(self.state.parent / 'design.md' if self.ctx['external']
-                                         else self.root / 'design/design.md'))
+                env = self.adoption_env()
                 pin = Pins(env, task).resolve(if_present=True)
                 if pin is not None:
                     return task
@@ -499,7 +496,10 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 batch['due'] = self.clock() + self.policy['debounce_seconds']
         # External repositories may never report BEHIND without protection.
         if self.ctx['external']:
-            if pr.get('mergeable') is not False and not pr.get('draft'):
+            import fm_adopt
+            adopted = self.adoptions()[0].get(pr['number']) == task
+            can_update = not adopted or fm_adopt.pushed(self.rows(), task, pr['number'])
+            if can_update and pr.get('mergeable') is not False and not pr.get('draft'):
                 token = f'update:{number}:{head}'
                 if self.retry_due(token):
                     try:
@@ -528,6 +528,8 @@ class Pilot(BranchUpdates, MechanicalLoop):
             return
         try:
             self._poll_rows = self.rows()
+            if self.ctx['external']:
+                self.adoptions()
             pulls = self.pages('pulls?state=open')
             for item in pulls:
                 self.observe_pr(item)
@@ -561,7 +563,8 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 if statuses.get('sha') != head or runs.get('total_count', 0) > 100 or statuses.get('total_count', 0) > 100:
                     raise ValueError('incomplete or stale check/status response')
                 self.pull(pr, reviews, comments, runs['check_runs'], statuses['statuses'])
-                if pr['base']['ref'] != self.ctx['base'] and self.task(pr):
+                adopted = self.ctx['external'] and pr['number'] in self.adoptions()[0]
+                if not adopted and pr['base']['ref'] != self.ctx['base'] and self.task(pr):
                     from urllib.parse import quote
                     parents = self.pages('pulls?state=closed&head=' + quote(self.ctx['repository'].split('/')[0] + ':' + pr['base']['ref'], safe=''))
                     for parent in parents:

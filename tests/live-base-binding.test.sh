@@ -2,6 +2,8 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
+python3 "$ROOT/tests/lib/external_adopt.py" "$ROOT" base
+assert_eq 0 "$?" 'adopted PR base follows pinned ownership and base'
 d="$(safe_tmpdir)"
 trap 'safe_rm_rf "$d"' EXIT
 mkdir -p "$d/stub" "$d/repo"

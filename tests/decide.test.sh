@@ -1135,4 +1135,6 @@ rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub"
 assert_fail "grep -qE '\\b(fswatch|watchexec|entr)\\b' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh')\"" \
   "it calls neither fswatch, watchexec nor entr"
 rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$dleg"
+python3 "$ROOT/tests/lib/external_adopt.py" "$ROOT" decide
+assert_eq 0 "$?" 'adopted PR decide follows pinned ownership and base'
 finish

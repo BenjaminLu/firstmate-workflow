@@ -93,8 +93,15 @@ actual_head="$(jq -r '.headRefOid // empty' <<<"$view")"
   echo 'fm-merge: PR head changed or is unverifiable; refresh review and gates / PR 版本已變更或無法驗證；請更新審核與關卡' >&2; exit 1; }
 branch="$(jq -r '.headRefName // empty' <<<"$view")"
 title="$(jq -r '.title // empty' <<<"$view")"
-owner="$(fm_task_of_pr "$branch" "$title" || true)"
-if fm_task_of_branch "$branch" >/dev/null; then by='its branch name'; else by='its title'; fi
+adopt_owner=''
+owner=''
+if [ "$FM_EXTERNAL" = 1 ]; then
+  owner="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_adopt.py" task-of --pr "$PR")" || exit 1
+  adopt_owner="$owner"
+fi
+[ -n "$owner" ] || owner="$(fm_task_of_pr "$branch" "$title" || true)"
+if [ -n "$adopt_owner" ]; then by='its adoption'
+elif fm_task_of_branch "$branch" >/dev/null; then by='its branch name'; else by='its title'; fi
 
 # A merged event with no task is an event the board cannot use: the reducer
 # keys on the task, so the task sits in whatever lane it was in and the

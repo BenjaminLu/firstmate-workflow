@@ -455,4 +455,6 @@ assert_lacks "$(cat "$d/ghcalls")" 'pr list' 'retention policy makes no unnecess
 assert_lacks "$(cat "$d/ghcalls")" '--delete-branch' 'retention policy never requests deletion'
 rm -rf "$d"
 
+python3 "$ROOT/tests/lib/external_adopt.py" "$ROOT" merge
+assert_eq 0 "$?" 'adopted PR merge follows pinned ownership and base'
 finish
