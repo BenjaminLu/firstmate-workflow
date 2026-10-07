@@ -1,4 +1,172 @@
 from herdr import *
+import contextlib
+import io
+import threading
+
+
+class ProjectWorkspaces(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.clone = self.home/'demo/repo'; self.clone.mkdir(parents=True)
+        self.logical = self.home/'round'; self.logical.mkdir()
+        self.attempt = self.logical/'attempt'; self.attempt.mkdir()
+        self.env = dict(FM_EXTERNAL='1', FM_PROJECT='demo', FM_TARGET_ROOT=str(self.clone))
+
+    def open(self, control, env=None, attempt=None):
+        with patch.dict(os.environ, dict(HERDR_PANE_ID='caller', FM_HERDR_SHELL_WAIT='0'), clear=True), \
+                patch.object(m, 'Herdr', return_value=control):
+            owner, _ = m.open_herdr_window(attempt or self.attempt, self.logical, self.clone,
+                'worker-test', 'T-249', dict(self.env if env is None else env), 'follow')
+        return owner
+
+    def assert_target(self, control, target):
+        owner = self.open(control)
+        create = next(c for c in control.calls if c[:2] == ('tab', 'create'))
+        self.assertEqual(target, create[create.index('--workspace')+1])
+        self.assertEqual(target, owner['workspace_id'])
+        self.assertEqual(target, json.loads((self.attempt/'owner.json').read_text())['workspace_id'])
+        self.assertEqual(owner['focus_before'], owner['focus_after'])
+        self.assertEqual([('pane', 'get', 'caller'), ('api', 'snapshot')], control.calls[:2])
+
+    def test_external_round_reuses_hand_made_workspace(self):
+        control = ProjectWorkspaceControl([workspace_row()])
+        self.assert_target(control, 'w-demo')
+        self.assertFalse(any(c[:2] == ('workspace', 'create') for c in control.calls))
+
+    def test_external_round_creates_missing_workspace_without_focus(self):
+        control = ProjectWorkspaceControl([workspace_row('other', 'w-other')])
+        self.assert_target(control, 'w-demo')
+        self.assertEqual([('workspace', 'create', '--cwd', str(self.clone.resolve()),
+                          '--label', 'demo', '--no-focus')],
+                         [c for c in control.calls if c[:2] == ('workspace', 'create')])
+        self.assertTrue((self.clone.parent/'state/herdr-workspace.lock').is_file())
+
+    def test_duplicate_labels_use_lowest_number(self):
+        control = ProjectWorkspaceControl([workspace_row(number=5), workspace_row(workspace_id='older', number=3)])
+        self.assert_target(control, 'older')
+        self.assertFalse(any(c[:2] == ('workspace', 'create') for c in control.calls))
+
+    def test_workspace_failure_falls_back_and_logs_reason(self):
+        cases = [(ProjectWorkspaceControl(created_label='wrong'), 'label'),
+                 (ProjectWorkspaceControl(failure=subprocess.TimeoutExpired('workspace list', 15)), 'timed out'),
+                 (ProjectWorkspaceControl(rows=None), 'NoneType'),
+                 (ProjectWorkspaceControl(rows=[None]), 'NoneType')]
+        for control, reason in cases:
+            with self.subTest(reason=reason):
+                (self.logical/'pane.json').unlink(missing_ok=True)
+                (self.attempt/'herdr.log').unlink(missing_ok=True)
+                self.assert_target(control, 'workspace')
+                lines = (self.attempt/'herdr.log').read_text().splitlines()
+                self.assertEqual(1, len(lines))
+                self.assertIn('project workspace unavailable:', lines[0])
+                self.assertIn(reason, lines[0])
+
+    def test_lock_failure_falls_back_without_workspace_calls(self):
+        control = ProjectWorkspaceControl()
+        with patch.object(m.fcntl, 'flock', side_effect=OSError('lock unavailable')):
+            self.assert_target(control, 'workspace')
+        self.assertFalse(any(c[0] == 'workspace' for c in control.calls))
+        self.assertIn('lock unavailable', (self.attempt/'herdr.log').read_text())
+
+    def test_self_or_incomplete_env_does_not_look_up_workspace(self):
+        for env in ({}, dict(self.env, FM_EXTERNAL='0'), dict(self.env, FM_PROJECT=''),
+                    dict(self.env, FM_TARGET_ROOT=''), dict(self.env, FM_TARGET_ROOT=str(self.home/'missing'))):
+            with self.subTest(env=env):
+                (self.logical/'pane.json').unlink(missing_ok=True)
+                control = ProjectWorkspaceControl()
+                self.assertEqual('workspace', self.open(control, env)['workspace_id'])
+                self.assertFalse(any(c[0] == 'workspace' for c in control.calls))
+
+    def test_recorded_project_pane_keeps_its_workspace(self):
+        control = ProjectWorkspaceControl([workspace_row()])
+        self.assertEqual('w-demo', self.open(control)['workspace_id'])
+        control.calls.clear(); control.failure = RuntimeError('must not look up on reuse')
+        attempt = self.logical/'second'; attempt.mkdir()
+        self.assertEqual('w-demo', self.open(control, attempt=attempt)['workspace_id'])
+        self.assertFalse(any(c[0] == 'workspace' or c[:2] == ('tab', 'create') for c in control.calls))
+
+    def test_recorded_caller_pane_is_not_migrated_to_project_workspace(self):
+        control = ProjectWorkspaceControl()
+        self.assertEqual('workspace', self.open(control, env={})['workspace_id'])
+        control.calls.clear(); control.failure = RuntimeError('must not look up on reuse')
+        attempt = self.logical/'second'; attempt.mkdir()
+        self.assertEqual('workspace', self.open(control, attempt=attempt)['workspace_id'])
+        self.assertFalse(any(c[0] == 'workspace' or c[:2] == ('tab', 'create') for c in control.calls))
+
+    def test_invalid_created_workspace_is_refused(self):
+        for workspace in (None, {}, dict(label='demo', workspace_id=''),
+                          dict(label='other', workspace_id='wrong')):
+            with self.subTest(workspace=workspace):
+                def control(*args):
+                    if args == ('workspace', 'list'): return dict(workspaces=[])
+                    return dict(workspace=workspace)
+                with self.assertRaisesRegex(RuntimeError, 'workspace'):
+                    m.project_workspace(control, 'demo', self.clone)
+
+    def test_exclusive_project_lock_covers_list_and_create(self):
+        control = ProjectWorkspaceControl()
+        def locked_control(*args):
+            with (self.clone.parent/'state/herdr-workspace.lock').open('a') as contender:
+                with self.assertRaises(BlockingIOError):
+                    m.fcntl.flock(contender, m.fcntl.LOCK_EX | m.fcntl.LOCK_NB)
+            return control(*args)
+        self.assertEqual('w-demo', m.project_workspace(locked_control, 'demo', self.clone))
+        self.assertEqual([('workspace', 'list'), ('workspace', 'create')],
+                         [c[:2] for c in control.calls])
+
+    def test_concurrent_first_rounds_create_one_workspace(self):
+        control = ProjectWorkspaceControl()
+        barrier = threading.Barrier(2)
+        def slow_control(*args):
+            result = control(*args)
+            if args == ('workspace', 'list'):
+                time.sleep(.05)  # Yield after observing absence, before create.
+            return result
+        def lookup():
+            barrier.wait(timeout=WAIT)
+            return m.project_workspace(slow_control, 'demo', self.clone)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(lookup) for _ in range(2)]
+            self.assertEqual(['w-demo', 'w-demo'], [f.result(timeout=WAIT) for f in futures])
+        self.assertEqual(1, sum(c[:2] == ('workspace', 'create') for c in control.calls))
+
+    def test_ensure_workspace_best_effort_and_temporary_logs(self):
+        control = ProjectWorkspaceControl(); log_dirs = []
+        def factory(directory):
+            directory = Path(directory); log_dirs.append(directory)
+            (directory/'herdr.log').write_text('temporary control log')
+            return control
+        def invoke():
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = m.main(['ensure-workspace', str(self.home), 'demo', str(self.clone)])
+            self.assertEqual(0, code)
+            return output.getvalue().strip()
+        with patch.dict(os.environ, dict(FM_HOST='herdr', HERDR_PANE_ID='caller'), clear=True), \
+                patch.object(m, 'Herdr', side_effect=factory):
+            self.assertEqual('w-demo', invoke())
+            self.assertEqual('w-demo', invoke())
+            control.failure = RuntimeError('server unavailable')
+            self.assertEqual('skip: server unavailable', invoke())
+            # Even an exception outside the launch path's normal catch set is best effort.
+            with patch.object(m, 'window_host', side_effect=Exception('host unavailable')):
+                self.assertEqual('skip: host unavailable', invoke())
+        self.assertEqual(1, sum(c[:2] == ('workspace', 'create') for c in control.calls))
+        self.assertTrue(log_dirs)
+        self.assertTrue(all(not p.exists() for p in log_dirs))
+        self.assertFalse((self.home/'herdr.log').exists())
+        self.assertFalse((self.clone/'herdr.log').exists())
+
+    def test_ensure_workspace_cli_without_caller_skips(self):
+        env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_', 'CMUX_', 'TMUX'))}
+        env['FM_HOST'] = 'herdr'
+        result = subprocess.run([sys.executable, str(root/'bin/fm-herdr.py'), 'ensure-workspace',
+                                 str(self.home), 'demo', str(self.clone)], env=env,
+                                cwd=self.clone, text=True, capture_output=True, timeout=15)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(result.stdout.startswith('skip:'), result.stdout)
+        self.assertFalse((self.clone/'herdr.log').exists())
 
 class CallerContext(unittest.TestCase):
     def test_complete_supplied_context_is_checked_before_creation_or_reuse(self):
@@ -37,6 +205,26 @@ class CallerContext(unittest.TestCase):
             self.assertEqual([('pane', 'get', 'caller'), ('api', 'snapshot')], calls)
 
 class Entrypoints(EntrypointsFixture):
+    def test_ensure_workspace_cli_creates_reuses_and_swallows_failure(self):
+        clone = self.repo/'projects/demo/repo'; clone.mkdir(parents=True)
+        command = [sys.executable, str(self.repo/'bin/fm-herdr.py'), 'ensure-workspace',
+                   str(self.repo), 'demo', str(clone)]
+        def invoke():
+            result = subprocess.run(command, env=dict(self.env, FM_HOST='herdr'),
+                                    cwd=self.fake, capture_output=True, text=True, timeout=15)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse((self.repo/'herdr.log').exists())
+            self.assertFalse((self.fake/'herdr.log').exists())
+            self.assertFalse((clone/'herdr.log').exists())
+            return result.stdout.strip()
+        workspace = invoke()
+        self.assertTrue(workspace.startswith('ws-'), workspace)
+        self.assertEqual(workspace, invoke())
+        calls = [json.loads(line) for line in (self.repo/'controls').read_text().splitlines()]
+        self.assertEqual(1, sum(c[:2] == ['workspace', 'create'] for c in calls))
+        (self.fake/'herdr').write_text('#!/bin/sh\nexit 1\n')
+        self.assertTrue(invoke().startswith('skip:'))
+
     def test_verified_nested_herdr_ignores_outer_cmux_and_requires_no_password(self):
         # Explicit, independently verified context wins even without HERDR_ENV.
         # cmux must never be invoked for this deployment.

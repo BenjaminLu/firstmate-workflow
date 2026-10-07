@@ -658,7 +658,7 @@ if run_section destroy; then
       >> "$engine/config.yaml"
     ghurl="$ext_dir/host/fm-canary"; mkdir -p "$ghurl"
     git clone -q --bare "$ext_dir/remote.git" "$ext_dir/host/fm-canary/destroy-fixture.git" >/dev/null 2>&1
-    if FM_HOME="$dwork/fm-home" FM_GITHUB_URL="$ext_dir/host" "$ROOT/bin/fm-project.sh" sync destroy-fixture --repo "$engine" >/dev/null 2>&1; then
+    if env -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID HERDR_ENV=0 FM_HOME="$dwork/fm-home" FM_GITHUB_URL="$ext_dir/host" "$ROOT/bin/fm-project.sh" sync destroy-fixture --repo "$engine" >/dev/null 2>&1; then
       ext_repo_dir="$dwork/fm-home/projects/destroy-fixture"
       cp -R "$ext_dir/repo/design/tasks" "$ext_repo_dir/tasks"
       # The fixture is an approved external project before any worker starts.

@@ -173,6 +173,9 @@ sync_clone() {
     printf '%s\n' '.fm-*' >> "$ex"
   fi
   python3 "$_fm_code_dir/lib/fm_design_check.py" check --engine "$REPO" --name "$NAME" --home "$project_home" --base "$base" || true
+  if [ "$repo_field" != . ] && [ "${FM_HERDR_WORKSPACE:-}" != 0 ]; then
+    python3 "$_fm_code_dir/fm-herdr.py" ensure-workspace "$REPO" "$NAME" "$clone" >/dev/null 2>&1 || true
+  fi
   exit 0
 }
 
