@@ -1,0 +1,15 @@
+I found no spec gaps. Every acceptance line is achievable within the declared scope.
+
+**1.** **ok**: Why
+- The current behaviour is as the spec describes:
+  - `ensure` exits 0 when `running` succeeds (`bin/fm-autopilot.sh:52-54`).
+  - owner.json gets only `pid`/`owner`/`started` (`:726`).
+
+**2.** **ok**: Which code
+- `HEAD:bin` and `HEAD:skills` both resolve in this checkout.
+
+**3.** **ok**: In flight
+- A board reused with no board.json writes a record without `code`.
+
+PREFLIGHT-COMPLETE:T-X
+SPEC-OK:T-X

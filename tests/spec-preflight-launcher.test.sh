@@ -48,8 +48,13 @@ body = pathlib.Path(sys.argv[1]).read_text()
 for phrase in ('declared scope', 'caller, mirror, fixture', 'ids, formats, paths', 'already in flight'):
     assert phrase in body
 assert 'REVIEWER_COMPLETE' not in body
+verdict = os.environ.get('FM_TEST_VERDICT', 'SPEC-OK')
+status = 'ok' if verdict == 'SPEC-OK' else 'gap'
+default = ('1. ' + status + ': Checked the acceptance and migration.\n'
+           + 'PREFLIGHT-COMPLETE:' + os.environ['FM_TASK'] + '\n'
+           + verdict + ':' + os.environ['FM_TASK'])
 result = {'type': 'result', 'subtype': 'success', 'is_error': False,
-          'result': '1. Checked the acceptance and migration.\n' + os.environ.get('FM_TEST_VERDICT', 'SPEC-OK') + ':' + os.environ['FM_TASK']}
+          'result': os.environ.get('FM_TEST_FINAL', default)}
 if os.environ['FM_CHAIN_VENDOR'] == 'codex':
     rows = [{'type': 'thread.started', 'thread_id': 'fixture'}, {'type': 'turn.started'},
             {'type': 'item.completed', 'item': {'type': 'agent_message', 'id': 'final', 'text': result['result']}},
@@ -76,7 +81,7 @@ assert_eq 1 "$(jq -r .attempt "$review_run/identity.json")" 'first review after 
 assert_eq 1 "$(jq -r .round "$review_run/identity.json")" 'first review after recorded preflight retains round 1'
 level=legacy; [ "$vendor" != codex ] || level=authenticated
 assert_eq "$level" "$(jq -r .provenance.level "$record")" "$vendor retains its provenance level"
-(cd "$repo" && FM_ROOT="$repo" FM_TEST_VERDICT=SPEC-GAPS bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/gaps" 2>&1
+(cd "$repo" && FM_ROOT="$repo" FM_TEST_VERDICT=SPEC-GAPS FM_TEST_FINAL=$'1. open: Checked the acceptance and migration.\nPREFLIGHT-COMPLETE:T-Z\nSPEC-GAPS:T-Z' bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/gaps" 2>&1
 assert_eq 65 "$?" 'gaps retain evidence and refuse approval'
 assert_eq 'spec-gaps ok' "$(jq -sr '[.[]|select(.type=="agent_finished")][-1].data|"\(.preflight_outcome) \(.result)"' "$repo/state/events.jsonl")" 'exit 65 with retained gaps is a completed preflight'
 assert_contains "$(cat "$d/gaps")" 'SPEC-GAPS:T-Z' 'firstmate receives gaps'
@@ -97,7 +102,7 @@ if [ "$vendor" = claude ]; then
   printf 'models:\n  claude: fixture-claude\n  codex: fixture-codex\nreviewer:\n  vendor: claude\nfallback:\n  - codex\n' > "$repo/config.yaml"
   # Amend bytes because an earlier SPEC-GAPS correctly forbids their reuse.
   printf '\n' >> "$repo/design/tasks/T-Z.json"
-  (cd "$repo" && FM_ROOT="$repo" FM_TEST_FALLBACK=1 bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/fallback" 2>&1
+  (cd "$repo" && FM_ROOT="$repo" FM_TEST_FALLBACK=1 FM_TEST_FINAL=$'1. done: Checked the acceptance and migration.\nPREFLIGHT-COMPLETE:T-Z\nSPEC-OK:T-Z' bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/fallback" 2>&1
   assert_eq 0 "$?" 'fallback attempt emits its own vendor and requested model'
 else
   # Select the registered self project while another project is the default.

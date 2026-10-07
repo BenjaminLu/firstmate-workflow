@@ -13,7 +13,7 @@ import unittest
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 from fm_evidence import Store
-from fm_spec_preflight import require_ok, retain, prompt, decision
+from fm_spec_preflight import require_ok, retain, prompt, decision, standing
 loader = importlib.util.spec_from_file_location('managed', ROOT / 'bin/fm-herdr.py')
 managed = importlib.util.module_from_spec(loader)
 loader.loader.exec_module(managed)
@@ -32,8 +32,19 @@ class Preflight(unittest.TestCase):
 
     def record(self, data=None, verdict='SPEC-OK'):
         data = self.spec if data is None else data
+        previous = standing(self.store)
+        if previous is None:
+            statuses = ['ok' if verdict == 'SPEC-OK' else 'gap'] * max(
+                1, len(json.loads(data).get('acceptance') or []))
+        else:
+            statuses = [('open' if verdict == 'SPEC-GAPS' else
+                         'done' if item['status'] in ('gap', 'open') else 'ok')
+                        for item in previous['standing']]
+        answer = ''.join(f'{n}. {status}: Checked each acceptance line.\n'
+                         for n, status in enumerate(statuses, 1))
+        answer += 'PREFLIGHT-COMPLETE:T-X\n' + verdict + ':T-X\n'
         return retain(self.store, data, 'a' * 40, 'reviewer-noah-tx-r1', 1,
-                      '1. Checked each acceptance line.\n' + verdict + ':T-X\n',
+                      answer,
                       {'level': 'legacy', 'vendor': 'claude'})
 
     def test_preflight_does_not_consume_review_attempt(self):
@@ -131,13 +142,15 @@ class Preflight(unittest.TestCase):
     def test_prompt_four_checks_and_closing_rule(self):
         body = prompt('T-X', self.spec, 'a' * 40)
         for part in ('declared scope', 'caller, mirror, fixture', 'ids, formats, paths',
-                     'already in flight', 'migration', 'test', 'SPEC-OK:T-X', 'SPEC-GAPS:T-X'):
+                     'already in flight', 'migration', 'test', 'SPEC-OK:T-X', 'SPEC-GAPS:T-X',
+                     'PREFLIGHT-COMPLETE:T-X'):
             self.assertIn(part, body)
         context = managed.role_context(ROOT, 'reviewer', 'T-X', 'reviewer-noah', body,
                                        spec_preflight=self.sha)
         self.assertNotIn('REVIEWER_COMPLETE', context)
         self.assertNotIn('APPROVE:T-X', context)
         self.assertIn('SPEC-OK:T-X', context)
+        self.assertIn('PREFLIGHT-COMPLETE:T-X', context)
 
     def test_prompt_check_five_names_the_design_section(self):
         # T-189: a design.md edit names its numbered home, never the file's end.
@@ -157,7 +170,9 @@ class Preflight(unittest.TestCase):
                 self.assertEqual(verdict, decision(self.bold_final(verdict), 'T-X'))
 
     def assert_bold_heading_retained(self, verdict):
-        answer = self.bold_final(verdict)
+        answer = (ROOT / 'tests/fixtures/spec-preflight/bold-headings-standing.final.txt').read_text()
+        if verdict == 'SPEC-GAPS':
+            answer = answer.replace('**ok**', '**gap**', 1).replace('SPEC-OK:T-X', 'SPEC-GAPS:T-X')
         retained = retain(self.store, self.spec, 'a' * 40, 'reviewer-noah-tx-r1', 1,
                           answer, {'level': 'legacy', 'vendor': 'claude'})
         records = self.store.records()  # Also exercises fm_evidence re-validation.
