@@ -47,6 +47,17 @@ class Standing(unittest.TestCase):
         self.refused(valid, valid.replace('PREFLIGHT-COMPLETE:T-X\n', ''),
                      'requires the standalone marker immediately before the verdict')
 
+    def test_prose_between_marker_and_verdict(self):
+        valid = self.answer('1. ok: src/a:1 one\n2. ok: src/b:2 two')
+        prose = valid.replace('PREFLIGHT-COMPLETE:T-X\n', 'PREFLIGHT-COMPLETE:T-X\n\nNo item is gap or open.\n')
+        self.assertNotEqual(valid, prose)
+        self.retain(prose)
+
+    def test_list_item_after_marker_refused(self):
+        valid = self.answer('1. ok: src/a:1 one\n2. ok: src/b:2 two')
+        self.refused(valid, valid.replace('PREFLIGHT-COMPLETE:T-X\n', 'PREFLIGHT-COMPLETE:T-X\n3. ok: late item\n'),
+                     'only prose may sit between the marker and the verdict')
+
     def test_missing_verdict(self):
         valid = self.answer('1. ok: src/a:1 one\n2. ok: src/b:2 two')
         self.refused(valid, valid.replace('SPEC-OK:T-X', 'SPEC-UNKNOWN:T-X'),
