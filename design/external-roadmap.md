@@ -32,7 +32,7 @@ Deferred, not dropped or completed: T-087, T-124, T-129, T-131, T-132, T-133, T-
 | T-051 | T-049, T-142, T-163, T-167 | Stock live dispatch/lifeline integration, isolated execution, head synchronization |
 | T-052 | T-051, T-139, T-135 | Portable bounded prompts, authoritative checkout/evidence context |
 | T-053 | T-050, T-051, T-052 | Fair live-owned concurrency, exact identity and merge turns |
-| T-055 | T-052, T-053, T-054, T-137, T-144 | Actual maker-founder basic pilot and retained real outputs |
+| T-055 | T-052, T-053, T-054, T-137, T-144 | Basic external flow has run end to end on a private repository |
 | T-140 | T-138, T-139, T-135 | Advanced external reviewers and posting conventions |
 | T-143 | T-051, T-139 | Advanced stacks and project-specific landing/retention |
 | T-141 | T-138, T-140, T-143, T-144, T-151 | Advanced zero-model pushed supervision |
@@ -54,7 +54,7 @@ T-142 → T-166 and T-051 → T-167 are the deliberate additions to the approved
 | Count historical PRs or dispatches | Count live owned runs under dispatch and identity locks |
 | setsid/beacon/polling supervision | Lifelines and writer-pushed local wakes; only GitHub conditional polling |
 | Worker checkpoint in target | Outside-round frozen launcher publishes; workers never commit/push/checkpoint |
-| Mock-only external pilot | Real maker-founder bootstrap, approved task, live stock Codex Herdr run, isolated review, current evidence and cleanup |
+| Mock-only external pilot | Basic external flow has run: onboarding, captain-card dispatch, isolated rounds and review, authoritative-head gates and captain-card landing |
 | Full autopilot needed for basic pilot | T-140/T-143/T-141 remain advanced roadmap; core T-051 dispatch works first |
 | Hard 240-second optimization gate | T-130 measurable optimization with reported estimates/actuals, no hard shard duration target |
 

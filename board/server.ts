@@ -982,6 +982,18 @@ const buildState = (only: string | null, tasksOnly = false) => {
   // crew/session portion of the full board response.
   const directories = tasksOnly ? [stateDir(only ?? "")] : undefined;
   const events = readEvents(directories).filter(e => !tasksOnly || projectOf(e) === (only ?? ""));
+  // Fold only superseded dispatch-start events. Merge progress remains visible.
+  const supersededDispatch = new Set<Event>();
+  const answeredDecisions = new Set<string>();
+  for (const event of [...events].reverse()) {
+    if (event.type !== "decision_made") continue;
+    const data = event.data as Record<string, unknown> | undefined;
+    if (typeof data?.decision !== "string") continue;
+    const key = JSON.stringify([projectOf(event), data.decision]);
+    if (data.effect === "dispatch" && data.outcome === "running" && answeredDecisions.has(key))
+      supersededDispatch.add(event);
+    answeredDecisions.add(key);
+  }
   const def = defaultProject();
   // every record that carries a pr number carries its URL beside it, on its
   // own project's repository
@@ -1384,7 +1396,7 @@ const buildState = (only: string | null, tasksOnly = false) => {
     if (e.type === 'review_opened') {kind='work';from=peer('worker');to=actor;}
     if (e.type === 'approved') {kind='approve';from=actor;to='firstmate';}
     if (e.type === 'review_failed' && data.review_outcome === 'rejected') {kind='reject';from=actor;to=peer('worker');}
-    if (e.type === 'decision_made') {kind='order';from='firstmate';to=peer('worker');}
+    if (e.type === 'decision_made' && !supersededDispatch.has(e)) {kind='order';from='firstmate';to=peer('worker');}
     // T-145: the role the board knows each named end by - firstmate, the one a
     // crewman said (`data.role`) or was dispatched as, or for a run recorded
     // before T-116 the one its canonical actor names - never guessed from any
@@ -1619,7 +1631,7 @@ const buildState = (only: string | null, tasksOnly = false) => {
     // Full outcome stream: a busy refresh must not lose events outside recent.
     responses: reviewed.filter(mine).map(linked),
     handoffs: handoffs.filter((h) => !("project" in h) || mine(h)),
-    outcomes: [...events.filter(e => (e.type === "merged" || e.type === "decision_made") && mine(e))
+    outcomes: [...events.filter(e => (e.type === "merged" || e.type === "decision_made") && !supersededDispatch.has(e) && mine(e))
       .map(e => linked({ ...e, chosen: (e.data as { chosen?: unknown } | undefined)?.chosen, identity: outcomeOf(e) })),
       ...responses.filter(d => d.identity && mine(d)).map(d => ({type:'decision_made',identity:d.identity,project:d.project,chosen:d.chosen,data:{decision:d.id,chosen:d.chosen}}))],
     // a lost run shows once: its agent_lost, not also the agent_finished the
@@ -2620,7 +2632,15 @@ const server = Bun.serve({
             : now?.stage === (effect === "park" ? "parked" : "closed") ? { outcome: "done", reason: `${task} was already ${now.stage}` }
             : setAside(cardProject, task!, effect, id);
         }
-        else if (effect === "dispatch") carried = await dispatchTask(cardProject, task!);
+        else if (effect === "dispatch") {
+          const recorded = recordedChoice !== "A" || emitCaptain([
+            "--type", "decision_made", "--task", task!, ...onProject,
+            "--data", JSON.stringify({ decision: id, chosen: "A", outcome: "running", effect: "dispatch" }),
+            "--en", `${id}: A, dispatch running`, "--tw", `${id}：A，派工進行中`,
+          ]).ok;
+          carried = recorded ? await dispatchTask(cardProject, task!)
+            : { outcome: "failed", reason: "decision event not recorded" };
+        }
         else if (effect === "send_back") carried = await sendBack(cardProject, task!, prNumber(p.pr));
         if (effect && effect !== "merge") {
           const now = readJson<Record<string, unknown>>(file) ?? decision;

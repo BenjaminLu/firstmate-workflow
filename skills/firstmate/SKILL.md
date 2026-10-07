@@ -214,10 +214,10 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 - `bin/fm-dispatch.sh --repo <root> --dry-run` previews the ready tasks the
   captain has cleared, and names on stderr the ready ones still held (see
   [Judge a task when it turns ready](#judge-a-task-when-it-turns-ready)). Actual dispatch
-  checks for any recorded green light, merged dependency events and capacity
-  derived from task events, not live process counts. Firstmate must verify the
-  green light applies to the proposed work and reconcile actual capacity. Crew
-  launch is *stock launch* only (see [dispatch-crew](dispatch-crew/SKILL.md)),
+  requires a `greenlit` event in the project store or the captain's A on the
+  task's readiness card as pin `approval(None)` accepts it. Merged dependencies,
+  readiness clearance and live owned capacity still apply. Firstmate must verify
+  that the approval covers the proposed work. Crew launch is *stock launch* only (see [dispatch-crew](dispatch-crew/SKILL.md)),
   with or without a terminal host; `FM_TRANSPORT=direct` runs the same
   supervised round with no window.
 - `bin/fm-worker.sh --task <id> --repo <root>` owns worktree setup, adapter calls,
@@ -1007,13 +1007,12 @@ detached cmux lifecycle. Count live owned runs under dispatch/identity locks,
 not open PR counts. T-167 distinguishes actual CLI/provider errors from quoted
 model/tool text; record final output and owner cleanup/retention honestly.
 
-Once T-053 is implemented, routine dispatch without --project fairly fills all
-projects; captain-requested single-project work uses --project. Other project
-operations always carry explicit context. Core dispatch needs no T-141 autopilot.
-T-140/T-143/T-141 remain advanced roadmap work after the basic maker-founder
-pilot. Its empty git/no-commit/no-remote bootstrap needs an approved product and
-remote contract; ask at most three genuinely missing questions, infer no product
-brief or visibility from authorization to use a fresh repo.
+Routine dispatch without --project fairly fills all projects; captain-requested
+single-project work uses --project. Other project operations always carry explicit
+context. Onboard a new external project, then dispatch through the standard
+`fm-dispatch.sh` path using the captain's readiness cards. The basic external
+flow has run end to end on a private repository. T-140/T-143/T-141 remain
+advanced integrations; core dispatch needs no T-141 autopilot.
 
 Apply T-164 hook diagnostics as separate source loading, enablement/policy,
 exact native trust, reload and delivery facts. No fabricated trust, bypass,

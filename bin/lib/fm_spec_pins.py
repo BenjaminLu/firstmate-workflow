@@ -63,6 +63,52 @@ def contract(text, project):
         return reader.project_contract(stream.name)
 
 
+def readiness_decision(state, task):
+    # fm-ready retires this record on dispatch. The ended card still names
+    # the dispatch judgment when a first pin is created on a later round.
+    path = state / 'ready' / (task + '.json')
+    if path.is_file() and not path.is_symlink():
+        record = json.loads(path.read_text())
+        if record.get('task') == task:
+            return record.get('decision') if record.get('episode') else record.get('ended')
+    return None
+
+
+def card_answer(state, project, task, decision):
+    if not isinstance(decision, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', decision):
+        return None
+    path = state / 'decisions' / (decision + '.json')
+    if not path.is_file() or path.is_symlink():
+        return None
+    answer = json.loads(path.read_text())
+    if (answer.get('chosen') == 'A' and answer.get('kind', 'choice') == 'choice'
+            and answer.get('task') == task and answer.get('id') == decision
+            and answer.get('project', 'firstmate-workflow') == project):
+        return answer
+    return None
+
+
+def readiness_card_approval(events, state, project, task, decision=None):
+    """Match a captain A using the caller's project-filtered event store."""
+    readiness = readiness_decision(state, task) if not decision else None
+    for event in reversed(events):
+        data = event.get('data') or {}
+        if event.get('type') != 'decision_made' or event.get('task') != task:
+            continue
+        id = data.get('decision', '')
+        if id != (decision or readiness):
+            continue
+        answer = card_answer(state, project, task, id)
+        if (answer is None or event.get('actor') != 'captain'
+                or data.get('chosen') != 'A'):
+            continue
+        if not event.get('ts'):
+            continue
+        return dict(kind='choice', decision=id, author='captain', time=event['ts'],
+                    event=event, answer=answer)
+    return None
+
+
 class Pins:
     def __init__(self, env, task):
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', task):
@@ -90,46 +136,17 @@ class Pins:
         return [e for e in events if e.get('project', 'firstmate-workflow') == self.project]
 
     def readiness_decision(self):
-        # fm-ready retires this record on dispatch. The ended card still names
-        # the dispatch judgment when a first pin is created on a later round.
-        path = self.state / 'ready' / (self.task + '.json')
-        if path.is_file() and not path.is_symlink():
-            record = json.loads(path.read_text())
-            if record.get('task') == self.task:
-                return record.get('decision') if record.get('episode') else record.get('ended')
-        return None
+        return readiness_decision(self.state, self.task)
 
     def answer(self, decision):
-        if not isinstance(decision, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', decision):
-            return None
-        path = self.state / 'decisions' / (decision + '.json')
-        if not path.is_file() or path.is_symlink():
-            return None
-        answer = json.loads(path.read_text())
-        if (answer.get('chosen') == 'A' and answer.get('kind', 'choice') == 'choice'
-                and answer.get('task') == self.task and answer.get('id') == decision
-                and answer.get('project', 'firstmate-workflow') == self.project):
-            return answer
-        return None
+        return card_answer(self.state, self.project, self.task, decision)
 
     def approval(self, decision=None):
         events = self.events()
         readiness = self.readiness_decision() if not decision else None
-        for event in reversed(events):
-            data = event.get('data') or {}
-            if event.get('type') != 'decision_made' or event.get('task') != self.task:
-                continue
-            id = data.get('decision', '')
-            if id != (decision or readiness):
-                continue
-            answer = self.answer(id)
-            if (answer is None or event.get('actor') != 'captain'
-                    or data.get('chosen') != 'A'):
-                continue
-            if not event.get('ts'):
-                continue
-            return dict(kind='choice', decision=id, author='captain', time=event['ts'],
-                        event=event, answer=answer)
+        choice = readiness_card_approval(events, self.state, self.project, self.task, decision)
+        if choice is not None:
+            return choice
         if decision:
             raise ValueError('missing or mismatched captain authorization for project/task/decision')
 
