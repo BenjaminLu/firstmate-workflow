@@ -9,4 +9,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export HERDR_ENV=0
 python3 "$ROOT/tests/lib/spec_preflight_cases.py" "$ROOT"
 assert_eq 0 "$?" 'spec preflight binds exact bytes, migration, prompt and authenticated finals'
+python3 "$ROOT/tests/lib/external_adopt.py" "$ROOT" preflight
+assert_eq 0 "$?" 'adopt schema refuses malformed and self specs'
 finish

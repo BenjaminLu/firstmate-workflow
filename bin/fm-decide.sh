@@ -313,7 +313,11 @@ pr_agrees() {   # pr_agrees: returns when --pr is --task's pull request (none fo
     && branch="$(jq -er '.headRefName | strings' 2>/dev/null <<<"$doc")" || {
     echo "fm-decide: cannot read #$PR's branch from GitHub; no card raised for ${TASK:-an untracked merge}" >&2; exit 1; }
   title="$(jq -r '.title // empty' <<<"$doc")"
-  owner="$(fm_task_of_pr "$branch" "$title" || true)"
+  owner=''
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    owner="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_adopt.py" task-of --pr "$PR")" || exit 1
+  fi
+  [ -n "$owner" ] || owner="$(fm_task_of_pr "$branch" "$title" || true)"
   if [ "$KIND" = merge-untracked ]; then
     [ -z "$owner" ] || {
       echo "fm-decide: #$PR is $owner's pull request (branch '$branch'), not untracked; raise --kind merge --task $owner" >&2

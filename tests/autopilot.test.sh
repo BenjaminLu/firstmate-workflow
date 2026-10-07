@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Feature dependencies: bin/lib/fm_adopt.py
 # Shared branch fixture: tests/lib/autopilot_branch_fixture.py
 # Feature-owned synthetic event tests; never contacts GitHub.
 set -uo pipefail

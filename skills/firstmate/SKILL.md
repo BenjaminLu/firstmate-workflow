@@ -985,6 +985,18 @@ commits and PRs. Keep both fields only in the external task spec under
 names into tracked engine files. Preflight checks new specs; existing SPEC-OK
 receipts stay valid, and older pinned rounds use the generic public label.
 
+To continue a person's existing external PR, write `adopt` with exactly `pr`
+(a positive number), `head` (the full commit), and `base` (the branch) shown on
+the readiness card. The captain's A pins the spec and authorizes that adoption;
+all readers use that pin. List every file changed by the human commits in
+scope. Gates and review measure the whole PR from its own base, so add a
+fail-first test in the first round if the human commits have none. Build on
+the human work and retain its conventions, title and body. External catch-up
+under `force_with_lease: true` can rewrite those commits on the same PR.
+A stacked PR waits for T-239; self-project adoption is unsupported. A changed
+base needs a new spec and A card. For `land: handoff`, return the finished PR
+to its team under the project's policy.
+
 External private data belongs in FM_HOME/projects/<name>, including specs,
 conventions, pins, evidence and recovery; no copies in engine state. Private
 repos are accepted. Unknown protection requires confirmed checks/policy, not

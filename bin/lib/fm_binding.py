@@ -168,9 +168,13 @@ def review_final(root, branch, repository, pr, head, base_name):
     return head
 
 
-def required_checks(root, repository, pr, head):
+def required_checks(root, repository, pr, head, *, task=None):
     from fm_project_checks import status_runs
+    import fm_adopt
+    adopt = fm_adopt.adoption(os.environ, task)
     view = remote_head(repository, pr)
+    if adopt:
+        fm_adopt.base_matches(view, adopt)
     if view['headRefOid'] != head:
         raise ValueError('checks belong to stale head')
     verified_base(view, repository, root)
@@ -184,7 +188,7 @@ def required_checks(root, repository, pr, head):
     except (ValueError, OSError) as error:
         if external:
             raise ValueError('required checks unknown: captain-confirmed checks and policy required: ' + str(error)) from error
-    if policy and view['baseRefName'] != policy['base'] and policy['stacking'] != 'allowed':
+    if policy and not adopt and view['baseRefName'] != policy['base'] and policy['stacking'] != 'allowed':
         raise ValueError('required checks unknown: stacked PR base requires confirmed stacking policy')
     try:
         protection = github(repository, 'api', 'repos/' + repository + '/branches/' + quote(view['baseRefName'], safe='') + '/protection/required_status_checks')
@@ -333,6 +337,15 @@ def main():
     args = p.parse_args()
     mapping = gate_list() if args.mode in ('ready', 'candidate') else None
     root = Path(os.environ['FM_TARGET_ROOT'])
+    import fm_adopt
+    if args.mode in ('base', 'local-gate-base', 'head', 'checks', 'ready', 'candidate'):
+        adopt = fm_adopt.adoption(os.environ, args.task)
+        if adopt:
+            if str(adopt['pr']) != args.pr:
+                raise ValueError('PR does not match authorized adoption')
+            repo = repository(root)
+            fm_adopt.base_matches(remote_head(repo, args.pr), adopt)
+            fm_adopt.sync_base(root, repo, adopt['base'])
     if args.mode == 'local-gate-base':
         print(local_gate_base(root, args.pr, args.project_base)); return
     repo = repository(root)
@@ -356,7 +369,7 @@ def main():
         record = records[-1]
         if record.get('gates') not in ([g['name'] for g in mapping['gates']], [int(n) for n in mapping['legacy']]) or not record.get('checks'):
             raise ValueError('candidate lacks all six gates and required checks')
-        if required_checks(root, repo, args.pr, head) != record['checks']:
+        if required_checks(root, repo, args.pr, head, task=args.task) != record['checks']:
             raise ValueError('required check/status evidence changed; refresh gates')
         selected, external = selected_review(store, root, repo, args.pr, head)
         if review_identity(selected) != record['verdict_signature'] or (external and review_identity(external) != record.get('external_signature')):
@@ -372,7 +385,7 @@ def main():
                 raise ValueError('candidate source/contract changed: ' + key)
         verify_current(root, repo, args.pr, head, record['gate_base'])
         print(json.dumps(record)); return
-    checks = required_checks(root, repo, args.pr, head)
+    checks = required_checks(root, repo, args.pr, head, task=args.task)
     if args.mode == 'checks':
         print(json.dumps(checks)); return
     report_path = Path(args.gate_report).resolve()

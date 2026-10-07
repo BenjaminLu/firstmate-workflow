@@ -1,0 +1,282 @@
+{
+ "id": "T-237",
+ "title": "an external task can adopt a single pull request that a person opened by hand on its own base: the pinned spec names the PR, the head the captain approved and the PR's base, worker rounds commit on top of the human commits, the gates, review, merge checks and required checks bind to that base, every reader takes the adoption from the pinned spec, the autopilot and the merge checks resolve the PR to its adopting task before the branch-name grammar, and a fork, a stacked PR, a base that no longer matches, a branch or title naming another task, a duplicate adoption or history rewritten before firstmate's first push is refused",
+ "milestone": "M2",
+ "depends_on": [
+  "T-238"
+ ],
+ "acceptance": [
+  "Why. The captain (2026-10-07) asked for firstmate to continue a pull request that a person opened by hand on an external project, before taking such a project over. The captain's answers the same day: (1) first: a PR whose base is not the project base stays refused; then changed the same day: \"這個問題應該只要每個PR能配置自己的base是什麼分支就可以解決. #164的base是#163, 表示這是一個stacked PR, 用stacked PR管理\" - each adopted PR keeps its own base, and a PR based on another PR's branch is a stacked PR managed with the existing stacking support (T-143); (2) an adopted PR follows the external catch-up rule: when CONVENTIONS force_with_lease is true, a behind or conflicting adopted PR is rebuilt by rebase and --force-with-lease on the same PR, as in T-223/T-231, so its human commits get rewritten; there is no special no-rewrite path. Today a task can only reach a PR whose branch or title carries its task id: fm-worker.sh derives the branch from the task slug (:417-447, external `t-NNN-work`), the autopilot maps a PR to a task only through fm_task_of_pr (bin/lib/fm_autopilot_loop.py:58-65 -> bin/fm-emit.sh:56-58), and fm-decide.sh pr_agrees (:306-330) and fm-merge.sh (:96-110) refuse a PR whose branch/title names no task. A hand-opened PR has a human branch name and title, so every one of these misses it. What already works and must stay: fm-worker.sh takes the branch from `--pr` headRefName (:430-439), fetches an existing remote branch (:596-605), binds BASE to the PR's own base (:546-548 `fm_binding base`), never retitles a PR whose title is not the `T-NNN: project work` fallback (:2264-2279), and the gates bind head/base through fm_binding (bin/fm-gate.sh:157-176) with no branch-name rule.",
+  "Split (coordinator, 2026-10-07, after the fifth preflight): this task adopts one PR that is not stacked. A PR whose base is the head branch of another open PR is refused here; stacked adoption (restack, retarget, parent release) is T-239, which depends on this task.",
+  "Change 1, the spec field. An external task spec MAY carry `\"adopt\": {\"pr\": <positive int>, \"head\": \"<40- or 64-hex commit>\", \"base\": \"<branch name>\"}` and no other keys. `head` is the PR head and `base` the PR's baseRefName that the captain saw when approving. The captain's A on the task's readiness card pins the spec bytes (existing pin path, bin/lib/fm_spec_pins.py), so the A card is the only authorization; no new card kind, no new decision record. bin/lib/fm_spec_preflight.py prompt() (:29-46) rejects a malformed `adopt` (missing or extra key, a base that is empty, starts with `-` or contains a space, `..`, `~`, `^`, `:` or `\\\\`), and rejects `adopt` on a self-project spec (FM_EXTERNAL != 1), before building the prompt, with the reason in the error.",
+  "Authority model, stated once and used by every reader. bin/lib/fm_adopt.py `adoption(env, task)` and `authorized_spec(env, task)` return None at once when env FM_EXTERNAL != '1' or env has no FM_TASKS_DIR, before touching any pin, so self-project callers (for example tests/live-base-binding.test.sh:8-17, which exports only FM_TARGET_ROOT, FM_EXTERNAL=0 and stubs) never build Pins and never call git. Otherwise `authorized_spec(env, task)` returns the task's spec as the pin holds it when a pin exists (`Pins(env, task).resolve(if_present=True)`, the pinned `snapshots.spec.text`, exactly as source_binding reads it at bin/lib/fm_binding.py:66-74), and the FM_TASKS_DIR file only when there is no pin yet; an unpinned task with no FM_TASKS_DIR/<task>.json returns None (no adoption, no error). `adoption(env, task)` returns that spec's `adopt` dict or None; it is the only function that reads `adopt`. `scan(env)` lists FM_TASKS_DIR/*.json (a missing directory is an empty scan), takes each task id from the file name, and builds (single {pr: task}, duplicates {pr: [tasks]}, errors {task: message}) from `adoption(env, task)`, so a file edited after the A card changes nothing for a pinned task. Error rule (fail closed per PR, skip the bad task): when `adoption` raises for a task (malformed JSON, a corrupt or unreadable pin store, bin/lib/fm_spec_pins.py:232-235), that task goes to `errors` and is skipped; if its raw private file still parses and names `adopt.pr` N, PR N is put in duplicates with the reason `adoption unreadable for T-x`, so N fails closed; every other PR resolves as normal. CLI `task-of` exits 1 with the message for a PR in duplicates (both kinds), and decide and merge treat exit 1 as a refusal (Change 6). The autopilot queues one wake per erroring task (`adopt-error-<task>`, the existing queue with its key debounce) and keeps polling. `env` is os.environ in the CLI callers (after fm_storage_init) and the dict the autopilot builds at bin/lib/fm_autopilot.py:288-293. Readers: the worker (its spec already comes from the pin, bin/fm-worker.sh:403-412, or the private file before the first pin), fm_binding (Change 4), the autopilot (Change 5) and fm-decide.sh and fm-merge.sh (Change 6). Before the first pin the private file is the only source; that is the draft firstmate wrote and the card showed, so a change there before the A card is a change the captain approves.",
+  "Change 2, bin/lib/fm_adopt.py (new, stdlib + fm_binding + fm_spec_pins, CLI + importable). Besides the authority functions above: `check(view, adopt, task, env, git_root, pushed, open_heads)` takes `gh pr view --json state,isCrossRepository,headRefName,headRefOid,baseRefName,title` and refuses, each with its own message: state not OPEN; isCrossRepository true; baseRefName != adopt.base; baseRefName equal to the head branch of another open same-repository PR (`open_heads` from one `gh pr list --state open --json number,headRefName,isCrossRepository` read): `stacked PR: adoption of a stacked PR is T-239`; headRefName equal to its base, to the project base or to main/master; the branch or title naming a different task through the grammar (`fm_task_of_pr`, bin/fm-emit.sh:56-58, called as bin/lib/fm_autopilot_loop.py:61 does); the PR adopted by another task too (a duplicate in scan); and, only while `pushed` is false, adopt.head not an ancestor of or equal to headRefOid in git_root. `sync_base(root, repository, base)`: fetch refs/heads/<base> with fm_binding.fetch_ref; create refs/heads/<base> when absent, fast-forward it with `git update-ref <ref> <new> <old>` when the local ref is an ancestor, refuse when the local ref holds commits the remote lacks; a no-op for the project base. CLI: `task-of --pr N` prints the task (exit 0), nothing for an unadopted PR (exit 0), exits 1 naming the tasks for a duplicate; `check --task T --pr N --root DIR [--pushed]` exits 0 or 1 with the message.",
+  "Change 3, bin/fm-worker.sh. (a) Right after `spec=` (:428) and before the `--pr` block (:432-441): `adopt_pr` is read from `.adopt.pr` of that spec; when set, refuse (exit 65, worker_crashed event) on a self project or when a caller `--pr` differs, otherwise set PR to it. (b) Right after branch selection (:442-448), when `adopt_pr` is set, read the PR's headRefName once more and refuse (exit 65, before any worktree, commit or push) unless `$branch` equals it exactly; this covers a failed `gh pr view` and a name the `--pr` block rejects (:438), which would otherwise fall through to `$slug-work` (:445) and push a stray branch (:2205). (c) After the branch is fetched and BASE bound (after :626, before bring_up_to_date runs at :1168), when `adopt_pr` is set, run `fm_adopt.py check`; when `adopt_pr` is set, the three `commit_pushed` emits (:278, :2211, :2282) add `\"adopt_pr\": <N>` to their data (merged into the existing --data at :2282 and its rebuild args). `--pushed` is passed when the task's event log holds a `commit_pushed` event for the task whose data.adopt_pr equals adopt.pr; events from before the task gained adopt carry no such field and never count, and the untagged emit at :2211 counts because it carries the field. Before firstmate's first push the head must still contain adopt.head; after it, firstmate and the autopilot rewrite the branch by rule (captain 2026-10-07, answer 2) and the gates and the review bind the current head. (d) Only when `adopt_pr` is set and FM_SPEC_PIN_JSON is set after the first-pin block (:1177-1199) and before the adapter section (:1425), run `fm_pin scope --task \"$TASK\" --head \"$branch\" --base \"$BASE\"` (the call the scope gate makes at bin/fm-gate.sh:210); a refusal exits 65 and names the first file outside scope, as Pins.scope reports it (bin/lib/fm_spec_pins.py:546-549). A task without `adopt` never runs this check, so self tasks and other external tasks behave as today. (e) bring_up_to_date (:1060, called at :1168) is unchanged: it rebuilds onto BASE, the PR's own base, and pushes with --force-with-lease under force_with_lease true, as for any external PR (captain 2026-10-07, answer 2). (f) The worker prompt gains one section when `adopt_pr` is set: a person opened this pull request; the commits up to adopt.head are theirs; build on them, do not revert their changes, keep their conventions. No PR is created (`pr create` only on the no-PR path, :2238-2262) and the human title and body stay unchanged.",
+  "Change 4, bin/lib/fm_binding.py. main() (:303): for the modes that reach verified_base (:266-277) - base, local-gate-base, head, checks, ready, candidate - when `fm_adopt.adoption(os.environ, args.task)` is set, first read the PR view and refuse (exit 1, `adopted PR base changed from <adopt.base> to <baseRefName>; a new spec and A card are needed`) when baseRefName != adopt.base, before any sync; then call fm_adopt.sync_base for adopt.base. So a person retargeting the PR after the last worker round stops the gates, review, required checks and merge, and no local ref of the new base is created or moved. That one place covers the worker (bin/fm-worker.sh:548), the gates (bin/fm-gate.sh:157-165), the review (bin/fm-review.sh:309) and the merge (bin/fm-merge.sh:131) with no edit of their own. A base that moved after the gates still fails closed at merge: the candidate check (:344-345) refuses `candidate gate base moved; refresh gates`. required_checks (:152) gains a keyword argument `task=None`; the refusal at :168-169 is skipped when `fm_adopt.adoption(os.environ, task)` has base equal to baseRefName, and required_checks raises the same base-changed refusal when an adopted task's baseRefName differs from adopt.base. main() passes task=args.task at :339 and :355; the existing test callers (tests/gate-check-evidence.test.sh:52, tests/lib/evidence_binding.py:112,152, tests/live-base-binding.test.sh:85, tests/stacking_cases.py:76,94) keep working through the default. fm_binding imports fm_adopt inside main() and required_checks only, so there is no import cycle.",
+  "Change 5, autopilot. bin/lib/fm_autopilot_loop.py pr_task (:58-65): for an external context, `fm_adopt.scan(env)` (env as built at bin/lib/fm_autopilot.py:288-293) is read first; a PR in the single map returns its task (adoption wins over the grammar); a PR in the duplicate map returns '' and leaves `adopted by two tasks: T-a, T-b` on self._adopt_reason; otherwise the grammar answers as today. pr_task never raises on a duplicate: task() (bin/lib/fm_autopilot.py:276) copies the reason into the unresolved record it already keeps (:301-309), and observe_pr (bin/lib/fm_autopilot_loop.py:76) emits with an empty task, as for any PR no task owns. Catch-up: the existing external catch-up (bin/lib/fm_autopilot.py:500-513 -> fm_autopilot_branches.py update_external_branch :197) applies to an adopted PR, with one guard added before that call: an adopted PR whose task has no `commit_pushed` event with data.adopt_pr equal to the PR (as Change 3(c)) in self.rows() is not updated yet, so the first worker round still sees adopt.head. Restack trigger: the poll at bin/lib/fm_autopilot.py:564-570 calls restack() for a PR whose base is not the project base, that resolves to a task, and whose base was the head of a merged PR; it skips a PR that resolves through adoption (single map), because a single adopted PR is never stacked (Change 2) and its long-lived base can match an earlier merged PR from the same branch. So no restack call, no `restack-held` wake (:378-381) and no branch_failure for an adopted PR. T-239 narrows this skip for adopted stacked children.",
+  "Change 6, merge owner checks. bin/fm-decide.sh pr_agrees (:316) and bin/fm-merge.sh (:96-97): when FM_EXTERNAL=1, the owner is first `fm_adopt.py task-of --pr \"$PR\"` (env from fm_storage_init, bin/fm-config.sh:978-989), and only when that prints nothing the grammar as today. Exit 1 from task-of refuses the card or the merge with its message. fm-merge.sh reports `by its adoption`. An adopted PR has an owner, so it is never merged untracked.",
+  "Gates and review measure from the PR's own base (the project base or a long-lived branch), never from the adoption head: the whole PR lands there, human commits included, so the scope gate, the fail-first gate, CI and the bound review must cover every line it lands. Consequences firstmate writes into each adopting spec (skill text): the scope lists every file the human commits change, and when they carry no test that fails on the base, the first round adds one.",
+  "Tests (fail-first; fail-first runs only *.test.sh). New tests/external-adopt.test.sh with tests/lib/external_adopt.py, on a local bare repository standing in for GitHub and a gh stub that answers `pr view --json` and `pr list --json` with the real field names and types (state OPEN, isCrossRepository false, headRefName, headRefOid, baseRefName, title, number) and counts `pr create` and `pr edit`: (a) a round on an adopting task checks out the human branch, commits on top, pushes to the same branch, keeps every human commit, calls `pr create` and `pr edit` 0 times; (b) refusals, one case each, before any engine run and with no push: closed PR; isCrossRepository true; baseRefName != adopt.base; a stacked PR (its base is another open PR's head branch); a branch `t-999-x` and a title `T-999: x` naming another task; two tasks adopting one PR; adopt.head not an ancestor with no prior commit_pushed; self project; caller --pr mismatch; a headRefName with `+` and a failed `gh pr view`; (c) a human change outside scope refuses before the adapter stub runs and names that file; a task without `adopt` whose earlier round left an out-of-scope file still reaches the adapter (negative case); (d) a behind adopted PR with force_with_lease true is rebuilt and pushed with --force-with-lease to the same branch, and the next round is not refused; the same after a stub autopilot-style rebase following a commit_pushed, and when the only prior event is the untagged commit_pushed of a round that died after its rebuild; (e) a PR on a long-lived non-project branch: `fm_binding base` syncs that base after the remote moved and binds to it; scope and fail-first measure from it; `fm_binding candidate` after the base moved past gate_base refuses `candidate gate base moved; refresh gates`; a local base ref with unpublished commits refuses; a PR retargeted to another branch after a worker round makes `fm_binding base`, `head`, `checks` and `candidate` and required_checks refuse with the base-changed message, and no local ref of the new base is created; (f) authority and errors: a self-project call (FM_EXTERNAL=0) of adoption returns None without building Pins, and the existing tests/live-base-binding.test.sh calls keep passing; one unrelated task with malformed JSON is skipped while another PR still resolves, and the autopilot queues one `adopt-error-<task>` wake; a task whose pin store is corrupt but whose raw file adopts PR N makes task-of exit 1 for N, so decide and merge refuse; after the pin, an `adopt` added to or changed in the FM_TASKS_DIR file is ignored by task-of, by the autopilot pr_task, by fm_binding sync_base and by the required_checks exemption, which use the pinned value; before the pin, the file is read; an unpinned task with no task file returns None. (h) a task that pushed rounds on its own branch before its spec gained adopt (commit_pushed without adopt_pr) is still checked for adopt.head on its first adopted round, and the autopilot gives that PR no update request until a commit_pushed with adopt_pr exists. tests/live-base-binding.test.sh: required_checks accepts an adopted PR on its recorded base under `stacking: hold` and still refuses a PR that is not adopted. tests/lib/autopilot_cases.py (via tests/autopilot.test.sh): a human branch resolves to its adopting task, also when the branch names another task; a duplicate resolves to no task, retains the reason, and observe_pr emits without raising; a behind adopted PR with no commit_pushed gets no update request and, after one, the REBASE request any external PR gets; an adopted PR on a long-lived branch from which an earlier PR was merged gets no restack call and no restack-held wake. tests/decide.test.sh and tests/merge.test.sh: the merge card and merge are accepted for the adopting task, refused for another task, refused for a duplicate. tests/spec-preflight.test.sh: a malformed adopt and an adopt on a self spec are rejected. Each new case is red on base.",
+  "Migration. `adopt` is a new optional field; a task without it never reaches any new code path (each new branch is guarded by `adopt_pr` or by `adoption(...)` being set), so specs, pins and PRs already in flight behave exactly as today, and case (c) checks the negative. No stored record or schema change beyond one optional data key: adopted rounds add `adopt_pr` to the existing `commit_pushed` event; readers that ignore it are unaffected, and events written before this task carry none, so they never count as an adopted push. Out of scope: stacked adoption (T-239) and adoption on the self project. Dependency: T-238 (per-project worker vendor) is dispatched first; this task does not touch vendor resolution code.",
+  "Docs, edited in place, generic wording only (no external repository names or private paths). design/design.md §15.5 (Immutable pins and authoritative heads, from :5095) gains one paragraph: the adopt field with its base, the A card and the pinned spec as the only authority, gates bound to the PR's own base, the external catch-up rule applying to adopted PRs (a rebuild under force_with_lease true rewrites human commits), and the refusals. skills/firstmate/SKILL.md, in the external-project section (from :973): how firstmate writes an adopting spec (record the PR, head and base shown on the card; list every human-changed file in scope; add a fail-first test when the human commits carry none; a stacked PR waits for T-239) and that a land: handoff project hands the finished PR back to its team.",
+  "Scope. bin/lib/fm_adopt.py (new), bin/fm-worker.sh, bin/lib/fm_binding.py, bin/lib/fm_autopilot_loop.py, bin/lib/fm_autopilot.py, bin/fm-decide.sh, bin/fm-merge.sh, bin/lib/fm_spec_preflight.py, tests/external-adopt.test.sh (new), tests/lib/external_adopt.py (new), tests/live-base-binding.test.sh, tests/autopilot.test.sh, tests/lib/autopilot_cases.py, tests/decide.test.sh, tests/merge.test.sh, tests/spec-preflight.test.sh, tests/lib/project-storage.sh (its bin/lib copy list at :11 gains fm_adopt.py, because fm_binding, fm-decide.sh and fm-merge.sh now load it in every fixture engine that uses this helper, e.g. tests/merge.test.sh:19 and tests/decide.test.sh:21), design/design.md, skills/firstmate/SKILL.md, design/tasks/T-237.json. Excluded with consequence: bin/fm-reconcile.sh:350,401 `task_of \"$branch\"` (an adopted PR event that lost its task is reported as `the branch name yields no task` for firstmate to repair by hand; observe_pr now gives such events their task); bin/lib/fm_stack.py and every stacking path (T-239; an adopted task cannot be a stack parent or child here, because check refuses a stacked PR and select_base finds no adopted parent); bin/fm-gate.sh, bin/fm-review.sh and bin/fm-merge.sh's candidate call (covered through fm_binding, Change 4, with no edit); bin/lib/fm_autopilot_branches.py and the worker's bring_up_to_date (used unchanged); board/server.ts (its taskOfPr twin, :618-641, decides no ownership); bin/fm-emit.sh grammar; vendor resolution code (T-238)."
+ ],
+ "scope": [
+  "bin/lib/fm_adopt.py",
+  "bin/fm-worker.sh",
+  "bin/lib/fm_binding.py",
+  "bin/lib/fm_autopilot_loop.py",
+  "bin/lib/fm_autopilot.py",
+  "bin/fm-decide.sh",
+  "bin/fm-merge.sh",
+  "bin/lib/fm_spec_preflight.py",
+  "tests/external-adopt.test.sh",
+  "tests/lib/external_adopt.py",
+  "tests/live-base-binding.test.sh",
+  "tests/autopilot.test.sh",
+  "tests/lib/autopilot_cases.py",
+  "tests/decide.test.sh",
+  "tests/merge.test.sh",
+  "tests/spec-preflight.test.sh",
+  "tests/lib/project-storage.sh",
+  "design/design.md",
+  "skills/firstmate/SKILL.md",
+  "design/tasks/T-237.json"
+ ],
+ "explain": {
+  "en": {
+   "intent": [
+    {
+     "kind": "fact",
+     "text": "A captain A on a task spec with an adopt field binds the task to a pull request that a person opened."
+    },
+    {
+     "kind": "fact",
+     "text": "Worker rounds commit on top of the human commits, and a rebuild follows the project conventions like any external pull request."
+    },
+    {
+     "kind": "fact",
+     "text": "Gates, review, merge checks and required checks bind to the base of the pull request."
+    },
+    {
+     "kind": "fact",
+     "text": "Readers take the adoption from the pinned spec, and firstmate refuses a fork, a stacked pull request, a changed base, a duplicate or rewritten history."
+    }
+   ],
+   "why": [
+    {
+     "kind": "fact",
+     "text": "You asked firstmate to continue pull requests that people opened by hand."
+    },
+    {
+     "kind": "fact",
+     "text": "On 2026-10-07 you answered: each pull request keeps its own base, and a stacked pull request uses the stack support."
+    },
+    {
+     "kind": "fact",
+     "text": "On 2026-10-07 you also answered: an adopted pull request follows the external rebase and force-with-lease rule."
+    },
+    {
+     "kind": "fact",
+     "text": "This task adopts one pull request that is not stacked, and T-239 adds stacked adoption."
+    }
+   ],
+   "scope_in": [
+    "bin/lib/fm_adopt.py (new)",
+    "bin/fm-worker.sh",
+    "bin/lib/fm_binding.py",
+    "the autopilot task lookup and catch-up guard",
+    "fm-decide.sh and fm-merge.sh owner checks",
+    "spec preflight",
+    "tests, design section 15.5 and the firstmate skill"
+   ],
+   "scope_out": [
+    "stacked adoption, which T-239 adds",
+    "adoption on the self project",
+    "fm_stack.py, fm-reconcile.sh and board/server.ts",
+    "vendor code, which T-238 changes first"
+   ],
+   "done": [
+    {
+     "kind": "fact",
+     "text": "Intent 1: the worker reads adopt.pr and checks that its branch equals the branch of the pull request. Test cases a and b prove it."
+    },
+    {
+     "kind": "fact",
+     "text": "Intent 2: the worker and the autopilot reuse the external catch-up path after the first push. Test case d and the autopilot case prove it."
+    },
+    {
+     "kind": "fact",
+     "text": "Intent 3: fm_binding syncs the adopted base for every base reader. Test case e and the live-base case prove it."
+    },
+    {
+     "kind": "fact",
+     "text": "Intent 4: fm_adopt.py reads the pinned spec and refuses each bad state. Test cases b and f prove it."
+    }
+   ],
+   "notes": [
+    {
+     "kind": "caution",
+     "text": "Each spec with an adopt field lists every file that the human commits change."
+    },
+    {
+     "kind": "caution",
+     "text": "A rebuild under force_with_lease rewrites the human commits on the same pull request."
+    }
+   ],
+   "before_nodes": [
+    {
+     "state": "same",
+     "label": "Person opens a pull request"
+    },
+    {
+     "state": "gone",
+     "label": "Branch name lacks task id"
+    },
+    {
+     "state": "gone",
+     "label": "Firstmate cannot find the task"
+    }
+   ],
+   "after_nodes": [
+    {
+     "state": "same",
+     "label": "Person opens a pull request"
+    },
+    {
+     "state": "new",
+     "label": "Pinned adopt names PR, base"
+    },
+    {
+     "state": "new",
+     "label": "Captain answers A"
+    },
+    {
+     "state": "new",
+     "label": "Worker commits on top"
+    },
+    {
+     "state": "new",
+     "label": "Gates measure from its base"
+    }
+   ]
+  },
+  "zh-TW": {
+   "intent": [
+    {
+     "kind": "fact",
+     "text": "船長在含 adopt 欄位的任務卡選 A，任務就接上人開的 PR。"
+    },
+    {
+     "kind": "fact",
+     "text": "worker 回合在人的 commit 之上提交，重建照專案慣例，和其他外部 PR 相同。"
+    },
+    {
+     "kind": "fact",
+     "text": "關卡、審查、合併檢查和必要檢查都綁 PR 自己的 base。"
+    },
+    {
+     "kind": "fact",
+     "text": "所有讀取都用固定的 spec；拒絕 fork、堆疊 PR、改過的 base、重複和改寫的歷史。"
+    }
+   ],
+   "why": [
+    {
+     "kind": "fact",
+     "text": "你要 firstmate 接手人手動開的 PR。"
+    },
+    {
+     "kind": "fact",
+     "text": "你在 2026-10-07 回答：每個 PR 用自己的 base，堆疊的 PR 走堆疊支援。"
+    },
+    {
+     "kind": "fact",
+     "text": "你在 2026-10-07 也回答：接手的 PR 照外部 rebase 和 force-with-lease 規則。"
+    },
+    {
+     "kind": "fact",
+     "text": "這個任務接手單一非堆疊 PR，堆疊接手由 T-239 處理。"
+    }
+   ],
+   "scope_in": [
+    "bin/lib/fm_adopt.py（新）",
+    "bin/fm-worker.sh",
+    "bin/lib/fm_binding.py",
+    "autopilot 的任務查找和追上防護",
+    "fm-decide.sh 和 fm-merge.sh 的擁有者檢查",
+    "spec 預審",
+    "測試、設計第 15.5 節和 firstmate skill"
+   ],
+   "scope_out": [
+    "堆疊接手，由 T-239 處理",
+    "self 專案的接手",
+    "fm_stack.py、fm-reconcile.sh 和 board/server.ts",
+    "vendor 程式，由 T-238 先改"
+   ],
+   "done": [
+    {
+     "kind": "fact",
+     "text": "意圖 1：worker 讀 adopt.pr，確認分支和 PR 的分支相同。案例 a 和 b 證明。"
+    },
+    {
+     "kind": "fact",
+     "text": "意圖 2：首推之後 worker 和 autopilot 沿用外部追上流程。案例 d 和 autopilot 案例證明。"
+    },
+    {
+     "kind": "fact",
+     "text": "意圖 3：fm_binding 為每個 base 讀取同步接手的 base。案例 e 和 live-base 案例證明。"
+    },
+    {
+     "kind": "fact",
+     "text": "意圖 4：fm_adopt.py 讀固定的 spec，拒絕每種錯誤狀態。案例 b 和 f 證明。"
+    }
+   ],
+   "notes": [
+    {
+     "kind": "caution",
+     "text": "接手 spec 的範圍要列出人的 commit 改到的每個檔案。"
+    },
+    {
+     "kind": "caution",
+     "text": "依 force_with_lease 重建時，同一個 PR 上人的 commit 會改寫。"
+    }
+   ],
+   "before_nodes": [
+    {
+     "state": "same",
+     "label": "人開了 PR"
+    },
+    {
+     "state": "gone",
+     "label": "分支名沒有任務 id"
+    },
+    {
+     "state": "gone",
+     "label": "firstmate 找不到任務"
+    }
+   ],
+   "after_nodes": [
+    {
+     "state": "same",
+     "label": "人開了 PR"
+    },
+    {
+     "state": "new",
+     "label": "固定的 adopt 記 PR 和 base"
+    },
+    {
+     "state": "new",
+     "label": "船長選 A"
+    },
+    {
+     "state": "new",
+     "label": "worker 在上面提交"
+    },
+    {
+     "state": "new",
+     "label": "關卡從它的 base 量起"
+    }
+   ]
+  }
+ }
+}

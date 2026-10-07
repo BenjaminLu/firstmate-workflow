@@ -97,6 +97,44 @@ class PilotTests(BranchFixture, unittest.TestCase):
         self.pilot.prepare_head = lambda *args: self.fail('ancestry must not prepare_head')
         self.ancestry[(self.base_tip, HEAD)] = 1
 
+    def test_adoption_ownership_duplicates_and_error_wake(self):
+        self.external_pilot()
+        taskfile = Path(self.context['tasks']) / 'T-001.json'
+        taskfile.write_text(json.dumps(dict(id='T-001', adopt=dict(pr=12, head=HEAD, base='main'))))
+        pr = copy.deepcopy(PR); pr['head']['ref'] = 'human-work'
+        self.assertEqual(self.pilot.pr_task(pr), 'T-001')
+        pr['head']['ref'] = 't-999-other'
+        self.assertEqual(self.pilot.pr_task(pr), 'T-001')
+        (taskfile.parent / 'T-bad.json').write_text('{broken')
+        self.pilot.pr_task(pr); self.pilot.pr_task(pr)
+        identity = 'autopilot-' + A.key([self.context['project'], 'adopt-error-T-bad'])
+        self.assertIn(identity, self.pilot.data['wakes'])
+        (taskfile.parent / 'T-002.json').write_text(taskfile.read_text())
+        self.assertEqual(self.pilot.task(pr), '')
+        self.assertIn('adopted by two tasks: T-001, T-002', self.pilot.data['pulls']['12']['reason'])
+        emitted = []; self.pilot.emit = lambda *a, **kw: emitted.append(a)
+        self.pilot.observe_pr(pr)
+        self.assertEqual(emitted[0][1], '')
+
+    def test_adoption_catchup_requires_adopted_push(self):
+        self.external_pilot()
+        (Path(self.context['tasks']) / 'T-001.json').write_text(json.dumps(
+            dict(id='T-001', adopt=dict(pr=12, head=HEAD, base='main'))))
+        # External specs live in the pin, not in the human PR's checkout.
+        spec = (Path(self.context['tasks']) / 'T-001.json').read_text()
+        pin = patch('fm_spec_pins.Pins.resolve', return_value=dict(snapshots=dict(spec=dict(text=spec))))
+        pin.start(); self.addCleanup(pin.stop)
+        head_spec = patch.object(self.pilot, 'read_head_spec', side_effect=ValueError('committed task spec unavailable at PR head'))
+        head_spec.start(); self.addCleanup(head_spec.stop)
+        rows = [dict(type='commit_pushed', task='T-001', data={})]
+        self.pilot.rows = lambda: rows
+        self.pull_at(PR)
+        self.assertEqual(self.graphqls(), [])
+        rows.append(dict(type='commit_pushed', task='T-001', data=dict(adopt_pr=12)))
+        self.pull_at(PR)
+        self.assertEqual(len(self.graphqls()), 1)
+        self.assertIn('updateMethod:REBASE', ' '.join(self.graphqls()[0]))
+
     def graphqls(self):
         return [x for x in self.calls if isinstance(x, list) and x[1:3] == ['api', 'graphql']]
 
