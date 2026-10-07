@@ -2710,7 +2710,7 @@ def emit_status(root, actor, task, en, tw, role='worker', crew_name=None,
 # prepare a checkout and what green means. Values are opaque shell command
 # strings: read and returned exactly, never evaluated here. Nothing in bin/
 # may know which toolchain a project uses; it only runs what is declared.
-PROJECT_KEYS = ('setup', 'check', 'check_env', 'tests', 'test', 'docs')
+PROJECT_KEYS = ('setup', 'check', 'check_env', 'tests', 'test', 'docs', 'unrunnable')
 
 
 def _project_scalar(text, where):
@@ -2788,11 +2788,15 @@ def project_contract(config):
         while i < len(block) and (indent(block[i]) > level or block[i].lstrip().startswith('- ')):
             children.append(block[i]); i += 1
         where = 'config.yaml project.' + key
-        if key in ('setup', 'check', 'test'):
+        if key == 'unrunnable' and (children or not value or value.startswith('#')):
+            raise ValueError(where + ' must be a nonempty one-line reason')
+        if key in ('setup', 'check', 'test', 'unrunnable'):
             if children or not value or value.startswith('#'):
                 if children: raise ValueError(where + ' must be a one-line command')
                 continue
             contract[key] = _project_scalar(value, where)
+            if key == 'unrunnable' and (not contract[key].strip() or '\n' in contract[key] or '\r' in contract[key]):
+                raise ValueError(where + ' must be a nonempty one-line reason')
         elif key in ('tests', 'docs'):
             if value and not value.startswith('#'): raise ValueError(where + ' must be a list of globs')
             items = []
@@ -2857,7 +2861,7 @@ def project_field(config, field):
     elif field == 'check_env':
         for name, value in contract.get('check_env', {}).items():
             sys.stdout.write(name + '=' + value + '\0')
-    elif field in ('setup', 'check', 'test'):
+    elif field in ('setup', 'check', 'test', 'unrunnable'):
         if field in contract: print(contract[field])
     else: raise ValueError('unknown project field ' + field)
     return 0

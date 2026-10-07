@@ -1,0 +1,286 @@
+{
+  "id": "T-240",
+  "title": "an external project can set its own reviewer mode (diff or run) in its private state/config.yaml, and a project whose tests cannot run locally declares it in its pinned contract: the fail-first gate then reports a distinct not-runnable result with the reason instead of red, readiness records it, the merge card stays raisable, and the card warns the captain that fail-first did not run and that the project's required CI checks are the remaining test evidence",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [
+    "T-238"
+  ],
+  "scope": [
+    "bin/fm-config.sh",
+    "bin/fm-review.sh",
+    "bin/fm-gate.sh",
+    "bin/fm-failfirst.sh",
+    "bin/fm-herdr.py",
+    "bin/lib/fm_onboard.py",
+    "bin/lib/fm_binding.py",
+    "bin/fm-decide.sh",
+    "board/public/index.html",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "i18n/tw2cn.tsv",
+    "tests/project-review-mode.test.sh",
+    "tests/gate-not-runnable.test.sh",
+    "tests/lib/gate_not_runnable.py",
+    "tests/onboard-register.test.sh",
+    "tests/config.test.sh",
+    "tests/e2e/board-decisions.spec.ts",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-240.json"
+  ],
+  "acceptance": [
+    "Why. The captain (2026-10-07) accepted firstmate's proposal for both parts: \"都照你的意見做\". For part 2 the captain added, verbatim: \"fail-first gate跑不了要在船長卡片上顯示出來並提醒CI測試通過的重要性, 但不阻塞合併\". Today the reviewer mode is one engine-wide value: bin/fm-review.sh reads `fm_cfg_in reviewer mode` from FM_CONFIG, which fm_storage_init sets to the engine config.yaml for every project, so an external project whose tests need secrets the machine does not hold cannot ask for diff-only review. And the fail-first gate (gate 4, bin/fm-gate.sh gate4) always runs bin/fm-failfirst.sh --gate on the pinned contract; a project whose check cannot run locally gets gate 4 red on every round, which blocks readiness (bin/lib/fm_binding.py ready requires a `+` line for every gate) and so blocks the merge card.",
+    "Change 1, per-project reviewer mode (bin/fm-config.sh, bin/fm-review.sh). Add `fm_project_reviewer_mode` beside T-238's `fm_project_vendor` and reuse its guard and path: when FM_EXTERNAL=1 and \"$FM_STATE_DIR/config.yaml\" exists, print `fm_cfg_in reviewer mode \"$FM_STATE_DIR/config.yaml\"`; otherwise print nothing. In bin/fm-review.sh, where REVIEW_MODE is read (`REVIEW_MODE=\"$(fm_cfg_in reviewer mode)\"`), use the private value when it is non-empty and the engine value otherwise; the existing `diff|run` validation, the default `diff`, the run-mode adapter refusal and every later `[ \"$REVIEW_MODE\" = run ]` branch stay unchanged and apply to the resolved value. The refusal message names the file that held the bad value (the private file or config.yaml). Diff mode builds no checkout and runs none of the project's setup/check/test commands, exactly as today. The self project (FM_EXTERNAL=0) reads only the engine value, so its prompt and behaviour stay byte for byte.",
+    "Change 2, the contract declaration (bin/fm-herdr.py, bin/lib/fm_onboard.py, bin/fm-config.sh docs). The project contract gains one optional scalar key `unrunnable`: a one-line, non-empty reason why the project's tests cannot run on this machine (for example, they need credentials or a network endpoint the machine does not hold). Add it to PROJECT_KEYS, parse it with the existing one-line scalar path, and let project_field print it like setup/check/test. fm_onboard.contract_yaml accepts it as a non-empty string and writes it on its own line. The fm_project docs in bin/fm-config.sh list it. Because the key lives in the `project:` block, it is part of the pinned gate contract (fm_spec_pins reads project_contract), so a branch cannot declare itself unrunnable, and a task pinned before the key was added keeps its old contract.",
+    "Change 3, gate 4 reports not runnable (bin/fm-gate.sh, bin/fm-failfirst.sh). In gate4, after reading the pinned contract and before starting fm-failfirst.sh, when `.contract.unrunnable` is a non-empty string, set NOT_RUNNABLE to that reason and return 3 without running anything. In g(), when the body returns 3, the gate is 4 and NOT_RUNNABLE is set, call `say '!' 4 \"$desc: not runnable: $NOT_RUNNABLE\"` and return 0; every other non-zero result still says `x` and exits with the gate number, so no other gate can produce `!`. The transcript line is `  ! gate 4 (fail-first): ...`. fm-failfirst.sh's pinned-contract key check accepts `unrunnable` as a string, so a direct --gate --contract call does not fail on the new key; its own behaviour is unchanged.",
+    "Change 4, readiness records it (bin/lib/fm_binding.py ready, bin/fm-review.sh gate summary). In `ready`, the transcript check keeps refusing any `  x gate` line and keeps requiring a line for every gate, but a `  ! gate 4 (fail-first):` line satisfies the fail-first gate only when the task's pinned contract (Pins.resolve, as source_binding already reads it) has a non-empty `unrunnable`; a `!` line for any other gate, or for fail-first without that key, is refused. The readiness record gains `not_runnable: {\"fail-first\": \"<reason>\"}` (absent when every gate is `+`). The candidate record that fm-decide reads carries the same field. bin/fm-review.sh's gate-summary reader accepts `!` as a result line (its pattern becomes `[+x!]`), so the reviewer sees the line and no gate is reported as missing.",
+    "Change 5, the merge card warns and does not block (bin/fm-decide.sh, board/public/index.html, i18n). In the merge payload, the `gates` map value for a gate named in `binding.not_runnable` is the string \"not_runnable\" instead of true, and the payload carries `not_runnable` from the binding. On the board, a merge card's gate row whose value is \"not_runnable\" renders with class `w`, a warning mark and the text of the new key `gateNotRunnable` with the reason; below the gate list the card shows the new key `ciOnlyEvidence`: the project's required CI checks are the only remaining test evidence for this change, so confirm they are green before you choose A. Both keys exist in i18n/ui.en.json and i18n/ui.zh-TW.json, and any new zh-TW character is added to i18n/tw2cn.tsv. The card's options and the A merge path are unchanged: gate 5 (ci) still requires the project's required checks green, so a red or missing check still stops readiness.",
+    "Not changed, stated. The gate list (bin/lib/fm_gates.json), gate numbers and names, the GATES:2 transcript header, gates 1, 2, 3, 5 and 6, fm-failfirst.sh's CI mode, the autopilot's gate exit mapping (gate 4 with `!` returns 0 like a pass), the event types (no new event), the self project's contract and prompts, and the reviewer prompt text in both modes.",
+    "Tests, new behaviour (each fails on the base commit and passes after). tests/project-review-mode.test.sh: an external project whose private state/config.yaml says `reviewer: mode: diff` while the engine says `run` gets a diff round (no FM_RUN_REVIEW, no checkout, the adapter sees diff mode); the reverse, private `run` over engine `diff`, gets a run round; an invalid private value is refused with exit 65 and a message naming the private file. tests/gate-not-runnable.test.sh driving tests/lib/gate_not_runnable.py: a pinned contract with `unrunnable` makes gate 4 print the `!` line with the reason, run no test command (a marker check command must not run), and the full gate run exits 0; fm_binding ready accepts that transcript and records not_runnable; ready refuses a `!` fail-first line when the pin has no `unrunnable`, and refuses a `!` line on another gate; fm-decide's merge payload carries gates[\"fail-first\"] = \"not_runnable\" and not_runnable. tests/onboard-register.test.sh: contract_yaml writes and project_contract reads back `unrunnable`. tests/config.test.sh: `fm_project unrunnable` prints the declared reason. tests/e2e/board-decisions.spec.ts: a merge card with gates[\"fail-first\"] = \"not_runnable\" shows one `.gates li.w` row with the reason and the ciOnlyEvidence text, in en and zh-TW, and its A option stays enabled.",
+    "Tests, regression (pass on base and after). The self review stays byte for byte (tests/review-diff.test.sh); an external project with no private reviewer key uses the engine mode; a contract without `unrunnable` runs fail-first exactly as today (tests/gate.test.sh, tests/failfirst.test.sh, tests/pinned-gate-contract.test.sh); a red gate 4 still exits 4; a merge card whose gates are all true renders as today (existing board-decisions cases).",
+    "Callers, all listed. REVIEW_MODE readers: bin/fm-review.sh (validation, checkout_ok, the run-mode setup block, the Run mode prompt section, context_checkout_matches, the build call, the run-chain refusal, the codex checkout retry); bin/fm-setup.sh reads and writes the engine `reviewer.mode` only and is unchanged. Contract readers: bin/fm-herdr.py project_contract/project_report/project_field, bin/lib/fm_registry.py (calls them), bin/lib/fm_spec_pins.py (pins project_contract), bin/fm-failfirst.sh (pinned key check), bin/fm-review.sh contract_line (the field list is unchanged, so prompts stay byte for byte), bin/lib/fm_onboard.py contract_yaml. Gate transcript readers: bin/lib/fm_binding.py ready, bin/fm-review.sh gate summary. Merge card gates: bin/fm-decide.sh payload, board/public/index.html gatePassed and the merge card gate list; board/server.ts passes pending cards through and is unchanged.",
+    "Migration. Existing pins and private config files have no `unrunnable` and no private `reviewer: mode`, so every existing task and project behaves as today. Readiness records written before this task have no not_runnable field and read as all gates passed. A captain who adds `unrunnable` to a project's private config changes its live contract, so a task not yet dispatched gets a fresh readiness judgement and a task already pinned keeps its old contract until it is repinned.",
+    "Docs. design/design.md §6 (the gate 4 paragraph in Lifecycle and the gates), §5.3 (the `reviewer: mode:` paragraph) and §15.6 (gate 4 for external projects): edit in place to state the not-runnable result, its readiness record, the card warning and that it never blocks the merge card; and that an external project can set its reviewer mode privately. skills/firstmate/SKILL.md: when onboarding a project whose tests cannot run here, set `unrunnable` with the reason and `reviewer: mode: diff` in its private config, and read the card's CI reminder before a merge."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "Each external project can choose diff review or run review in its private config."
+        },
+        {
+          "kind": "fact",
+          "text": "A project can declare that its tests cannot run on this machine, with a reason."
+        },
+        {
+          "kind": "fact",
+          "text": "The fail-first gate then shows a not-runnable result, and the merge card can still appear."
+        },
+        {
+          "kind": "fact",
+          "text": "The merge card warns you that fail-first did not run, and that the CI checks must be green."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The captain accepted the proposal on 2026-10-07: \"都照你的意見做\"."
+        },
+        {
+          "kind": "fact",
+          "text": "The captain added that the card shows a fail-first gate that cannot run."
+        },
+        {
+          "kind": "fact",
+          "text": "The card also stresses green CI, and the merge stays open."
+        },
+        {
+          "kind": "fact",
+          "text": "Today one engine setting chooses the review mode for every project."
+        },
+        {
+          "kind": "fact",
+          "text": "A project whose tests need missing secrets gets a red fail-first gate on every round."
+        }
+      ],
+      "scope_in": [
+        "bin/fm-config.sh and bin/fm-review.sh: the private review mode",
+        "bin/fm-herdr.py and bin/lib/fm_onboard.py: the unrunnable contract key",
+        "bin/fm-gate.sh, bin/fm-failfirst.sh and bin/lib/fm_binding.py: the not-runnable result",
+        "bin/fm-decide.sh, board/public/index.html and i18n: the card warning",
+        "new suites, onboarding, config and board tests",
+        "design sections 5.3, 6 and 15.6, and the firstmate skill"
+      ],
+      "scope_out": [
+        "the gate list, gate numbers and gates 1, 2, 3, 5 and 6",
+        "the self project's contract and review prompts",
+        "the board server and the event types"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the review reads the private mode first. The new review mode suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the contract parser and the onboarding writer accept the unrunnable key. The onboarding and config tests prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: gate 4 writes a warning line, and readiness accepts it only for a pinned unrunnable contract. The new gate suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the merge card shows the warning row and the CI reminder. The board test proves it in both languages."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "The CI gate still needs the required checks of the project. A red check still stops the merge card."
+        },
+        {
+          "kind": "caution",
+          "text": "A branch cannot declare itself unrunnable, because the key is part of the pinned contract."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Gate run reads the pinned contract"
+        },
+        {
+          "state": "gone",
+          "label": "Fail-first runs tests it cannot run"
+        },
+        {
+          "state": "gone",
+          "label": "Gate 4 red on every round"
+        },
+        {
+          "state": "gone",
+          "label": "No merge card"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Gate run reads the pinned contract"
+        },
+        {
+          "state": "new",
+          "label": "Contract says tests cannot run"
+        },
+        {
+          "state": "new",
+          "label": "Gate 4 writes a warning line"
+        },
+        {
+          "state": "new",
+          "label": "Card warns, asks for green CI"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "每個外部專案可以在私有設定選擇 diff 審查或執行審查。"
+        },
+        {
+          "kind": "fact",
+          "text": "專案可以宣告測試無法在這台機器執行，並寫明原因。"
+        },
+        {
+          "kind": "fact",
+          "text": "fail-first 關卡改為顯示無法執行，合併卡照常出現。"
+        },
+        {
+          "kind": "fact",
+          "text": "合併卡提醒你 fail-first 沒有執行，CI 檢查必須全綠。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 同意提案：「都照你的意見做」。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長補充：fail-first 跑不了時，要在船長卡片上顯示。"
+        },
+        {
+          "kind": "fact",
+          "text": "卡片也要提醒 CI 全綠的重要性，但不阻塞合併。"
+        },
+        {
+          "kind": "fact",
+          "text": "現在一個引擎設定決定所有專案的審查模式。"
+        },
+        {
+          "kind": "fact",
+          "text": "測試需要密鑰的專案，每輪的 fail-first 關卡都是紅燈。"
+        }
+      ],
+      "scope_in": [
+        "bin/fm-config.sh 和 bin/fm-review.sh：私有審查模式",
+        "bin/fm-herdr.py 和 bin/lib/fm_onboard.py：unrunnable 契約欄位",
+        "bin/fm-gate.sh、bin/fm-failfirst.sh 和 bin/lib/fm_binding.py：無法執行的結果",
+        "bin/fm-decide.sh、board/public/index.html 和 i18n：卡片警告",
+        "新測試、onboarding、config 和看板測試",
+        "設計第 5.3、6、15.6 節和 firstmate skill"
+      ],
+      "scope_out": [
+        "關卡清單、編號，以及第 1、2、3、5、6 關",
+        "自身專案的契約和審查提示",
+        "看板伺服器和事件類型"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：審查先讀私有模式。新的審查模式測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：契約解析和 onboarding 寫入都接受 unrunnable 欄位。onboarding 和 config 測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：第 4 關寫出警告行，readiness 只在 pin 宣告時接受。新的關卡測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：合併卡顯示警告列和 CI 提醒。看板測試以兩種語言證明這點。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "CI 關卡照樣要求專案的必要檢查。檢查紅燈時合併卡不會出現。"
+        },
+        {
+          "kind": "caution",
+          "text": "這個欄位屬於 pin 住的契約，分支無法自行宣告。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "關卡讀取 pin 住的契約"
+        },
+        {
+          "state": "gone",
+          "label": "fail-first 硬跑無法執行的測試"
+        },
+        {
+          "state": "gone",
+          "label": "第 4 關每輪紅燈"
+        },
+        {
+          "state": "gone",
+          "label": "沒有合併卡"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "關卡讀取 pin 住的契約"
+        },
+        {
+          "state": "new",
+          "label": "契約宣告測試無法執行"
+        },
+        {
+          "state": "new",
+          "label": "第 4 關寫出警告行"
+        },
+        {
+          "state": "new",
+          "label": "卡片警告並要求 CI 全綠"
+        }
+      ]
+    }
+  }
+}

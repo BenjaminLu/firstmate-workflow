@@ -163,6 +163,9 @@ docs' "$(fm_project keys "$p/config.yaml")" "and keys names it"
 printf 'project:\n  check: make\n  docs: README.md\n' > "$p/config.yaml"
 assert_fail "fm_project docs '$p/config.yaml'" "a docs scalar is refused: it must be a list"
 
+printf 'project:\n  unrunnable: Missing test credentials\n' > "$p/config.yaml"
+assert_eq 'Missing test credentials' "$(fm_project unrunnable "$p/config.yaml")" 'unrunnable reason reads as an opaque scalar'
+
 printf 'vendor: claude\n' > "$p/config.yaml"
 assert_eq "" "$(fm_project check "$p/config.yaml")" "an undeclared check reads empty"
 assert_eq "" "$(fm_project keys "$p/config.yaml")" "and nothing is declared"

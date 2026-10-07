@@ -324,11 +324,17 @@ emit_status "Review adapter starting on $TASK" "開始審核 $TASK"
 
 # Read from the checkout running the round, like the reviewer's vendor: a
 # branch under review does not get to choose how it is reviewed.
-REVIEW_MODE="$(fm_cfg_in reviewer mode)"
+REVIEW_MODE="$(fm_project_reviewer_mode)"
+REVIEW_MODE_CONFIG=config.yaml
+if [ -n "$REVIEW_MODE" ]; then
+  REVIEW_MODE_CONFIG="$FM_STATE_DIR/config.yaml"
+else
+  REVIEW_MODE="$(fm_cfg_in reviewer mode)"
+fi
 case "${REVIEW_MODE:=diff}" in
   diff|run) ;;
   *)
-    echo "fm-review: config.yaml's reviewer mode is '$REVIEW_MODE'; it must be diff or run" >&2
+    echo "fm-review: $REVIEW_MODE_CONFIG's reviewer mode is '$REVIEW_MODE'; it must be diff or run" >&2
     emit --review-outcome infrastructure_error --type review_failed \
          --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
     exit 65 ;;
@@ -799,9 +805,9 @@ head_evidence() {
     fi
     while IFS=$'\t' read -r n name old; do
       if grep -q '^GATES:2$' "$summary"; then
-        pattern="^[[:space:]]*[+x] gate $n \($name\): "
+        pattern="^[[:space:]]*[+x!] gate $n \($name\): "
       else
-        pattern="^[[:space:]]*[+x] gate $old: "
+        pattern="^[[:space:]]*[+x!] gate $old: "
       fi
       grep -Eq "$pattern" "$summary" || lacking="${lacking:+$lacking, }$n ($name)"
     done < <(jq -r '. as $m | .gates[] | [.n,.name,(.name as $name | $m.legacy|to_entries[]|select(.value==$name)|.key)] | @tsv' "$gate_list")

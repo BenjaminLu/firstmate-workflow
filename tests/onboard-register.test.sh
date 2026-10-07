@@ -9,7 +9,7 @@ t="$(safe_tmpdir)"; eng="$t/engine"; fresh="$t/fresh"
 mkdir -p "$eng" "$fresh"
 export FM_HOME="$t/private"
 cat > "$t/answers.json" <<'JSON'
-{"confirmed":true,"policy_confirmed":true,"captain":"captain","intent":"Start product","product":"Private product brief","repository":"owner/product","visibility":"private","base":"main","bootstrap_authorized":true,"merge_method":"squash","available_merge_methods":["squash"],"delete_branch":false,"required_checks":["ci"],"contract":{"setup":"npm ci","check":"npm test","test":"bash {file}","tests":["tests/*.sh"],"check_env":{"MODE":"private"}}}
+{"confirmed":true,"policy_confirmed":true,"captain":"captain","intent":"Start product","product":"Private product brief","repository":"owner/product","visibility":"private","base":"main","bootstrap_authorized":true,"merge_method":"squash","available_merge_methods":["squash"],"delete_branch":false,"required_checks":["ci"],"contract":{"unrunnable":"Missing test credentials","setup":"npm ci","check":"npm test","test":"bash {file}","tests":["tests/*.sh"],"check_env":{"MODE":"private"}}}
 JSON
 cat > "$t/self" <<'YAML'
   self:
@@ -50,6 +50,8 @@ assert_eq main "$(routing base)" 'new base routing is visible through fm_project
 sed -n '/^  self:/,/^  seed:/{ /^  seed:/d; p; }' "$eng/config.yaml" > "$t/self-after"
 assert_ok 'cmp "$t/self" "$t/self-after"' 'every self entry line remains byte-identical'
 assert_ok 'cmp "$t/expected" "$eng/config.yaml"' 'entry is appended after the indented comment continuation'
+
+assert_eq 'Missing test credentials' "$(bash -c '. "$1/bin/fm-config.sh"; fm_project unrunnable "$2"' _ "$ROOT" "$FM_HOME/projects/seed/state/config.yaml")" 'onboarding writes an unrunnable reason that the contract parser reads back'
 
 # (d) Re-onboarding preserves the complete file, including its comments.
 cp "$eng/config.yaml" "$t/once"

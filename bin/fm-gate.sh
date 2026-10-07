@@ -68,12 +68,16 @@ say() {
 }
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
-g() {   # g <n> <description> ; body reads stdin-free, returns 0/1
+g() {   # g <n> <description> ; only gate 4 may return 3 with NOT_RUNNABLE
   local n="$1"
   want "$n" || return 0
   shift 1
-  local desc="$1"; shift
-  if "$@"; then say '+' "$n" "$desc"; return 0; fi
+  local desc="$1" rc; shift
+  NOT_RUNNABLE=''
+  if "$@"; then say '+' "$n" "$desc"; return 0; else rc=$?; fi
+  if [ "$rc" = 3 ] && [ "$n" = 4 ] && [ -n "$NOT_RUNNABLE" ]; then
+    say '!' 4 "$desc: not runnable: $NOT_RUNNABLE"; return 0
+  fi
   say 'x' "$n" "$desc"; exit "$n"
 }
 
@@ -215,6 +219,8 @@ gate4() {
   local contract pin rc
   mkdir -p "$FM_STATE_DIR/tmp" || return 1
   pin="$(fm_pin resolve --task "$TASK")" || return 1
+  NOT_RUNNABLE="$(jq -r '.contract.unrunnable | select(type == "string" and length > 0)' <<<"$pin")" || return 1
+  [ -z "$NOT_RUNNABLE" ] || return 3
   contract="$(mktemp "$FM_STATE_DIR/tmp/gate-contract.XXXXXX")" || return 1
   if ! jq -e '.contract' <<<"$pin" > "$contract"; then
     rm -f "$contract"; return 1
