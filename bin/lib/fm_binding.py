@@ -65,9 +65,8 @@ def change(root, head, base):
     return dict(head=head, base=base, patch=patch[0] if patch else '', files=[f for f in files if f])
 
 
-def source_binding(task, head, base, code):
+def approved_pin(task, code):
     root = Path(os.environ['FM_TARGET_ROOT'])
-    result = change(root, head, base)
     external = os.environ.get('FM_EXTERNAL') == '1'
     from fm_spec_pins import Pins
     env = dict(os.environ)
@@ -76,7 +75,14 @@ def source_binding(task, head, base, code):
                    FM_TASKS_DIR=str(root / 'design/tasks'), FM_DESIGN=str(root / 'design/design.md'))
     env.setdefault('FM_ENGINE_ROOT', str(code))
     env.setdefault('FM_DESIGN', str(Path(env['FM_STATE_DIR']).parent / 'design.md'))
-    pin = Pins(env, task).resolve(if_present=True)
+    return Pins(env, task).resolve(if_present=True)
+
+
+def source_binding(task, head, base, code):
+    root = Path(os.environ['FM_TARGET_ROOT'])
+    result = change(root, head, base)
+    external = os.environ.get('FM_EXTERNAL') == '1'
+    pin = approved_pin(task, code)
     if pin is not None:
         # Gate policy and signed review evidence bind the same approved bytes.
         # A corrupt pin never falls back to the branch or mutable private data.
@@ -390,9 +396,19 @@ def main():
         raise ValueError('gate transcript is red or belongs to another head')
     if not re.search(r'^GATES:2$', report, re.M):
         raise ValueError('gate transcript lacks GATES:2')
+    not_runnable = {}
+    warnings = re.findall(r'^  ! gate ([^\n]+)', report, re.M)
+    if warnings:
+        pin = approved_pin(args.task, Path(__file__).parents[2])
+        reason = pin.get('contract', {}).get('unrunnable') if pin else None
+        if (not isinstance(reason, str) or not reason.strip()
+                or any(not line.startswith('4 (fail-first):') for line in warnings)):
+            raise ValueError('gate transcript has an unauthorized not-runnable result')
+        not_runnable['fail-first'] = reason
     for gate in mapping['gates']:
         label = str(gate['n']) + ' (' + gate['name'] + ')'
-        if not re.search(r'^  \+ gate ' + re.escape(label) + ':', report, re.M):
+        mark = r'[+!]' if gate['name'] in not_runnable else r'\+'
+        if not re.search(r'^  ' + mark + ' gate ' + re.escape(label) + ':', report, re.M):
             raise ValueError('gate transcript lacks gate ' + label)
     base_tip = git(root, 'rev-parse', view_base(repo, args.pr) + '^{commit}')
     if not re.search(r'^BASE:' + re.escape(base_tip) + r'$', report, re.M):
@@ -410,7 +426,8 @@ def main():
                          pr=int(args.pr), repository=repo, gates=[g['name'] for g in mapping['gates']], checks=checks,
                          gate_report_sha256=digest(report.encode()), gate_base=base_tip,
                          verdict_signature=review_identity(reviewed), review=reviewed,
-                         external_signature=review_identity(external) if external else None)
+                         external_signature=review_identity(external) if external else None,
+                         **({'not_runnable': not_runnable} if not_runnable else {}))
     print(json.dumps(record))
 
 

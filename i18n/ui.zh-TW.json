@@ -241,5 +241,7 @@
   "detailCards": "決策卡",
   "detailPending": "待作答",
   "detailNoCards": "尚無決策卡。",
-  "detailBrief": "最新工作摘要"
+  "detailBrief": "最新工作摘要",
+  "gateNotRunnable": "無法執行：{reason}",
+  "ciOnlyEvidence": "fail-first 沒有執行。專案的必要 CI 檢查是這次變更僅剩的測試證據。選擇 A 前，請確認這些檢查全部通過。"
 }

@@ -339,3 +339,29 @@ for (const legacy of [false, true]) test(`named checklist reads ${legacy ? 'lega
     }
   } finally { await stopBoard(b); }
 });
+
+
+test('not-runnable fail-first warns in both languages and leaves merge available', async ({ page }) => {
+  const root = makeRoot(['working']);
+  const path = join(root, 'state/pending/D-1.json');
+  const cardData = JSON.parse(readFileSync(path, 'utf8'));
+  const reason = 'Missing test credentials $& <script>unsafe()</script>';
+  cardData.gates = {branch:true, rebase:true, scope:true, 'fail-first':'not_runnable', ci:true, approval:true};
+  cardData.not_runnable = {'fail-first':reason};
+  writeFileSync(path, JSON.stringify(cardData));
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    for (const [lang, dict] of [['en', EN], ['zh-TW', TW]] as const) {
+      await page.locator(`[data-l="${lang}"]`).click();
+      const card = page.locator('#card-D-1');
+      await expect(card.locator('.gates li.w')).toHaveCount(1);
+      await expect(card.locator('.gates li.w')).toContainText(dict.gateNotRunnable.replace('{reason}', () => reason));
+      await expect(card).toContainText(dict.ciOnlyEvidence);
+      await expect(card.locator('script')).toHaveCount(0);
+      await expect(card.locator('[data-c="A"]')).toBeEnabled();
+      await card.locator('[data-c="A"]').click();
+      await expect(card.locator('button.confirm')).toBeEnabled();
+    }
+  } finally { await stopBoard(b); }
+});

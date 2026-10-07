@@ -1081,6 +1081,17 @@ are `product`, `contract` (project setup/check/test commands and tests/docs glob
 The script creates no remote and makes no initial commit. Coordinate those
 separately under that authorization, before task protected-base rules apply.
 
+When the project's tests cannot run on this machine, include `unrunnable`
+with a nonempty one-line reason in the approved contract, written under
+`project:` in private `FM_HOME/projects/<name>/state/config.yaml`. Set
+`reviewer: mode: diff` in that same private file after onboarding. The private
+mode overrides the engine for this external project only. Existing task pins
+keep their recorded contract; a branch cannot declare itself unrunnable.
+Gate 4 then records a not-runnable warning and leaves the merge card raisable.
+Before a merge, read the card's CI reminder and confirm the project's
+required checks are green: they are the only remaining test evidence when
+fail-first did not run. Missing or red required CI still blocks readiness.
+
 Defaults are `land: card`, `post: local`, no force push and stacking held.
 `land` permits only `card` or `handoff`, never auto. `review` is `fm`, `external`
 or `both`; an external/both project's fm review is a local pre-check, not a

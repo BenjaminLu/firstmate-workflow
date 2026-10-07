@@ -682,8 +682,11 @@ vendor with none of these gets no model flag and runs on its CLI's default,
 which the round records from its transcript; `model_requested` is then
 empty. `fm_model <role>` is `fm_model_for` for the role's own vendor.
 
-`reviewer: mode:` sets how a review runs. `diff`, the default for a project
-that declares nothing, is the prompt above and nothing else. `run` makes a
+`reviewer: mode:` sets how a review runs. An external project may override
+it in private `FM_HOME/projects/<name>/state/config.yaml`; an absent or empty
+private value uses the engine setting. Invalid values name their source file.
+The self project reads only the engine setting. `diff`, the default when no
+mode is declared, is the prompt above and nothing else. `run` makes a
 fresh clone of the pull request head under the system temp directory - never a
 worktree, whose shared `.git` would let git inside it write outside it - with
 the base at `fm/base`, the head at `fm/head` and no remote, and removes it
@@ -1307,6 +1310,16 @@ requires evidence that passes on the head and goes red on the base. The gate
 keeps its declared-docs classification and its explicit `project.check`
 fallback; CI keeps the behavior-path classification described in §7. Worktree
 restoration, suite execution and assertion comparison have one implementation.
+When the pinned contract declares a nonempty one-line `unrunnable` reason,
+gate 4 runs no project commands and reports `! gate 4 (fail-first): ... not
+runnable: <reason>` with a successful gate-run exit. Readiness accepts this
+warning only for gate 4 and only with that pinned declaration, recording
+`not_runnable: {"fail-first": "<reason>"}` in readiness and the candidate.
+The merge card stays raisable and displays the reason plus a reminder that
+the project's required CI checks are the only remaining test evidence for
+this change: confirm they are green before choosing A. This result never
+blocks the merge card; red or missing CI still does. Ordinary pins and CI-mode
+fail-first behavior are unchanged.
 
 A new feature's tests go in a new file named for that feature, or in the
 file that already owns the feature; never append them to an unrelated suite.
@@ -1412,7 +1425,7 @@ gates always rerun on the head being merged, since they test the change
 combined with the current `main`.
 
 Gate 4 names no toolchain. It reads the complete verified task pin's contract
-(`setup`, `check`, `check_env`, `tests`, `test`, `docs`) through the shared
+(`setup`, `check`, `check_env`, `tests`, `test`, `docs`, optional `unrunnable`) through the shared
 fail-first engine. Neither the tested branch nor a mutable engine copy can
 change that contract. A scoped config edit cannot alter its own gates.
 The self contract lives once at `projects.firstmate-workflow.project` in
@@ -5322,6 +5335,12 @@ statuses**, gate 6 authenticated review under project policy. Required names
 come from readable protection and confirmed conventions. Missing/pending checks
 are pending, failed checks are failed, unreadable evidence is unknown. Bounded
 CI wait does not turn pending into failure or approval.
+An external project's pinned `project.unrunnable` reason lets gate 4 report
+not runnable without running tests. Readiness and the candidate retain that
+reason in `not_runnable`; it never blocks raising the merge card. The card
+warns that fail-first did not run and that required green CI is the only
+remaining test evidence. This does not waive gate 5 or approval. Existing
+pins keep their previous contract until explicitly repinned.
 A behind branch gets one bilingual stderr diagnostic after a passing gate 2,
 or before gate 5 in an `--only 5` run, with the commit count and resolved base
 SHA. The diagnostic changes no gate result and does not enter the gate report.
