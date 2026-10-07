@@ -633,9 +633,10 @@ def push(root, ident, reason, line, extra=None):
 ACK_DIR = 'state/session/acknowledged'
 
 
-def _ack_record(root, ident):
+def _ack_record(root, ident, records=None):
     import json
-    base = os.path.join(record_root(root), 'state/session')
+    records = records or record_root(root)
+    base = os.path.join(records, 'state/session')
     try:
         with open(os.path.join(base, '.ack-transaction.json')) as f:
             before = json.load(f)
@@ -649,7 +650,7 @@ def _ack_record(root, ident):
         # Unknown transaction state must never expose tentative watermarks.
         return None
     try:
-        with open(os.path.join(record_root(root), ACK_DIR, str(ident) + '.json')) as f:
+        with open(os.path.join(records, ACK_DIR, str(ident) + '.json')) as f:
             return json.load(f)
     except (OSError, ValueError, TypeError):
         return None
@@ -664,7 +665,8 @@ def acknowledged_many(root, identifiers, *, blocking=True, busy=None):
            for ident in identifiers):
         raise ValueError('invalid wake id')
     unknown = dict.fromkeys(identifiers)
-    base = os.path.join(record_root(root), 'state/session')
+    records = record_root(root)
+    base = os.path.join(records, 'state/session')
     os.makedirs(base, exist_ok=True)
     lock = os.open(os.path.join(base, '.ack.lock'), os.O_RDWR | os.O_CREAT, 0o644)
     try:
@@ -676,7 +678,7 @@ def acknowledged_many(root, identifiers, *, blocking=True, busy=None):
             return unknown
         result = {}
         for ident in identifiers:
-            record = _ack_record(root, ident)
+            record = _ack_record(root, ident, records)
             stamp = record.get('acknowledged') if isinstance(record, dict) else None
             result[ident] = (stamp if type(stamp) in (int, float) and
                              math.isfinite(stamp) and stamp >= 0 else None)
@@ -720,8 +722,9 @@ def acknowledge_batch(root, items, *, before_commit=None):
     """
     import fcntl
     import json
-    base = os.path.join(record_root(root), 'state/session')
-    directory = os.path.join(record_root(root), ACK_DIR)
+    records = record_root(root)
+    base = os.path.join(records, 'state/session')
+    directory = os.path.join(records, ACK_DIR)
     os.makedirs(directory, exist_ok=True)
     transaction = os.path.join(base, '.ack-transaction.json')
     lock = os.open(os.path.join(base, '.ack.lock'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
@@ -751,7 +754,7 @@ def acknowledge_batch(root, items, *, before_commit=None):
             if not re.fullmatch(r'[A-Za-z0-9_-]+', ident):
                 raise ValueError('a wake id is letters, digits, - and _')
             if ident not in before:
-                before[ident] = _ack_record(root, ident)
+                before[ident] = _ack_record(root, ident, records)
             old = after.get(ident) or before[ident]
             stamp = item.get('woken') or 0
             if old is None or old['acknowledged'] < stamp:
