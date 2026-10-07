@@ -321,7 +321,9 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 </section>
 <section class="logwrap">
   <h2 id="h-log"></h2>
-  <div class="log"><ul id="log"></ul></div>
+  <div class="log"><ul id="log"></ul><ul id="logOlder"></ul></div>
+  <button id="logLoadOlder" type="button"></button>
+  <span id="logLoadStatus" role="status"></span>
 </section>
 <script src="ship.js"></script>
 <script src="diagram.js"></script>
@@ -379,8 +381,68 @@ const crewChip = c => `<span class="cchip r-${esc(c.role)}" data-crew-chip="${es
     (c.attempt > 1 ? ` · ${esc(t("crewAttempt"))} ${esc(c.attempt)}` : '')}</span></span>`;
 // text someone wrote, escaped, with every #n in it linked to the pull request
 // of the project the text belongs to
-const said = (s, owner) => SHIP.linkPrs(esc(s),
-  owner && latest?.pr_urls_by_project ? latest.pr_urls_by_project[projOf(owner) || ''] || {} : prUrls);
+const said = (s, owner, links) => SHIP.linkPrs(esc(s), links ??
+  (owner && latest?.pr_urls_by_project ? latest.pr_urls_by_project[projOf(owner) || ''] || {} : prUrls));
+// Older pages remain separate from the newest forty rows. A generation
+// discards a response arriving after its anchor has fallen out of live state.
+let logAnchor = null, logNext = null, logEnded = false, logLoading = false, logFailed = false, logGeneration = 0;
+let olderEvents = [], olderLinks = {};
+function clearOlderLog() {
+  logGeneration++;
+  logAnchor = logNext = null;
+  logEnded = logLoading = logFailed = false;
+  olderEvents = [];
+  olderLinks = {};
+}
+function logLine(e, links) {
+  const time = (e.ts || "").slice(11, 19);
+  const text = words(e.summary?.[lang === 'en' ? 'en' : 'zh-TW'] || e.summary?.en || e.type);
+  return `<li class="${e.evidence_warning ? 'evidence-warning' : ''}"><time>${esc(time)}</time><span class="who">${esc(e.actor)}</span>` +
+    `<span class="k-${esc(e.type)}">${said(text, e, links)}</span></li>`;
+}
+function renderOlderLog() {
+  document.getElementById('logOlder').innerHTML = olderEvents.map(e => {
+    const project = projOf(e) || '';
+    return logLine(e, {...(latest?.pr_urls_by_project?.[project] || {}), ...(olderLinks[project] || {})});
+  }).join('');
+  const button = document.getElementById('logLoadOlder');
+  button.textContent = t("logLoadOlder");
+  button.hidden = logEnded || !latest?.recent?.length;
+  button.disabled = logLoading;
+  document.getElementById('logLoadStatus').textContent = logFailed ? t("logLoadFailed") : '';
+}
+document.getElementById('logLoadOlder').onclick = async () => {
+  if (logLoading || logEnded) return;
+  if (!logAnchor) logAnchor = latest?.recent?.at(-1)?.cursor;
+  if (!logAnchor) return;
+  const generation = logGeneration;
+  const query = new URLSearchParams({before: logNext || logAnchor});
+  if (PROJECT) query.set('project', PROJECT);
+  logLoading = true;
+  logFailed = false;
+  renderOlderLog();
+  try {
+    const response = await fetch('/api/events?' + query);
+    if (generation !== logGeneration) return;
+    if (response.status === 409 || response.status === 400) {
+      const error = await response.json();
+      if (generation !== logGeneration) return;
+      if (error.code === 'staleCursor' || error.code === 'badCursor') { clearOlderLog(); renderOlderLog(); return; }
+    }
+    if (!response.ok) throw new Error('log page failed');
+    const page = await response.json();
+    if (generation !== logGeneration) return;
+    olderEvents.push(...page.events);
+    for (const [project, links] of Object.entries(page.pr_urls_by_project || {}))
+      olderLinks[project] = {...(olderLinks[project] || {}), ...links};
+    logNext = page.next;
+    logEnded = page.next === null;
+  } catch (_) {
+    if (generation === logGeneration) logFailed = true;
+  } finally {
+    if (generation === logGeneration) { logLoading = false; renderOlderLog(); }
+  }
+};
 // Recorded classification wins; old cards keep their authored title fallback.
 function cardKind(d) {
   if (d.kind === 'merge' || d.kind === 'merge-untracked') return 'merge';
@@ -863,12 +925,9 @@ function render(s) {
   }
 
   const log = document.getElementById("log");
-  log.innerHTML = s.recent.length ? s.recent.map(e => {
-    const t = (e.ts || "").slice(11, 19);
-    const text = words(e.summary?.[lang === 'en' ? 'en' : 'zh-TW'] || e.summary?.en || e.type);
-    return `<li class="${e.evidence_warning ? 'evidence-warning' : ''}"><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
-      `<span class="k-${esc(e.type)}">${said(text, e)}</span></li>`;
-  }).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
+  log.innerHTML = s.recent.length ? s.recent.map(e => logLine(e)).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
+  if (logAnchor && !s.recent.some(e => e.cursor === logAnchor)) clearOlderLog();
+  renderOlderLog();
   window.VOYAGE?.update(s, t, lang);
 }
 

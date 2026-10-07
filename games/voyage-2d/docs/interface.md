@@ -126,7 +126,7 @@ ship of the line's capacity). The ship's tiers map one to one onto this limit:
 | vendor | `crew[].vendor` | The crewman's own run vendor, never the board-wide engine rule. |
 | llm, llm_source, llm_requested, llm_mismatch | `crew[].model`, `model_source`, `model_requested`, `model_mismatch` | The exact run model and its provenance; requested models are marked, mismatches show a warning, and absent models use the empty-value label. |
 | model (which puppet) | **none** | The game chooses a puppet: robot for `worker-4` today, and live a stable hash of the id picks one of the sailors. The firstmate and reviewer puppets go by `role`. |
-| hand-offs between crewmen | `handoffs[]` `{kind: order, work, approve or reject, from, to, task, project}` | This is exactly what the rituals need: the order bell, the scroll carried to the reviewer, the salute, the rejection. |
+| hand-offs between crewmen | `handoffs[]` `{kind: order, work, approve or reject, from, to, task, project}` | The complete list stays in every snapshot. This is exactly what the rituals need: the order bell, the scroll carried to the reviewer, the salute, the rejection. |
 
 Boarding and leaving. A crewman who appears in `crew[]` boards the ship; one who
 disappears goes ashore. In Playground the sim's own crew driver does this; there
@@ -153,9 +153,16 @@ refusal.
 
 `responses[]` holds the answered records: `{id, chosen, task, pr, kind, merge}`,
 where `merge` is `running`, `merged`, `failed` or `null`, plus `merge_reason`,
-`merge_unknown` and `superseded`. The game needs these to play the merge salvo
-only when `merge` becomes `merged`, and a clear, non-blaming "the merge did not
-go through" when it becomes `failed`.
+`merge_unknown` and `superseded`. The board keeps running or unknown merges,
+every failed merge (even superseded), and failed effects not yet superseded,
+plus the newest 50 other answers by parsed `ts` and plain-string `id`. The
+returned list is in that order; invalid or missing dates sort before dated
+records. The game does not read responses: merge salvos come from the complete
+`merged` entries in `outcomes`. Only `decision_made` outcomes are windowed to
+the newest 200 by parsed `ts` and identity string, retaining their original
+output order. Response-derived outcomes use the decision record's `ts`.
+`windows: {responses: {shown, total}, outcomes: {shown, total}}` reports the
+returned lengths and pre-window totals, after any project filter.
 
 Mapping to the game's card:
 
@@ -289,14 +296,16 @@ the board page's own files change. It does **not** send individual events. The
 adapter derives them:
 
 1. From `recent[]`, the last 40 events, newest first, each
-   `{ts, actor, type, task, project?, pr?, data, summary{en,zh-TW}}`. Keep the
+   `{ts, actor, type, task, project?, pr?, data, summary{en,zh-TW}, cursor}`. Keep the
    last seen `(ts, actor, type, task)`, and emit the newer ones oldest first.
    40 is a window. If more than 40 events land between two snapshots, the rest
    are lost. The game must tolerate gaps: re-sync from the snapshot, and never
    assume it has seen every event.
 2. From `handoffs[]` (with a stable `identity`) and `outcomes[]` (merges and
-   decisions, with an `identity`), which are complete lists. Dedupe by
-   `identity`.
+   decisions, with an `identity`). Handoffs and `merged` outcomes remain
+   complete lists; `decision_made` outcomes are windowed as described above.
+   The game consumes only merged outcomes, so its replay is unchanged. Dedupe
+   by `identity`.
 
 Mapping from board event types (the real log's counts are in brackets) to the
 game's director:
