@@ -5074,7 +5074,14 @@ no-remote bootstrap is explicit, not a pretend clone of a nonexistent remote.
 ### 15.2 Registry and conventions
 
 The engine registry carries only approved routing metadata, not private project
-contracts, designs or specs. Resolve external base, checks and gate contract
+contracts, designs or specs. External routing entries stay uncommitted local
+changes and never reach main. Onboarding updates
+`tests/fixtures/private-name-digests.txt`; commit that digest file through a task
+PR. The privacy guard scans the committed content of every tracked UTF-8 text
+file against these committed SHA-256 digests, even on CI without a local
+external registry. Digests detect leaks but allow guessed names to be confirmed;
+they are not secrecy protection. A history rewrite is a separate captain-approved
+operation after the cleanup merges. Resolve external base, checks and gate contract
 from approved private project records. Self retains T-043's full contract:
 `setup`, `check`, `check_env`, `tests`, `test`, `docs`, and future fields. T-050
 ships shell and Python readers for both the top-level `project:` block and
