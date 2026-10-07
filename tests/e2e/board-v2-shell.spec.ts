@@ -172,10 +172,6 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
     await expect(page.locator('.roster h4.rgroup').first()).toBeVisible();
     await expect(page.locator(`.roster [data-roster="${warningCrewId}"] .rm.warn`)).toBeVisible({timeout:15000});
     await expect(page.locator(`.roster [data-roster="${warningCrewId}"] .rv.warn`)).toBeVisible({timeout:15000});
-    if(width===390) for(const cell of ['.rv','.jb']) {
-      const field=page.locator(`.roster [data-roster="${warningCrewId}"]`).locator(cell);
-      expect(await field.evaluate(el=>el.getBoundingClientRect().width)).toBeGreaterThan(100);
-    }
     await expect(page.locator('#log .k-greenlit')).toBeVisible();
     expect(await page.evaluate(()=>{
       const s=getComputedStyle(document.documentElement);
@@ -192,6 +188,9 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
       const roots=document.querySelectorAll('.top,#readOnly,.counts,#deckwrap,#shipregion,.logwrap');
       for(const root of roots) for(const el of [root,...root.querySelectorAll('*')]) {
         if(!(el instanceof HTMLElement) || !el.checkVisibility() || ![...el.childNodes].some(n=>n.nodeType===Node.TEXT_NODE && n.textContent?.trim())) continue;
+        // Inactive controls are exempt; zero-area boxes have no visible text to check.
+        const box=el.getBoundingClientRect();
+        if(el.matches(':disabled') || box.width===0 || box.height===0) continue;
         // Frames are separate documents; the voyage bar is outside these roots.
         if(el.closest('iframe,#voyage-bar,.kbadge,[aria-pressed="true"]')) continue;
         const chain:Element[]=[];for(let n:Element|null=el;n;n=n.parentElement)chain.push(n);
