@@ -170,12 +170,12 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
     await page.locator('.dstrip > summary').click();
     await page.locator('.rgroupbtn').click();
     await expect(page.locator('.roster h4.rgroup').first()).toBeVisible();
-    if(width===390) for(const cell of ['.rv','.jb']) {
-      const field=page.locator('.roster li.rrow').first().locator(cell);
-      expect(await field.evaluate(el=>el.getBoundingClientRect().width)).toBeGreaterThan(100);
-    }
     await expect(page.locator(`.roster [data-roster="${warningCrewId}"] .rm.warn`)).toBeVisible({timeout:15000});
     await expect(page.locator(`.roster [data-roster="${warningCrewId}"] .rv.warn`)).toBeVisible({timeout:15000});
+    if(width===390) for(const cell of ['.rv','.jb']) {
+      const field=page.locator(`.roster [data-roster="${warningCrewId}"]`).locator(cell);
+      expect(await field.evaluate(el=>el.getBoundingClientRect().width)).toBeGreaterThan(100);
+    }
     await expect(page.locator('#log .k-greenlit')).toBeVisible();
     expect(await page.evaluate(()=>{
       const s=getComputedStyle(document.documentElement);
