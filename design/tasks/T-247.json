@@ -1,0 +1,267 @@
+{
+  "id": "T-247",
+  "title": "an external project's pull request follows the format its CONVENTIONS or private owner default confirms: the title uses the pr_title style with no firstmate task id, the body follows pr_sections with Summary, Changes, a Testing checklist that the autopilot updates with real CI results and the AI participation checklist, all from public spec fields; onboarding accepts the fields only from the captain's answers",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-worker.sh",
+    "bin/lib/fm_pr_format.py",
+    "bin/lib/fm_public_text.py",
+    "bin/lib/fm_spec_preflight.py",
+    "bin/lib/fm-spec-preflight.sh",
+    "bin/lib/fm_conventions.py",
+    "bin/lib/fm_onboard.py",
+    "bin/lib/fm_autopilot_loop.py",
+    "tests/external-pr-format.test.sh",
+    "tests/lib/external_pr_format.py",
+    "tests/lib/external_public_title.py",
+    "tests/external-execution.test.sh",
+    "tests/lib/external_stock.py",
+    "tests/external-public-title.test.sh",
+    "tests/lib/autopilot_cases.py",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-247.json"
+  ],
+  "acceptance": [
+    "Why. The captain (2026-10-07) asked how firstmate would open a pull request on a managed external repository, saw that today it uses the title \"<task id>: <public_title>\" and a body that ends in \"Captain acceptance and evidence are retained privately.\", and answered verbatim: \"照外部PR格式\", then \"全部都改成 Summary → Changes → Testing（勾選清單）→ AI 参与度 這種template\" and \"<owner>/ 底下的repo都照這個convension\" (owner name kept private). Today (bin/fm-worker.sh:2143-2163, :2279-2292, :2304-2316 on origin/main 44a78fe) the external commit subject and PR title are \"$TASK: <public_title>\", and the PR body is public_summary plus that fixed private line.",
+    "Change 1, format fields and precedence (bin/lib/fm_conventions.py). Three optional data fields: `pr_title` (enum `conventional` or `plain`), `pr_sections` (a JSON list of 0-12 unique non-empty one-line heading strings of at most 80 characters, no `#`, kept verbatim, non-ASCII allowed) and `pr_language` (enum `en`, `zh-TW`, `zh-CN` or `auto`). `validate` checks them when present and raises ValueError naming the field otherwise; because every conventions reader goes through `read_policy`, a bad format field in CONVENTIONS stops the whole project exactly like any other bad conventions field today (the worker and review exit 65 at bin/fm-worker.sh:52 and bin/fm-review.sh:80, the autopilot reports conventions unavailable through policy_error); only the owner file is read lazily by pr_format. New `pr_format(policy, conventions_path)` returns the effective `{pr_title, pr_sections, pr_language}` with precedence per field: the CONVENTIONS value, else the owner default, else the engine default (`plain`, `[]`, `en`). The owner default file is `<root>/owners/<owner>.yaml`, where `<owner>` is `policy['repository']` before `/` and `<root>` is found from the conventions path itself: when the resolved path is `<root>/projects/<name>/CONVENTIONS.md` (the parent's parent is named `projects`), `<root>` is that parent's parent's parent; any other layout has no owner default. No environment variable and no new shell argument is involved. The owner file uses the CONVENTIONS front-matter line format (`key: <JSON or bare enum>`) with the same parser: a bare value must match the existing bare grammar `[a-z][a-z0-9_-]*`, so `plain`, `conventional`, `en` and `auto` may be bare while `zh-TW` and `zh-CN` must be JSON-quoted (`pr_language: \"zh-CN\"`), in CONVENTIONS and owner files alike; a bare `zh-CN` is refused with the existing `quote conventions string as JSON` message with blank lines and `#` lines ignored; only the three keys are allowed and each is validated as above; a missing file is no default; a symlinked, unreadable or invalid file raises ValueError. `main --field pr_format` prints the effective JSON from pr_format; every other `--field` is unchanged. The owner default applies at round time, so a later change to the owner file reaches every repository whose CONVENTIONS lacks the field. Firstmate git never holds an owner file or an owner name.",
+    "Change 2, title rule (bin/lib/fm_public_text.py, bin/lib/fm_spec_preflight.py, bin/lib/fm-spec-preflight.sh). `validate(title, summary, style='plain', changes=None)`; every existing check stays. When style is `conventional`, the title must also match `^(\\[[A-Za-z][A-Za-z0-9]*-[0-9]+\\] )?(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\\([a-z0-9][a-z0-9._-]{0,29}\\))?!?: \\S`, else the problem `public_title: expected a conventional subject such as fix(scope): text`. In every style, a title that matches that pattern has its STE check run on the text after the first `: ` (the type word is not prose), and any other title is checked whole as today; preflight and render therefore apply the same STE rule. The optional `[KEY-123] ` is a ticket reference the spec author supplies; firstmate never invents one. `changes` is the optional spec field `public_changes`: a list of 1-10 strings, each 1-200 printable ASCII characters on one line, with the same path-like and STE checks as public_summary. The conventional rule is enforced at preflight only: bin/lib/fm-spec-preflight.sh gains a new block before its prompt call (:60): `if [ \"${FM_EXTERNAL:-0}\" = 1 ]; then` it sets FM_PR_TITLE from `fm_conventions pr_format` (its pr_title) and exports it, and when `fm_conventions pr_format` fails (for example an invalid or symlinked owner file) preflight prints `fm-spec-preflight: cannot read the PR format` and exits 65; for the self project the block sets nothing; fm_spec_preflight.prompt passes FM_PR_TITLE (default plain) and `spec.get('public_changes')` to validate. The CLI `check` reads FM_PR_TITLE (default plain) whatever FM_EXTERNAL says, because the caller chooses to run it. At render time (Change 3) the title is validated with style plain (same STE rule as above), so a pinned spec that passed preflight under plain and later meets a conventional setting still publishes its title without a task id; the worker prints one warning `fm-worker: public_title does not follow the conventional style` in that case.",
+    "Change 3, one renderer (new bin/lib/fm_pr_format.py). `render(spec, fmt, required_checks, review_mode, unrunnable)` returns `{title, body}` or None when validate (style plain, with public_changes) reports problems. title: the validated public_title, stripped, no task id prefix. body: the `pr_sections` headings in order, each as `## <heading>`, a blank line and its content, sections separated by one blank line; a heading whose class has no content is omitted; with empty `pr_sections` the body is public_summary alone (empty when absent). Firstmate never reads a repository's own pull request template. Heading class, case-insensitive, first match wins: contains `AI` and one of `参与`, `參與`, `participation`, `involvement` -> ai; contains `summary`, `摘要` or `概要` -> summary; contains `test`, `测试` or `測試` -> testing; contains `change`, `改动`, `变更` or `變更` -> changes; else none (omitted). Content: summary -> public_summary with each non-empty line not already starting with `- ` prefixed by `- `; changes -> one `- ` line per public_changes item (none -> omitted); testing -> lines between the marker lines `<!-- fm:testing -->` and `<!-- /fm:testing -->`: one `- [ ] <check>: pending` per required check in the given order; then, when review_mode is `run`, `- [ ] Local tests: run in the firstmate review`; when unrunnable is true, `- [ ] Local tests: not run on this machine`; no project command, unrunnable reason or other private value is ever written; ai -> exactly the three lines `- [x] 🤖 AI-Generated`, `- [ ] 🤝 AI-Assisted`, `- [ ] 👤 Human-Written`, because a firstmate worker round writes the change. `pr_language` changes no text in v1: public prose stays English ASCII under fm_public_text and headings come verbatim from the effective pr_sections. `refresh_testing(body, states)` never touches a line whose name is `Local tests`; it takes a mapping of check name to `passed`, `failed` or `pending`; inside the two markers it rewrites each line of the form `- [ ] <name>: <state>` or `- [x] <name>: <state>` whose name is in states to `- [x] <name>: passed`, `- [ ] <name>: failed` or `- [ ] <name>: pending`, keeps every other line, and returns None when either marker is missing. CLI: `fm_pr_format.py render --spec FILE --format JSON --required-checks JSON [--review-mode MODE] [--unrunnable 0|1]` prints the JSON result or exits 65.",
+    "Change 4, the worker (bin/fm-worker.sh). The external public_text block at :2147-2163 replaces the inline python with `fm_pr_format.py render`, still inside the existing `[ -n \"${spec:-}\" ] && [ -n \"${FM_CODE_ROOT:-}\" ]` guard at :2147, fed by the pinned spec, `fm_conventions pr_format`, `fm_conventions required_checks`, the review mode resolved exactly as bin/fm-review.sh:327-334 does (`fm_project_reviewer_mode`, else `fm_cfg_in reviewer mode`, else `diff`), and unrunnable from the round's pinned contract, the same source gate 4 reads (bin/fm-gate.sh:224): `jq -r '.contract.unrunnable // empty' <<<\"$FM_SPEC_PIN_JSON\"` (non-empty -> 1; an empty or unreadable pin -> 0, never a fallback). On success: commit_msg is the rendered title (no `$TASK: ` prefix), pr_title the rendered title, pr_body the rendered body. When `fm_conventions pr_format` fails because of the owner file (invalid, unreadable or symlinked), the worker prints one line `fm-worker: cannot read the PR format; using the generic title` to stderr; any other render failure stays silent. On any failure the existing fallbacks stay byte for byte (commit_msg and pr_title `$TASK: project work`, pr_body `Task $TASK. Captain acceptance and evidence are retained privately.`). The anchor lines `commit_msg=\"$TASK: project work\"`, `public_text=''`, `  pr_body=\"Dispatched by firstmate` and `  # Upgrade only the untouched external fallback title.` stay unchanged. The later-round generic-title upgrade (:2304-2316) keeps its condition and sets the rendered title and body. Draft first-round questions keep `--draft`. Adopted PRs are never retitled or edited (unchanged rule).",
+    "Change 5, CI results in the Testing block (bin/lib/fm_autopilot_loop.py). In `advance`, right after the `settled_checks` call and before its `checks is None` return, for an open external PR, and only when the PR number is not adopted (`self.adoptions()`) and `pr.get('body')` holds both testing markers: build states: when settled_checks returned None (CI not settled at this head), every name in the conventions `required_checks` and the analysers (the same names settled_checks uses) that already has a line in the block maps to pending; the `Local tests:` lines are never CI names and are never rewritten, so a new head never shows the previous head's results; otherwise from the settled rows (conclusion `success`, `neutral` or `skipped` -> passed; `failure`, `error`, `cancelled`, `timed_out` or `action_required` -> failed; else pending), and when one name has several rows (a check run and a commit status) failed beats pending and pending beats passed, call `fm_pr_format.refresh_testing`, and when the result differs from the body and the key (`<head>-pending` for the None case, else `<head>-<key(rows)>`) differs from `self.data.setdefault('testing', {}).get(str(number))` (a top-level record that `pull()` at bin/lib/fm_autopilot.py:460 does not overwrite), send `self.gh('api', '-X', 'PATCH', 'repos/<repository>/pulls/<number>', '-f', 'body=<new body>', '--include')` through `self.probe`, store the key in `self.data['testing'][str(number)]` on HTTP 200 and save, and on any other result record one `branch_failure('testing-refresh', ...)` and continue; it never raises and never blocks gates or merge. This edits only firstmate's own marked block of its own pull request body; it is not a comment projection, so it applies under every post mode. The autopilot runs after CI settles, so the block shows real results.",
+    "Change 6, onboarding (bin/lib/fm_onboard.py). `approve` accepts `pr_title`, `pr_sections` and `pr_language` only from the captain's explicit answers (added to its allowed keys), and `edit` accepts the three keys even when the current CONVENTIONS lacks them. `infer` is unchanged: onboarding writes no format field by itself, so a repository without its own values follows its owner default at round time.",
+    "Not changed, stated. The self project: commit subject `$TASK: <title>` and PR body `Dispatched by firstmate ...` stay byte for byte. post modes, review comments, progress comments and statuses (bin/lib/fm_external.py, bin/fm-review.sh) stay as they are; local test results are not published. The publication guard, gates, readiness and merge are unchanged. `infer`, `questions`, `drift` and bin/fm-canary.sh are unchanged. Translating public prose for `pr_language` is out of scope.",
+    "Tests, new behaviour (each fails on the base commit and passes after). New tests/external-pr-format.test.sh running tests/lib/external_pr_format.py: (1) sections [\"Summary\",\"Changes\",\"Testing\",\"AI 参与度\"] render `## Summary` bullets, `## Changes` from public_changes, the Testing block between markers with pending CI lines, and the AI block with only AI-Generated ticked; no task id, no `retained privately`; (2) `fix(api): the fee is deducted` gets the same STE result at preflight (conventional) and at render (plain), so a title that passes preflight is published; validate with style conventional accepts `fix(validator): deduct the fee` and `[ABC-12] feat: add x` and refuses `Deduct the fee`; style plain accepts all three; (3) a heading with no class and a changes heading without public_changes are omitted; (4) review_mode run adds the generic local line; unrunnable adds the not-run line; no command or reason appears; in the worker block, unrunnable comes from `.contract.unrunnable` of a stub FM_SPEC_PIN_JSON and an empty pin gives no not-run line, and the review mode follows the fm-review.sh chain with a stub `fm_cfg_in`; (5) refresh_testing maps passed/failed/pending, keeps other lines and returns None without markers; (6) precedence with a temp `<root>/projects/<name>/CONVENTIONS.md`: a CONVENTIONS value beats an owner file value, an owner value beats the engine default, a missing owner file gives the default, an invalid or symlinked owner file raises, a conventions path outside the `projects/<name>` layout ignores owner files; `fm_conventions.py <path> --field pr_format` prints the effective JSON; (7) bad pr_title, pr_sections and pr_language values raise; (8) `edit` accepts the three keys on a file that lacks them, `approve` writes them only when they are in the answers; (9) fm_spec_preflight.prompt with FM_EXTERNAL=1 and FM_PR_TITLE=conventional refuses `Deduct the fee`, with FM_EXTERNAL=0 ignores FM_PR_TITLE, and bin/lib/fm-spec-preflight.sh contains the FM_PR_TITLE export inside its external-only branch; (10) the worker publication block, run by the section harness with stub shell functions `fm_conventions` (answering `pr_format` and `required_checks`), `fm_project` and `fm_project_reviewer_mode`, produces commit_msg and pr_title equal to the rendered title with no `T-051: ` prefix, and a conventional setting with a plain title prints the warning and still publishes the title. (11) validate refuses public_changes that is not a list, has 0 or 11 items, an empty item, an item over 200 characters, a newline, a non-ASCII character, a path-like item or an STE failure, and accepts a valid list; (12) `fm_public_text.py check` exits 65 for `Deduct the fee` with FM_PR_TITLE=conventional and 0 without it, and exits 65 for a spec whose public_changes is invalid. tests/lib/autopilot_cases.py: a settled external PR with markers sends exactly one PATCH with the refreshed block; a second poll with the same rows sends none even when the stub keeps returning the old unrefreshed body; an adopted PR, a PR without markers and a pending CI send none; a PATCH failure records a branch failure and the poll continues; after a new head with CI not settled, a body showing passed lines gets one PATCH back to pending and its `Local tests:` line stays unchanged; a name with a successful check run and a failed status is published as failed. (13) bin/lib/fm-spec-preflight.sh with a stub `fm_conventions` that fails exits 65 with the message for FM_EXTERNAL=1 and is not called for FM_EXTERNAL=0. (14) the worker block with a stub `fm_conventions` failing on `pr_format` prints the warning once and uses the fallback. (16) an owner file with a bare `pr_language: zh-CN` raises the quote message and with `\"zh-CN\"` is accepted. (15) a CONVENTIONS file with `pr_title: fancy` makes `fm_conventions.py <path>` (no field) exit non-zero with a message naming pr_title, the same refusal every reader gets.",
+    "Tests, updated. tests/lib/external_public_title.py: the shell harness at :85-97 prepends the same stubs (`fm_conventions`, `fm_project_reviewer_mode`, `fm_cfg_in`, and FM_SPEC_PIN_JSON); the valid-public rows of test_commit_and_pr_share_validated_text and the edit arguments of test_later_round_retitles_only_matching_generic_pr (:138-153) change to the unprefixed title and the new body; the fallback, helper-failure and external=0 rows stay. tests/external-execution.test.sh:281-292 adds the stubs and expects the unprefixed title and body. tests/lib/external_stock.py:237-252 expects the commit subject and PR title equal to public_title and the body equal to public_summary alone (its CONVENTIONS fixture has no format fields and no owner file). tests/external-public-title.test.sh adds bin/lib/fm_pr_format.py to its dependency header.",
+    "Tests, regression (pass on base and after). Self-project commit and PR text (the external=0 row); tests/external-execution.test.sh branch and private-title checks at :262-279; tests/onboarding-crew.test.sh:113-115 and tests/worker-external-catchup.test.sh:106 (section harnesses without FM_CODE_ROOT, so the guarded render is skipped and the fallback holds); tests/conventions-publication.test.sh, tests/onboarding.test.sh, tests/onboard-cli.test.sh, tests/project.test.sh and tests/autopilot.test.sh with CONVENTIONS files that lack the new fields and no owner file.",
+    "Callers, all listed. commit_msg: bin/fm-worker.sh :2143-2163, :2182, :2191. pr_title/pr_body: :2279-2292. Later round: :2304-2316. public_text: :2144-2163, :2285-2287, :2304-2311. fm_public_text.validate: its CLI (:47), bin/lib/fm_spec_preflight.py:39-42, the worker inline helper (replaced). fm_conventions.py: bin/fm-config.sh:1140-1146. fm_onboard approve/edit: bin/lib/fm_onboard.py main and bin/fm-canary.sh:670-673 (calls approve with answers that lack the keys; unchanged behaviour). Autopilot advance: bin/lib/fm_autopilot_loop.py:194-265. Tests: tests/lib/external_public_title.py, tests/external-execution.test.sh, tests/lib/external_stock.py, tests/external-public-title.test.sh, tests/lib/spec_preflight_cases.py (unchanged; existing external cases pass with FM_PR_TITLE unset), tests/lib/autopilot_cases.py, tests/onboarding-crew.test.sh:113-115, tests/worker-external-catchup.test.sh:106.",
+    "Migration. CONVENTIONS without the fields use the owner default when one exists, else plain, no sections, en: title is public_title without the task prefix and body is public_summary alone; the private footer line disappears for every external PR with valid public text, as the captain asked. Existing open PRs keep titles and bodies except a still-generic `$TASK: project work` title that the next round upgrades as today; bodies without the testing markers are never refreshed. Specs and pins without valid public text keep today's fallback. A pinned plain title under a later conventional setting still publishes, with a warning (Change 2). An invalid owner file makes the worker warn and fall back, and preflight refuse, so it never fails silently; a bad format field inside CONVENTIONS stops the project like any other bad conventions field. Pins need no repin: conventions and owner defaults are read at round time; onboarding writes no format field, so nothing freezes an owner default.",
+    "Docs. design/design.md §15 (the paragraph at about :5440 starting \"External commit subjects and PR titles use the spec's validated `public_title`\"): edit in place for the three fields, the owner default and its precedence, the heading classes, the Testing block and its autopilot refresh, the AI block and the no-prefix title. skills/firstmate/SKILL.md (the external spec paragraph at about :981): add public_changes, the conventional title rule and the owner default file."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "An external pull request uses the title style of its repository, with no firstmate task id."
+        },
+        {
+          "kind": "fact",
+          "text": "Its body follows the confirmed sections: Summary, Changes, a Testing checklist and the AI checklist."
+        },
+        {
+          "kind": "fact",
+          "text": "Firstmate fills the sections from public spec fields and the real CI results."
+        },
+        {
+          "kind": "fact",
+          "text": "An owner default applies to every repository of that owner, and a repository value still wins."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The captain answered on 2026-10-07: \"照外部PR格式\"."
+        },
+        {
+          "kind": "fact",
+          "text": "Today the title starts with the firstmate task id."
+        },
+        {
+          "kind": "fact",
+          "text": "Today the body ends with a line about private evidence."
+        },
+        {
+          "kind": "fact",
+          "text": "The captain asked for one section format for every repository of one owner."
+        }
+      ],
+      "scope_in": [
+        "bin/fm-worker.sh: the commit subject, title and body",
+        "bin/lib/fm_pr_format.py: one renderer",
+        "bin/lib/fm_public_text.py and preflight: the title rule",
+        "bin/lib/fm_conventions.py: the fields and the owner default",
+        "bin/lib/fm_autopilot_loop.py: CI results in the Testing block",
+        "tests and docs"
+      ],
+      "scope_out": [
+        "The self project",
+        "Translation of public prose",
+        "Review comments and statuses"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the worker uses the rendered title. Test cases 1, 2 and 9 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the renderer builds the sections in the confirmed order. Test cases 1 and 3 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the autopilot writes CI results into the Testing checklist, and the AI checklist marks AI-Generated. The autopilot cases and test cases 1 and 5 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the repository value beats the owner default, and that beats the engine default. Test case 6 proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Firstmate never invents a ticket reference in a title."
+        },
+        {
+          "kind": "caution",
+          "text": "The reason that tests cannot run stays private."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Worker reads public spec text"
+        },
+        {
+          "state": "gone",
+          "label": "Title adds the task id"
+        },
+        {
+          "state": "gone",
+          "label": "Body adds a private line"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Worker reads public spec text"
+        },
+        {
+          "state": "new",
+          "label": "Read repository and owner format"
+        },
+        {
+          "state": "new",
+          "label": "Fill sections and checklists"
+        },
+        {
+          "state": "new",
+          "label": "Title follows repository style"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "外部 PR 的標題沿用該 repo 的風格，不帶 firstmate 任務編號。"
+        },
+        {
+          "kind": "fact",
+          "text": "PR 內文照已確認的段落：摘要、變更、測試清單和 AI 清單。"
+        },
+        {
+          "kind": "fact",
+          "text": "firstmate 用 spec 公開欄位和實際的 CI 結果填段落。"
+        },
+        {
+          "kind": "fact",
+          "text": "同一 owner 的 repo 共用預設，repo 自己的設定優先。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 回答：\"照外部PR格式\"。"
+        },
+        {
+          "kind": "fact",
+          "text": "現在的標題以 firstmate 任務編號開頭。"
+        },
+        {
+          "kind": "fact",
+          "text": "現在的內文結尾有一行私有證據說明。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長要求同一 owner 的所有 repo 用同一種段落格式。"
+        }
+      ],
+      "scope_in": [
+        "bin/fm-worker.sh：commit 主旨、標題和內文",
+        "bin/lib/fm_pr_format.py：單一產生器",
+        "bin/lib/fm_public_text.py 和預檢：標題規則",
+        "bin/lib/fm_conventions.py：欄位和 owner 預設",
+        "bin/lib/fm_autopilot_loop.py：測試清單的 CI 結果",
+        "測試和文件"
+      ],
+      "scope_out": [
+        "self 專案",
+        "公開文字的翻譯",
+        "審查留言和狀態"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：worker 使用產生的標題。案例 1、2 和 9 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：產生器照確認的順序建立段落。案例 1 和 3 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：autopilot 把 CI 結果寫進測試清單，AI 清單勾選 AI-Generated。autopilot 案例和案例 1、5 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：repo 設定優先於 owner 預設，再優先於引擎預設。案例 6 證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "firstmate 不自行編造標題裡的票號。"
+        },
+        {
+          "kind": "caution",
+          "text": "測試跑不了的原因不公開。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "worker 讀公開 spec 文字"
+        },
+        {
+          "state": "gone",
+          "label": "標題加任務編號"
+        },
+        {
+          "state": "gone",
+          "label": "內文加私有說明"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "worker 讀公開 spec 文字"
+        },
+        {
+          "state": "new",
+          "label": "讀 repo 和 owner 格式"
+        },
+        {
+          "state": "new",
+          "label": "填段落和清單"
+        },
+        {
+          "state": "new",
+          "label": "標題沿用 repo 風格"
+        }
+      ]
+    }
+  }
+}

@@ -57,6 +57,14 @@ chmod 444 "$FM_RUN_DIR/pinned/spec.json"
 export FM_PINNED_DIR="$FM_RUN_DIR/pinned"
 export FM_SPEC_PREFLIGHT
 FM_SPEC_PREFLIGHT="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$FM_PINNED_DIR/spec.json")" || exit 65
+if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+  if ! pr_format="$(fm_conventions pr_format 2>/dev/null)"; then
+    echo 'fm-spec-preflight: cannot read the PR format' >&2
+    exit 65
+  fi
+  FM_PR_TITLE="$(jq -r '.pr_title' <<<"$pr_format")" || exit 65
+  export FM_PR_TITLE
+fi
 python3 "$preflight_py" prompt --task "$TASK" --spec "$FM_PINNED_DIR/spec.json" \
   --base "$base_head" > "$preflight/prompt.md" || exit 65
 # An independent clone has no remote, linked git directory or mutable base ref.
