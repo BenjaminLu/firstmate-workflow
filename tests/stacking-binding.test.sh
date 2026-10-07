@@ -45,8 +45,8 @@ git -C "$r" checkout -q t-902-child
 git -C "$r" commit -q --allow-empty -m 'same patch on a new head'
 git -C "$r" checkout -q main
 git -C "$r" update-ref refs/pull/9/head t-902-child
-out="$(FM_ROOT="$r" FM_GH="$GH" bash "$r/bin/fm-gate.sh" --task T-Z --repo "$r" --branch t-902-child --pr 9 --only 7 2>&1)"; code=$?
-assert_eq 0 "$code" 'gate 7 carries approval using the stacked PR parent patch'
+out="$(FM_ROOT="$r" FM_GH="$GH" bash "$r/bin/fm-gate.sh" --task T-Z --repo "$r" --branch t-902-child --pr 9 --only 6 2>&1)"; code=$?
+assert_eq 0 "$code" 'gate 6 carries approval using the stacked PR parent patch'
 
 # Every local-only path must reach its own gate without an origin or PR.
 printf '#!/usr/bin/env bash\nexit 1\n' > "$r/stub/no-pr"
@@ -57,12 +57,12 @@ for availability in no-origin no-pr; do
   else
     git -C "$r" remote add origin https://github.com/fixture/project.git
   fi
-  for only in 1 2 4 5 7; do
+  for only in 1 2 3 4 6; do
     out="$(FM_ROOT="$r" FM_GH="$r/stub/no-pr" bash "$r/bin/fm-gate.sh" --task T-Z --repo "$r" --branch t-902-child --pr 9 --only "$only" 2>&1)"; code=$?
-    assert_ne 6 "$code" "gate $only preserves local evaluation with $availability"
-    assert_contains "$out" "gate $only:" "gate $only reaches its own result with $availability"
+    assert_ne 5 "$code" "gate $only preserves local evaluation with $availability"
+    assert_contains "$out" "gate $only (" "gate $only reaches its own result with $availability"
   done
-  out="$(FM_ROOT="$r" FM_GH="$r/stub/no-pr" bash "$r/bin/fm-gate.sh" --task T-Z --repo "$r" --branch t-902-child --pr 9 --only 6 2>&1)"; code=$?
-  assert_eq 6 "$code" "gate 6 still requires authoritative evidence with $availability"
+  out="$(FM_ROOT="$r" FM_GH="$r/stub/no-pr" bash "$r/bin/fm-gate.sh" --task T-Z --repo "$r" --branch t-902-child --pr 9 --only 5 2>&1)"; code=$?
+  assert_eq 5 "$code" "gate 5 still requires authoritative evidence with $availability"
 done
 finish

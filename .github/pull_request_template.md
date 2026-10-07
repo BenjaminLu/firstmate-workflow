@@ -17,7 +17,7 @@ the task entry; say how this meets them, not what they are. -->
 
 ## Scope
 
-<!-- Gate 4 compares every changed path with the task's `scope` globs in
+<!-- Gate 3 compares every changed path with the task's `scope` globs in
 design/tasks/T-xxx.json, read from this branch. -->
 
 - [ ] Every changed file is inside the task's `scope`. If the work needs a file
@@ -40,17 +40,11 @@ config.yaml's `docs` globs needs no new test; say so if that is the case. -->
 
 ## Gates
 
-<!-- bin/fm-gate.sh checks these (design/design.md section 6). Gate 7 matches
-the marker in any comment unless FM_REVIEWER_LOGIN is set, and does not tie it
-to the current head; the approval that counts is the reviewer's, on this head. -->
+<!-- bin/fm-gate.sh checks these (design/design.md section 6), bound to the current head. -->
 
-- [ ] 1. The branch has commits on top of `main`.
-- [ ] 2. It rebases onto `main` cleanly.
-- [ ] 3. In a fresh worktree, `setup` succeeds and the declared
-      `project.check` (`bin/ci.sh`) exits 0.
-- [ ] 4. The diff stays inside the task's `scope`.
-- [ ] 5. With the non-test changes reverted, at least one changed test goes
-      red; or every non-test change is declared `docs`.
-- [ ] 6. The required GitHub check `ci` is green.
-- [ ] 7. A comment contains `APPROVE:T-xxx`, posted by the reviewer for this
-      head.
+- [ ] 1. branch: the branch carries commits.
+- [ ] 2. rebase: it rebases onto its base cleanly.
+- [ ] 3. scope: the diff stays inside the approved scope.
+- [ ] 4. fail-first: reverting implementation turns tests red, unless all implementation changes are declared docs.
+- [ ] 5. ci: the required GitHub checks and statuses are green.
+- [ ] 6. approval: bound reviewer approval covers this change.

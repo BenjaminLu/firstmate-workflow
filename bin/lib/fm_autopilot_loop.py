@@ -2,7 +2,7 @@
 
 Jobs have durable write-ahead identities. Their lifeline-owned children write
 completion receipts and ring the supervisor; neither jobs nor receipts poll.
-Gate 7, not event text or a cached APPROVE, authorizes a merge card.
+Gate 6, not event text or a cached APPROVE, authorizes a merge card.
 """
 import datetime
 import json
@@ -134,7 +134,7 @@ class MechanicalLoop:
         """Return only latest required conclusions; None means CI is pending.
 
         Branch protection and confirmed external policy supply the names, as
-        in gate 6. This is scheduling evidence, never gate authorization.
+        in gate 5. This is scheduling evidence, never gate authorization.
         """
         from urllib.parse import quote
         names = set(self.policy.get('required_checks', []))
@@ -361,7 +361,7 @@ class MechanicalLoop:
             else:
                 self.start_job('gate', task, pr, self.gate_command(task, pr), base=result['base'], round=result['round'])
         elif kind == 'gate':
-            if code == 7:
+            if code == 6:
                 if self.policy['review'] not in ('fm', 'both'):
                     self.attention('external-review', task, pr, f'{task}: external review required', f'{task}：需要外部審查')
                     return
@@ -371,9 +371,17 @@ class MechanicalLoop:
                 self.launch_review(task, pr, result['round'])
             elif code == 0:
                 self.merge_card(task, pr, result['base'])
+            elif 1 <= code <= 5:
+                from fm_binding import gate_list
+                try:
+                    name = next(g['name'] for g in gate_list()['gates'] if g['n'] == code)
+                except (ValueError, StopIteration):
+                    name = 'gate list unavailable'
+                self.attention('gate', task, pr, f'{task}: stopped at gate {code} ({name})' + suffix,
+                               f'{task}：關卡 {code}（{name}）失敗，需要 firstmate 處理')
             else:
-                self.attention('gate', task, pr, f'{task}: stopped at gate {code}' + suffix,
-                               f'{task}：關卡 {code} 失敗，需要 firstmate 處理')
+                self.attention('gate', task, pr, f'{task}: gate run failed (exit {code})' + suffix,
+                               f'{task}：關卡執行失敗（exit {code}）')
         elif kind == 'review':
             verdict = self.verdict(task)
             from fm_autopilot import key

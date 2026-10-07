@@ -19,8 +19,8 @@ test("the captain merges from the board", async ({ page }) => {
   await expect(page.locator("#roster .rrow").first()).toBeVisible();
   const card = page.locator(".dcard").first();
   await expect(card).toBeVisible();
-  await expect(card.locator(".gates li")).toHaveCount(6);   // gates 1, 2, 4, 5, 6, 7
-  await expect(card.locator(".gates li.n")).toHaveCount(1);   // gate 7 open
+  await expect(card.locator(".gates li")).toHaveCount(6);   // six named gates
+  await expect(card.locator(".gates li.n")).toHaveCount(1);   // gate 6 open
 
   await expect(card.locator("button.confirm")).toBeDisabled();
   await card.locator('[data-c="A"]').click();
@@ -318,6 +318,24 @@ test('decision kind badges lead every card and strip in both locales with readab
         return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
       });
       expect(ratio).toBeGreaterThanOrEqual(4.5);
+    }
+  } finally { await stopBoard(b); }
+});
+
+for (const legacy of [false, true]) test(`named checklist reads ${legacy ? 'legacy' : 'new'} card`, async ({page}) => {
+  const root = makeRoot([...CREW]);
+  const file = join(root, 'state/pending/D-1.json');
+  const card = JSON.parse(readFileSync(file, 'utf8'));
+  card.gates = legacy ? [true,true,null,true,true,true,true] : {branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:true}; // legacy-gates (T-232)
+  writeFileSync(file, JSON.stringify(card));
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const lines = page.locator('#card-D-1 .gates li');
+    await expect(lines).toHaveCount(6);
+    for (const [i,name] of ['branch','rebase','scope','fail-first','ci','approval'].entries()) {
+      await expect(lines.nth(i)).toContainText(`${i+1}. ${EN['gate_'+name]}`);
+      await expect(lines.nth(i)).toHaveClass('y');
     }
   } finally { await stopBoard(b); }
 });

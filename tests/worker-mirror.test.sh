@@ -59,7 +59,7 @@ assert_eq "true" \
   "and a zh-TW one (design section 9)"
 # the mirror itself, outside both of the round's write roots
 assert_ok "test -d '$dMir/repo/state/mirrors/self/T-MIR'" "the mirror lives outside the worktree and the round's own temp directory"
-# gate 5: revert bin/fm-worker.sh's mirror mechanism (the sandbox.test.sh
+# gate 4: revert bin/fm-worker.sh's mirror mechanism (the sandbox.test.sh
 # static profile checks are this test's fail-first for the sandbox half) -
 # left to the reviewer's run, since it needs the real script reverted, not
 # a fixture copy; this suite proves the mechanism works, not its absence

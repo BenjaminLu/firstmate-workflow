@@ -437,9 +437,10 @@ if [ "$MODE" = request ]; then
         echo 'fm-decide: verified candidate SHA required' >&2; exit 65; }
     fi
     payload="$(jq -cn --arg expected_head "$EXPECTED_HEAD" --argjson binding "$binding" --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
+      --slurpfile gate_list "$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json" \
       --arg purpose "$PURPOSE" --argjson ste "$ste" --arg project "$RECORD" --slurpfile details "$DETAILS" \
       '{id:$id,expected_head:$expected_head,binding:$binding}
-       + (if $kind=="merge" then {gates:[true,true,null,true,true,true,true]} else {} end) + (if $task=="" then {} else {task:$task} end)
+       + (if $kind=="merge" then {gates:($gate_list[0].gates|map({key:.name,value:true})|from_entries)} else {} end) + (if $task=="" then {} else {task:$task} end)
        + {kind:$kind,details:$details[0],title:$details[0].en.title}
        + (if $purpose=="" then {} else {purpose:$purpose} end)
        + (if $ste==null then {} else {ste:$ste} end)

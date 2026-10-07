@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Required names, status classification, and head/base movement at gate 6.
+# Required names, status classification, and head/base movement at gate 5.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$ROOT" <<'PY'

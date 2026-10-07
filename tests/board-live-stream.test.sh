@@ -13,7 +13,7 @@ cp -R "$ROOT/bin/lib" "$d/bin/"
 cp "$ROOT/board/server.ts" "$d/board/"
 cp "$ROOT/tests/lib/board-read-race.ts" "$d/board/"
 # Only replace the fs import with the fault-injection facade. All server
-# logic stays byte-for-byte the source under test, including in gate 5.
+# logic stays byte-for-byte the source under test, including in gate 4.
 python3 - "$d/board/server.ts" <<'PY'
 from pathlib import Path
 import sys

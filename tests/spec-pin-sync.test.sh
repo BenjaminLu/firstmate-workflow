@@ -75,7 +75,7 @@ assert_contains "$(cat "$d/prompt.md")" 'approved spec changed (pin v2)' 'a: pro
 head="$(rb_head "$d" "$branch")"
 (cd "$repo" && . bin/fm-config.sh && fm_storage_init "$repo" firstmate-workflow && \
   fm_pin scope --task T-Z --head "$head" --base main) > "$d/scope.out" 2>&1
-assert_eq 0 "$?" 'a: unchanged gate 4 accepts synced branch'
+assert_eq 0 "$?" 'a: unchanged gate 3 accepts synced branch'
 # d: already equal, an empty adapter leaves no commit or sync message.
 sync_round 42
 assert_eq 1 "$sync_rc" 'd: unchanged round remains no-work'

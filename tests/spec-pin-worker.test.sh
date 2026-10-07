@@ -153,8 +153,8 @@ M
     assert_eq 0 "$?" "authorized worker survives missing $missing ($mode self)"
     assert_ok "test -s '$d/prompt.md'" 'legacy worker still runs its adapter'
     assert_ok "test ! -e '$repo/state/pins/T-Z/1.json'" 'failed first pin writes no record'
-    assert_contains "$(cat "$d/out")" 'no pin; gate 4 will refuse' 'failed first pin warns on stderr'
-    assert_ok "grep -Rq 'no pin; gate 4 will refuse' '$repo/state/evidence'" 'failed first pin warning retained in round report'
+    assert_contains "$(cat "$d/out")" 'no pin; gate 3 (scope) will refuse' 'failed first pin warns on stderr'
+    assert_ok "grep -Rq 'no pin; gate 3 (scope) will refuse' '$repo/state/evidence'" 'failed first pin warning retained in round report'
     rm -rf "$d"
   done
 done

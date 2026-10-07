@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Each gate has a case that passes and one that does not; gate 5 also runs
-# whatever the fixture's own config.yaml declares under project:. Gate 3 is
-# retired (T-114), and this suite shows that nothing still runs it.
+# Each gate has a case that passes and one that does not; gate 4 also runs
+# whatever the fixture's own config.yaml declares under project:.
 set -uo pipefail
 # A gate run exports FM_GATE_LOCK_HELD, and a Herdr session its pane ids, into
 # every suite it runs. This suite runs the real gate, so it inherits none of
@@ -17,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/spec-pins.sh"
 GATE="$ROOT/bin/fm-gate.sh"
 # this suite's own gate lock: it neither waits on a real gate run on this
-# machine nor holds one up, and a run that encloses it (gate 5 of this very
+# machine nor holds one up, and a run that encloses it (gate 4 of this very
 # repository) holds a different lock, so the serialization below is real
 FM_GATE_LOCK="$(mktemp -d)/gate.lock"; export FM_GATE_LOCK
 
@@ -63,23 +62,15 @@ assert_ok "gate '$d' work 2" "2 passes a branch that rebases cleanly"
 git -C "$d" checkout -q main; echo conflicting > "$d/src/thing.sh"; git -C "$d" commit -qam diverge
 assert_fail "gate '$d' work 2" "2 blocks a branch that conflicts"
 
-# --- gate 3: retired (T-114) ---------------------------------------------
-# It ran the whole project.check, which the required GitHub check runs on the
-# same head and gate 6 reads. Asking for it is refused, never reported green;
-# that no run executes the check is shown under "no gate repeats CI" below.
 d="$(fixture)"; git -C "$d" checkout -q -b green
 printf '#!/usr/bin/env bash\nexit 0\n' > "$d/tests/a.test.sh"; chmod +x "$d/tests/a.test.sh"
 echo impl > "$d/src/thing.sh"; git -C "$d" add -A; git -C "$d" commit -qm green; git -C "$d" checkout -q main
-"$GATE" --task T-X --repo "$d" --branch green --only 3 >/dev/null 2>&1
-assert_eq "64" "$?" "3 is retired: asking for it is a usage error, not a green gate"
-assert_contains "$(said "$d" green 3)" "gate 3 is retired" "and it says so"
-
-# --- gate 4 --------------------------------------------------------------
-assert_ok "gate '$d' green 4" "4 passes a diff inside the declared scope"
+# --- gate 3 --------------------------------------------------------------
+assert_ok "gate '$d' green 3" "3 passes a diff inside the declared scope"
 git -C "$d" checkout -q -b wide green
 mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm wide
 git -C "$d" checkout -q main
-assert_fail "gate '$d' wide 4" "4 blocks a diff that reaches outside it"
+assert_fail "gate '$d' wide 3" "3 blocks a diff that reaches outside it"
 
 # A branch cannot expand its own approved scope (T-049).
 git -C "$d" checkout -q -b ownfile green
@@ -87,17 +78,17 @@ printf '{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml","design/
   > "$d/design/tasks/T-X.json"
 mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm ownfile
 git -C "$d" checkout -q main
-assert_fail "gate '$d' ownfile 4" "4 rejects a branch that widens its own task scope"
-assert_contains "$(said "$d" ownfile 4)" "task entry differs" "4 names the task snapshot mismatch"
+assert_fail "gate '$d' ownfile 3" "3 rejects a branch that widens its own task scope"
+assert_contains "$(said "$d" ownfile 3)" "task entry differs" "3 names the task snapshot mismatch"
 
-# --- gate 5: the one that matters ---------------------------------------
+# --- gate 4: the one that matters ---------------------------------------
 d="$(fixture)"
 git -C "$d" checkout -q -b vacuous
 printf 'real\n' > "$d/src/thing.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$d/tests/v.test.sh"        # asserts nothing
 chmod +x "$d/tests/v.test.sh"; git -C "$d" add -A; git -C "$d" commit -qm vacuous
 git -C "$d" checkout -q main
-assert_fail "gate '$d' vacuous 5" "5 blocks a test that passes without the implementation"
+assert_fail "gate '$d' vacuous 4" "4 blocks a test that passes without the implementation"
 
 git -C "$d" checkout -q -b honest main
 mkdir -p "$d/tests"          # git does not track an empty directory
@@ -105,11 +96,11 @@ printf 'real\n' > "$d/src/thing.sh"
 printf '#!/usr/bin/env bash\ngrep -q real "${FM_ROOT:-.}/src/thing.sh"\n' > "$d/tests/h.test.sh"
 chmod +x "$d/tests/h.test.sh"; git -C "$d" add -A; git -C "$d" commit -qm honest
 git -C "$d" checkout -q main
-assert_ok "gate '$d' honest 5" "5 passes a test that goes red without it"
+assert_ok "gate '$d' honest 4" "4 passes a test that goes red without it"
 
 git -C "$d" checkout -q -b untested main
 printf 'more\n' >> "$d/src/thing.sh"; git -C "$d" commit -qam untested; git -C "$d" checkout -q main
-assert_fail "gate '$d' untested 5" "5 blocks implementation that ships no test at all"
+assert_fail "gate '$d' untested 4" "4 blocks implementation that ships no test at all"
 
 touched() {
   local r; r="$(mktemp -d)"
@@ -137,7 +128,7 @@ printf 'real\n' > "$t5/src/thing.sh"
 printf 'grep -q real "${FM_ROOT:-.}/src/thing.sh"\n' > "$t5/tests/h.test.sh"
 git -C "$t5" add -A; git -C "$t5" commit -qm honest; git -C "$t5" checkout -q main
 
-# --- gates 6 and 7: gh is injectable so the suite makes no network call ---
+# --- gates 5 and 6: gh is injectable so the suite makes no network call ---
 stub() {
   local conclusion=success
   [ "$2" = 0 ] || conclusion=failure
@@ -147,11 +138,11 @@ stub() {
 d2="$(fixture)"; git -C "$d2" checkout -q -b b; echo y >> "$d2/src/thing.sh"
 git -C "$d2" commit -qam b; git -C "$d2" checkout -q main
 
-assert_ok   "FM_GH='$(stub "$d2" 0 reviewer-1)' gate '$d2' b 6 --pr 9" "6 passes when the required check is green"
-assert_fail "FM_GH='$(stub "$d2" 1 reviewer-1)' gate '$d2' b 6 --pr 9" "6 blocks when it is not"
-assert_fail "'$GATE' --task T-X --repo '$d2' --branch b --only 6" "6 blocks with no pull request at all"
+assert_ok   "FM_GH='$(stub "$d2" 0 reviewer-1)' gate '$d2' b 5 --pr 9" "5 passes when the required check is green"
+assert_fail "FM_GH='$(stub "$d2" 1 reviewer-1)' gate '$d2' b 5 --pr 9" "5 blocks when it is not"
+assert_fail "'$GATE' --task T-X --repo '$d2' --branch b --only 5" "5 blocks with no pull request at all"
 
-# --- gate 7: the approval binds to the change, not the head (T-113) --------
+# --- gate 6: the approval binds to the change, not the head (T-113) --------
 # `gh pr view <pr> --json comments` answers with the comments as JSON, the
 # way GitHub does, and with --jq runs the filter over it and prints strings
 # raw, the way gh does, so a gate that filters with --jq is read as it would
@@ -192,7 +183,7 @@ post() {
   printf '%s\t%s\n' "$2" "$3" >> "$1/comments.tsv"
   python3 "$ROOT/tests/lib/evidence.py" "$ROOT" "$1/state" T-X "$2" "$3"
 }   # post <dir> <author> <body>
-g7() { FM_GH="$d7/stub/gh" FM_REVIEWER_LOGIN=reviewer-1 "$GATE" --task T-X --repo "$d7" --branch "$1" --only 7 --pr 9 2>&1; }
+approval_gate() { FM_GH="$d7/stub/gh" FM_REVIEWER_LOGIN=reviewer-1 "$GATE" --task T-X --repo "$d7" --branch "$1" --only 6 --pr 9 2>&1; }
 
 d7="$(fixture)"; ghc "$d7" >/dev/null
 # thing.sh long enough that main can change its far end and still merge cleanly
@@ -208,13 +199,13 @@ assert_matches "$(reviewed "$d7" pr APPROVE)" \
   "(the REVIEWED line the tests post carries a head, merge-base, patch-id and the changed file)"
 
 post "$d7" reviewer-1 "looks right\\nAPPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
-out="$(g7 pr)"; rc=$?
-assert_eq "0" "$rc" "(7 passes on an APPROVE for the current head, as it did before)"
+out="$(approval_gate pr)"; rc=$?
+assert_eq "0" "$rc" "(6 passes on an APPROVE for the current head, as it did before)"
 : > "$d7/comments.tsv"
 rm -rf "$d7/state/evidence"
 post "$d7" someone-else "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
-out="$(g7 pr)"; rc=$?
-assert_eq "7" "$rc" "(7 ignores APPROVE from anyone but the reviewer, as it did before)"
+out="$(approval_gate pr)"; rc=$?
+assert_eq "6" "$rc" "(6 ignores APPROVE from anyone but the reviewer, as it did before)"
 
 # the reviewer approves the pull request as it stands ...
 : > "$d7/comments.tsv"
@@ -227,15 +218,15 @@ echo "more notes" >> "$d7/README.md"; git -C "$d7" commit -qam "main: notes"
 git -C "$d7" checkout -q -b updated pr; git -C "$d7" merge -q --no-edit main
 git -C "$d7" checkout -q main
 assert_ne "$approved_head" "$(git -C "$d7" rev-parse updated)" "(the update moved the head)"
-out="$(g7 updated)"; rc=$?
-assert_eq "0" "$rc" "(7 carries the APPROVE forward across an update-only head; the base passed any head)"
+out="$(approval_gate updated)"; rc=$?
+assert_eq "0" "$rc" "(6 carries the APPROVE forward across an update-only head; the base passed any head)"
 
 # the worker edits after the approval: another change, another review
 git -C "$d7" checkout -q -b edited updated
 sed -i.bak '2s/.*/and a worker edit/' "$d7/src/thing.sh"; rm -f "$d7/src/thing.sh.bak"
 git -C "$d7" commit -qam "an edit"; git -C "$d7" checkout -q main
-out="$(g7 edited)"; rc=$?
-assert_eq "7" "$rc" "7 blocks a head whose change has a different patch-id"
+out="$(approval_gate edited)"; rc=$?
+assert_eq "6" "$rc" "6 blocks a head whose change has a different patch-id"
 assert_contains "$out" "condition 1" "and names the condition that failed"
 assert_contains "$out" "patch-id" "which is the patch-id"
 
@@ -249,8 +240,8 @@ git -C "$d7" checkout -q main
 assert_eq "$(git -C "$d7" diff main...pr | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
   "$(git -C "$d7" diff main...touched | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
   "(the change itself is identical)"
-out="$(g7 touched)"; rc=$?
-assert_eq "0" "$rc" "7 carries the APPROVE forward when main touched a file the approval reviewed and the patch-id is unchanged"
+out="$(approval_gate touched)"; rc=$?
+assert_eq "0" "$rc" "6 carries the APPROVE forward when main touched a file the approval reviewed and the patch-id is unchanged"
 assert_lacks "$out" "re-review" "and asks for no re-review"
 
 # main changes the very line the pull request changes: the update conflicts,
@@ -266,29 +257,29 @@ git -C "$d7" commit -qam "resolve the conflict"; git -C "$d7" checkout -q main
 assert_ne "$(git -C "$d7" diff main...pr | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
   "$(git -C "$d7" diff main...resolved | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
   "(the resolution changed the change)"
-out="$(g7 resolved)"; rc=$?
-assert_eq "7" "$rc" "7 blocks a carry-forward across a resolved conflict, whose patch-id changed"
+out="$(approval_gate resolved)"; rc=$?
+assert_eq "6" "$rc" "6 blocks a carry-forward across a resolved conflict, whose patch-id changed"
 assert_contains "$out" "condition 1" "and names the patch-id condition"
 
 # a later REJECT supersedes the APPROVE, carried forward or not
 post "$d7" reviewer-1 "1. open fix the helper\\nCRITERIA-COMPLETE:T-X\\nREJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
-out="$(g7 updated)"; rc=$?
-assert_eq "7" "$rc" "7 blocks an APPROVE superseded by a later REJECT"
+out="$(approval_gate updated)"; rc=$?
+assert_eq "6" "$rc" "6 blocks an APPROVE superseded by a later REJECT"
 assert_contains "$out" "condition 2" "and names the condition that failed"
 assert_contains "$out" "REJECT" "which is the later REJECT"
 : > "$d7/comments.tsv"
 rm -rf "$d7/state/evidence"
 post "$d7" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
 post "$d7" reviewer-1 "1. open fix the helper\\nCRITERIA-COMPLETE:T-X\\nREJECT:T-X"
-out="$(g7 pr)"; rc=$?
-assert_eq "7" "$rc" "7 blocks even the approved head once a REJECT follows"
+out="$(approval_gate pr)"; rc=$?
+assert_eq "6" "$rc" "6 blocks even the approved head once a REJECT follows"
 # a rejection that mentions the approve marker on the way, posted the way
 # fm-review.sh posts it: the reviewer's words, then the REVIEWED line
 : > "$d7/comments.tsv"
 rm -rf "$d7/state/evidence"
 post "$d7" reviewer-1 "I cannot sign APPROVE:T-X while item 1 stands\\n1. open fix the helper\\nCRITERIA-COMPLETE:T-X\\nREJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
-out="$(g7 pr)"; rc=$?
-assert_eq "7" "$rc" "7 blocks a REJECT whose text mentions the approve marker"
+out="$(approval_gate pr)"; rc=$?
+assert_eq "6" "$rc" "6 blocks a REJECT whose text mentions the approve marker"
 assert_contains "$out" "the latest verdict is REJECT:T-X" "and says the latest verdict is REJECT"
 
 # an APPROVE posted by hand records nothing it reviewed: it is read as it
@@ -296,16 +287,16 @@ assert_contains "$out" "the latest verdict is REJECT:T-X" "and says the latest v
 : > "$d7/comments.tsv"
 rm -rf "$d7/state/evidence"
 post "$d7" reviewer-1 "APPROVE:T-X"
-out="$(g7 updated)"; rc=$?
-assert_eq "7" "$rc" "7 refuses an unbound legacy approval"
+out="$(approval_gate updated)"; rc=$?
+assert_eq "6" "$rc" "6 refuses an unbound legacy approval"
 assert_contains "$out" "no reviewed head" "and says it binds to no head"
 post "$d7" reviewer-1 "1. open fix the helper\\nCRITERIA-COMPLETE:T-X\\nREJECT:T-X"
-out="$(g7 updated)"; rc=$?
-assert_eq "7" "$rc" "and a later REJECT supersedes it too"
+out="$(approval_gate updated)"; rc=$?
+assert_eq "6" "$rc" "and a later REJECT supersedes it too"
 
 # --- no gate repeats CI (T-114) -----------------------------------------
 # A whole run, every gate, on a head CI and the reviewer have passed: the
-# project's check never runs, and the gates that do are 1, 2, 4, 5, 6 and 7.
+# project's check never runs, and the gates that do are 1, 2, 3, 4, 5 and 6.
 # gh answers as gh does: checks green, and the reviewer's comment is the one
 # fm-review.sh posts for this head, REVIEWED line included (T-113)
 rm -f "$t5/marks/check" "$t5/marks/other"
@@ -316,8 +307,8 @@ out="$(FM_GH="$t5/stub/head-gh" FM_REVIEWER_LOGIN=reviewer-1 \
   "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 2>&1)"; rc=$?
 assert_eq "0" "$rc" "a head with green CI and an approval passes every gate"
 assert_fail "test -e '$t5/marks/check'" "and no gate ran the project's check in full"
-assert_eq "1 2 4 5 6 7" "$(sed -n 's/^  + gate \([0-9]*\): .*/\1/p' <<<"$out" | tr '\n' ' ' | sed 's/ $//')" \
-  "the gates are 1, 2, 4, 5, 6 and 7, each said once, in that order"
+assert_eq "1 2 3 4 5 6" "$(sed -n 's/^  + gate \([0-9]*\) ([^)]*): .*/\1/p' <<<"$out" | tr '\n' ' ' | sed 's/ $//')" \
+  "the gates are 1, 2, 3, 4, 5 and 6, each said once, in that order"
 assert_contains "$out" "all six gates green" "and the run says all six are green"
 assert_lacks "$out" "seven" "and nowhere seven"
 
@@ -338,12 +329,12 @@ assert_lacks "$(cat "$t5/gate-out")" "behind the base by" "diagnostic never ente
 assert_contains "$(cat "$t5/gate-err")" "落後 base 2 個 commit（base ${base_sha:0:12}）" "behind diagnostic includes Chinese and resolved base"
 for conclusion in success failure; do
   head_binding_fixture "$t5" honest "$conclusion"
-  out="$(FM_GH="$t5/stub/head-gh" "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 --only 6 2>&1)"; rc=$?
-  expected=0; [ "$conclusion" = success ] || expected=6
-  assert_eq "$expected" "$rc" "behind diagnostic preserves gate 6 $conclusion outcome"
-  assert_eq "1" "$(grep -Fc "$behind_line" <<<"$out")" "gate 6 $conclusion prints exact behind diagnostic once"
+  out="$(FM_GH="$t5/stub/head-gh" "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 --only 5 2>&1)"; rc=$?
+  expected=0; [ "$conclusion" = success ] || expected=5
+  assert_eq "$expected" "$rc" "behind diagnostic preserves gate 5 $conclusion outcome"
+  assert_eq "1" "$(grep -Fc "$behind_line" <<<"$out")" "gate 5 $conclusion prints exact behind diagnostic once"
 done
-for only in 1 4 5 7; do
+for only in 1 3 4 6; do
   out="$(FM_GH="$t5/stub/head-gh" FM_REVIEWER_LOGIN=reviewer-1 "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 --only "$only" 2>&1)"
   assert_lacks "$out" "behind the base by" "only gate $only omits behind diagnostic"
 done
@@ -366,7 +357,7 @@ finishes() {
   done
   wait "$p"
 }
-# a gate 5 that takes a while and writes down when it starts and ends
+# a gate 4 that takes a while and writes down when it starts and ends
 sl="$(touched)"; trail="$sl/marks/trail"
 git -C "$sl" checkout -q -b slow
 printf 'real\n' > "$sl/src/thing.sh"
@@ -374,8 +365,8 @@ printf 'grep -q real "${FM_ROOT:-.}/src/thing.sh" && exit 0\necho start >> %q\ns
   > "$sl/tests/s.test.sh"
 git -C "$sl" add -A; git -C "$sl" commit -qm slow; git -C "$sl" checkout -q main
 lock="$(mktemp -d)/gate.lock"
-FM_GATE_LOCK="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 5 >/dev/null 2>&1 & p1=$!
-FM_GATE_LOCK="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 5 >/dev/null 2>&1 & p2=$!
+FM_GATE_LOCK="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 4 >/dev/null 2>&1 & p1=$!
+FM_GATE_LOCK="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 4 >/dev/null 2>&1 & p2=$!
 wait "$p1"; r1=$?; wait "$p2"; r2=$?
 assert_eq "0 0" "$r1 $r2" "two gate runs started together both pass"
 assert_eq "start end start end" "$(tr '\n' ' ' < "$trail" | sed 's/ $//')" \
@@ -394,7 +385,7 @@ git -C "$sl" add -A; git -C "$sl" commit -qm hold; git -C "$sl" checkout -q main
 # hold <lock> ; starts the holder in the background, and returns once it holds
 hold() {
   rm -f "$held" "$release"
-  FM_GATE_LOCK="$1" "$GATE" --task T-X --repo "$sl" --branch hold --only 5 >/dev/null 2>&1 & holder=$!
+  FM_GATE_LOCK="$1" "$GATE" --task T-X --repo "$sl" --branch hold --only 4 >/dev/null 2>&1 & holder=$!
   for _ in $(seq 1 200); do [ -e "$held" ] && return 0; sleep 0.1; done
   return 1
 }
@@ -422,7 +413,7 @@ slowbin="$(mktemp -d)"
 printf '#!/bin/sh\nsleep 0.5\nexec %q "$@"\n' "$(command -v mv)" > "$slowbin/mv"; chmod +x "$slowbin/mv"
 rm -f "$trail"; pids=''
 for _ in 1 2 3; do
-  PATH="$slowbin:$PATH" FM_GATE_LOCK="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 5 >/dev/null 2>&1 &
+  PATH="$slowbin:$PATH" FM_GATE_LOCK="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 4 >/dev/null 2>&1 &
   pids="$pids $!"; sleep 0.3
 done
 rcs=''; for p in $pids; do wait "$p"; rcs="$rcs $?"; done
@@ -499,90 +490,49 @@ while IFS= read -r f; do
   assert_contains "$(code "$ROOT/$f")" "FM_GATE_LOCK=" "$f runs the real gate, and sets its own FM_GATE_LOCK"
 done <<<"$reaching"
 
-# --- the gate numbers are the same everywhere that reads them (T-114) ---
-# fm-gate.sh's own `g <n>` lines are the source; the board, the review
-# prompt, the diagram suite and the labels read them.
-nums="$(sed -n 's/^g \([0-9]*\) .*/\1/p' "$GATE" | tr '\n' ' ' | sed 's/ $//')"
-assert_eq "1 2 4 5 6 7" "$nums" "fm-gate.sh runs gates 1, 2, 4, 5, 6 and 7; 3 is retired"
-csv="$(tr ' ' ',' <<<"$nums")"
-assert_contains "$(code "$ROOT/board/public/index.html" | tr -d ' ')" "GATE_NUMBERS=[$csv];" \
-  "the board's merge checklist lists those gates"
-assert_contains "$(code "$ROOT/board/server.ts" | tr -d ' ')" "GATE_NUMBERS=[$csv];" \
-  "the board's failed-gate badge accepts those gates"
-assert_contains "$(code "$ROOT/bin/fm-review.sh")" "for n in $nums; do" \
-  "the review prompt looks for a result line from each of them"
-assert_contains "$(code "$ROOT/tests/diagram.test.sh")" "for n in $nums; do" \
-  "the diagram suite checks each of their labels"
-for n in $nums; do
-  assert_ok "jq -e 'has(\"gate$n\")' '$ROOT/i18n/ui.en.json' >/dev/null" "gate $n has a board label"
-done
-# The retired number keeps its key (tests/i18n.test.sh asks for gate1..7), but
-# no dictionary may still describe it as the local check.
+# --- canonical list agreement, labels and stale prose (T-232) -----------
+nums="$(sed -n 's/^g \([0-9]*\) .*/\1/p' "$GATE" | paste -sd ' ' -)"
+assert_eq '1 2 3 4 5 6' "$nums" 'six contiguous gates'
+assert_eq "$nums" "$(jq -r '.gates[].n' "$ROOT/bin/lib/fm_gates.json" | paste -sd ' ' -)" 'runner agrees with canonical list'
+assert_contains "$(code "$ROOT/board/server.ts")" 'bin/lib/fm_gates.json' 'board loads canonical list'
+assert_contains "$(code "$ROOT/board/public/index.html")" 'latest?.gates' 'page reads state gate list'
 for dict in "$ROOT"/i18n/ui.*.json; do
-  g3="$(jq -r '.gate3 // ""' "$dict")"
-  assert_lacks "$g3" "ci.sh" "$(basename "$dict") no longer labels gate 3 as the local check"
-  assert_ok "grep -qiE 'retired|退役' <<<'$g3'" "$(basename "$dict") labels gate 3 retired"
+  for name in $(jq -r '.gates[].name' "$ROOT/bin/lib/fm_gates.json"); do
+    assert_ok "jq -e 'has(\"gate_$name\")' '$dict' >/dev/null" "$dict labels $name"
+  done
+  assert_eq false "$(jq 'has("gate3")' "$dict")" 'retired key removed'
 done
-# and nothing in the repository still counts seven gates, or calls gate 3 the
-# check. The whole tree is swept, not a list of the files a spec named, so a
-# guide or a template nobody thought of is found too. The pattern is the idea,
-# not a list of phrasings: seven (or 7) near a gate or green, either way
-# round, and a run of gates from one to six or seven, in digits or words.
-count='seven[^.]{0,40}(gate|green)|(gate|green)[^.]{0,40}seven|(^|[^0-9])7 gates|gates? *(1|one) *(-|–|to|through) *(6|six|7|seven)|gates 3 and 5|gate 3 (runs|and gate 5)'
-for phrase in "seven green means a decision" "gates one to six pass" "The seven gates" "all 7 gates" \
-  "gates 1-6 are green" "gate 7 sends it; the green lights are seven" "Gate 3 runs the check"; do
-  assert_ok "grep -qiE '$count' <<<'$phrase'" "the sweep catches: $phrase"
-done
-# The allowlist, each entry a use that is not a count of the gates, or a file
-# this task cannot change. Task specs and dated proposals record what was true
-# when they were written; this suite has to spell the pattern out.
-allowed='^design/design\.md:[0-9]+:.*keeps seven slots'      # the card's gate list: one slot per number 1-7
-allowed="$allowed"'|^tests/lib/worker(-rebuild)?\.sh:[0-9]+:.*seven of them'  # shared fixture design.md, moved with its tests
+count='seven[^.]{0,40}(gate|green)|(gate|green)[^.]{0,40}seven|(^|[^0-9])7 gates|(^|[^0-9A-Za-z])gate 7([^0-9]|$)|gate exits? 7([^0-9]|$)|gate 3 (runs|is) the (whole|project|local) check'
+allowed='^tests/lib/worker(-rebuild)?\.sh:[0-9]+:.*seven of them'
 sweep_gates() {
-  (cd "$1" && git grep -niE "$count" -- . ':!design/tasks/' ':!design/proposals/' ':!tests/gate.test.sh' ':!games/voyage-2d/' 2>&1 \
-    | grep -vE "$allowed")
+  (cd "$1" && git grep -niE "$count" -- . ':!design/tasks/' ':!design/proposals/' ':!design/T-165-validation.md' ':!design/t130-pr-body.md' ':!tests/gate.test.sh' ':!games/voyage-2d/' | grep -vE "$allowed")
 }
-# A vendor exclusion must not exempt the engine's own prose.
 sweep_root="$(mktemp -d)"
 git -C "$sweep_root" init -q
 mkdir -p "$sweep_root/games/voyage-2d" "$sweep_root/skills/example"
 printf '%s\n' 'The seven gates' > "$sweep_root/games/voyage-2d/README.md"
-printf '%s\n' 'The seven gates' > "$sweep_root/skills/example/SKILL.md"
-git -C "$sweep_root" add .
-sweep_fixture="$(sweep_gates "$sweep_root")"
-assert_contains "$sweep_fixture" 'skills/example/SKILL.md:1:' 'gate sweep still detects engine prose'
-assert_lacks "$sweep_fixture" 'games/voyage-2d/' 'gate sweep excludes vendored game prose'
-sweep="$(sweep_gates "$ROOT")"
-assert_eq "" "$sweep" "no file in the repository still counts seven gates, or runs gate 3"
+for phrase in 'seven green means a decision' 'The seven gates' 'all 7 gates' 'gate 7 sends it' 'Gate 3 runs the local check' 'Gate exit 7 launches review'; do
+  printf '%s\n' "$phrase" > "$sweep_root/skills/example/SKILL.md"
+  git -C "$sweep_root" add .
+  found="$(sweep_gates "$sweep_root")"
+  assert_contains "$found" 'skills/example/SKILL.md:1:' "same git grep catches: $phrase"
+  assert_lacks "$found" 'games/voyage-2d/' 'vendor exclusion leaves engine prose covered'
+done
+printf '%s\n' 'gates 1-6 are green' 'gate 3 checks the scope' > "$sweep_root/skills/example/SKILL.md"
+assert_eq '' "$(sweep_gates "$sweep_root")" 'new numbering is allowed'
+assert_eq '' "$(sweep_gates "$ROOT")" 'no obsolete live gate numbers'
 
-# --- a merge card's gate list has one shape everywhere (T-114) ------------
-# The board reads a card's gates by gate number, gates[n-1], so the list
-# keeps a slot per number 1-7 and the retired slot 3 is never shown. Read by
-# position, a seven-slot list shows each gate from 4 on with the value of the
-# gate before it, and gate 7 with gate 6's.
-board="$(code "$ROOT/board/public/index.html" | tr -d ' ')"
-assert_contains "$board" "gates[n-1]" "the board reads a merge card's gates by gate number"
-assert_lacks "$board" "gates[i]" "and never by position in its own list"
-# comment lines are dropped here too: a commented-out card is no producer
-nocomment() { grep -vE '^[[:space:]]*(#|//|\*|/\*)' || true; }
-producers="$(cd "$ROOT" && git grep -hE 'gates: *\[[0-9, ]*\]' -- . ':!design/proposals/' 2>&1 \
-  | nocomment | grep -oE 'gates: *\[[0-9, ]*\]')"
-assert_ne "" "$producers" "there are merge cards to check the shape of"
-while IFS= read -r p; do
-  [ -n "$p" ] || continue
-  slots="$(tr -cd ',' <<<"$p" | wc -c | tr -d ' ')"
-  assert_eq "6" "$slots" "a merge card's gates carry one slot per number 1-7: $p"
-done <<<"$producers"
-# and whatever renders the checklist expects one line per gate that exists
-counts="$(cd "$ROOT" && git grep -hE '\.gates li"\)\)\.toHaveCount\([0-9]+\)' -- tests/ 2>&1 \
-  | nocomment | grep -oE '\.gates li"\)\)\.toHaveCount\([0-9]+\)')"
-assert_ne "" "$counts" "the end-to-end suite counts the checklist's lines"
-while IFS= read -r c; do
-  [ -n "$c" ] || continue
-  assert_eq "toHaveCount(6)" "${c##*.}" "the end-to-end suite expects six gate lines: $c"
-done <<<"$counts"
+# Merge cards use name keys, or explicitly marked legacy fixture data.
+board="$(code "$ROOT/board/public/index.html")"
+assert_contains "$board" 'gates[name]' 'new cards read by name'
+assert_contains "$board" 'latest.gateLegacy' 'old cards read through canonical legacy map'
+assert_lacks "$board" 'gates[i]' 'never index by display position'
+assert_contains "$(code "$ROOT/bin/fm-decide.sh")" 'map({key:.name,value:true})|from_entries' 'producer uses exactly the canonical names'
+arrays="$(cd "$ROOT" && git grep -nE 'gates: *\[[0-9,truefalsnul ]+\]' -- bin/ board/ tests/e2e/ | grep -v 'legacy-gates (T-232)' || true)"
+assert_eq '' "$arrays" 'only explicitly marked legacy card keeps an array'
+assert_contains "$(cat "$ROOT/tests/e2e/board-decisions.spec.ts")" 'toHaveCount(6)' 'six gate lines in browser'
 
 # --- the exit code names the gate ---------------------------------------
-"$GATE" --task T-X --repo "$d" --branch untested --only 5 >/dev/null 2>&1
-assert_eq "5" "$?" "the exit code is the number of the gate that failed"
+"$GATE" --task T-X --repo "$d" --branch untested --only 4 >/dev/null 2>&1
+assert_eq "4" "$?" "the exit code is the number of the gate that failed"
 finish

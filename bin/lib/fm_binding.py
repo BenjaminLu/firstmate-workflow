@@ -8,6 +8,19 @@ import subprocess
 import uuid
 
 
+def gate_list():
+    """The frozen code snapshot supplies identities for all gate readers."""
+    try:
+        return json.loads(Path(__file__).with_name('fm_gates.json').read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError('gate list unavailable: bin/lib/fm_gates.json') from error
+
+
+def gate_entry(value, mapping):
+    name = mapping['legacy'].get(str(value)) if type(value) is int else value
+    return next((gate for gate in mapping['gates'] if gate['name'] == name), None)
+
+
 def command(argv, cwd=None):
     result = subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL,
                             capture_output=True, timeout=120)
@@ -278,7 +291,7 @@ def verified_base(view, repo=None, root=None):
 
 def local_gate_base(root, pr, project_base):
     # Individual local gates also work before a PR exists, or without an
-    # origin. Full runs and gate 6 keep the strict authoritative binding.
+    # origin. Full runs and gate 5 keep the strict authoritative binding.
     try:
         repo = repository(root)
         view = remote_head(repo, pr)
@@ -312,6 +325,7 @@ def main():
     p.add_argument('--base-name', default='')
     p.add_argument('--gate-report', default='')
     args = p.parse_args()
+    mapping = gate_list() if args.mode in ('ready', 'candidate') else None
     root = Path(os.environ['FM_TARGET_ROOT'])
     if args.mode == 'local-gate-base':
         print(local_gate_base(root, args.pr, args.project_base)); return
@@ -334,7 +348,7 @@ def main():
         if not records:
             raise ValueError('no signed six-gate readiness for candidate')
         record = records[-1]
-        if record.get('gates') != [1,2,4,5,6,7] or not record.get('checks'):
+        if record.get('gates') not in ([g['name'] for g in mapping['gates']], [int(n) for n in mapping['legacy']]) or not record.get('checks'):
             raise ValueError('candidate lacks all six gates and required checks')
         if required_checks(root, repo, args.pr, head) != record['checks']:
             raise ValueError('required check/status evidence changed; refresh gates')
@@ -361,9 +375,12 @@ def main():
     report = report_path.read_text()
     if not report.startswith('HEAD:' + head + '\n') or re.search(r'^  x gate ', report, re.M):
         raise ValueError('gate transcript is red or belongs to another head')
-    for number in (1,2,4,5,6,7):
-        if not re.search(r'^  \+ gate ' + str(number) + ':', report, re.M):
-            raise ValueError('gate transcript lacks gate ' + str(number))
+    if not re.search(r'^GATES:2$', report, re.M):
+        raise ValueError('gate transcript lacks GATES:2')
+    for gate in mapping['gates']:
+        label = str(gate['n']) + ' (' + gate['name'] + ')'
+        if not re.search(r'^  \+ gate ' + re.escape(label) + ':', report, re.M):
+            raise ValueError('gate transcript lacks gate ' + label)
     base_tip = git(root, 'rev-parse', view_base(repo, args.pr) + '^{commit}')
     if not re.search(r'^BASE:' + re.escape(base_tip) + r'$', report, re.M):
         raise ValueError('gate transcript base moved or is unbound; refresh gates')
@@ -372,12 +389,12 @@ def main():
     current_base = git(root, 'merge-base', view_base(repo, args.pr), head)
     current = source_binding(args.task, head, current_base, Path(__file__).parents[2])
     if any(current[k] != bound.get(k) for k in ('patch', 'files', 'spec_sha256', 'contract_sha256', 'conventions_sha256')):
-        raise ValueError('review changed after gate 7')
+        raise ValueError('review changed after the approval gate')
     if reviewed['head'] != head:
         git(root, 'merge-base', '--is-ancestor', reviewed['base'], current_base)
     verify_current(root, repo, args.pr, head, base_tip)
     record = store.append('readiness', reviewed['round'], 'firstmate', head, '',
-                         pr=int(args.pr), repository=repo, gates=[1,2,4,5,6,7], checks=checks,
+                         pr=int(args.pr), repository=repo, gates=[g['name'] for g in mapping['gates']], checks=checks,
                          gate_report_sha256=digest(report.encode()), gate_base=base_tip,
                          verdict_signature=review_identity(reviewed), review=reviewed,
                          external_signature=review_identity(external) if external else None)

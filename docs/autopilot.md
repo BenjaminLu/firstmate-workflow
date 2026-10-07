@@ -34,7 +34,7 @@ complete lines on startup and on notifications. GitHub alone is polled, using
 per-endpoint ETags, convention cadence and bounded exponential network backoff.
 Reviews and review comments close a separate quiet-period batch per PR/reviewer.
 Idle polling does not run a model. A base-only head change starts a review through the visible Herdr launcher
-only when the latest verdict is APPROVE and gate 7 cannot carry it because it
+only when the latest verdict is APPROVE and gate 6 cannot carry it because it
 is unsigned legacy evidence or its spec, contract or conventions hash changed.
 Worker edits, standing rejections and carried approvals do not start rounds. A failed launcher queues judgment.
 
@@ -79,7 +79,7 @@ GitHub returns 201 or lists the reviewer as already requested, or the reviewer
 has reviewed that head. A 422 refusal wakes once with GitHub's message without
 retry; other failures retry at offsets 0, 1 and 3, then wake once.
 Review launch is decided from the review job recorded for that PR head, in any
-state: at most one autopilot-launched review per head. Gate 7 can request a
+state: at most one autopilot-launched review per head. Gate 6 can request a
 review even with a same-head verdict whose binding is stale. A failed start
 marks the job uncertain (or records an uncertain job if launch failed before
 recording one) and wakes firstmate once; later gate results do not retry it.

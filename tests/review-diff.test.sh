@@ -76,7 +76,7 @@ M
 done
 
 # --- the verdict says what it reviewed (T-113) -----------------------------
-# Gate 7 carries an approval across an update onto main only when the change
+# Gate 6 carries an approval across an update onto main only when the change
 # is the one approved, so the posted verdict records it: the head, the
 # merge-base, the patch-id and the changed files, on one line the script
 # writes after the reviewer's own words.

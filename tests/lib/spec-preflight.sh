@@ -6,7 +6,7 @@ seed_spec_preflight() { # engine, task, optional exact spec file, project, exter
 import hashlib, sys
 from pathlib import Path
 library = Path(sys.argv[1]) / 'bin/lib'
-# Gate 5 restores the pre-feature implementation while keeping fixture helpers.
+# Gate 4 restores the pre-feature implementation while keeping fixture helpers.
 # That base has no preflight store or dispatch requirement to seed.
 if not (library / 'fm_spec_preflight.py').is_file():
     sys.exit(0)

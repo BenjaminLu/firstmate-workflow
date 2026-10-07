@@ -23,13 +23,13 @@ the crew and you do not need to.
 ## What you do
 
 Implement the task against the design and approved spec supplied in your prompt.
-The six gates are 1, 2, 4, 5, 6, 7; gate 3 is retired. The two that catch most work are:
+The six gates are 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci, 6 approval. The two that catch most work are:
 
-- **Gate 4** — your diff must stay inside the `scope` globs declared for your
+- **Gate 3** — your diff must stay inside the `scope` globs declared for your
   task in the supplied approved spec (the immutable project pin once enabled). If the work genuinely needs a file outside that
   list, write `.fm-say.md` for launcher publication and stop; widening scope is the captain's
   call, not yours.
-- **Gate 5** — revert your implementation and your new tests must go red. A
+- **Gate 4** — revert your implementation and your new tests must go red. A
   test that passes without the code it covers is worse than no test: it is a
   green light wired to nothing. Write the test first and identify its expected
   failing assertion; CI and the gates observe red/base and green/head. Workers
@@ -39,7 +39,7 @@ A new feature's tests go in a new file named for that feature, or in the
 file that already owns the feature; never append them to an unrelated suite.
 Keep every file under `tests/` at 1200 lines or fewer. Shared shell and Python
 fixtures belong in `tests/lib/`; shared browser fixtures in `tests/e2e/lib/`.
-Name helper dependencies literally so gate 5 can select their consuming
+Name helper dependencies literally so gate 4 can select their consuming
 suites. Split files must run independently and preserve existing assertions
 and test names.
 
@@ -167,7 +167,7 @@ the failing assertion, its log lines, the file:line and source around it,
 the verified root cause, the expected change and what must not change —
 before reading files (SK-002). Under T-135, the approved project-local
 record is authoritative; a PR comment is only an optional projection under
-the project comments/local setting (self defaults to comments). No non-comment mode requires a published brief. T-135 stores brief, pack, worker-report, ask and authenticated verdict records append-only under state/evidence/<project>/<task>/; local records supply the next prompt, gate 7 and the protocol reader. T-138 extends external storage and binding; T-140 adds other projections. A brief that only relays a symptom is
+the project comments/local setting (self defaults to comments). No non-comment mode requires a published brief. T-135 stores brief, pack, worker-report, ask and authenticated verdict records append-only under state/evidence/<project>/<task>/; local records supply the next prompt, gate 6 and the protocol reader. T-138 extends external storage and binding; T-140 adds other projections. A brief that only relays a symptom is
 incomplete; report that back to firstmate rather than hunting from nothing.
 
 Every `REJECT`, from round one, ends with the task's standing list: the
@@ -228,7 +228,7 @@ Some adapters let you edit files but not execute anything. That is not a
 reason to stop or to ask. Finish the work, write in `.fm-say.md` which checks
 you could not run, and end with `WORKER_COMPLETE:<task>`. Verification is the
 job of the gates and the pull request's required GitHub check. Do not
-claim a test passed that you did not run; gate 5 still applies to the tests
+claim a test passed that you did not run; gate 4 still applies to the tests
 you write.
 
 ## Evidence and role boundary
@@ -250,9 +250,9 @@ Workers do not run the test suite or `ci.sh`: GitHub CI and the gates verify
 request, the assertion that should go red when your implementation is
 reverted, with the file:line it lives at. A metadata/link check proves
 structure, not model compliance; report instruction-only validation limits
-and do not waive gate 5. T-163 managed Codex run mode authenticates final-output provenance; that does
+and do not waive gate 4. T-163 managed Codex run mode authenticates final-output provenance; that does
 not establish authoritative remote-head freshness or make legacy/custom paths
-trusted. Gate 7 alone is insufficient, and the
+trusted. Gate 6 alone is insufficient, and the
 protocol checker does not prove that a finding matches the item it cites or
 that a regression or new ground is real. Report gaps to firstmate rather than treating a passing
 script as proof of those properties. Never claim tests, hook removal,
@@ -287,6 +287,6 @@ is PR acceptance or captain merge permission.
 
 
 T-135 provenance contract (captain, 2026-10-02): local verdict records carry
-`authenticated` for managed Codex finals or `legacy` for other adapters. Gate 7
+`authenticated` for managed Codex finals or `legacy` for other adapters. Gate 6
 and the protocol reader accept both; legacy remains explicitly labelled and
 cannot claim T-163 authentication. Optional comments never replace local records.

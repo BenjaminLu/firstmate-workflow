@@ -61,7 +61,7 @@ GH="$ROOT/tests/gh-stub.sh"
 run() { FM_ROOT="$r" FM_GH="$GH" FM_BASE=main GH_REPO=fixture/project "$@"; }
 
 # the mock writes a real implementation and a test that depends on it, so the
-# fifth gate has something honest to check
+# fail-first gate has something honest to check
 export FM_MOCK_FILE=src/thing FM_MOCK_BODY=implemented
 cat > bin/adapters/mock.sh <<'M'
 #!/usr/bin/env bash
@@ -101,9 +101,9 @@ branch="$(awk -F'\t' 'NR==1{print $2}' "$GHSTATE/prs")"
 assert_contains "$branch" "t-101" "on a branch named after the task"
 assert_ok "git --git-dir='$bare' rev-parse --verify '$branch'" "and it was pushed"
 
-# --- turn two: the gates run, gate 7 sends it to review -----------------
+# --- turn two: the gates run, gate 6 sends it to review -----------------
 out2="$(run python3 "$ROOT/tests/lib/autopilot_turn.py" "$r" 2>&1)"
-assert_contains "$out2" "sending it to review" "every gate before 7 passes and it goes to review"
+assert_contains "$out2" "sending it to review" "every gate before 6 passes and it goes to review"
 assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
 criteria="$(jq -r 'select(.kind=="verdict") | .text' "$r/state/evidence/self/T-101/"*.json)"
 assert_contains "$criteria" '1. open name the helper' 'the mock reviewer supplies numbered round-one criteria'
@@ -114,7 +114,7 @@ assert_contains "$criteria" 'CRITERIA-COMPLETE:T-101' 'the mock reviewer closes 
 
 # a real review body has newlines, quotes and backslashes in it. The stub
 # used to interpolate one into JSON by hand, which put a raw control
-# character in the document, and gate 7 then read an approval sitting right
+# character in the document, and gate 6 then read an approval sitting right
 # there as nothing at all.
 body="$(printf 'Two findings:\n1. open the "helper" is unnamed\n2. open a path like C:\\tmp is unhandled\nCRITERIA-COMPLETE:T-101\nREJECT:T-101')"
 run "$GH" pr comment "$pr" --body "$body" >/dev/null 2>&1

@@ -20,7 +20,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   writeTasks(root, spec.tasks);
   emitFixture(root,'captain','T-DECIDED','decision_requested','Dispatch T-DECIDED: a decided title','派工 T-DECIDED：決定的標題');
   emitFixture(root,'worker-absent','T-ABSENT','dispatched','Work on an unlisted task','處理未列出的任務',{role:'worker'});
-  emitFixture(root,'worker-2',spec.tasks[1].id,'gate_failed','Gate five failed','第五道閘未過',{gate:5});
+  emitFixture(root,'worker-2',spec.tasks[1].id,'gate_failed','Fail-first failed','第四道閘未過',{gate:5});
   emitFixture(root,'worker-1',first,'crew_status','Counting gates','計算閘門',{role:'worker',progress:{done:2,total:5}});
   writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',kind:'choice',task:spec.tasks[2].id,details}));
   const b = await startBoard(root);
@@ -75,7 +75,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     await expect(page.locator('[data-task="T-DECIDED"] .t')).toHaveText('a decided title');
     await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(EN.titleMissing);
     await expect(page.locator('[data-task="T-ABSENT"]')).toContainText('worker-absent');
-    await expect(page.locator(`[data-task="${spec.tasks[1].id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}','5'));
+    await expect(page.locator(`[data-task="${spec.tasks[1].id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}','4').replace('{label}', EN['gate_fail-first']));
     await expect(page.locator(`[data-lane="captain"] [data-task="${first}"] .badge`)).toContainText('D-1');
     await expect(page.locator(`[data-lane="captain"] [data-task="${spec.tasks[2].id}"] .badge`))
       .toHaveText(`D-2 · ${EN.optionsN.replace('{n}','3')}`);
@@ -141,7 +141,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
         }
         // 閘門 survives only as a pair row; 門 on its own must convert too
         expect(await page.evaluate(() => (window as any).eval('cn')('門'))).toBe('门');
-        await expect(page.locator(`[data-task="${spec.tasks[1].id}"] .badge`)).toHaveText(CN.gateFailedN.replace('{n}','5'));
+        await expect(page.locator(`[data-task="${spec.tasks[1].id}"] .badge`)).toHaveText(CN.gateFailedN.replace('{n}','4').replace('{label}', 'revert 后测试变红'));
         await expect(page.locator(`[data-lane="captain"] [data-task="${spec.tasks[2].id}"] .badge`))
           .toHaveText(`D-2 · ${CN.optionsN.replace('{n}','3')}`);
       }

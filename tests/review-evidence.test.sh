@@ -80,27 +80,29 @@ assert_contains "$sent" "No gate summary for head $head1" "a missing gate summar
 # lines are written by fm-gate.sh's own say(), not by hand from the reader:
 # a fixture copied from the code that parses it proves only that the two agree
 eval "$(sed -n '/^say() {/,/^}/p' "$ROOT/bin/fm-gate.sh" | sed 's/^say()/gate_say()/')"
+# shellcheck disable=SC2034 # read by gate_say, eval'd from fm-gate.sh's say() above
+GATE_LIST="$ROOT/bin/lib/fm_gates.json"
 declare -F gate_say >/dev/null || { echo "fm-gate.sh has no say()" >&2; exit 1; }
 gates="$rc/state/gates/T-Z-$head1.txt"
 mkdir -p "$rc/state/gates"
-{ for g in 1 2 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done
+{ echo GATES:2; for g in 1 2 3 4 5 6; do gate_say '+' "$g" "GATE_LINE_$g"; done
   echo "  all six gates green"; } > "$gates"
 review_c "$dc/sent-g.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-g.md")"
 begin="$(grep -m1 '^----- begin gate summary' "$dc/sent-g.md")"
 quoted="$(awk -v b="$begin" -v e="${begin/begin/end}" '$0==b{on=1;next} $0==e{on=0} on' "$dc/sent-g.md")"
 assert_eq "$(cat "$gates")" "$quoted" "a head's gate summary is quoted verbatim, every line of it"
-assert_contains "$quoted" "  + gate 7: GATE_LINE_7" "all six of its gate lines"
+assert_contains "$quoted" "  + gate 6 (approval): GATE_LINE_6" "all six of its gate lines"
 assert_lacks "$sent" "No gate summary for head" "and it is not said to be missing"
 assert_lacks "$sent" "has no result line for gates" "nor any gate said to be without a result"
 
 # fm-gate.sh stops at the first red gate: the red line is shown as it is, and
 # every gate after it is said to have no result
-{ for g in 1 2 4; do gate_say '+' "$g" "GATE_LINE_$g"; done; gate_say 'x' 5 "RED_GATE_LINE"; } > "$gates"
+{ echo GATES:2; for g in 1 2 3; do gate_say '+' "$g" "GATE_LINE_$g"; done; gate_say 'x' 4 "RED_GATE_LINE"; } > "$gates"
 review_c "$dc/sent-gx.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-gx.md")"
-assert_contains "$sent" "  x gate 5: RED_GATE_LINE" "a red gate is quoted as red"
-assert_contains "$sent" "The gate summary for head $head1 has no result line for gates: 6, 7" \
+assert_contains "$sent" "  x gate 4 (fail-first): RED_GATE_LINE" "a red gate is quoted as red"
+assert_contains "$sent" "The gate summary for head $head1 has no result line for gates: 5 (ci), 6 (approval)" \
   "and the gates after it are stated to have no result"
 
 # a summary with no gate line in it is not an empty quote that says nothing
@@ -108,12 +110,12 @@ printf 'NOT_A_GATE_LINE\n' > "$gates"
 review_c "$dc/sent-g0.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-g0.md")"
 assert_contains "$sent" "NOT_A_GATE_LINE" "a summary in another shape is still quoted, not filtered away"
-assert_contains "$sent" "has no result line for gates: 1, 2, 4, 5, 6, 7" "and every gate is stated to have no result"
+assert_contains "$sent" "has no result line for gates: 1 (branch), 2 (rebase), 3 (scope), 4 (fail-first), 5 (ci), 6 (approval)" "and every gate is stated to have no result"
 : > "$gates"
 review_c "$dc/sent-ge.md" --round 2 --pr "$prh" >/dev/null
-assert_contains "$(cat "$dc/sent-ge.md")" "has no result line for gates: 1, 2, 4, 5, 6, 7" \
+assert_contains "$(cat "$dc/sent-ge.md")" "has no result line for gates: 1 (branch), 2 (rebase), 3 (scope), 4 (fail-first), 5 (ci), 6 (approval)" \
   "an empty summary is stated to have no result for any gate"
-{ for g in 1 2 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done; } > "$gates"
+{ echo GATES:2; for g in 1 2 3 4 5 6; do gate_say '+' "$g" "GATE_LINE_$g"; done; } > "$gates"
 
 # a new head: the old head's run is not this head's, and neither is a run
 # GitHub hands back for this commit that names another head. Only src/a is

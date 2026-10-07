@@ -101,7 +101,7 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   // the extracted config helpers: the board reads the watch's files under
   // state/watch itself (T-137) and runs none of bin/lib's watch or hook code
   mkdirSync(join(d, 'bin/lib'));
-  for (const f of ['fm_evidence.py', 'fm_spec_preflight.py', 'fm_ste.py', 'fm_lifeline.py', 'fm-lifeline.sh', 'fm_project_paths.py', 'fm_registry.py', 'fm_config_values.py', 'fm_config_tasks.py', 'fm_config_runtime.py']) cpSync(join(ROOT, 'bin/lib', f), join(d, 'bin/lib', f));
+  for (const f of ['fm_gates.json', 'fm_binding.py', 'fm_evidence.py', 'fm_spec_preflight.py', 'fm_ste.py', 'fm_lifeline.py', 'fm-lifeline.sh', 'fm_project_paths.py', 'fm_registry.py', 'fm_config_values.py', 'fm_config_tasks.py', 'fm_config_runtime.py']) cpSync(join(ROOT, 'bin/lib', f), join(d, 'bin/lib', f));
 
   const tasks = readTasks(ROOT);
   if (tasks.length < stages.length) {
@@ -129,7 +129,7 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   if (withDecision) {
     writeFileSync(join(d, "state/pending/D-1.json"), JSON.stringify({
       id: "D-1", kind: "merge", task: tasks[0].id, pr: 99,
-      title: "Merge it into main", details, gates: [1, 1, 1, 1, 1, 1, 0],
+      title: "Merge it into main", details, gates: {branch: true, rebase: true, scope: true, 'fail-first': true, ci: true, approval: false},
     }));
     const result = spawnSync('bash', [join(d,'bin/fm-diagram.sh'),'--decision','D-1','--repo',d]);
     if (result.status !== 0) throw new Error(result.stderr.toString());

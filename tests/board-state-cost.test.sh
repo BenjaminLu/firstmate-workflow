@@ -12,7 +12,7 @@ mkdir -p "$d/bin" "$d/board/public" "$d/state/session/acknowledged" "$d/design/t
 cp -R "$ROOT/bin/lib" "$d/bin/"
 project_storage_fixture "$d/bin"
 cp "$ROOT/board/server.ts" "$d/board/"
-# Literal helper dependency lets gate 5 select this consuming suite. The facade
+# Literal helper dependency lets gate 4 select this consuming suite. The facade
 # delegates real I/O and wraps only the HTTP entrypoint to bound each count.
 cp "$ROOT/tests/lib/board-state-cost.ts" "$d/board/"
 python3 - "$d/board/server.ts" <<'PYFACADE'

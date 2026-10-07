@@ -25,7 +25,7 @@ tasks` prints one on demand. A pull request implements one task.
 - **To report a defect**, open a *bug* issue.
 - **A new task defines itself on its own branch.** Its file
   `design/tasks/<id>.json` is committed in the same pull request that
-  implements it. Gate 4 reads the scope from the branch under test.
+  implements it. Gate 3 reads the scope from the branch under test.
 
 ## Who does what
 
@@ -50,7 +50,7 @@ tasks` prints one on demand. A pull request implements one task.
 ## The gates
 
 Every pull request, human or agent, must pass the six gates of
-`design/design.md` section 6 before it is merged: 1, 2, 4, 5, 6 and 7.
+`design/design.md` section 6 before it is merged: 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci and 6 approval.
 `bin/fm-gate.sh` checks them and exits with the number of the first gate that
 failed. Each reads git, the filesystem, an exit code or GitHub; none reads
 what the author said about the work. Gates run one at a time on a machine:
@@ -59,39 +59,35 @@ whatever your `TMPDIR` is) and a second run waits for the first. A test suite
 that runs `bin/fm-gate.sh` sets its own `FM_GATE_LOCK`; a gate run inside one
 that holds the same lock is refused.
 
-1. The branch exists and `git rev-list --count main..<branch>` is above 0.
-2. It rebases onto `main` without conflict, tried in a scratch worktree.
-3. *Retired (T-114).* It ran the whole project check locally, which the
-   required GitHub check (gate 6) already runs on the same head. The number
-   is kept so the other gates keep theirs.
-4. **The diff stays in scope**: every changed path matches a glob in the
-   task's `scope`, read from `design/tasks/<id>.json` on the branch. A scope
+1. **branch**: the branch exists and `git rev-list --count main..<branch>` is above 0.
+2. **rebase**: it rebases onto `main` without conflict, tried in a scratch worktree.
+3. **scope** — the diff stays in approved scope: every changed path matches a glob in the
+   task's `scope`, read through the verified approved pin. A scope
    that names `design/tasks.json` (the list before T-090) covers the task's
    own file and no other. If the work needs a file outside the scope, say so
    in the pull request and stop; widening scope is the captain's decision.
-5. **The new tests are not vacuous**: the gate reverts every changed non-test
+4. **fail-first** — the new tests are not vacuous: the gate reverts every changed non-test
    path to `main`, runs `setup`, then runs only the suites the diff touches
    (the changed tests, and the tests that source one of them) one at a time
    through the declared `test`. When no suite can be determined it runs the
    whole `check` once and says so. It passes as soon as one goes red. Write the test first and watch it fail.
    A change whose every non-test path matches the project's declared `docs`
    globs needs no new test.
-6. **The required GitHub check is green**: `gh pr checks <pr> --required`
+5. **ci** — the required GitHub check is green: `gh pr checks <pr> --required`
    exits 0. This repository's required check is `ci`.
-7. **A pull request comment contains `APPROVE:<task-id>`.** The gate checks
-   who wrote it only when `FM_REVIEWER_LOGIN` is set; otherwise any comment
-   with the marker passes. It does not tie the marker to the current head,
-   and a later rejection does not undo it, so firstmate checks the approval
-   against the current head before it treats a merge card as ready. The
-   marker is normally posted by the reviewer: `bin/fm-review.sh` posts its
-   verdict as a pull request comment.
+6. **approval** — the latest bound verdict is an `APPROVE:<task-id>` for
+   this change: it names the current head or the same patch with matching
+   spec, contract and conventions, and no later `REJECT`. Local review
+   records are authoritative; a pull request comment is an optional
+   projection. Firstmate verifies current-head evidence before treating a
+   merge card as ready.
 
 ## The project check
 
 What "green" means is not hard-coded. It is the `project:` block of
 [`config.yaml`](config.yaml), described in the README: `setup` prepares a
 fresh checkout, `check` is the gate, `tests` and `docs` classify changed
-paths for gate 5. For this repository `check` is `bin/ci.sh`, the same file
+paths for gate 4. For this repository `check` is `bin/ci.sh`, the same file
 GitHub Actions runs, and `setup` is `bun install --frozen-lockfile` followed by
 the Playwright browser install. A fresh worktree has no `node_modules`; without
 `node_modules/@playwright`, `bin/ci.sh` skips its end-to-end stage instead of
