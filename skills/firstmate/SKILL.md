@@ -1212,7 +1212,25 @@ configured order (currently cursor-agent, then gemini). Only an unavailable
 adapter (exit 2, including quota/rate-limit refusal) advances the chain.
 An unknown or other host uses the configured fallback head and logs why.
 A named worker vendor retains its existing chain; explicit `--vendor` selects
-that vendor alone. The reviewer remains explicitly `vendor: claude`.
+that vendor alone. The engine reviewer remains explicitly `vendor: claude`.
+
+External projects may override either role's `vendor:` in the `worker:` or
+`reviewer:` block of private `FM_HOME/projects/<name>/state/config.yaml`.
+A named private vendor records `rule=project`; private `opposite-of-host`
+keeps that rule, and explicit `--vendor` still wins and records `explicit`.
+A non-empty private `fallback:` list in `- item` line form replaces only the
+engine fallback list; the opposite-of-host pair step still comes before it.
+Empty or missing private lists use the engine list. Inline values such as
+`fallback: [codex]` are reported and ignored. Models stay in the engine config:
+role/top-level model overrides belong to the vendor the engine alone resolves;
+other vendors use `models.<vendor>`, with no private model override.
+The shared resolver applies this policy to dispatch, autopilot and hand launches.
+A dispatched task reads changed private vendor settings at its next launch
+without a re-gate: its contract pin stays fixed. Before dispatch, changing the
+private file changes its contract digest and requires fresh readiness judgment.
+Re-running onboarding rewrites the private file from the contract and drops
+these hand-added keys; add them again afterward. The board vendor badge still
+shows the engine rule.
 
 `fm-session.sh start` and `status` refresh `state/session/host.json` beside
 the other session records, except when `FM_IN_ROUND` or `FM_RUN_DIR` is non-empty:

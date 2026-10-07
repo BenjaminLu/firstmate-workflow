@@ -161,6 +161,24 @@ Named vendors keep their configured chain; `--vendor` selects only that vendor.
 The launcher records host, rule and resolved head as `vendor_resolution` in
 `identity.json`; adapters receive a concrete vendor, never the rule name.
 
+External projects may override either role's `vendor:` in the `worker:` or
+`reviewer:` block of private `FM_HOME/projects/<name>/state/config.yaml`.
+A named private vendor records `rule=project`; private `opposite-of-host`
+keeps that rule, and explicit `--vendor` still wins and records `explicit`.
+A non-empty private `fallback:` list in `- item` line form replaces only the
+engine fallback list; the opposite-of-host pair step still comes before it.
+Empty or missing private lists use the engine list. Inline values such as
+`fallback: [codex]` are reported and ignored. Models stay in the engine config:
+role/top-level model overrides belong to the vendor the engine alone resolves;
+other vendors use `models.<vendor>`, with no private model override.
+The shared resolver applies this policy to dispatch, autopilot and hand launches.
+A dispatched task reads changed private vendor settings at its next launch
+without a re-gate: its contract pin stays fixed. Before dispatch, changing the
+private file changes its contract digest and requires fresh readiness judgment.
+Re-running onboarding rewrites the private file from the contract and drops
+these hand-added keys; add them again afterward. The board vendor badge still
+shows the engine rule.
+
 The separation matters: if a model producing bad work looked the same as an
 outage, an outage would look like the model failing and the crew would burn a
 review round on nothing.
