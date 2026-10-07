@@ -151,10 +151,16 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
   try {
     await page.setViewportSize({width,height:width===1440?900:844}); await page.emulateMedia({colorScheme:'light'});
     await page.route('**/api/session',route=>route.fulfill({json:{writable:false}}));
+    let warningCrewId='';
     await page.route('**/api/state',async route=>{
       const response=await route.fetch(), state=await response.json();
       state.crew=state.crew.filter((c:any)=>c.state!=='queued');
-      Object.assign(state.crew[0],{host_recorded:true,host_confirmed:false,vendor:'vendor-alpha',model_mismatch:true,model_requested:'requested',model:'actual'});
+      const warningCrew=state.crew.find((c:any)=>c.id===warningCrewId)
+        ?? state.crew.find((c:any)=>c.role!=='firstmate' && c.state==='working')
+        ?? state.crew.find((c:any)=>c.role!=='firstmate');
+      expect(warningCrew,'contrast fixture needs a non-firstmate crew row').toBeDefined();
+      warningCrewId=warningCrew.id;
+      Object.assign(warningCrew,{host_recorded:true,host_confirmed:false,vendor:'vendor-alpha',model_mismatch:true,model_requested:'requested',model:'actual'});
       await route.fulfill({response,json:state});
     });
     await page.goto(b.url+'/?lang=en');
@@ -168,7 +174,8 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
       const field=page.locator('.roster li.rrow').first().locator(cell);
       expect(await field.evaluate(el=>el.getBoundingClientRect().width)).toBeGreaterThan(100);
     }
-    await expect(page.locator('.roster .warn').first()).toBeVisible();
+    await expect(page.locator(`.roster [data-roster="${warningCrewId}"] .rm.warn`)).toBeVisible({timeout:15000});
+    await expect(page.locator(`.roster [data-roster="${warningCrewId}"] .rv.warn`)).toBeVisible({timeout:15000});
     await expect(page.locator('#log .k-greenlit')).toBeVisible();
     expect(await page.evaluate(()=>{
       const s=getComputedStyle(document.documentElement);
