@@ -27,6 +27,7 @@ html[data-theme=light] :is(.counts span,#merging li){color:var(--fg2)}
 html[data-theme=light] .vend.x,html[data-theme=light] .pchip,html[data-theme=light] #merging li.unknown{color:var(--warn)}
 html[data-theme=light] #pcount{color:#FFFFFF}
 html[data-theme=light] .capstage .lbl{color:#d9a441}
+html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{color:var(--fg)}
 
 #themeToggle{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;
   padding:0;font:20px var(--sans);border:1px solid var(--line);border-radius:var(--r-chip);
