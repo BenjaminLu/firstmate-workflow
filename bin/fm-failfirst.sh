@@ -149,8 +149,8 @@ if [ -n "$CONTRACT" ]; then
   # substitution otherwise cannot propagate a parser failure).
   jq -e '
     type == "object" and
-    (keys - ["setup","check","test","tests","docs","check_env"] | length == 0) and
-    all(.setup,.check,.test; . == null or type == "string") and
+    (keys - ["setup","check","test","tests","docs","check_env","unrunnable"] | length == 0) and
+    all(.setup,.check,.test,.unrunnable; . == null or type == "string") and
     all(.tests,.docs; . == null or (type == "array" and all(.[]; type == "string"))) and
     (.check_env == null or (.check_env | type == "object" and
       all(to_entries[]; (.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) and (.value | type == "string")))) and

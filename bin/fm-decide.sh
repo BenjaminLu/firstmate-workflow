@@ -440,7 +440,8 @@ if [ "$MODE" = request ]; then
       --slurpfile gate_list "$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json" \
       --arg purpose "$PURPOSE" --argjson ste "$ste" --arg project "$RECORD" --slurpfile details "$DETAILS" \
       '{id:$id,expected_head:$expected_head,binding:$binding}
-       + (if $kind=="merge" then {gates:($gate_list[0].gates|map({key:.name,value:true})|from_entries)} else {} end) + (if $task=="" then {} else {task:$task} end)
+       + (if $kind=="merge" then {gates:(($gate_list[0].gates|map({key:.name,value:true})|from_entries) | reduce ((($binding.not_runnable // {})|keys[])) as $k (.; if has($k) then .[$k]="not_runnable" else . end))} else {} end)
+       + (if $binding.not_runnable then {not_runnable:$binding.not_runnable} else {} end) + (if $task=="" then {} else {task:$task} end)
        + {kind:$kind,details:$details[0],title:$details[0].en.title}
        + (if $purpose=="" then {} else {purpose:$purpose} end)
        + (if $ste==null then {} else {ste:$ste} end)

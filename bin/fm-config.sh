@@ -94,6 +94,7 @@ _fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # project fills in so that nothing here has to know its toolchain.
 #
 #   fm_project setup|check|test [file]  -> the command, exactly as declared
+#   fm_project unrunnable [file]       -> why tests cannot run on this machine
 #   fm_project tests|docs [file]        -> one glob per line
 #   fm_project check_env [file]         -> NAME=value, each ending in NUL
 #   fm_project keys [file]              -> the declared keys, one per line
@@ -482,6 +483,12 @@ fm_project_vendor() {
   [ "${FM_EXTERNAL:-0}" = 1 ] && [ -n "${FM_STATE_DIR:-}" ] &&
     [ -f "$FM_STATE_DIR/config.yaml" ] && [ -n "${1:-}" ] || return 0
   fm_cfg_in "$1" vendor "$FM_STATE_DIR/config.yaml"
+}
+
+fm_project_reviewer_mode() {
+  [ "${FM_EXTERNAL:-0}" = 1 ] && [ -n "${FM_STATE_DIR:-}" ] &&
+    [ -f "$FM_STATE_DIR/config.yaml" ] || return 0
+  fm_cfg_in reviewer mode "$FM_STATE_DIR/config.yaml"
 }
 
 fm_vendor_source() {

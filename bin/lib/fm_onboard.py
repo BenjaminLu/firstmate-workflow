@@ -213,14 +213,16 @@ def render(p):
 
 
 def contract_yaml(contract):
-    allowed = {'setup', 'check', 'test', 'tests', 'docs', 'check_env'}
+    allowed = {'setup', 'check', 'test', 'tests', 'docs', 'check_env', 'unrunnable'}
     if set(contract) - allowed:
         raise ValueError('unknown project contract key')
     lines = ['project:']
     for key, value in contract.items():
-        if key in ('setup', 'check', 'test'):
+        if key in ('setup', 'check', 'test', 'unrunnable'):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError('project command must be a nonempty string')
+            if key == 'unrunnable' and ('\n' in value or '\r' in value):
+                raise ValueError('unrunnable must be a one-line reason')
             if key == 'test' and '{file}' not in value:
                 raise ValueError('project.test must contain {file}')
             lines.append('  ' + key + ': ' + json.dumps(value, ensure_ascii=False))

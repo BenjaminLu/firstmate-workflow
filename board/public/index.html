@@ -118,6 +118,7 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
   grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:3px 14px}
 .gates li{font-size:12px;color:var(--fg2);display:flex;gap:8px}
 .gates li i{font-style:normal;width:12px;text-align:center;color:var(--ok)}
+.gates li.w i,.gates li.w,.ci-only-evidence{color:var(--warn)}
 .gates li.n i{color:var(--warn)} .gates li.n{color:var(--fg3)}
 .acts{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;align-items:center}
 .acts button{font:750 12.5px var(--sans);border:none;border-radius:9px;padding:8px 18px;cursor:pointer}
@@ -346,7 +347,7 @@ const t = (k) => lang === "zh-CN" ? cn(DICT["zh-TW"][k] ?? DICT.en[k] ?? k)
 const GATES = () => latest?.gates || [];
 const gatePassed = (gates, name) => Array.isArray(gates)
   ? gates[Number(Object.keys(latest.gateLegacy || {}).find(n => latest.gateLegacy[n] === name)) - 1]
-  : gates[name];
+  : gates[name] === true;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;',"'":'&#39;'}[c]));
 // T-069: a pull request number links to that pull request, at the URL the
 // server derived from the project registry. Without one it is the same text,
@@ -772,8 +773,10 @@ function render(s) {
       (content?.intent ? '' : DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>` : '')) +
       (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome), d)}</p>` : '') +
       (d.kind === "merge" && d.gates
-        ? `<ul class="gates">${GATES().map(({n,name})=>{const g=t("gate_"+name), ok=gatePassed(gates,name);return `<li class="${ok?"y":"n"}"><i>${ok?"&#10003;":"&#8211;"}</i>${n}. ${g}</li>`;}).join("")}</ul>`
+        ? `<ul class="gates">${GATES().map(({n,name})=>{const g=t("gate_"+name), warning=gates[name]==="not_runnable", ok=gatePassed(gates,name);return `<li class="${warning?"w":ok?"y":"n"}"><i>${warning?"&#9888;":ok?"&#10003;":"&#8211;"}</i>${n}. ${esc(g)}${warning?` · ${esc(t('gateNotRunnable').replace('{reason}', () => d.not_runnable?.[name] || ''))}`:''}</li>`;}).join("")}</ul>`
         : "") +
+      (d.kind === "merge" && GATES().some(({name}) => gates?.[name] === "not_runnable")
+        ? `<p class="ci-only-evidence" role="note">${esc(t('ciOnlyEvidence'))}</p>` : '') +
       (content?.intent ? `</section>${intentBody(d, content, locked)}` :
       `<div class="acts">${options}
          <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
