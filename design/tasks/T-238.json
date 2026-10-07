@@ -1,0 +1,253 @@
+{
+  "id": "T-238",
+  "title": "each registered external project can name its own worker and reviewer vendor and fallback list in its private state/config.yaml, read by the one vendor resolver every launcher uses, so fm-dispatch, the autopilot and hand launches start that project's rounds on the configured vendor and the identity records rule=project",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-config.sh",
+    "bin/fm-session.sh",
+    "tests/project-vendor.test.sh",
+    "tests/lib/project_vendor.py",
+    "tests/session-startup.test.sh",
+    "bin/adapters/_contract.md",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-238.json"
+  ],
+  "acceptance": [
+    "Why. The captain (2026-10-07): each repository must be configurable to run its worker rounds on a different agent, and this goes before T-237. Today the worker vendor is engine-level: bin/fm-config.sh fm_vendor_rule (:480-485) reads `<role>: vendor:` and then the top-level `vendor:` only from FM_CONFIG, which fm_storage_init (:945) always sets to the engine config.yaml, also for an external project. fm-worker.sh accepts --vendor, but fm-dispatch and the autopilot never pass it, so an external project's rounds always resolve `opposite-of-host` (a Claude host gives a codex worker).",
+    "Change 1, the role vendor (bin/fm-config.sh fm_vendor_rule, :480-485). When FM_EXTERNAL=1 and \"$FM_STATE_DIR/config.yaml\" exists, read `<role>: vendor:` from that private file first; a value there wins over every engine value. Otherwise behave exactly as today, whatever file argument the caller passes. A new helper fm_vendor_source <role> prints `project` when the private value was used, else `engine`. fm_role_vendor and fm_vendor_chain keep their signatures and pick this up through fm_vendor_rule. The self project keeps its existing override, the `worker:`/`reviewer:` blocks in the engine config.yaml (:21-23); no new self key.",
+    "Change 2, the fallback list (bin/fm-config.sh). The private list uses the `- item` line form that fm_cfg_list (:43-48) and the board (server.ts:446) read, for example `fallback:\\n  - codex`. When FM_EXTERNAL=1 and the private file's `fallback:` list has at least one `- item` entry, that list replaces the engine list in two places: the trailing `fm_cfg_list fallback` in fm_vendor_chain (:500), and the unknown-or-unconfirmed-host head in fm_role_vendor (:518). An empty or missing private list uses the engine list. A private `fallback:` line carrying an inline value (the bracket form `fallback: [codex]` that onboarding writes for other keys, fm_onboard.py:298-300) is not read as a list: fm_vendor_chain prints `fm-vendor: <private file>: fallback must use '- vendor' lines; using the engine fallback list` on stderr and uses the engine list. The `opposite-of-host` pair step (:493-499) is unchanged and still comes before the fallback list. Example: private `worker:\\n  vendor: claude` and `fallback:\\n  - codex` give the worker chain exactly `claude`, `codex`.",
+    "Change 3, the model stays per vendor (T-146). fm_model_for (:564-576) uses the engine `<role>: model:` only when the vendor equals the role vendor that the engine file alone resolves (the same resolver evaluated with FM_EXTERNAL=0), and the top-level `model:` under the same engine-only comparison. Without this, Change 1 would hand an engine `worker: {vendor: codex, model: <codex model>}` override to a project's claude worker. No private `<role>: model:` is added; a project's vendor uses the engine `models.<vendor>`.",
+    "Change 4, the record. fm_record_vendor_resolution writes rule=`project` when fm_vendor_source returns project and the value is a named vendor; a private `opposite-of-host` value records rule `opposite-of-host` as today. An explicit --vendor still records rule `explicit` and still wins, because fm_vendor_chain returns the explicit vendor alone (:488). fm_log_vendor_resolution keeps its line format, so the worker log reads `fm-vendor: host=claude rule=project resolved=claude`. bin/lib/fm_config_runtime.py:32-37 stores any rule string and needs no change.",
+    "Change 5, engine-wide session report. bin/fm-session.sh:27 runs fm_storage_init with no project argument, so an external default_project makes FM_EXTERNAL=1 there. Its start-only report (:61-83) describes the engine config.yaml: run `fm_model reviewer config.yaml` at :62 and the fm_role_vendor/fm_model_for pair at :78 with FM_EXTERNAL=0 for those calls only. Without this, Changes 1 and 3 would make :62 resolve the private reviewer vendor and report the engine reviewer model as missing.",
+    "Not changed, stated. fm_run_chain's adapter check stays as it is: a head with no adapter returns 65 (:747-750) and later unknown vendors are skipped (:752), for private and engine lists alike. The refusal text at bin/fm-worker.sh:1566-1567 and bin/fm-review.sh:1092-1093 keeps naming $FM_CONFIG even when the private file named the head; that wording is accepted and out of scope. bin/fm-canary.sh:188 never calls fm_storage_init and stays engine-only with no change.",
+    "Binding and pins (no code change). Before dispatch (no pin) fm_binding.py:73-74 hashes the live private state/config.yaml into contract_sha256, so adding a vendor or fallback key changes that digest and readiness (:350-352, :374-375) asks for a fresh judgement, as any edit to that file does today. After dispatch fm_binding.py:66-71 hashes the pinned `contract` snapshot, and fm_spec_pins.py:448-449 and :484-485 keep that pin without a repin decision: the edit changes no digest, the task does not re-gate, and the new vendor applies from the task's next launch, because the launchers resolve the vendor from the live file. Gates read only the `project:` block (fm_spec_pins.contract :44-59 -> fm-herdr project_contract), so the new top-level keys never change gate commands.",
+    "Tests, new behaviour (each fails on the base commit, passes after). tests/project-vendor.test.sh driving tests/lib/project_vendor.py, in the style of tests/lib/firstmate_host.py (scrubbed env, copied bin/, stub CLIs, temp engine with `vendor: opposite-of-host` and a claude host record, temp FM_STATE_DIR, FM_EXTERNAL=1): (1) private `worker: vendor: claude` gives fm_role_vendor worker = claude [Change 1]; (2) private `reviewer:\\n  vendor: claude` gives fm_role_vendor reviewer = claude [Change 1; on base the engine opposite-of-host rule with the claude host gives codex]; (3) private `worker:\\n  vendor: claude` with `fallback:\\n  - codex` (line form) gives fm_vendor_chain worker exactly `claude\\ncodex` [Change 2]; (4) with no host record and a private `fallback:\\\\n  - codex` under a private `worker: vendor: opposite-of-host`, fm_role_vendor worker = codex, not the engine head [Change 2]; (5) engine `worker:\\n  vendor: codex\\n  model: gpt-x` with private `worker: vendor: claude` gives `fm_model worker` = the engine models.claude, not gpt-x [Change 3; on base fm_model worker returns gpt-x]; (6a) a private `fallback: [codex]` bracket line prints the `must use '- vendor' lines` warning and the chain ends with the engine list [Change 2]; (6) fm_record_vendor_resolution worker \"\" writes {host: claude, rule: project, vendor: claude} [Change 4].",
+    "Tests, regression (pass on base and after). In the same suite: FM_EXTERNAL=0 ignores the private file; an explicit vendor gives a one-line chain and records rule explicit; an empty private fallback list keeps the engine list; `fm_model_for worker claude` with the Change 3 config returns models.claude; with no pin the binding digest of the private file changes after adding a vendor key, and with a pin it does not; fm_spec_pins.contract() returns the same project contract with and without the new top-level keys. tests/session-startup.test.sh, a new start case [Change 5]. fm-session.sh uses one file for two things: the registry reader loads bin/fm-herdr.py as a module (bin/fm-config.sh:338 -> bin/lib/fm_registry.py:18-19, :57, :70), and the session engine runs it as a script, `exec python3 \"${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py\" session ...` (bin/fm-session.sh:106). The existing reviewer_report harness overwrites that file with a one-line stub (tests/session-startup.test.sh:136), which breaks the registry, so this case does not use it. Instead it copies the real file to bin/fm-herdr-real.py in the test repo and writes bin/fm-herdr.py as a shim: at import it loads fm-herdr-real.py with importlib and copies its public names into its own module namespace, so the registry reader gets the real project_contract, project_field and _project_scalar; run as a script with first argument `session`, it prints `FM_EXTERNAL=` and `FM_STATE_DIR=` from its environment and exits 0; run as a script with any other argument it runs fm-herdr-real.py through runpy.run_path(..., run_name='__main__'). Only the `session` script call is stubbed; the registry parsing is real. config.yaml registers an external default_project (FM_HOME passed to a temp dir), names `reviewer:\\n  vendor: claude\\n  model: claude-opus-5-5` and no models.codex, and the private file names `reviewer:\\n  vendor: codex` and `worker:\\n  vendor: claude`. Run `fm-session.sh start` the way reviewer_report does (FM_ENTRY_PID/FM_ENTRY_SCRIPT, scrubbed FM_* env plus FM_HOME). Assert stdout has FM_EXTERNAL=1 and the private state dir (the project really resolved as external), and stderr has no `names no reviewer`. With Changes 1 and 3 but not Change 5 this case fails, because :62 resolves codex and finds no model; on base it passes, so it is a regression guard. tests/lib/firstmate_host.py, tests/config.test.sh (:391-414, :598-606, :610-645), tests/canary.test.sh:149 and tests/adapter-verdict.test.sh:73-132 run without FM_EXTERNAL and stay green unchanged.",
+    "Callers, all listed. bin/fm-worker.sh:95-97, :1496, :1532; bin/fm-review.sh:113-115, :363, :1006; bin/lib/fm-spec-preflight.sh:44-46, :52, :86; bin/fm-session.sh:62, :78 (Change 5); bin/fm-canary.sh:188 (unchanged); fm_run_chain :771 inside bin/fm-config.sh. fm-dispatch and the autopilot start rounds through bin/fm-worker.sh after fm_storage_init sets FM_EXTERNAL and FM_STATE_DIR (:978-980), so they pick up the project vendor with no change. bin/fm-doctor.sh:57-59 and bin/fm-setup.sh:191-193 are engine-only and unchanged.",
+    "Migration. No stored record format changes. Existing private config files have no `worker:`, `reviewer:` or `fallback:` keys, so every existing project resolves, records and binds exactly as before. Adding a key changes the contract digest only for a task not yet dispatched (see Binding and pins). Existing identity.json records keep their rule values.",
+    "Docs. design/design.md §5.3 (the vendor paragraph at :615-636, including :623-624 on the other main vendor before the fallbacks) and §15.3 (:5055): edit in place to say an external project may name `worker:`/`reviewer:` vendor and a non-empty `fallback:` list in `- item` form in its private state/config.yaml, that the bracket form is reported and ignored, that the private list replaces only the engine fallback list and keeps the opposite-of-host pair step before it, the rule=project record, that a dispatched task picks up a change at its next launch without a re-gate, and that re-running onboarding rewrites the private file from the contract (fm_onboard.py:300) and drops these hand-added keys, so they are added again after it. Same in bin/adapters/_contract.md:155-162 and skills/firstmate/SKILL.md:1205-1212. No new numbered section.",
+    "Not in this task, a follow-up. The board badge (board/server.ts engine(), :433-457) keeps reading only the engine config.yaml and keeps showing the engine rule; it does not show a project's private vendor. Its existing tests (tests/board-readiness.test.sh:46-62, tests/e2e/firstmate-host.spec.ts:53, tests/e2e/board-engine-rule.spec.ts:6-21) are untouched. A later task makes the badge read the selected project's private file."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "Each external project can name the vendor that runs its worker rounds."
+        },
+        {
+          "kind": "fact",
+          "text": "Each external project can name its own fallback list."
+        },
+        {
+          "kind": "fact",
+          "text": "Dispatch, the autopilot and hand launches all start the round on that vendor."
+        },
+        {
+          "kind": "fact",
+          "text": "The round identity records that the project chose the vendor."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "On 2026-10-07 you asked that each repository can use a different worker agent, before T-237."
+        },
+        {
+          "kind": "fact",
+          "text": "Today one engine rule picks the worker vendor for every project."
+        },
+        {
+          "kind": "fact",
+          "text": "For one external project you chose codex as the only fallback."
+        }
+      ],
+      "scope_in": [
+        "bin/fm-config.sh vendor and model resolver",
+        "the fm-session start report",
+        "a new project vendor suite and a session case",
+        "design, adapter contract and skill text"
+      ],
+      "scope_out": [
+        "model names for each vendor",
+        "the adapter check and its refusal text",
+        "the board vendor badge"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the resolver reads the role vendor from the private project config first. The new suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: a non-empty private fallback list replaces the engine list. The new suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: every launcher selects the project first and then calls the same resolver. The caller list and the suite prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the identity records rule project. The new suite proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "With no private fallback key, the engine fallback list still applies."
+        },
+        {
+          "kind": "caution",
+          "text": "A dispatched task keeps its pinned contract and uses a new vendor from its next launch."
+        },
+        {
+          "kind": "caution",
+          "text": "The board badge still shows the engine rule. A later task changes it."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Launcher selects the project"
+        },
+        {
+          "state": "gone",
+          "label": "Engine rule picks the vendor"
+        },
+        {
+          "state": "gone",
+          "label": "Engine fallback list follows"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Launcher selects the project"
+        },
+        {
+          "state": "new",
+          "label": "Private config names the vendor"
+        },
+        {
+          "state": "new",
+          "label": "Private fallback list follows"
+        },
+        {
+          "state": "new",
+          "label": "Identity records rule project"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "每個外部專案都能指定執行 worker 回合的廠商。"
+        },
+        {
+          "kind": "fact",
+          "text": "每個外部專案都能指定自己的備援清單。"
+        },
+        {
+          "kind": "fact",
+          "text": "派工、autopilot 和手動啟動都用那個廠商開始回合。"
+        },
+        {
+          "kind": "fact",
+          "text": "回合身分記錄廠商由專案指定。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "你在 2026-10-07 要求每個 repo 能用不同的 worker，並排在 T-237 之前。"
+        },
+        {
+          "kind": "fact",
+          "text": "現在一條引擎規則替所有專案選 worker 廠商。"
+        },
+        {
+          "kind": "fact",
+          "text": "你替一個外部專案選了 codex 當唯一的備援。"
+        }
+      ],
+      "scope_in": [
+        "bin/fm-config.sh 的廠商和模型解析",
+        "fm-session 啟動報告",
+        "新的專案廠商測試和啟動案例",
+        "design、adapter 契約和 skill 文字"
+      ],
+      "scope_out": [
+        "各廠商的模型名稱",
+        "adapter 檢查和它的拒絕訊息",
+        "看板的廠商標籤"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：解析器先讀私有專案設定的角色廠商。新測試證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：非空的私有備援清單取代引擎清單。新測試證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：選定專案後，每個啟動方式都走同一個解析器。呼叫清單和測試證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：身分記錄 rule project。新測試證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "私有設定沒有備援鍵時，仍套用引擎的備援清單。"
+        },
+        {
+          "kind": "caution",
+          "text": "已派工的任務保留固定的契約，下一次啟動才用新廠商。"
+        },
+        {
+          "kind": "caution",
+          "text": "看板標籤仍顯示引擎規則，由後續任務修改。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "啟動器選定專案"
+        },
+        {
+          "state": "gone",
+          "label": "引擎規則選廠商"
+        },
+        {
+          "state": "gone",
+          "label": "接著用引擎備援清單"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "啟動器選定專案"
+        },
+        {
+          "state": "new",
+          "label": "私有設定指定廠商"
+        },
+        {
+          "state": "new",
+          "label": "接著用私有備援清單"
+        },
+        {
+          "state": "new",
+          "label": "身分記錄 rule project"
+        }
+      ]
+    }
+  }
+}
