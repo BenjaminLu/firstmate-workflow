@@ -1,0 +1,198 @@
+{
+  "id": "T-255",
+  "title": "the fast CI lints catch the three bash 3.2 versus 5.2 traps in every shell file under bin, tests and .githooks: a literal & in a pattern-substitution replacement, an unbraced variable before non-ASCII text, and escaped JSON with a comma inside a double-quoted command substitution; each lint has a positive and a negative fixture and an explicit allow marker",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_ci_checks.py",
+    "bin/ci.sh",
+    "tests/ci-lints.test.sh",
+    "design/design.md",
+    "design/tasks/T-255.json"
+  ],
+  "acceptance": [
+    "Why. Three bash portability traps have each cost a red CI round because the local shell is bash 3.2 and the runner is bash 5.2: (a) bash 5.2 turns patsub_replacement on, so a literal & in the replacement of ${var//pattern/replacement} means the matched text there and an ampersand on 3.2; (b) bash 3.2 reads non-ASCII bytes after an unbraced $name as part of the name; (c) bash 3.2 brace-expands a {a,b} inside a double-quoted $( ... ) when only escaped quotes protect it, so \"$(cmd \"{\\\"a\\\":1,\\\"b\\\":2}\")\" runs the command twice. The captain approved making these rules instead of notes, verbatim: \"好 先B再C 其他照你的意思改\". Today (a) is a grep inside tests/diagram.test.sh (about :1024-1061) over bin/*.sh, bin/adapters/*.sh and tests/*.sh only, so bin/lib/*.sh, tests/lib/*.sh, test fixtures and .githooks are unchecked; (b) is already the fast stage \"non-ASCII variable boundary\" (bin/ci.sh :613-619, bin/lib/fm_ci_checks.py variable_boundary :6-24) with fixtures in tests/ci-lints.test.sh (about :86-110); (c) has no check.",
+    "Change 1, one shell-file walker for the two new lints (bin/lib/fm_ci_checks.py). A helper `shell_files(root)` yields every regular file under root/bin, root/tests and root/.githooks (not games: its git-ignored node_modules tree would be read on a local run) whose name ends in .sh or whose first line is a shebang naming bash or sh, skipping files that contain a NUL byte and files that `fm_is_lint_source` would skip, with the same rule as bin/fm-config.sh :956: any line matching `^# fm:lint-source`. Comment lines (first non-space character #) are never hits. A line is exempt when the previous line is exactly `# fm:allow-portability: <reason>` with a non-empty reason. The variable-boundary check keeps its own rule: it scans every text file, lint sources included, as bin/ci.sh :609-611 says.",
+    "Change 2, lint (a) patsub-amp (bin/lib/fm_ci_checks.py, new check name `patsub-amp`). A line is a hit when it contains `${<name>[<index>]?/<pattern>/<replacement>}` (also `//`, `/#`, `/%`) whose replacement text in the source contains a literal & (the regex used today in tests/diagram.test.sh :1042, applied per line). Output: `<path>:<line>: a literal & in a pattern replacement differs between bash 3.2 and 5.2` and exit 1 on any hit.",
+    "Change 3, lint (c) brace-json (bin/lib/fm_ci_checks.py, new check name `brace-json`). Within one line, for every `\"$(` that opens a double-quoted command substitution, scan to the matching `)` (counting nested parentheses outside quotes); a hit is any double-quoted word inside it whose text contains an escaped quote (\\\\\") and a `{` followed by a `,` before the next `}`. Output: `<path>:<line>: escaped JSON with a comma inside \"$(...)\" is brace-expanded by bash 3.2; build it with jq or outside the substitution` and exit 1 on any hit. Assignment words outside a command substitution are not hits.",
+    "Change 4, bin/ci.sh. The `lint` stage (:621 onward) runs `python3 \"$_fm_code_dir/lib/fm_ci_checks.py\" patsub-amp .` and `... brace-json .` with pass labels `patsub replacement portability` and `escaped JSON in command substitutions`, using the stage's pass/flunk helpers as the private-fetch check does (:631-638). The variable-boundary check (bin/lib/fm_ci_checks.py :6-24) adds root/.githooks to its roots (bin and tests unchanged); its stage name and every other behaviour stay the same.",
+    "Change 5, existing code. The tree has no current hit for (a) or (c) on origin/main (checked: no line in any tracked .sh or .githooks file matches either shape). Any hit the implementation finds is fixed by building the string with jq or a helper outside the substitution, or carries the allow marker with a reason; the round reports each one.",
+    "Not changed, stated. The tests/diagram.test.sh block (about :1024-1061) stays as a regression of its own suite. No shellcheck setting, no runtime script and no shell behaviour changes.",
+    "Tests, new behaviour (each fails on the base commit and passes after), in tests/ci-lints.test.sh. tests/ci-lints.test.sh is not a lint source (no line starts with `# fm:lint-source`), so the new lints scan it on the real tree: every fixture line is assembled at run time from pieces held in variables (the ampersand, the braces, the escaped quote and the comma each interpolated, as tests/diagram.test.sh :1052-1056 does) and written under the suite's temporary tree $q, so no source line of the suite spells either forbidden shape and the real-tree `bin/ci.sh --stage fast` stays green. Cases: (1) a bin/lib/probe.sh line with a literal & in a ${s//x/...} replacement turns `--stage fast` red with `x patsub replacement portability` and names file:line; (2) the same shape in a comment line, an & arriving from a variable (${s//$a/$b}) and the same line under a `# fm:allow-portability: reason` marker pass; (3) a tests/lib/probe.sh line `out=\"$(cmd \"{\\\"a\\\":1,\\\"b\\\":2}\")\"` turns the stage red with `x escaped JSON in command substitutions` and names file:line; (4) the same JSON assigned outside a substitution, escaped JSON without a comma inside a substitution, and a marked line pass; (5) a .githooks/probe file with a bash shebang and an unbraced `$X` before non-ASCII text turns the variable-boundary stage red (the new root); (6) a probe file with a line starting `# fm:lint-source` and both new shapes is skipped by the two new lints, while the variable-boundary check still flags an unbraced `$X` before non-ASCII text in it.",
+    "Tests, regression (pass on base and after). The existing variable-boundary fixtures in tests/ci-lints.test.sh (about :86-110) keep passing unchanged; tests/diagram.test.sh keeps passing; `bin/ci.sh --stage fast` on the real tree passes.",
+    "Callers, all listed. fm_ci_checks.py is called from bin/ci.sh (:614, :633, the design-layout and coverage calls), from tests/ci-lints.test.sh through ci.sh, directly from tests/design-layout.test.sh :30, tests/private-fetch-lint.test.sh :11, :20, :25 and tests/config-python-extraction.test.sh :35, and it is copied by tests/lib/config-modules.sh :9. Those direct callers use other subcommands and stay unaffected regressions; the dispatch table at :189-192 gains the two names.",
+    "Migration. None: no stored data; a branch that adds a new hit turns its own fast stage red.",
+    "Docs. design/design.md §10 CI, the `--stage fast` paragraph (about :2738-2746): add one sentence naming the three portability lints, their allow marker and the lint-source skip; edit in place, no new section."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "CI finds a literal ampersand in a pattern replacement in every shell file."
+        },
+        {
+          "kind": "fact",
+          "text": "CI finds escaped JSON with a comma inside a quoted command substitution."
+        },
+        {
+          "kind": "fact",
+          "text": "The non-ASCII variable check also covers the git hooks."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "Each trap passed on a laptop and failed on the CI runner."
+        },
+        {
+          "kind": "fact",
+          "text": "You approved rules in the repository instead of notes."
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_ci_checks.py: one walker and two lints",
+        "bin/ci.sh: the lint stage",
+        "tests/ci-lints.test.sh",
+        "design section 10"
+      ],
+      "scope_out": [
+        "Shell behaviour at runtime",
+        "Shellcheck settings"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the patsub-amp lint flags the shape and skips comments. Test cases 1 and 2 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the brace-json lint flags the shape inside a substitution only. Test cases 3 and 4 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the boundary check reads the new roots. Test cases 5 and 6 prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "A line can pass with an allow marker that states a reason."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Fast stage runs lints"
+        },
+        {
+          "state": "gone",
+          "label": "One suite greps three folders"
+        },
+        {
+          "state": "gone",
+          "label": "No check for escaped JSON"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Fast stage runs lints"
+        },
+        {
+          "state": "new",
+          "label": "Walk every shell file"
+        },
+        {
+          "state": "new",
+          "label": "Flag three portability traps"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "CI 在每個 shell 檔找出模式替換裡的字面 &。"
+        },
+        {
+          "kind": "fact",
+          "text": "CI 找出引號命令替換裡帶逗號的跳脫 JSON。"
+        },
+        {
+          "kind": "fact",
+          "text": "非 ASCII 變數檢查也涵蓋 git hook。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "每個陷阱都在筆電上通過，卻在 CI 失敗。"
+        },
+        {
+          "kind": "fact",
+          "text": "你同意把這些寫成 repo 裡的規則，不再只是筆記。"
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_ci_checks.py：一個走訪器和兩個 lint",
+        "bin/ci.sh：lint 階段",
+        "tests/ci-lints.test.sh",
+        "設計第 10 節"
+      ],
+      "scope_out": [
+        "執行時的 shell 行為",
+        "shellcheck 設定"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：patsub-amp lint 抓出這個寫法並略過註解。測試案例 1、2 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：brace-json lint 只抓命令替換裡的寫法。測試案例 3、4 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：邊界檢查讀取新的目錄。測試案例 5、6 證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "附上理由的允許標記可以讓一行通過。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "fast 階段跑 lint"
+        },
+        {
+          "state": "gone",
+          "label": "一個測試只查部分檔案"
+        },
+        {
+          "state": "gone",
+          "label": "沒有檢查跳脫 JSON"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "fast 階段跑 lint"
+        },
+        {
+          "state": "new",
+          "label": "走訪每個 shell 檔"
+        },
+        {
+          "state": "new",
+          "label": "抓出三種可攜性陷阱"
+        }
+      ]
+    }
+  }
+}

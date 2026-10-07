@@ -2811,6 +2811,12 @@ own slice of one gate run instead of all of it:
   themselves. With neither flag, every stage runs in one process, exactly
   as a plain `bin/ci.sh` always has — nothing above this paragraph describes
   a changed default.
+  The three portability lints cover literal ampersands in pattern replacements,
+  escaped JSON with commas in quoted command substitutions, and non-ASCII
+  variable boundaries under `bin/`, `tests/` and `.githooks/`; the first two
+  scan shell files, skip comments and files declaring `# fm:lint-source`, and
+  allow a line immediately after `# fm:allow-portability: <reason>` with a
+  non-empty reason, while the boundary lint scans all text without exemptions.
   `hygiene` includes the design-layout check (T-189): outside fenced code,
   every `###` heading in the last `## N.` section of design/design.md starts
   with `N.`, so new material nests under a numbered home instead of landing

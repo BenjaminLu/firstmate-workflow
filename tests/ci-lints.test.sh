@@ -116,6 +116,99 @@ safe_rm_rf "$q/tests/boundary-cache"
 assert_eq "$unicode_tree_before" "$(find "$q" -print | sort)" \
   "boundary fixtures restore the shared tree, including directories"
 
+# T-255: assemble hazards from pieces so this suite remains a lint target.
+amp='&'; left='{'; right='}'; escaped_quote='\"'; comma=','
+amp_line='out="$'"${left}s//x/${amp}${right}"'"'
+json_word="${left}${escaped_quote}a${escaped_quote}:1${comma}${escaped_quote}b${escaped_quote}:2${right}"
+json_single="${left}${escaped_quote}a${escaped_quote}:1${right}"
+json_line='out="$(cmd "'"$json_word"'")"'
+mkdir -p "$q/tests/lib" "$q/.githooks"
+for portability_file in bin/lib/probe.sh tests/lib/probe.sh .githooks/probe; do
+  for portability_kind in amp json; do
+    if [ "$portability_kind" = amp ]; then
+      portability_line="$amp_line"; portability_label='patsub replacement portability'
+    else
+      portability_line="$json_line"; portability_label='escaped JSON in command substitutions'
+    fi
+    printf '#!/usr/bin/env bash\n%s\n' "$portability_line" > "$q/$portability_file"
+    portability_rc=0
+    out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || portability_rc=$?
+    assert_eq '1' "$portability_rc" "$portability_kind in $portability_file fails fast checks"
+    assert_contains "$out" "x $portability_label" "the portability lint rejects $portability_kind"
+    assert_contains "$out" "$portability_file:2:" "the portability lint names file and line"
+    printf '#!/usr/bin/env bash\n  # %s\n# fm:allow-portability: deliberate fixture\n%s\n' \
+      "$portability_line" "$portability_line" > "$q/$portability_file"
+    portability_rc=0
+    out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || portability_rc=$?
+    assert_eq '0' "$portability_rc" "comments and reasoned markers pass for $portability_kind"
+    assert_contains "$out" "+ $portability_label" "the portability lint accepts exemptions"
+  done
+  rm -f "$q/$portability_file"
+done
+# Pin the replacement variants and quote/parenthesis boundaries directly.
+for replacement in '/x/' '//x/' '/#x/' '/%x/'; do
+  printf 'out="$%ss[0]%s%s%s"\n' "$left" "$replacement" "$amp" "$right" > "$q/tests/lib/probe.sh"
+  portability_rc=0
+  out="$(python3 "$ROOT/bin/lib/fm_ci_checks.py" patsub-amp "$q" 2>&1)" || portability_rc=$?
+  assert_eq '1' "$portability_rc" "indexed replacement $replacement is rejected"
+  assert_contains "$out" 'tests/lib/probe.sh:1:' "indexed replacement names its line"
+done
+for marker in '# fm:allow-portability: ' ' # fm:allow-portability: indented' '# fm:allow-portability: reason
+# intervening comment'; do
+  printf '%s\n%s\n' "$marker" "$amp_line" > "$q/tests/lib/probe.sh"
+  portability_rc=0
+  out="$(python3 "$ROOT/bin/lib/fm_ci_checks.py" patsub-amp "$q" 2>&1)" || portability_rc=$?
+  assert_eq '1' "$portability_rc" "only an immediate exact marker with a reason exempts a line"
+done
+printf 'out="$( (cmd ")" '\''('\''); cmd "%s")"\n' "$json_word" > "$q/tests/lib/probe.sh"
+portability_rc=0
+out="$(python3 "$ROOT/bin/lib/fm_ci_checks.py" brace-json "$q" 2>&1)" || portability_rc=$?
+assert_eq '1' "$portability_rc" "nested and quoted parentheses do not hide JSON"
+assert_contains "$out" 'tests/lib/probe.sh:1:' "nested substitution names its line"
+printf 'out="$(cmd)"; payload="%s"\n' "$json_word" > "$q/tests/lib/probe.sh"
+portability_rc=0
+out="$(python3 "$ROOT/bin/lib/fm_ci_checks.py" brace-json "$q" 2>&1)" || portability_rc=$?
+assert_eq '0' "$portability_rc" "JSON after the matching parenthesis is outside the substitution"
+rm -f "$q/tests/lib/probe.sh"
+# Neither arbitrary text, binary shell files, nor the games tree is shell input.
+mkdir -p "$q/games"
+printf '%s\n%s\n' "$amp_line" "$json_line" > "$q/tests/probe.txt"
+printf '#!/usr/bin/env bash\n%s\n%s\n\0' "$amp_line" "$json_line" > "$q/tests/probe.sh"
+printf '%s\n%s\n' "$amp_line" "$json_line" > "$q/games/probe.sh"
+for portability_check in patsub-amp brace-json; do
+  portability_rc=0
+  out="$(python3 "$ROOT/bin/lib/fm_ci_checks.py" "$portability_check" "$q" 2>&1)" || portability_rc=$?
+  assert_eq '0' "$portability_rc" "$portability_check skips non-shell text, binaries, and games"
+done
+rm -f "$q/tests/probe.txt" "$q/tests/probe.sh" "$q/games/probe.sh"
+rmdir "$q/games"
+# Safe data expansion, assignment outside substitution, and comma-free JSON.
+printf '#!/usr/bin/env bash\na=x; b="%s"; s=x\nout="${s//$a/$b}"\npayload="%s"\nout="$(cmd "%s")"\n' \
+  "$amp" "$json_word" "$json_single" > "$q/tests/lib/probe.sh"
+portability_rc=0
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || portability_rc=$?
+assert_eq '0' "$portability_rc" "safe replacements and JSON forms pass fast checks"
+assert_contains "$out" '+ patsub replacement portability' "variable replacement data is safe"
+assert_contains "$out" '+ escaped JSON in command substitutions' "safe JSON forms are accepted"
+rm -f "$q/tests/lib/probe.sh"
+# Lint-source applies even below a shebang, but never hides boundary hazards.
+for portability_marker in '' '# fm:lint-source fixture'; do
+  printf '#!/usr/bin/env bash\n%s\nprintf "%%s" "%s%s"\n' \
+    "$portability_marker" '$X' '。' > "$q/.githooks/probe"
+  if [ -n "$portability_marker" ]; then
+    printf '%s\n%s\n' "$amp_line" "$json_line" >> "$q/.githooks/probe"
+  fi
+  portability_rc=0
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || portability_rc=$?
+  assert_eq '1' "$portability_rc" "hook boundary hazard fails even in a lint source"
+  assert_contains "$out" 'x non-ASCII variable boundary' "boundary lint covers hooks"
+  assert_contains "$out" '.githooks/probe:3:' "boundary lint names the hook line"
+  assert_contains "$out" '+ patsub replacement portability' "lint source skips amp replacement"
+  assert_contains "$out" '+ escaped JSON in command substitutions' "lint source skips JSON"
+done
+rm -f "$q/.githooks/probe"
+rmdir "$q/.githooks" "$q/tests/lib"
+
 # The real clock path reports elapsed time and the caller's effective budget;
 # deterministic boundary enforcement is covered above.
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
