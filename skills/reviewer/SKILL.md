@@ -179,8 +179,10 @@ why/references, each Change, callers/fixtures/mirrors, scope, test labels,
 records/pins/tasks-in-flight migration, named design sections, i18n/lint
 reachability and external-project privacy. First-pass items are `N. ok:` or
 `N. gap:`, with file:line evidence and the expected spec change for each gap.
-Close the list with standalone `PREFLIGHT-COMPLETE:<task>` immediately before
-SPEC-OK or SPEC-GAPS (blank lines allowed). Every gap belongs in that report.
+Put any summary sentence before item 1. After the last numbered item, write
+only standalone `PREFLIGHT-COMPLETE:<task>` and then SPEC-OK or SPEC-GAPS, with
+nothing but blank lines between the last item, the marker and the verdict.
+Every gap belongs in that report.
 Later preflights, including after SPEC-OK, keep every number: gap/open becomes
 done/open; ok/done becomes ok/open. Append only `gap NEW-GROUND:` for changed
 text or `gap MISSED:` for prior omissions, using the next numbers. SPEC-OK has
