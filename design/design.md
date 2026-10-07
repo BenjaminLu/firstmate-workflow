@@ -440,8 +440,10 @@ autopilot requests them, or it reports the request's exit 64 refusal.
 The five defaults, each changeable by a later card, are: enforce STE when an
 intent card is raised; turn “No, change it” into a spec-change request (T-211);
 use the captain-approved Chinese Z1–Z8 rules and glossary from `fm_ste.py`;
-apply this standard to cards only, not PR bodies or worker briefs; and provide
-no light theme. STE has no Chinese standard; these Chinese rules are the
+apply this standard to cards only, not PR bodies or worker briefs; and, following
+the captain's board prototype approval on 2026-10-07 ("看板樣式可以了, 可以以這個版本開發"),
+provide a light theme and a per-viewer toggle, keeping dark as the first-visit
+theme when the system scheme is dark. STE has no Chinese standard; these Chinese rules are the
 approved equivalent. Mechanical checks do not prove meaning or the rules
 marked “checked by eye”.
 
@@ -1762,13 +1764,56 @@ percentages. The regions below are that layout.
 
 | Region | What it holds |
 |---|---|
-| Header | brand, the engine badge, green-light state and the language switch |
+| Header | brand, the engine badge, green-light state, the theme toggle and the language switch |
 | Sea header | merged / in flight / waiting on you / blocked / ready / backlog; waiting on you is the number of pending decisions |
 | Decision deck | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place; each card and strip starts with a coloured kind badge (T-227) |
 | Voyage | the 2.5D stage (T-125) is the only ship view; crew, captain, handoffs and merge salvos live there |
 | Crew roster | separate field columns, shown by default and toggled from its own bar |
 | Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
 | Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl`, with a Load older control below the live list |
+
+**Shell themes and stage (T-241).** `board.css`, loaded after the inline style,
+provides one token system. `board.js` sets `html[data-theme]` from `board.theme`
+in localStorage, falling back to the system colour scheme. The top bar's 32px
+half-circle icon toggles the theme and remembers it per viewer. Its title and
+accessible label follow the language switch. Storage reads and writes for the
+theme and language tolerate denied storage and keep working for the session.
+
+| Token | Light | Dark |
+|---|---|---|
+| `--chart` | #EEF2F0 | #0E1824 |
+| `--hull` | #FFFFFF | #16222F |
+| `--hull2` | #F6F8F7 | #1C2A39 |
+| `--harbour` | #10233B | #E6EDF1 |
+| `--fog` | #5B6B7A | #93A3B1 |
+| `--line` | #CBD5D2 | #26384A |
+| `--signal` | #F2B90F | #F0B429 |
+| `--flag-red` | #C2372C | #E35D4F |
+| `--flag-blue` | #1D4F91 | #6EA8E8 |
+| `--kelp` | #2F7D5B | #4FB286 |
+
+The existing background variables map to chart/hull/hull2; foreground maps to
+harbour, muted foreground to fog, and brass/ok/bad/accent to
+signal/kelp/flag-red/flag-blue. Light text accents override brass #7A5600,
+warn #8A4B00, wait #6B2FA0, ok #1E6B47, bad #B3261E and accent #1D4F91
+for at least 4.5:1 contrast on all three light surfaces. A light-only rule set
+covers literal roster and count text colours. Kind badges, pressed buttons,
+the portrait gradient and the gold action gradient keep their original colours;
+the portrait label keeps its original brass ink. `ship.css` stays unchanged.
+Type tokens are 13/15/17/21/26/33/41px, spacing is 4/8/12/16/24/32/48px,
+and chip/panel radii are 4/8px. The shell adds no shadows.
+
+The voyage stays above the cards at every width. Its expanded stage is
+`clamp(270px, 36vh, 440px)` above 650px and 270px below. An icon in its bar
+shrinks it to 88px (72px at widths up to 650px). With no stored choice the
+stage follows the viewport live: strip on narrow screens, expanded on wide
+screens. Pressing the control stores `board.voyage.size` as `strip` or
+`full-size` and ends automatic switching. The narrow default panel, including
+margins, is at most 160px tall so the first card starts within an 844px viewport.
+The size control is hidden in full and hidden modes. Full mode always fills
+the screen and restores the panel size on exit; existing mode/hidden keys,
+drawer homes and Escape handling stay intact. Reduced motion disables the
+size transition. Cards and sheets are separate tasks T-245 and T-246.
 
 **Engine badge (V7).** The server reads `config.yaml` on every state request —
 the top-level `vendor`, and `reviewer.vendor` when that block exists — and the
@@ -2535,8 +2580,8 @@ workers or game tests, then builds Playground and runs the vendored node tests.
 Session startup builds Live before starting the board; failure is reported and
 removes stale output, so the board serves its workflow without loading the game
 controller. E2e fixtures locate the built artifact or build in isolated scratch.
-On screens at most 650px wide the panel follows the decisions and precedes the
-lanes; desktop retains the panel above the decisions. The frozen 3D application stays outside this integration;
+The panel sits above the decisions at every width, retaining its DOM home
+below the top bar and above the counts. The frozen 3D application stays outside this integration;
 any 3D follow-up requires its own approved scope.
 
 ---

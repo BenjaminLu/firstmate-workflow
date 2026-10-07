@@ -1,0 +1,42 @@
+/* Board shell tokens; existing regions consume their established variable names. */
+html[data-theme=light],html[data-theme=dark]{
+  --t13:13px;--t15:15px;--t17:17px;--t21:21px;--t26:26px;--t33:33px;--t41:41px;
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;
+  --r-chip:4px;--r-panel:8px;
+  --bg:var(--chart);--bg2:var(--hull);--bg3:var(--hull2);
+  --fg:var(--harbour);--fg2:var(--fog);--fg3:var(--fog);
+  --brass:var(--signal);--ok:var(--kelp);--bad:var(--flag-red);--accent:var(--flag-blue);
+}
+html[data-theme=light]{
+  --chart:#EEF2F0;--hull:#FFFFFF;--hull2:#F6F8F7;--harbour:#10233B;--fog:#5B6B7A;--line:#CBD5D2;
+  --signal:#F2B90F;--flag-red:#C2372C;--flag-blue:#1D4F91;--kelp:#2F7D5B;
+  /* Text accents read on hull, chart and hull2 at >=4.5:1. */
+  --brass:#7A5600;--warn:#8A4B00;--wait:#6B2FA0;--ok:#1E6B47;--bad:#B3261E;--accent:#1D4F91;
+}
+html[data-theme=dark]{
+  --chart:#0E1824;--hull:#16222F;--hull2:#1C2A39;--harbour:#E6EDF1;--fog:#93A3B1;--line:#26384A;
+  --signal:#F0B429;--flag-red:#E35D4F;--flag-blue:#6EA8E8;--kelp:#4FB286;
+}
+/* One light-only pass for text whose original rules use literal colours. */
+html[data-theme=light] :is(.roster,.rosterbar) *:not([aria-pressed=true]){color:var(--fg2)}
+html[data-theme=light] .roster :is(.nm,.jb .tt,h4.rgroup,.rl,.pj,.rd,.rv,.rm,.rc){color:var(--fg)}
+html[data-theme=light] .roster :is(.rv.warn,.rm.warn){color:var(--bad)}
+html[data-theme=light] :is(.roster .rhead,.roster h3 .rgroupbtn,.rosterbar .toggle):not([aria-pressed=true]){background:var(--bg3)}
+html[data-theme=light] .counts{background:var(--hull)}
+html[data-theme=light] :is(.counts span,#merging li){color:var(--fg2)}
+html[data-theme=light] .vend.x,html[data-theme=light] .pchip,html[data-theme=light] #merging li.unknown{color:var(--warn)}
+html[data-theme=light] #pcount{color:#FFFFFF}
+html[data-theme=light] .capstage .lbl{color:#d9a441}
+
+#themeToggle{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;
+  padding:0;font:20px var(--sans);border:1px solid var(--line);border-radius:var(--r-chip);
+  background:var(--bg3);color:var(--fg);cursor:pointer}
+#voyage-stage{transition:height .2s}
+#voyage-bar #voyage-size{flex:none;width:44px;padding:0;font-size:20px}
+#voyage-size[hidden]{display:none}
+#voyage.voyage-strip:not(.voyage-full *) #voyage-stage{height:88px}
+@media(max-width:650px){
+  #voyage.voyage-strip:not(.voyage-full *) #voyage-stage{height:72px}
+}
+.voyage-full #voyage-stage{height:100%}
+@media(prefers-reduced-motion:reduce){#voyage-stage{transition:none}}
