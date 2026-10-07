@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+os.environ['HERDR_ENV'] = '0'
+
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'bin/lib'), str(ROOT / 'tests/lib')]
