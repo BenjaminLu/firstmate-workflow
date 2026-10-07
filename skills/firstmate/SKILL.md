@@ -230,12 +230,17 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   after its running jobs finish, so firstmate never kills the service. It observes PR events, runs gates on
   worker heads, checks the standing-list protocol from round three, launches
   review after gate exit 6, and reruns gates when approval or CI changes.
-  After all six gates pass it requests the merge card using your authored
-  `state/decision-details/<id>.json`, with the gated head bound to the request.
+  After all six gates pass it requests the merge card with the gated head bound
+  to the request. Your authored `state/decision-details/<id>.json` has priority;
+  for the self project it otherwise builds checked details from the latest
+  answered dispatch A card into `state/decision-details-built/<id>.json`.
   It wakes firstmate once per head for REJECT (brief needed), SCOPE-BLOCKED/ASK,
   failed gates, unavailable or misconfigured launchers, a review without a
-  verdict, or missing merge-card details (naming the reserved id). Read the
-  child's quoted log line when investigating a launcher failure.
+  verdict, a draft PR that needs to become ready, or a failed details build
+  (naming the reserved id and reason). External projects without authored
+  details still ask for them. Author merge details when that wake asks.
+  Read the child's quoted log line when investigating a launcher failure.
+  Firstmate does not run the merge path through hand scripts.
   It never relaunches a worker or dispatches a new task. Dispatch stays with
   the board intent card or an explicit `bin/fm-dispatch.sh` call; a new worker
   round still needs your approved brief. Avoid competing loop owners.
@@ -917,16 +922,20 @@ Pass the matching purpose on every choice card: `dispatch` for a
 dispatch/readiness card, `repin` for a repin approval, `scope` for a scope
 widening, `skill` for a skill update, and `decision` otherwise.
 
-For a merge, use `--kind merge --pr <actual-pr>` only after current-head gates,
-CI and reviewer provenance are verified. `fm-autopilot.sh` allocates the merge card's
-id itself (never `D-<task digits>`), says which id when details are missing,
-and reads `<repo>/state/decision-details/<decision-id>.json` after gates pass;
-it reuses that id on later turns. Supply the preflighted details there, or
-allocate the id with `--kind merge` first and author under it, before the loop
-can request that card;
-coordinate a single loop owner so it cannot publish ahead of diagram preflight.
+The autopilot owns the merge path: gates, review, the merge lock, base and head
+checks, and the merge-card request. Do not run a hand script chain for that path.
+It allocates the merge card's id itself (never `D-<task digits>`) and reuses that
+id on later turns. After gates pass, authored
+`<repo>/state/decision-details/<decision-id>.json` always wins. For the self
+project, when none exists, it builds checked details from the latest answered
+dispatch A card into `state/decision-details-built/`. Author preflighted details
+only when its wake asks: a failed build names the reserved id and the missing
+card, structural error or failing STE line; external projects still need authored
+details. Supply them under the reserved id in `state/decision-details/`.
+A draft wake asks for the PR to become ready; autopilot never marks it ready.
 Missing/invalid details produce “no captain card created” with the diagnostic;
 inspect the actual files and error, rather than fabricating content or captain A.
+The captain's board click remains the only merge authorization.
 
 Publication is **not atomic**: `fm-decide.sh` validates, writes the pending JSON
 with noclobber, attempts the diagram, then attempts the bilingual request event

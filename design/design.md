@@ -379,7 +379,8 @@ New requests require `--details <file>` with this shared data contract:
 `{en: Locale, "zh-TW": Locale}`, where each Locale contains nonempty strings
 `title`, `explanation`, `before`, `after`, `outcome`, and `options.A/B/C`, each
 with `description`, `pros`, `cons`. Each string is bounded to 2000 code points.
-Firstmate authors both locales; the scripts do not infer them from task titles.
+Firstmate authors both locales on dispatch cards; the self-project merge fallback
+reuses those approved details, rather than inferring intent from task titles.
 The board escapes data as text, diagrams use the authored before/after labels,
 and zh-CN applies the same ordered TW-to-CN table as the UI. Invalid requests
 fail before a pending record is written; existing IDs cannot be replaced.
@@ -450,10 +451,18 @@ marked “checked by eye”.
 A new card's id names its owner, `D-<project>-<task>-<n>`, and is allocated by
 `fm-decide.sh --allocate` before the card is requested (section 15.4).
 `fm-autopilot.sh` consumes `state/decision-details/<id>.json` after gates pass,
-under the id it allocated for the task's merge card and names when details are
-missing; a later turn reuses that id rather than taking another. Missing or
-invalid authored input is reported as no card created. Only a successful
-request is announced as asking the captain.
+under the id it allocated for the task's merge card; a later turn reuses that
+id rather than taking another. Authored details always win and are never
+overwritten. For the self project, when no authored file exists, the autopilot
+builds details from the highest-numbered answered dispatch card with chosen A
+for that task. It copies both locales' intent fields and checks the result with
+`fm_ste.py check-details --kind merge` before writing
+`state/decision-details-built/<id>.json`. Built files stay outside the gate
+fingerprint's inputs, so a write or a refused request starts no new gate run.
+An external project still needs authored details. A failed build wakes firstmate
+with the reserved id and the missing-card or checker diagnostic. Invalid
+authored input is reported as no card created. Only a successful request is
+announced as asking the captain.
 
 **Only a decision request rings (T-096).** A card the captain must answer can
 sit unseen while the captain is not looking at the board, so inside Herdr
@@ -5845,13 +5854,21 @@ A new worker head runs the standing-list protocol from round three, then the
 six gates. Gate exit 6 launches the next review round through the frozen
 launcher. Updated CI or a bound local APPROVE triggers fresh gates. Exit 0
 enters the project's merge lock, verifies the captured base and authoritative
-head, reuses the lowest unused merge reservation, and requests a card only
-from firstmate-authored details. Pending or answered cards remain authoritative;
+head, reuses the lowest unused merge reservation, and requests a card from
+authored details when present. Otherwise, for the self project it builds checked
+merge details from the latest answered dispatch A card into
+`state/decision-details-built/`, outside the advancement fingerprint's inputs.
+Pending or answered cards remain authoritative;
 legacy numeric ids are never mistaken for a task's reservation. Another project
 has its own lock, PR-number namespace, events, evidence and decision ids.
 
-Missing details queues one wake naming `D-<project>-<task-key>-<n>`. REJECT
-queues a brief request. Scope questions, failed gates, protocol violations,
+A failed details build queues one wake naming `D-<project>-<task-key>-<n>`
+and its missing-card, structural or STE diagnostic. External projects without
+authored details wake with "external project: author the details". A draft PR
+with no running task job queues one bilingual wake per head with identity
+`draft-<n>-<head>`, asking firstmate to mark it ready; the autopilot never marks
+it ready itself. Each open draft gets one wake on the first poll after upgrade.
+REJECT queues a brief request. Scope questions, failed gates, protocol violations,
 launcher exits 2/3/65, and a review without a verdict queue judgment with the
 child's own retained-log line where available. A gate, protocol or review result
 for a PR that has merged, or that has a captain merge chosen A at that head

@@ -49,9 +49,12 @@ not that a model follows them. Candidate-specific live acceptance remains requir
   the open list are fetched directly. Each poll shares one event-log snapshot.
   It queues one judgment
   wake per head for REJECT, scope questions, failed gates or launchers, missing
-  verdicts and missing authored merge-card details. A missing-details wake
-  names the reserved project/task decision id. Its owned children write
-  completion receipts and ring the service's separate `autopilot.d` channel;
+  verdicts, draft PRs, and missing merge-card details when the self-project
+  dispatch-card build fallback fails or an external project needs authored
+  details. A missing-details wake names the reserved project/task decision id
+  and the build diagnostic. Authored details keep priority; generated details
+  live outside the gate fingerprint in `state/decision-details-built/`.
+  Its owned children write completion receipts and ring the service's separate `autopilot.d` channel;
   the service then queues only the judgment firstmate needs. Neither a wake
   nor an instruction proves model receipt or compliance.
 - **The watch.** `bin/fm-watch-arm.sh` attaches to the one live watcher
