@@ -83,9 +83,9 @@ with open(sys.argv[4], 'a') as log: log.write('WORKER_COMPLETE:T-223\\n')
             spec_sha256=hashlib.sha256(text.encode()).hexdigest(), verdict='SPEC-OK',
             provenance={'level': 'legacy', 'vendor': 'claude'})
 
-    def launch(self, pr=None):
+    def launch(self, pr=None, project='app'):
         args = [str(self.engine / 'bin/fm-worker.sh'), '--repo', str(self.engine),
-                '--project', 'app', '--task', 'T-223']
+                '--project', project, '--task', 'T-223']
         if pr is not None: args += ['--pr', str(pr)]
         result = subprocess.run(args, env=self.env, text=True, capture_output=True,
                                 stdin=subprocess.DEVNULL, timeout=120)
@@ -173,6 +173,27 @@ with open(sys.argv[4], 'a') as log: log.write('WORKER_COMPLETE:T-223\\n')
         self.assertEqual(result.returncode, 65, self.output)
         self.assertIn('adopt', self.output)
         self.assertFalse((self.scratch/'prompt.md').exists())
+
+    def test_adopt_self_project_refused_before_adapter_or_push(self):
+        # Route through real self storage; setting FM_EXTERNAL alone would be
+        # overwritten by fm_storage_init. Preserve the external fixture too.
+        config = self.engine / 'config.yaml'
+        config.write_text(config.read_text() + '\n  self:\n    repo: .\n'
+                          '    github: owner/engine\n    base: main\n    required_check: ci\n')
+        tasks = self.engine / 'design/tasks'; tasks.mkdir(parents=True)
+        text = json.dumps(self.spec)
+        (tasks / 'T-223.json').write_text(text)
+        state = self.engine / 'state'
+        Store(state, 'self', 'T-223', external=False).append('spec-preflight', 1,
+            'reviewer-adopt', self.base, '1. Worker refusal fixture.\nSPEC-OK:T-223',
+            spec_sha256=hashlib.sha256(text.encode()).hexdigest(), verdict='SPEC-OK',
+            provenance={'level': 'legacy', 'vendor': 'claude'})
+        result = self.launch(project='self')
+        self.assertEqual(result.returncode, 65, self.output)
+        self.assertIn('adopt is only supported for external projects', self.output)
+        self.assertFalse((self.scratch / 'prompt.md').exists(), self.output)
+        calls = [json.loads(line) for line in (self.scratch / 'git.jsonl').read_text().splitlines()]
+        self.assertFalse(any('push' in call for call in calls), calls)
 
     def test_adopt_scope_covers_human_commits(self):
         self.spec['scope'] = ['other']; self.write_spec(); self.refusal('app')
@@ -377,6 +398,27 @@ class BaseBinding(AdoptionRounds):
 
 
 class AdoptionPilot(Authority):
+    def test_pilot_unpinned_adopting_draft_cannot_advance(self):
+        import fm_autopilot as autopilot
+        state = self.root / 'state'; state.mkdir()
+        (self.root / 'T-1.json').write_text(json.dumps(dict(id='T-1', adopt=self.value)))
+        ctx = dict(engine=str(ROOT), target=str(self.root), state=str(state), tasks=str(self.root),
+                   project='app', base='main', external=True, repository='owner/app', evidence_project='app')
+        pilot = autopilot.Pilot(ctx, clock=lambda: 1000)
+        pilot.policy_error = None; pilot.policy = dict(autopilot.DEFAULTS)
+        pr = dict(number=9, state='open', head=dict(ref='human', sha='a'*40),
+                  base=dict(ref='release', sha='b'*40), title='Human work')
+        with patch.object(pilot, 'read_head_spec', side_effect=ValueError('committed task spec unavailable at PR head')), \
+             patch.object(pilot, 'advance') as advance, patch.object(pilot, 'sync_branch') as sync, \
+             patch.object(pilot, 'recheck') as recheck:
+            self.assertEqual(pilot.pr_task(pr), 'T-1')
+            self.assertEqual(pilot.task(pr), '')
+            self.assertIn('no authorized pin', pilot.data['pulls']['9']['reason'])
+            pilot.pull(pr, [], [], [], [])
+            advance.assert_not_called()
+            sync.assert_not_called()
+            recheck.assert_not_called()
+
     def test_pilot_pin_authority_and_no_restack(self):
         import fm_autopilot as autopilot
         state = self.root/'state'; state.mkdir()

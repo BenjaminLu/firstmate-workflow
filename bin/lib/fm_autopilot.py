@@ -275,8 +275,6 @@ class Pilot(BranchUpdates, MechanicalLoop):
     def task(self, pr):
         task = self.pr_task(pr)
         reason = getattr(self, '_adopt_reason', '') or 'branch/title does not identify a task'
-        if task and self.ctx['external'] and self.adoptions()[0].get(pr['number']) == task:
-            return task
         if task:
             try:
                 spec = self.read_head_spec(pr, task)
