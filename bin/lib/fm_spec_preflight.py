@@ -213,8 +213,9 @@ of new user-facing keys; privacy of external project text when FM_EXTERNAL=1.
 Every gap belongs in this one report. A later pass may add only NEW-GROUND or
 MISSED items, not silently introduce another round of unlabelled gaps.
 {history}
-Close the list with this standalone line immediately before the verdict
-(blank lines or one short summary sentence between them are allowed):
+Put any summary sentence before item 1. After the last numbered item, write
+only this standalone marker line and then the verdict, with nothing but blank
+lines between the last item, the marker and the verdict:
 PREFLIGHT-COMPLETE:{task}
 End the final assistant answer with exactly one standalone closing line:
 SPEC-OK:{task}
