@@ -618,12 +618,31 @@ chain appends to one log, a verdict only reads the bytes its own run added.
 
 `fm_vendor_chain <role>` builds the order and `fm_run_chain` runs it, both in
 `bin/fm-config.sh`, so the worker and the reviewer fall back identically. Each
-role may name its own engine — `reviewer:` and `worker:` blocks in
-`config.yaml`. Named vendors lead their existing fallback chain. The shipped
+role may name its own engine — `reviewer:` and `worker:` blocks in the
+engine `config.yaml`, with private external-project overrides below. Named
+vendors lead their configured fallback chain. The shipped
 worker rule `opposite-of-host` resolves from the recorded firstmate host and
 puts both main vendors before the remaining fallbacks (§4), with no vendor
 run twice. A reviewer whose engine is down is
 therefore not a reviewer who never ran.
+
+External projects may override either role's `vendor:` in the `worker:` or
+`reviewer:` block of private `FM_HOME/projects/<name>/state/config.yaml`.
+A named private vendor records `rule=project`; private `opposite-of-host`
+keeps that rule, and explicit `--vendor` still wins and records `explicit`.
+A non-empty private `fallback:` list in `- item` line form replaces only the
+engine fallback list; the opposite-of-host pair step still comes before it.
+Empty or missing private lists use the engine list. Inline values such as
+`fallback: [codex]` are reported and ignored. Models stay in the engine config:
+role/top-level model overrides belong to the vendor the engine alone resolves;
+other vendors use `models.<vendor>`, with no private model override.
+The shared resolver applies this policy to dispatch, autopilot and hand launches.
+A dispatched task reads changed private vendor settings at its next launch
+without a re-gate: its contract pin stays fixed. Before dispatch, changing the
+private file changes its contract digest and requires fresh readiness judgment.
+Re-running onboarding rewrites the private file from the contract and drops
+these hand-added keys; add them again afterward. The board vendor badge still
+shows the engine rule.
 
 The reviewer's `vendor` and `model` are the captain's choice (T-066); this
 repository names `claude` and `claude-opus-5-5` for review. Since T-174 the
@@ -5065,6 +5084,14 @@ engine queue: only its namespaced id, `reason` (`forwarded`), `origin_project`,
 `origin_reason`, projected line and time (`woken`) cross that boundary.
 Posting is an explicit projection controlled by project
 policy, not a prerequisite to retaining or gating local evidence.
+
+Private `state/config.yaml` may also name `worker:`/`reviewer:` vendors and a
+non-empty `fallback:` list using `- item` lines (§5.3). The private list replaces
+only the engine fallback list, after the opposite-of-host pair step; bracket
+form is reported and ignored. Named private vendors record `rule=project`.
+Dispatched tasks use changed values at their next launch without re-gating
+because their contract pins stay fixed. Onboarding rewrites this file from the
+contract and drops hand-added vendor/fallback keys; add them again afterward.
 
 Cleanup, reconcile, worker, reviewer and gates take the same project context.
 Cleanup removes only a validated direct child of that project's worktree root,

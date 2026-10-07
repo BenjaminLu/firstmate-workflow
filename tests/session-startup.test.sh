@@ -140,6 +140,50 @@ class Session(SessionFixture):
             ['bash', '-c', 'export FM_ENTRY_PID=$$ FM_ENTRY_SCRIPT=fm-session.sh; exec "$0" "$@"',
              str(self.repo / 'bin/fm-session.sh'), mode, '--repo', str(self.repo)],
             env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+    def test_start_external_default_reports_engine_models(self):
+        """Registry imports stay real; only the session script call is stubbed."""
+        shutil.copyfile(self.repo / 'bin/fm-herdr.py', self.repo / 'bin/fm-herdr-real.py')
+        (self.repo / 'bin/fm-herdr.py').write_text("""import importlib.util
+import os
+from pathlib import Path
+import runpy
+import sys
+real = Path(__file__).with_name('fm-herdr-real.py')
+if __name__ != '__main__':
+    spec = importlib.util.spec_from_file_location('fm_herdr_real', real)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    globals().update({key: value for key, value in vars(module).items()
+                      if not key.startswith('__')})
+elif len(sys.argv) > 1 and sys.argv[1] == 'session':
+    print('FM_EXTERNAL=' + os.environ.get('FM_EXTERNAL', ''))
+    print('FM_STATE_DIR=' + os.environ.get('FM_STATE_DIR', ''))
+else:
+    runpy.run_path(str(real), run_name='__main__')
+""")
+        private_home = tempfile.TemporaryDirectory()
+        self.addCleanup(private_home.cleanup)
+        state = Path(private_home.name).resolve() / 'projects/sample/state'
+        state.mkdir(parents=True)
+        (state / 'config.yaml').write_text(
+            'reviewer:\n  vendor: codex\nworker:\n  vendor: claude\n')
+        (self.repo / 'config.yaml').write_text(
+            'vendor: codex\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n'
+            'default_project: sample\nprojects:\n  sample:\n'
+            '    github: owner/sample\n    base: main\n    required_check: ci\n')
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(('FM_', 'HERDR_', 'CLAUDE', 'CODEX'))}
+        env.update(FM_HOME=str(Path(private_home.name).resolve()),
+                   HOME=private_home.name, FIRSTMATE_CI_SESSION='1')
+        result = subprocess.run(
+            ['bash', '-c', 'export FM_ENTRY_PID=$$ FM_ENTRY_SCRIPT=fm-session.sh; exec "$0" "$@"',
+             str(self.repo / 'bin/fm-session.sh'), 'start', '--repo', str(self.repo)],
+            env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('FM_EXTERNAL=1', result.stdout)
+        self.assertIn('FM_STATE_DIR=' + str(state), result.stdout)
+        self.assertNotIn('names no reviewer', result.stderr)
+
     def test_start_reports_a_project_that_names_no_reviewer(self):
         for config, missing in [('vendor: claude\n', 'vendor and model'),
                                 ('vendor: claude\nreviewer:\n  vendor: claude\n', 'model'),

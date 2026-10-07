@@ -477,11 +477,48 @@ fm_host_harness() {
   jq -r '.harness | select(type == "string")' "$(fm_host_record)" 2>/dev/null || true
 }
 
+# Private project values are live launch policy, not the pinned gate contract.
+fm_project_vendor() {
+  [ "${FM_EXTERNAL:-0}" = 1 ] && [ -n "${FM_STATE_DIR:-}" ] &&
+    [ -f "$FM_STATE_DIR/config.yaml" ] && [ -n "${1:-}" ] || return 0
+  fm_cfg_in "$1" vendor "$FM_STATE_DIR/config.yaml"
+}
+
+fm_vendor_source() {
+  if [ -n "$(fm_project_vendor "${1:-}")" ]; then
+    printf '%s\n' project
+  else
+    printf '%s\n' engine
+  fi
+}
+
 fm_vendor_rule() {
   local role="${1:-}" f="${2:-${FM_CONFIG:-config.yaml}}" v=''
+  v="$(fm_project_vendor "$role")"
+  if [ -n "$v" ]; then printf '%s\n' "$v"; return 0; fi
   [ -n "$role" ] && v="$(fm_cfg_in "$role" vendor "$f")"
   [ -n "$v" ] || v="$(fm_cfg vendor "$f")"
   printf '%s\n' "${v:-mock}"
+}
+
+# Only line-form, non-empty private lists replace the engine fallback list.
+# The chain asks for the diagnostic once; head resolution uses the same policy.
+fm_vendor_fallback() {
+  local f="${1:-${FM_CONFIG:-config.yaml}}" warn="${2:-0}" private list inline
+  if [ "${FM_EXTERNAL:-0}" = 1 ] && [ -n "${FM_STATE_DIR:-}" ] &&
+     [ -f "$FM_STATE_DIR/config.yaml" ]; then
+    private="$FM_STATE_DIR/config.yaml"
+    inline="$(fm_cfg fallback "$private")"
+    if [ -n "$inline" ]; then
+      if [ "$warn" = 1 ]; then
+        echo "fm-vendor: $private: fallback must use '- vendor' lines; using the engine fallback list" >&2
+      fi
+    else
+      list="$(fm_cfg_list fallback "$private")"
+      if [ -n "$list" ]; then printf '%s\n' "$list"; return 0; fi
+    fi
+  fi
+  fm_cfg_list fallback "$f"
 }
 
 fm_vendor_chain() {
@@ -498,7 +535,7 @@ fm_vendor_chain() {
         *) printf '%s\n' claude codex ;;
       esac
     fi
-    fm_cfg_list fallback || true
+    fm_vendor_fallback "${FM_CONFIG:-config.yaml}" 1 || true
   } | awk 'NF && !seen[$0]++'
 }
 
@@ -515,7 +552,7 @@ fm_role_vendor() {
     case "$host" in
       claude) v=codex ;;
       codex) v=claude ;;
-      *) v="$(fm_cfg_list fallback "$f" | head -1)"; v="${v:-mock}"
+      *) v="$(fm_vendor_fallback "$f" | head -1)"; v="${v:-mock}"
          echo "fm-vendor: opposite-of-host: recorded host ${host:-unknown}; using configured fallback head $v" >&2 ;;
     esac
   fi
@@ -528,7 +565,12 @@ fm_record_vendor_resolution() {
   local role="$1" explicit="${2:-}" rule host vendor
   rule="$(fm_vendor_rule "$role")"; host="$(fm_host_harness)"
   if [ -n "$explicit" ]; then rule=explicit; vendor="$explicit"
-  else vendor="$(fm_role_vendor "$role")"; fi
+  else
+    vendor="$(fm_role_vendor "$role")"
+    if [ "$rule" != opposite-of-host ] && [ "$(fm_vendor_source "$role")" = project ]; then
+      rule=project
+    fi
+  fi
   echo "fm-vendor: host=${host:-unknown} rule=$rule resolved=$vendor" >&2
   [ -n "${FM_RUN_DIR:-}" ] && [ -f "$FM_RUN_DIR/identity.json" ] || return 0
   python3 "$_fm_code_dir/lib/fm_config_runtime.py" vendor-resolution "$FM_RUN_DIR/identity.json" "$host" "$rule" "$vendor"
@@ -549,8 +591,8 @@ fm_log_vendor_resolution() {
 # round on <vendor> takes, in order:
 #
 #   1. the role's own `model:` (worker.model / reviewer.model), only when
-#      <vendor> is the role's own vendor - the override the role names is
-#      for the engine the role names;
+#      <vendor> is the role's engine-config vendor (ignoring private project
+#      overrides) - the model belongs to the engine vendor the role names;
 #   2. `models.<vendor>`, the vendor's own model;
 #   3. the top-level `model:`, only when <vendor> is the top-level vendor
 #      (a config written before `models:` existed);
@@ -564,11 +606,11 @@ fm_log_vendor_resolution() {
 fm_model_for() {
   local role="${1:-}" vendor="${2:-}" f="${3:-${FM_CONFIG:-config.yaml}}" m=''
   [ -n "$vendor" ] || vendor="$(fm_role_vendor "$role" "$f")"
-  if [ -n "$role" ] && [ "$vendor" = "$(fm_role_vendor "$role" "$f")" ]; then
+  if [ -n "$role" ] && [ "$vendor" = "$(FM_EXTERNAL=0 fm_role_vendor "$role" "$f")" ]; then
     m="$(fm_cfg_in "$role" model "$f")"
   fi
   [ -n "$m" ] || m="$(fm_cfg_in models "$vendor" "$f")"
-  if [ -z "$m" ] && [ "$vendor" = "$(fm_role_vendor '' "$f")" ]; then
+  if [ -z "$m" ] && [ "$vendor" = "$(FM_EXTERNAL=0 fm_role_vendor '' "$f")" ]; then
     m="$(fm_cfg model "$f")"
   fi
   printf '%s\n' "$m"
