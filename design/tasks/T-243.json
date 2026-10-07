@@ -1,0 +1,205 @@
+{
+  "id": "T-243",
+  "title": "the board's /api/state stays smaller as history grows: settled answered decision records beyond the newest 50 and decision_made outcomes beyond the newest 200 leave the default payload, while tasks, counts, every handoff and every merged outcome stay so the voyage game behaves exactly as today; GET /api/events pages the log with a stable per-store cursor and a bounded limit, and the board's log gains a load-older control",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "board/server.ts",
+    "board/public/index.html",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "i18n/tw2cn.tsv",
+    "tests/board-state-paging.test.sh",
+    "tests/lib/board_state_paging.py",
+    "tests/e2e/board-log-paging.spec.ts",
+    "games/voyage-2d/docs/interface.md",
+    "tests/i18n.test.sh",
+    "design/design.md",
+    "design/tasks/T-243.json"
+  ],
+  "acceptance": [
+    "Why. The captain approved the board prototype on 2026-10-07: \"看板樣式可以了, 可以以這個版本開發\". The prototype's notes (the round's local brief, state/briefs/T-241.design.md, section 'API changes a production version needs') measured /api/state on the live board at 3.4 MB: handoffs about 2.0 MB (2,772 items), responses about 1.1 MB (336), outcomes about 0.3 MB (901), tasks about 0.13 MB (223), recent about 0.1 MB (40). Every SSE state push repeats it. The log shows only the newest 40 events, and nothing can page further back.",
+    "Change 1, the default payload (board/server.ts buildState). After counts and every derived value are computed from the full lists, and after ?project= filtering: `responses` keeps every answered decision record whose merge or effect is not settled (merge running or merge_unknown, effect_outcome failed and not effect_superseded) and every record whose merge failed, superseded or not (index.html clears its mergeRefused feedback only by finding the refused record marked superseded, and failed merges are rare) plus the newest 50 of the others, newest meaning the largest (ts, id) pair, where ts is the record's own ts; the kept list is then emitted in (ts, id) order. `handoffs` is not windowed: the voyage game rebuilds rounds, approvals and kraken arms from every handoff, so all of them stay. `outcomes` keeps every entry of type `merged` (the game fires merge salvos only from these), plus the newest 200 of the `decision_made` entries, newest by ts, where a response-derived entry takes its decision record's ts; the kept list keeps today's order. `tasks`, `counts`, `recent` (40), `pending`, `crew`, `watch`, `projects` and every other field are unchanged, except that each `recent` item gains a `cursor` field (Change 2). The payload gains `windows: {responses: {shown, total}, outcomes: {shown, total}}` with totals before windowing. pr_urls and pr_urls_by_project are built, as today, from the lists the payload holds. The memo, the stamp and the SSE pushes of T-235 use the windowed value. One total order for both windows: ts is compared as Date.parse(ts) milliseconds (the server's own later() reading), an entry whose ts is missing or unparsable counts as older than every dated entry, and ties break by the record id for responses and by the entry's identity string for outcomes, both compared as plain strings; 'newest N' means the last N in that order.",
+    "Change 2, GET /api/events?before=<cursor>&limit=<n>[&project=]. Read-only, served like /api/state. The order is the order recent already uses: readEvents joins the stores' events.jsonl in stores() order and recent is the last 40 of that joined list after project filtering and lost-run folding, newest first. A cursor names one event by its own store and its position inside that store, `<store>:<index>:<sha>`, where store is the first 12 hex of sha256 of the store's absolute directory path as stores() returns it (one key per directory, however many projects share it; no path or project name appears in the cursor), index is the event's 0-based position among that store's events as parseEvents returns them (unparsable lines are skipped, so appending never changes an earlier index), and sha is the first 12 hex of sha256 of the event's raw line text without its newline; because each store is append-only, appending to any store never moves an older event's cursor. Each `recent` item and each returned event carries its `cursor`. The endpoint returns `{events, next, pr_urls_by_project}`, where pr_urls_by_project is built for the returned events exactly as /api/state builds it (mentioned() per project over those events), so the page links every #n in an older line as it links the live log: the events that come before the cursor's event in that joined, filtered, folded order, newest first, in the shape of `recent` items; limit defaults to 40 and is clamped to 1..200; with no cursor the first page equals `recent`; `next` is the cursor of the oldest returned event, or null when none is older. A cursor whose store no longer holds that sha at that index answers 409 `{code: \"staleCursor\"}`; a malformed cursor or a store key that matches no current store answers 400 `{code: \"badCursor\"}`.",
+    "Change 3, the log loads older events (board/public/index.html). Below the live log list (#log inside .logwrap, whose ids stay) a 'Load older' button fetches /api/events?before=<anchor>, where the anchor is the cursor of the oldest live event at the moment of the first click, and shows the result in a separate older list below the live list, rendering each line through said() with the page's link map merged with the page's pr_urls_by_project; further clicks fetch before the oldest older event and append. The live list keeps being redrawn from recent exactly as today and is never merged with the older list. When the anchor's event is no longer in the live list (new events pushed it out), the older list is cleared and the 'Load older' button shows again, so nothing is shown twice and no gap is hidden. The button hides when next is null; a 409 staleCursor or 400 badCursor clears the older list; a failed fetch shows `logLoadFailed` and keeps what is shown. New i18n keys, each in i18n/ui.en.json and i18n/ui.zh-TW.json (the board has no zh-CN dictionary; a new Traditional term goes into i18n/tw2cn.tsv): `logLoadOlder`, `logLoadFailed`, and the server codes `staleCursor` and `badCursor` (tests/i18n.test.sh collects every server `code:` and requires it in both dictionaries). Every new page call uses the double-quoted form t(\"key\"), which the existing page-key lint reads. Known limit, stated: on the unfiltered board the order is the stores joined in stores() order, as recent already uses it, so an event appended to an earlier store after the captain paged past that store's boundary is not in the older list until it is cleared and loaded again.",
+    "Not changed, stated, except one doc. games/voyage-2d/docs/interface.md is edited in place where it describes the board snapshot (the handoffs row around line 129, the responses paragraph around line 154, and the 'complete lists' sentence around lines 291-298): responses and decision_made outcomes become windowed as Change 1 states, while handoffs and merged outcomes stay complete lists, and the windows block reports totals. The voyage game code (games/voyage-2d/src and board/public/voyage2d) is unchanged and behaves identically: it reads only tasks, handoffs, recent, pending, crew and the merged entries of outcomes (games/voyage-2d/src/board-source.js:27, :66), all of which stay complete, and it never reads responses or decision_made outcomes. games/voyage-2d/tests/board-source.test.mjs and tests/e2e/game.spec.ts guard it unchanged. POST routes, decision records, the event log, task detail, and the card UI.",
+    "Tests, new behaviour (fail on base, pass after). tests/board-state-paging.test.sh with tests/lib/board_state_paging.py: a fixture board with 120 settled and 3 unsettled answered decisions (written in an order unrelated to their ts), 2,000 handoffs, 220 merged events, 1,000 decision outcomes and 50,000 events answers /api/state with exactly the windows above and a windows block whose totals match the full counts; every unsettled response, the 50 newest settled ones by (ts, id), all 2,000 handoffs and all 220 merged outcomes are present; a refused merge that is later superseded stays present even with more than 50 newer settled records, and a just-answered merged record is present, so index.html's mergeRefused and mergeRunning feedback clear as today; the responses and outcomes lists of the /api/state body for this fixture are at most half of their full serialised size (the kept share is about 32% of the entries), which the suite computes from its own fixture files; /api/events pages through all events of one project exactly once in order and returns a pr_urls_by_project that links a #n named only in an older event, its first page equals recent, limit is clamped, paging an external project's log while events keep being appended to the default store and to that project's store reaches the oldest event with no 409; recent items carry cursors equal to the endpoint's; a cursor whose event was rewritten answers 409 staleCursor and a malformed one 400. tests/e2e/board-log-paging.spec.ts: the log's 'Load older' appends older events with their #n linked, hides at the end, recovers from a stale cursor, keeps the older list while the anchor is still in the live list, and clears it once more than 40 new events push the anchor out.",
+    "Tests, regression. tests/i18n.test.sh guards the new keys (both dictionaries hold the same keys, and the page-key lint finds every key the page asks for). Every caller listed below keeps passing unchanged, and tests/e2e/game.spec.ts stays green.",
+    "Callers, all listed, each unaffected because its fixture stays inside every window (none of these fixtures holds more than 50 settled answered decisions or 200 decision_made outcomes; the preflight of this spec checked the loops) or because it reads no windowed list: bash suites tests/board-card-effects, board-pr-links, board-live-stream (SSE pushes), board-auth, board-progress, board-state-cost (and tests/lib/board-state-cost.ts), board-readiness, board-task-detail, board-identity, board-state, board-titles, board-projects, board-task-actions, board-wake, crew-end-to-end, decisions, diagram, gate-names, open and review-verdict; e2e specs board-activity, board-auth, board-brief-coverage (it reads #log .evidence-warning, which stays on the same list items), board-card-effects (failed-effect cards from responses, whose unsettled records the window keeps), board-chips, board-crew, board-pr-links, board-projects, board-review-duration, board-task-actions, board-task-detail, board-teardown, board-continuation, board-card-lock, board-layout, board-intent-cards, board-decisions, board-preflight, board-locales, firstmate-host, board-engine-rule, board-merges, game and board-waiting (all start the real server through tests/e2e/lib/fixture.ts); the voyage game source games/voyage-2d/src/board-source.js and its tests games/voyage-2d/tests/board-source.test.mjs and preflight.test.mjs; and index.html (responses for failed and running merges and failed effects, and for the refused-then-superseded and the just-merged decision at index.html:528-537: every failed merge stays in the window, and a just-merged record is among the newest; recent for the log). The new paging suite asserts the windows only on its own large fixture.",
+    "Migration. No stored data changes. In-repo clients are listed above and stay unaffected; an out-of-repo client that read full responses or decision_made outcomes sees windowed lists plus the windows block.",
+    "Docs. design/design.md §8 'The captain's board': edit in place for the default windows, the windows block, GET /api/events and the log's load-older control."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "The board state request sends fewer decision records, and the game reads the same data as today."
+        },
+        {
+          "kind": "fact",
+          "text": "A read endpoint pages the log with a cursor."
+        },
+        {
+          "kind": "fact",
+          "text": "The log loads older events, and the game behaves as today."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "You approved the board prototype on 2026-10-07: \"看板樣式可以了, 可以以這個版本開發\"."
+        },
+        {
+          "kind": "fact",
+          "text": "The state request sends 3.4 MB today, and every live update repeats it."
+        }
+      ],
+      "scope_in": [
+        "board/server.ts: the windows and the events endpoint",
+        "index.html: the load-older control in the log",
+        "a new paging suite and a log paging test",
+        "design section 8"
+      ],
+      "scope_out": [
+        "the voyage game code",
+        "the task list, POST routes, decision records and the event log",
+        "the card layout"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the state builder windows three long lists after it counts them. The paging suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: /api/events pages with a cursor and refuses a stale cursor. The paging suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the log fetches older pages, and the game test stays green. The log paging test proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Handoffs stay complete, because the game reads every handoff."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Board asks for the state"
+        },
+        {
+          "state": "gone",
+          "label": "Server sends every record"
+        },
+        {
+          "state": "gone",
+          "label": "Each push repeats 3.4 MB"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Board asks for the state"
+        },
+        {
+          "state": "new",
+          "label": "Server windows long lists"
+        },
+        {
+          "state": "new",
+          "label": "Log pages older events"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "看板狀態請求送出較少的決策紀錄，遊戲讀到的資料和現在相同。"
+        },
+        {
+          "kind": "fact",
+          "text": "一個唯讀端點用游標分頁提供日誌。"
+        },
+        {
+          "kind": "fact",
+          "text": "日誌能載入較舊的事件，遊戲照常運作。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 核准看板原型：\"看板樣式可以了, 可以以這個版本開發\"。"
+        },
+        {
+          "kind": "fact",
+          "text": "狀態請求現在送出 3.4 MB，每次即時更新都重送一次。"
+        }
+      ],
+      "scope_in": [
+        "board/server.ts：視窗和事件端點",
+        "index.html：日誌的載入較舊按鈕",
+        "新的分頁測試和日誌分頁測試",
+        "設計第 8 節"
+      ],
+      "scope_out": [
+        "航程遊戲程式",
+        "任務清單、POST 路由、決策紀錄和事件日誌",
+        "卡片版面"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：狀態產生器先計數，再截短三個長清單。分頁測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：/api/events 用游標分頁，並拒絕過期游標。分頁測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：日誌抓取舊頁，遊戲測試維持綠燈。日誌分頁測試證明這點。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "交接紀錄維持完整，因為遊戲會讀取每一筆。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "看板請求狀態"
+        },
+        {
+          "state": "gone",
+          "label": "伺服器送出所有紀錄"
+        },
+        {
+          "state": "gone",
+          "label": "每次推送重送 3.4 MB"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "看板請求狀態"
+        },
+        {
+          "state": "new",
+          "label": "伺服器截短長清單"
+        },
+        {
+          "state": "new",
+          "label": "日誌分頁載入舊事件"
+        }
+      ]
+    }
+  }
+}

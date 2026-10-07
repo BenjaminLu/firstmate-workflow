@@ -19,6 +19,11 @@ assert_eq "$ke" "$kt" "both dictionaries hold exactly the same keys"
 assert_fail "grep -q '^$' < <(jq -r '.[]' '$en')" "no English value is empty"
 assert_fail "grep -q '^$' < <(jq -r '.[]' '$tw')" "no Chinese value is empty"
 
+# T-243: paging labels and cursor refusals must exist even before a code scan.
+for k in logLoadOlder logLoadFailed staleCursor badCursor; do
+  assert_ok "jq -e --arg k '$k' 'has(\$k)' '$en' >/dev/null && jq -e --arg k '$k' 'has(\$k)' '$tw' >/dev/null" "log paging key $k exists in both dictionaries"
+done
+
 # every key the page asks for has to exist
 missing=''
 # a word boundary, or the t at the end of get(" matches too

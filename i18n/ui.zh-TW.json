@@ -1,4 +1,8 @@
 {
+  "logLoadOlder": "載入較舊事件",
+  "logLoadFailed": "無法載入較舊事件，請再試一次。",
+  "staleCursor": "事件游標已過期，請重新載入日誌。",
+  "badCursor": "事件游標無效，請重新載入日誌。",
   "showMore": "展開（{n}）",
   "notesHeading": "備註",
   "optionsHeading": "選項",

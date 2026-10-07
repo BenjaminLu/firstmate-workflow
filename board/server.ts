@@ -155,8 +155,15 @@ const readText = (file: string): string => {
 type EventRead = { ino: number; size: number; offset: number; mtimeMs: number; ctimeMs: number;
   events: Event[]; rest: Buffer; prefix: Buffer };
 const eventReads = new Map<string, EventRead>();
+// Metadata stays out of JSON.stringify(event): game identities retain their exact input.
+const eventMeta = new WeakMap<Event, { sha: string; cursor?: string }>();
+const shortHash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 12);
 const parseEvents = (text: string): Event[] => text.split("\n").filter(Boolean)
-  .flatMap(line => { try { return [JSON.parse(line) as Event]; } catch { return []; } });
+  .flatMap(line => { try {
+    const event = JSON.parse(line) as Event;
+    if (event && typeof event === "object") eventMeta.set(event, { sha: shortHash(line) });
+    return [event];
+  } catch { return []; } });
 // The base reader accepts a valid final JSON line even before its newline.
 // Keep that tail out of the committed prefix so completing it never duplicates it.
 const eventSnapshot = (read: EventRead): Event[] => read.events.concat(parseEvents(read.rest.toString("utf8")));
@@ -198,7 +205,14 @@ const eventFile = (file: string): Event[] => {
   } finally { if (fd !== undefined) closeSync(fd); }
 };
 const readEvents = (directories: string[] = stores()): Event[] => timed("events", () =>
-  directories.flatMap(dir => eventFile(join(dir, "events.jsonl"))));
+  directories.flatMap(dir => {
+    const key = shortHash(dir);
+    return eventFile(join(dir, "events.jsonl")).map((event, index) => {
+      const meta = eventMeta.get(event);
+      if (meta) meta.cursor = `${key}:${index}:${meta.sha}`;
+      return event;
+    });
+  }));
 
 // A task's state is whatever the log last said about it. The board never
 // decides; it reports.
@@ -977,6 +991,67 @@ const state = (only: string | null = null): BoardState => withStorage(() => {
   }
   return value;
 });
+// every record that carries a pr number carries its URL beside it, on its
+// own project's repository
+const linked = <T extends Record<string, unknown>>(o: T): T & { pr_url?: string | null } =>
+  o && typeof o === "object" && o.pr != null ? { ...o, pr_url: pullUrl(repoOf(projectOf(o)), o.pr) } : o;
+const evidenceWarning = (event: Event) => {
+  const data = event.data as Record<string, any> | undefined;
+  const coverage = data?.coverage;
+  return data?.evidence_event === 'brief_gap' ||
+    (data?.evidence_event === 'brief_coverage' &&
+      ['gaps', 'deferred', 'waived'].some(key => Array.isArray(coverage?.[key]) && coverage[key].length > 0));
+};
+// The live log and paged log share folding, filtering and rendering fields.
+const visibleEvents = (events: Event[], only: string | null) => {
+  // bin/fm-herdr.py's deck reconcile follows each agent_lost with the
+  // agent_finished (`data.status: process_gone`) that has always closed a
+  // vanished run; the log shows the loss and not that close as well
+  const closesLoss = new Set<Event>();
+  const lostLast = new Set<string>();
+  for (const e of events) {
+    const actor = String(e.actor ?? "");
+    if (e.type === "agent_finished" && lostLast.has(actor)
+      && (e.data as { status?: unknown } | undefined)?.status === "process_gone") closesLoss.add(e);
+    if (e.type === "agent_lost") lostLast.add(actor); else lostLast.delete(actor);
+  }
+  return events.filter(e => (only === null || projectOf(e) === only) && !closesLoss.has(e));
+};
+const logItem = (e: Event) => linked({ ...e, cursor: eventMeta.get(e)?.cursor, evidence_warning: evidenceWarning(e) });
+const eventPage = (url: URL, only: string | null) => {
+  const directories = stores(), events = readEvents(directories);
+  const before = url.searchParams.get("before");
+  let anchor: Event | undefined;
+  if (before !== null) {
+    const parts = /^([a-f0-9]{12}):(0|[1-9][0-9]*):([a-f0-9]{12})$/.exec(before);
+    if (!parts || !Number.isSafeInteger(Number(parts[2])) || !directories.some(dir => shortHash(dir) === parts[1]))
+      return json({ code: "badCursor" }, 400);
+    anchor = events.find(e => eventMeta.get(e)?.cursor === before);
+    if (!anchor) return json({ code: "staleCursor" }, 409);
+  }
+  const visible = visibleEvents(events, only);
+  const end = anchor ? visible.indexOf(anchor) : visible.length;
+  // A valid raw event outside this filtered/folded view is not a page anchor.
+  if (end < 0) return json({ code: "badCursor" }, 400);
+  const asked = Number(url.searchParams.get("limit") ?? 40);
+  const limit = Number.isNaN(asked) ? 40 : Math.max(1, Math.min(200, Math.trunc(asked)));
+  const start = Math.max(0, end - limit);
+  const page = visible.slice(start, end).reverse().map(logItem);
+  const byProject: Record<string, Record<string, string>> = {};
+  for (const e of page) {
+    const project = projectOf(e);
+    byProject[project] = mentioned(repoOf(project), e, byProject[project] ?? {});
+  }
+  return json({ events: page, next: start > 0 ? page.at(-1)?.cursor ?? null : null, pr_urls_by_project: byProject });
+};
+// Missing/invalid dates precede every dated record; ties use plain strings.
+const windowOrder = (key: "id" | "identity") => (a: Record<string, any>, b: Record<string, any>) => {
+  const time = (value: unknown) => { const n = Date.parse(String(value ?? "")); return Number.isFinite(n) ? n : -Infinity; };
+  const x = time(a.ts), y = time(b.ts);
+  if (x !== y) return x < y ? -1 : 1;
+  const left = String(a[key] ?? ""), right = String(b[key] ?? "");
+  return left < right ? -1 : left > right ? 1 : 0;
+};
 const buildState = (only: string | null, tasksOnly = false) => {
   // Task detail shares the lane replay but never reads other projects or the
   // crew/session portion of the full board response.
@@ -995,17 +1070,6 @@ const buildState = (only: string | null, tasksOnly = false) => {
     answeredDecisions.add(key);
   }
   const def = defaultProject();
-  // every record that carries a pr number carries its URL beside it, on its
-  // own project's repository
-  const linked = <T extends Record<string, unknown>>(o: T): T & { pr_url?: string | null } =>
-    o && typeof o === "object" && o.pr != null ? { ...o, pr_url: pullUrl(repoOf(projectOf(o)), o.pr) } : o;
-  const evidenceWarning = (event: Event) => {
-    const data = event.data as Record<string, any> | undefined;
-    const coverage = data?.coverage;
-    return data?.evidence_event === 'brief_gap' ||
-      (data?.evidence_event === 'brief_coverage' &&
-        ['gaps', 'deferred', 'waived'].some(key => Array.isArray(coverage?.[key]) && coverage[key].length > 0));
-  };
   const pend = pending(directories).filter(d => !tasksOnly || projectOf(d) === (only ?? ""));
   const responses = readResponses(directories).filter(d => !tasksOnly || projectOf(d) === (only ?? ""));
   // a task is its project and its id; `key` is how the rest of this reads one
@@ -1512,17 +1576,6 @@ const buildState = (only: string | null, tasksOnly = false) => {
       .map((c) => ({ id: c.id, name: c.name || c.crew_name || c.id, role: c.role,
         mode: c.mode ?? null, round: c.round ?? null, attempt: c.attempt ?? null }));
   }
-  // bin/fm-herdr.py's deck reconcile follows each agent_lost with the
-  // agent_finished (`data.status: process_gone`) that has always closed a
-  // vanished run; the log shows the loss and not that close as well
-  const closesLoss = new Set<Event>();
-  const lostLast = new Set<string>();
-  for (const e of events) {
-    const actor = String(e.actor ?? "");
-    if (e.type === "agent_finished" && lostLast.has(actor)
-      && (e.data as { status?: unknown } | undefined)?.status === "process_gone") closesLoss.add(e);
-    if (e.type === "agent_lost") lostLast.add(actor); else lostLast.delete(actor);
-  }
   // setting aside a task with crew aboard or an open pull request asks first
   // and stops that crew; the pull request is left open
   for (const t of tasks) t.confirm = t.crew.length > 0 || (t.pr !== null && !FINAL.has(t.stage));
@@ -1628,17 +1681,27 @@ const buildState = (only: string | null, tasksOnly = false) => {
     designDoc: existsSync(only && registry().projects.has(only) && stateDir(only) !== join(ROOT, "state")
       ? join(dirname(stateDir(only)), "design.md") : join(ROOT, "design/design.md")),
     designPath: only && registry().projects.has(only) && stateDir(only) !== join(ROOT, "state") ? "design.md" : "design/design.md",
-    // Full outcome stream: a busy refresh must not lose events outside recent.
+    // Derive from full records; apply payload windows only after replay.
     responses: reviewed.filter(mine).map(linked),
     handoffs: handoffs.filter((h) => !("project" in h) || mine(h)),
     outcomes: [...events.filter(e => (e.type === "merged" || e.type === "decision_made") && !supersededDispatch.has(e) && mine(e))
       .map(e => linked({ ...e, chosen: (e.data as { chosen?: unknown } | undefined)?.chosen, identity: outcomeOf(e) })),
-      ...responses.filter(d => d.identity && mine(d)).map(d => ({type:'decision_made',identity:d.identity,project:d.project,chosen:d.chosen,data:{decision:d.id,chosen:d.chosen}}))],
+      ...responses.filter(d => d.identity && mine(d)).map(d => ({type:'decision_made',identity:d.identity,ts:d.ts,project:d.project,chosen:d.chosen,data:{decision:d.id,chosen:d.chosen}}))],
     // a lost run shows once: its agent_lost, not also the agent_finished the
     // deck reconcile closes it with
-    recent: events.filter((e) => mine(e) && !closesLoss.has(e)).slice(-40).reverse().map(e => linked({ ...e, evidence_warning: evidenceWarning(e) })),
+    recent: visibleEvents(events, only).slice(-40).reverse().map(logItem),
     pending: shownPending.map(linked),
   };
+  const responseTotal = out.responses.length, outcomeTotal = out.outcomes.length;
+  const retained = (d: Record<string, any>) => d.merge === "running" || d.merge_unknown
+    || d.merge === "failed" || (d.effect_outcome === "failed" && !d.effect_superseded);
+  out.responses = [...out.responses.filter(retained),
+    ...out.responses.filter(d => !retained(d)).sort(windowOrder("id")).slice(-50)].sort(windowOrder("id"));
+  const newestDecisions = new Set(out.outcomes.filter(e => e.type === "decision_made")
+    .sort(windowOrder("identity")).slice(-200));
+  out.outcomes = out.outcomes.filter(e => e.type === "merged" || newestDecisions.has(e));
+  const windows = { responses: { shown: out.responses.length, total: responseTotal },
+    outcomes: { shown: out.outcomes.length, total: outcomeTotal } };
   // Every #n in text links to its own project's pull request: a log line,
   // a card and a crewman's activity each read the map of the project they
   // belong to. `pr_urls` is the default project's, which is every #n on a
@@ -1651,7 +1714,7 @@ const buildState = (only: string | null, tasksOnly = false) => {
     }
   const input = { events, aboard: shownCrew.filter((c) => c.role !== "firstmate").map((c) => c.id), cards: shownPending };
   const watched = timed("watch", () => watchState(input.events, input.aboard, input.cards));
-  const value = { ...out, watch: watched, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
+  const value = { ...out, windows, watch: watched, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
   watchInputs.set(value, input);
   return value;
 };
@@ -2397,6 +2460,10 @@ const server = Bun.serve({
       return detail ? json(detail) : json({ error: "unknown project or task" }, 404);
     }
     if (url.pathname === "/api/state") return json(state(only));
+    if (url.pathname === "/api/events") {
+      if (req.method !== "GET") return json({ error: "GET only" }, 405);
+      return eventPage(url, only);
+    }
 
     // whether this tab may write: the page disables its controls and says so
     // when it may not. A yes or a no, never the credential.

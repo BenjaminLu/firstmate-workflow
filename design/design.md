@@ -1768,7 +1768,7 @@ percentages. The regions below are that layout.
 | Voyage | the 2.5D stage (T-125) is the only ship view; crew, captain, handoffs and merge salvos live there |
 | Crew roster | separate field columns, shown by default and toggled from its own bar |
 | Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
-| Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl` |
+| Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl`, with a Load older control below the live list |
 
 **Engine badge (V7).** The server reads `config.yaml` on every state request —
 the top-level `vendor`, and `reviewer.vendor` when that block exists — and the
@@ -1831,6 +1831,52 @@ CLI retains its JSON output but exits 75 when the nonblocking acknowledgement
 lock is busy, so that unknown snapshot is never cached; library callers keep
 their existing conservative result. The reader resolves the record root once
 per call.
+
+**State windows and log pages (T-243).** After replay, counts, derived values
+and project filtering, `/api/state` keeps every response with a running or
+unknown merge, every failed merge even when superseded, and every failed effect
+not yet superseded, plus the newest 50 other answered records. Responses are
+emitted in `(ts, id)` order. Outcomes keep every `merged` entry and the newest
+200 `decision_made` entries, preserving their existing output order. A
+response-derived outcome uses its decision record's own `ts`. Both windows
+compare `Date.parse(ts)` milliseconds, missing or invalid timestamps before all
+dated entries, with plain-string ties by response id or outcome identity.
+`windows: {responses: {shown, total}, outcomes: {shown, total}}` reports returned
+lengths and totals before windowing. PR link maps are built from the returned
+lists; state memoization and SSE use this windowed value. Tasks, counts, pending,
+crew, watch, projects and all handoffs remain unchanged. The voyage reads no
+responses or decision outcomes; its full handoffs and merged outcomes remain
+available. No stored record or log changes, and task detail stays complete.
+External clients that consumed full responses or decision outcomes now receive
+these windows and their totals.
+
+`GET /api/events?before=<cursor>&limit=<n>[&project=]` is an open read like
+`/api/state`. It returns `{events, next, pr_urls_by_project}` in the live log's
+shape, newest first, with the same project filter and lost-run folding. Limit
+defaults to 40 and is clamped to 1–200. Without a cursor its default page equals
+`recent`; before a cursor it returns events preceding that event. `next` is the
+oldest returned event's cursor, or null when nothing is older. Both `recent`
+and paged events carry a cursor `<store>:<index>:<sha>`: the first 12 hex digits
+of SHA-256 of the absolute store directory, the zero-based parsed event index
+within that store (invalid JSON lines skipped), and the first 12 hex digits
+of SHA-256 of its raw line without newline. Neither paths nor project names
+appear in cursors. Appending to any store leaves older cursors stable. A
+missing store or malformed cursor returns 400 `badCursor`; a store no longer
+holding the same raw line hash at that index returns 409 `staleCursor`. The
+page link map scans all mentions per project, including PRs named only in old
+summary text.
+
+The log keeps `#log` inside `.logwrap` as the live newest-40 list. Load older
+captures its oldest cursor as the anchor, appends pages to a separate older
+list, and merges page link maps for rendering through `said()`. Further clicks
+use the oldest older event. The button hides at the end. When the anchor leaves
+`recent`, older rows clear and the button returns; pending fetches for that
+anchor are discarded. Bad/stale cursors clear older rows; other failures show
+`logLoadFailed` while preserving rows for retry. Locale keys include
+`logLoadOlder`, `logLoadFailed`, `badCursor` and `staleCursor` in both dictionaries.
+On the unfiltered board, stores remain joined in `stores()` order, as in
+`recent`: an event appended to an earlier store after paging past its boundary
+is not shown in older rows until they are cleared and loaded again.
 
 The lane order is sent by the server (`lanes`) so the page
 keeps no second copy. A task no event has moved yet is `ready` when every

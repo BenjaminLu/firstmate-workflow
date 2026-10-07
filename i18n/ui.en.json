@@ -1,4 +1,8 @@
 {
+  "logLoadOlder": "Load older",
+  "logLoadFailed": "Could not load older events. Try again.",
+  "staleCursor": "The event cursor is out of date. Load the log again.",
+  "badCursor": "The event cursor is invalid. Load the log again.",
   "showMore": "Show more ({n})",
   "notesHeading": "Notes",
   "optionsHeading": "Options",
