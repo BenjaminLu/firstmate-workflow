@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "gates": [
+    {
+      "n": 1,
+      "name": "branch"
+    },
+    {
+      "n": 2,
+      "name": "rebase"
+    },
+    {
+      "n": 3,
+      "name": "scope"
+    },
+    {
+      "n": 4,
+      "name": "fail-first"
+    },
+    {
+      "n": 5,
+      "name": "ci"
+    },
+    {
+      "n": 6,
+      "name": "approval"
+    }
+  ],
+  "legacy": {
+    "1": "branch",
+    "2": "rebase",
+    "4": "scope",
+    "5": "fail-first",
+    "6": "ci",
+    "7": "approval"
+  }
+}

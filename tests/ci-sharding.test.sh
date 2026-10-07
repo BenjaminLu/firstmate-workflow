@@ -73,7 +73,7 @@ for skip in shellcheck lint "test hygiene" stdin assertions dag "bash tests" "bu
 done
 rm -f "$sf/unit.spec.ts"; rm -rf "$sf/tests/e2e"
 
-# The bar for gate 4: --shard splits tests/*.test.sh into exactly n shards
+# Shard coverage: --shard splits tests/*.test.sh into exactly n shards
 # whose union is every suite, with no suite in two. Balanced by duration is
 # a quality, not a correctness property, so this reads only membership: it
 # collects the "+ path" line every shard printed and compares the combined

@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Require related concepts in the same operative paragraph, ignoring case,
 # Markdown emphasis and line wrapping. Never eval text read from a skill.
-# This suite reads the checkout, so gate 5's reverted skills are its inputs.
+# This suite reads the checkout, so gate 4's reverted skills are its inputs.
 contract() {
   python3 - "$ROOT/skills/$1/SKILL.md" "${@:2}" <<'PY'
 from pathlib import Path

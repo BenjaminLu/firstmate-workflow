@@ -5,6 +5,8 @@ description: Stock-only launch of workers and reviewers through fm-worker.sh / f
 
 # Stock crew dispatch
 
+The six gates are 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci, 6 approval.
+
 *Stock launch* is the only allowed way to start a worker or reviewer. Claude,
 Codex and Cursor follow this recipe the same way. Session wrappers,
 `run-*.sh` sidecars, `herdr pane run` of raw adapters, and inventing a

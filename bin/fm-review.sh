@@ -260,12 +260,12 @@ trap 'exit 143' TERM
 trap '' HUP
 
 # Resolve an existing pin before any branch-owned task lookup. An absent pin
-# keeps legacy unauthorised rounds readable; gate 4 will explicitly reject it.
+# keeps legacy unauthorised rounds readable; gate 3 will explicitly reject it.
 FM_SPEC_PIN_JSON=''
 FM_SPEC_PIN_JSON="$(fm_pin_existing "$TASK")"; pin_rc=$?
 case "$pin_rc" in
   0) ;;
-  3) echo 'fm-review: no pin; legacy task context is unapproved and gate 4 will refuse it' >&2 ;;
+  3) echo 'fm-review: no pin; legacy task context is unapproved and gate 3 (scope) will refuse it' >&2 ;;
   *) exit "$pin_rc" ;;
 esac
 # Only an unpinned legacy round uses the branch lookup below. It supplies
@@ -371,7 +371,7 @@ if fm_crew_hatch fm-review; then unsandboxed=1; fi
 
 # What this round reviews, pinned once: the head, its merge-base with the
 # base, the patch-id of the change between them and the files it touches.
-# The verdict carries all four in its REVIEWED line, and gate 7 carries an
+# The verdict carries all four in its REVIEWED line, and gate 6 carries an
 # APPROVE across an update onto a newer base only when the change is the
 # same one (T-113). The patch-id comes from plumbing, which reads no user
 # configuration, with renames off, exactly as fm-gate.sh takes it.
@@ -781,17 +781,30 @@ head_evidence() {
   # as an empty quote that neither reports results nor says they are missing.
   # What is not there is then said by gate - fm-gate.sh stops at the first
   # red one, so a summary can end early, and an empty one lacks all six. The
-  # numbers are fm-gate.sh's own: 3 is retired (T-114).
-  local summary="$FM_STATE_DIR/gates/$TASK-$sha.txt" n lacking=''
+  # identities come from the frozen canonical gate list.
+  local summary="$FM_STATE_DIR/gates/$TASK-$sha.txt" n name old pattern gate_list lacking=''
+  gate_list="$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json"
+  if [ ! -r "$gate_list" ]; then
+    printf '\ngate list unavailable (bin/lib/fm_gates.json missing); gate results unknown\n'
+    return
+  fi
   if [ -f "$summary" ]; then
     fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
     printf '\nFrom state/gates/%s-%s.txt, verbatim:\n\n----- begin gate summary %s -----\n' "$TASK" "$sha" "$fence"
     cat "$summary"
     [ -z "$(tail -c1 "$summary")" ] || printf '\n'
     printf -- '----- end gate summary %s -----\n' "$fence"
-    for n in 1 2 4 5 6 7; do
-      grep -Eq "^[[:space:]]*[+x] gate $n: " "$summary" || lacking="${lacking:+$lacking, }$n"
-    done
+    if ! grep -q '^GATES:2$' "$summary"; then
+      printf '\nthis summary uses the old gate numbers (before T-232): %s\n' "$(jq -r '[.legacy|to_entries[]|select(.key != "1" and .key != "2")|"\(.key) \(.value)"]|join(", ")' "$gate_list")"
+    fi
+    while IFS=$'\t' read -r n name old; do
+      if grep -q '^GATES:2$' "$summary"; then
+        pattern="^[[:space:]]*[+x] gate $n \($name\): "
+      else
+        pattern="^[[:space:]]*[+x] gate $old: "
+      fi
+      grep -Eq "$pattern" "$summary" || lacking="${lacking:+$lacking, }$n ($name)"
+    done < <(jq -r '. as $m | .gates[] | [.n,.name,(.name as $name | $m.legacy|to_entries[]|select(.value==$name)|.key)] | @tsv' "$gate_list")
     [ -z "$lacking" ] ||
       printf '\nThe gate summary for head %s has no result line for gates: %s, so those results are unknown.\n' "$sha" "$lacking"
   else
@@ -1168,7 +1181,7 @@ if [ -n "$model_requested" ] && [ -n "$model_reported" ] && [ "$model_reported" 
               "要求的是 ${model_requested}，實際跑在 ${model_reported}"
 fi
 # a review that did not happen must never look like one that did. An empty
-# verdict used to reach the pull request as the adapter's own log, and gate 7
+# verdict used to reach the pull request as the adapter's own log, and gate 6
 # would then be reading a stack trace for a signature.
 # A verdict has to be one of the two markers. Without that rule a crashed
 # engine's stack trace on stdout is indistinguishable from a review, because
@@ -1236,7 +1249,7 @@ fi
 # who rejects may well mention the approve marker in passing ("I cannot sign
 # APPROVE:..."), so finding it somewhere in the text proves nothing, and a
 # review with no standalone marker is not an approval. This one reading
-# decides both the REVIEWED line gate 7 trusts and the event, so the two
+# decides both the REVIEWED line gate 6 trusts and the event, so the two
 # cannot disagree.
 decided="$(printf '%s\n' "$verdict" | awk -v a="APPROVE:$TASK" -v r="REJECT:$TASK" '
   { sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
@@ -1248,7 +1261,7 @@ if [ -z "$decided" ]; then
   decided=REJECT
 fi
 # the script's record of what was reviewed goes last, after the reviewer's
-# words, so it is the one gate 7 reads whatever the reviewer quoted above it
+# words, so it is the one gate 6 reads whatever the reviewer quoted above it
 # Retain before projection. Only the managed Codex selector grants authenticated
 # provenance; configured legacy reviewers still count, with their level visible.
 printf '%s\n' "$verdict" > "$work/selected-final.txt"
@@ -1286,7 +1299,7 @@ if [ -n "$PR" ] && [ "$projection" = comments ]; then
 
 $verdict"
   if [ "$project_review" != fm ]; then
-    # A local pre-check must not masquerade as gate 7's repository review.
+    # A local pre-check must not masquerade as gate 6's repository review.
     comment_verdict="Firstmate local pre-check finished for $TASK at $R_HEAD ($decided). Required external project review remains outstanding; details retained privately. EVIDENCE:$TASK $evidence_ref"
   fi
   if ! fm_comment_projection "$PR" --body "$comment_verdict" >/dev/null 2>&1; then

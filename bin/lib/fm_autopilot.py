@@ -670,7 +670,13 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 # Poll the authoritative PR before attributing this rejection
                 # to a head. The same head's poll owns its one brief wake.
                 reason = None
-        if kind == 'gate_failed' and data.get('gate') == 7: reason = None
+        if kind == 'gate_failed':
+            from fm_binding import gate_list, gate_entry
+            try:
+                gate = gate_entry(data.get('gate'), gate_list())
+            except ValueError:
+                gate = None
+            if gate and gate['name'] == 'approval': reason = None
         # The managed child's receipt carries its actual exit and log line.
         if kind in ('gate_failed', 'review_failed', 'worker_crashed') and self.busy(task): reason = None
         # Any tagged event establishes the actor's mode, including after a

@@ -5,6 +5,8 @@ description: Coordinate startup, task dispatch, review remediation and captain d
 
 # Firstmate startup contract
 
+The six gates are 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci, 6 approval.
+
 You are firstmate unless explicitly dispatched as a worker or reviewer. Plan,
 dispatch, monitor and coordinate through repository scripts; delegate production
 implementation to [workers](../worker/SKILL.md) and assessment to
@@ -129,7 +131,7 @@ The project contract is `config.yaml`'s `projects.<name>.project` block: `setup`
 keys, setup's exit status and error, and `ready`; `status` reports the same
 declaration without running anything. Report the contract at startup, including
 a missing `check` or a failed setup, which is not ready rather than a reason to
-stop startup. Any fresh verification worktree — gate 5, or any check you
+stop startup. Any fresh verification worktree — gate 4, or any check you
 coordinate outside the gates — runs the declared `setup` before `check`. A
 check whose output says a stage was skipped is not evidence that the stage
 passed: a skipped stage is an unverified stage, whatever the exit status.
@@ -227,7 +229,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   supervisor for each registered project. A merged autopilot change reloads itself
   after its running jobs finish, so firstmate never kills the service. It observes PR events, runs gates on
   worker heads, checks the standing-list protocol from round three, launches
-  review after gate exit 7, and reruns gates when approval or CI changes.
+  review after gate exit 6, and reruns gates when approval or CI changes.
   After all six gates pass it requests the merge card using your authored
   `state/decision-details/<id>.json`, with the gated head bound to the request.
   It wakes firstmate once per head for REJECT (brief needed), SCOPE-BLOCKED/ASK,
@@ -237,9 +239,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   It never relaunches a worker or dispatches a new task. Dispatch stays with
   the board intent card or an explicit `bin/fm-dispatch.sh` call; a new worker
   round still needs your approved brief. Avoid competing loop owners.
-- `bin/fm-gate.sh` checks six gates, numbered 1, 2, 4, 5, 6 and 7. Gate 3,
-  the local run of the whole project `check`, is retired (T-114): the required
-  GitHub check runs it on the same head, and gate 6 reads that. Gate 5 runs
+- `bin/fm-gate.sh` checks six gates, numbered 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci and 6 approval. Gate 4 runs
   only the suites the diff touches, falling back to the whole `check` only
   when it cannot tell which, and says so. Gate runs on one machine are
   serialized by a kernel lock on `FM_GATE_LOCK` (default `/tmp/fm-gate.lock`,
@@ -285,7 +285,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   and `zh-TW`; a second empty ending is reported as today.
 - Round order and the merge double check (captain, 2026-09-25; design §6).
   The autopilot starts the review after the worker hands back and gates 1, 2,
-  4, 5 and 6 pass. An explicitly coordinated review may still use `bin/fm-review.sh`. Given `--pr`, `fm-review.sh` waits,
+  3, 4 and 5 pass. An explicitly coordinated review may still use `bin/fm-review.sh`. Given `--pr`, `fm-review.sh` waits,
   bounded, for the head's required checks and hands the reviewer what they
   found - every job's result, the failing assertions and the fail-first
   report - in either mode (T-153): the machine runs the tests, fail-first
@@ -306,7 +306,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   `gh pr update-branch` is allowed before or after an APPROVE and during a
   running review round. The required GitHub check and the other gates still
   rerun on the head being merged: after an update, do not start a second
-  review by reflex; run `bin/fm-gate.sh` on the new head. Gate 7 accepts the
+  review by reflex; run `bin/fm-gate.sh` on the new head. Gate 6 accepts the
   latest APPROVE when its `REVIEWED:` line names that head, or when the
   change's patch-id is the one approved and no later REJECT supersedes it.
   When it fails it names the condition, and that is a real re-review. A
@@ -405,7 +405,7 @@ self-wake.
   (Codex, Cursor), in a turn's added context, or from
   `bin/fm-watch-arm.sh` itself: `review: T-134 APPROVE 4ea1ec2 #9`,
   `finished: T-134 worker-mira-t134-r1 ok`, `lost: T-134 ...`,
-  `gate: T-134 failed gate 6 #9`, `card: D-51 answered A`,
+  `gate: T-134 failed gate 5 (ci) #9`, `card: D-51 answered A`,
   `merge: D-51 failed`. Handle each event, then advance already authorized
   actionable follow-ups: verification, review/gates, a concrete board merge
   within current time-boxed authorization, self-update, and authorized next
@@ -501,7 +501,7 @@ set by the captain.
    changes or the branch changes in any other way. Non-comment modes must not
    depend on a PR brief or publish one
    implicitly. T-135 stores brief, pack, worker-report, ask and authenticated verdict
-   records append-only under state/evidence/<project>/<task>/; gate 7 and the
+   records append-only under state/evidence/<project>/<task>/; gate 6 and the
    protocol reader consume local verdicts and standing lists. T-138 extends
    external storage and bindings; T-140 adds summary/check/threads projections.
 
@@ -588,8 +588,8 @@ for the current PR head. Old CI or an old approval does not establish readiness;
 inspect actual required GitHub CI results as well as local checks. If the script
 cannot establish this, report the gap and coordinate remediation before a merge
 card is treated as ready. T-135 makes provenance-labelled local verdict records the
-gate-7 source, with missing records failing explicitly. Until T-135 ships, the
-legacy gate 7 takes the latest verdict comment, filtering
+gate-6 source, with missing records failing explicitly. Until T-135 ships, the
+legacy gate 6 takes the latest verdict comment, filtering
 the author only when `FM_REVIEWER_LOGIN` is set, and binds an APPROVE to the
 change its `REVIEWED:` line records; a later rejection supersedes it. It does
 not reject quoted markers, and an APPROVE with no `REVIEWED:` line (posted by
@@ -994,7 +994,7 @@ No hardcoded squash/delete, protected-base force push or unapproved task lease.
 
 Before treating any candidate as ready, fetch/synchronize and verify authoritative
 GitHub PR head against local task ref and isolated checkout. Required check-runs
-and commit statuses, six gates 1/2/4/5/6/7, review head/patch/identity/final answer
+and commit statuses, six gates 1/2/3/4/5/6, review head/patch/identity/final answer
 and merge candidate must refer to that verified SHA. Recheck after update-branch
 and before landing; stale local green gates do not establish readiness. Preserve
 approval only for unchanged authoritative patch-id with no later rejection.
@@ -1043,9 +1043,9 @@ local records first; `local` posts no round records. Optional publication failur
 is reported and records survive. Comments never establish a verdict or list.
 
 Verdict provenance is `authenticated` for the T-163 managed Codex final selector,
-or `legacy` for another adapter's selected final answer. Both count at gate 7
+or `legacy` for another adapter's selected final answer. Both count at gate 6
 when bound to the reviewed head or unchanged patch. Legacy adapter receipts
-cannot upgrade their provenance. Gate 7 reports the level; neither level proves
+cannot upgrade their provenance. Gate 6 reports the level; neither level proves
 remote-head freshness or the semantics of a finding. The current-head CI and
 six-gate merge checks remain firstmate's responsibility.
 
@@ -1170,7 +1170,7 @@ never a handpicked range.
 Use `bin/fm-external.sh collect --project <name> --task <id> --pr <n>
 --branch <branch>` outside rounds to retain named reviewers' reviews, threads,
 comments, checks and commit statuses. The helper verifies the remote head/base
-against the task ref before collecting; gate 7 and merge candidates refresh the
+against the task ref before collecting; gate 6 and merge candidates refresh the
 same reader. Every conventions `reviewers` login must approve the current patch;
 a later COMMENTED or CHANGES_REQUESTED state, an unresolved thread, unknown
 history or a stale approval holds readiness. Optional `analysers` is a list of

@@ -29,7 +29,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
   // beta's card was asked for first, so it leads the one list
   const card = (id:string, project:string) => {
     const file = join(projectState(root, project),`pending/${id}.json`);
-    writeFileSync(file, JSON.stringify({id, project, task:'T-001', kind:'merge', pr:7, details, gates:[1,1,1,1,1,1,1]}));
+    writeFileSync(file, JSON.stringify({id, project, task:'T-001', kind:'merge', pr:7, details, gates:{branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:true}}));
     return file;
   };
   writeFileSync(join(dirname(projectState(root, 'beta')), 'design.md'), 'Beta design\n');

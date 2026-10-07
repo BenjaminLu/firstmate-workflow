@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gate 5 executes the approved snapshot even if target config disappears.
+# Gate 4 executes the approved snapshot even if target config disappears.
 set -uo pipefail
 for key in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do unset "$key" || true; done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,15 +37,15 @@ cat > "$d/tests/value.test.sh" <<'TEST'
 test "$PIN_VALUE" = approved && test -f setup-marker && test "$(cat src/value)" = new
 TEST
 git -C "$d" add -A; git -C "$d" commit -qm feature
-run_gate() { "$ROOT/bin/fm-gate.sh" --repo "$d" --task T-X --branch work --only 5 > "$d.out" 2>&1; }
-assert_ok run_gate "gate 5 executes pinned setup, env and test template"
+run_gate() { "$ROOT/bin/fm-gate.sh" --repo "$d" --task T-X --branch work --only 4 > "$d.out" 2>&1; }
+assert_ok run_gate "gate 4 executes pinned setup, env and test template"
 # Both the head and the mutable checkout now advertise a failing setup.
 printf 'project:\n  setup: exit 94\n  check: exit 95\n' > "$d/config.yaml"
 git -C "$d" add config.yaml; git -C "$d" commit -qm altered-contract
 assert_ok run_gate "a scoped branch config change cannot change its own gate contract"
 rm "$d/config.yaml"
 git -C "$d" add config.yaml; git -C "$d" commit -qm removed-config
-assert_ok run_gate "gate 5 uses the complete pin even when head has no config"
+assert_ok run_gate "gate 4 uses the complete pin even when head has no config"
 
 # Docs classification also comes from the immutable snapshot.
 git -C "$d" checkout -q main
@@ -80,5 +80,5 @@ echo new > "$d/src/value"
 echo '# contract runs the whole check' > "$d/tests/changed.test.sh"
 printf 'project:\n  check: exit 95\n' > "$d/config.yaml"
 git -C "$d" add -A; git -C "$d" commit -qm feature
-assert_ok run_gate "gate 5 fallback runs pinned check with pinned environment"
+assert_ok run_gate "gate 4 fallback runs pinned check with pinned environment"
 finish

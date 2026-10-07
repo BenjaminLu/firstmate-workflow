@@ -141,7 +141,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-# Gate 5 supplies the verified pin, independent of any target config file.
+# Gate 4 supplies the verified pin, independent of any target config file.
 # Standalone CI retains its head declaration.
 P_SETUP=''; P_TEST=''; P_TESTS=''; P_CHECK=''; P_DOCS=''; P_ENV=()
 if [ -n "$CONTRACT" ]; then

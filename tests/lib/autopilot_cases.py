@@ -1069,7 +1069,7 @@ class PilotTests(BranchFixture, unittest.TestCase):
                     with patch.object(self.pilot, 'start_job') as launch:
                         for _ in range(2):
                             self.pilot.job_completed(dict(kind='gate', task='T-001', pr=PR,
-                                                         code=7, round=1, base='b'*40))
+                                                         code=6, round=1, base='b'*40))
                         launch.assert_not_called()
                     self.assertEqual(self.pilot.data, before)
                     self.assertEqual(len(self.pilot.data['wakes']), 1)

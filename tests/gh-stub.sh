@@ -53,7 +53,7 @@ case "${1-}:${2-}" in
         # jq builds the JSON, because a real review body has newlines and
         # quotes in it: interpolating one into a string by hand produced a
         # raw control character, the whole document failed to parse, and
-        # gate 7 read an approval that was sitting right there as nothing.
+        # gate 6 read an approval that was sitting right there as nothing.
         # Each comment carries every field `gh pr view --json comments`
         # returns, oldest first as gh lists them, so a caller that picks
         # fields or relies on the order is tested against what gh sends.

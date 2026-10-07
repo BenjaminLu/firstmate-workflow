@@ -163,7 +163,7 @@ class ExternalReviews(unittest.TestCase):
         import fm_binding
         first=self.collect()
         gate=self.home/'state/gates/head.txt'; gate.parent.mkdir()
-        gate.write_text('HEAD:'+HEAD+'\nBASE:'+BASE+'\n'+''.join('  + gate %s: ok\n'%n for n in (1,2,4,5,6,7)))
+        gate.write_text('HEAD:'+HEAD+'\nBASE:'+BASE+'\nGATES:2\n'+''.join(f"  + gate {g['n']} ({g['name']}): ok\n" for g in json.loads((root/'bin/lib/fm_gates.json').read_text())['gates']))
         env=dict(FM_TARGET_ROOT=str(self.home),FM_STATE_DIR=str(self.home/'state'),
                  FM_EVIDENCE_PROJECT='app',FM_EXTERNAL='1')
         view=dict(state='OPEN',headRefOid=HEAD,baseRefOid=BASE,

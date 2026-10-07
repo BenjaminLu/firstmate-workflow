@@ -192,7 +192,7 @@ lock — `flock(1)` does not ship on macOS. `bin/ci.sh` fails if anything under
 
 ```jsonc
 {"ts":"2026-09-20T14:10:02Z","actor":"worker-2","task":"T-004","type":"gate_failed",
- "pr":9,"data":{"gate":5},
+ "pr":9,"data":{"gate":"fail-first"},
  "summary":{"en":"...","zh-TW":"..."}}
 ```
 
@@ -722,7 +722,7 @@ Both modes emit `review_opened` and
 A round that produced no review exits `3` and emits `review_failed` with
 `data.review_outcome` set to `missing_review` when an attempt completed without
 a signed verdict, or `infrastructure_error` for vendor/configuration/execution
-failure; it never reaches the pull request and never counts toward gate 7. A
+failure; it never reaches the pull request and never counts toward gate 6. A
 verdict has to
 carry exactly one unquoted `APPROVE:<task>` or `REJECT:<task>` in the final
 assistant answer. Only that answer is the verdict; prompt echoes, intermediate
@@ -1271,29 +1271,18 @@ concurrency limit still hold, and it says which one held the task.
 
 | # | Gate | How it is checked |
 |---|---|---|
-| 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
-| 2 | rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
-| 3 | *retired (T-114)* | ran the whole `project.check` locally; gate 6 reads the required GitHub check, which runs it on the same head |
-| 4 | the diff stays in approved scope | shared verified pin resolver; changed files within pinned `scope`, unchanged self task entry, no `.fm-*` paths |
-| 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
-| 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id, merge-base to head, with no later `REJECT` (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
+| 1 | **branch** — branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
+| 2 | **rebase** — rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
+| 3 | **scope** — the diff stays in approved scope | shared verified pin resolver; changed files within pinned `scope`, unchanged self task entry, no `.fm-*` paths |
+| 4 | **fail-first** — **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
+| 5 | **ci** — the required GitHub check is green | `gh pr checks <pr> --required` |
+| 6 | **approval** — the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id, merge-base to head, with no later `REJECT` (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
 
-**Gate 3 is retired, and its number with it (captain, 2026-09-26; T-114).**
-It ran the whole project check in a fresh worktree: the same run the required
-GitHub check makes on the same head, which gate 6 already reads. On
-2026-09-25 and 2026-09-26 it held CI-green heads by overrunning its 600-second
-budget whenever run-mode reviewers or other gates ran the check on the same
-machine (1565 seconds on T-104; again on T-068, T-086, T-112 and T-054). The
-remaining gates keep their numbers and their meaning, so gate 5 is still the
-fail-first gate, gate 6 CI and gate 7 the approval; nothing exits 3, and
-`fm-gate.sh --only 3` is a usage error (exit 64), not a green gate. The board,
-the review prompt's gate section and `fm-autopilot.sh` read the same six numbers.
-A merge card's `gates` list keeps seven slots and the board reads it by gate
-number (`gates[n-1]`), so slot 3 is carried but never shown, and a producer
-that still sends one value per number 1-7 lines up with the checklist.
+Gate 3 (a local whole-project check) was retired on 2026-09-26 (T-114); T-232 (2026-10-06) renumbered the gates 1-6 and named them (old 4-7 are new 3-6). Records written before T-232 keep the old numbers and are read through bin/lib/fm_gates.json legacy.
+A merge card stores gates by name; the board reads a legacy 7-slot array through the legacy map.
+The autopilot and its gate jobs run the same frozen code snapshot, so their exit codes always use the same numbering. New transcripts carry `GATES:2` after `HEAD` and `BASE`; readiness stores gate names. Old transcripts, readiness records, decisions and events are never rewritten.
 
-**Gate 5 delegates to `fm-failfirst.sh --gate --head=<branch>` (T-157).**
+**Gate 4 delegates to `fm-failfirst.sh --gate --head=<branch>` (T-157).**
 The shared engine prepares and runs both the head and the reverted tree, and
 requires evidence that passes on the head and goes red on the base. The gate
 keeps its declared-docs classification and its explicit `project.check`
@@ -1304,11 +1293,11 @@ A new feature's tests go in a new file named for that feature, or in the
 file that already owns the feature; never append them to an unrelated suite.
 Keep every file under `tests/` at 1200 lines or fewer. Shared shell and Python
 fixtures belong in `tests/lib/`; shared browser fixtures in `tests/e2e/lib/`.
-Name helper dependencies literally so gate 5 can select their consuming
+Name helper dependencies literally so gate 4 can select their consuming
 suites. Split files must run independently and preserve existing assertions
 and test names.
 
-**Gate 5 runs only the touched suites (T-114).** On each tree it runs,
+**Gate 4 runs only the touched suites (T-114).** On each tree it runs,
 through `project.test`, every test file the diff changes, then every other
 test file that names one of them by path or file name - the suites that
 source a changed helper. A name counts only standing alone, with no other
@@ -1317,7 +1306,7 @@ file-name character either side, so `helper.sh` is not named by
 implementation is not run: in the reverted tree it is the base's test of the
 base's code, and could go red only for a reason other than the diff. When no
 suite can be determined that way - no `project.test` declared, or no touched
-test file left in the tree - gate 5 runs the whole `check` and says so on
+test file left in the tree - gate 4 runs the whole `check` and says so on
 stderr, as it says which suites it ran.
 
 **Gate runs are serialized on one machine (T-114).** A run holds a kernel
@@ -1342,7 +1331,7 @@ running unlocked, so every suite that runs the real gate sets its own
 Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-autopilot.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
-Historical transport until T-135 lands: Gate 7 reads the verdict comments (the reviewer's only, when
+Historical transport until T-135 lands: Gate 6 reads the verdict comments (the reviewer's only, when
 `FM_REVIEWER_LOGIN` is set) and takes the latest; a later rejection supersedes
 an earlier approval. It does not distinguish final from quoted markers, and an
 `APPROVE` with no `REVIEWED:` line (one posted by hand, or before T-113) is
@@ -1352,7 +1341,7 @@ requires remediation regardless of praise or an `approved` event.
 
 **Round order and the merge double check (captain, 2026-09-25).** A review
 round starts through `fm-review.sh` after the worker hands back and the
-autopilot observes gates 1, 2, 4, 5 and 6 green. Given
+autopilot observes gates 1, 2, 3, 4 and 5 green. Given
 `--pr`, the round itself waits for the head's required checks, bounded, before
 it starts the reviewer, so the reviewer is handed their results (T-153; §7);
 the launcher retains this wait for explicitly requested rounds too. Green CI and the gates are not a review
@@ -1362,7 +1351,7 @@ reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
 CI, and green gates are not an approval. A head that changes after either
 check requires fresh gates, with the approval carry rule below. The autopilot
-sends a task to review once every gate before 7 is green. Firstmate writes
+sends a task to review once every gate before 6 is green. Firstmate writes
 the brief for any subsequent worker round.
 
 **The approval binds to the change; CI and the gates bind to the head
@@ -1380,12 +1369,12 @@ REVIEWED:<task-id> verdict=<APPROVE|REJECT> head=<sha> base=<merge-base> patch=<
 on a line of its own in the reviewer's answer, never a marker mentioned in
 passing; an answer with no standalone marker is recorded as `REJECT`. The
 same reading decides the `approved` or `review_failed` event, so the event
-and the line gate 7 trusts cannot disagree.
+and the line gate 6 trusts cannot disagree.
 
 `base` is the head's merge-base with `main`; `patch` is `git patch-id
 --stable` of the diff between them, taken with `git diff-tree -p
 --no-renames`, which reads no user configuration; `files` lists every path
-that diff touches. Gate 7 accepts the latest `APPROVE` when its `head` is the
+that diff touches. Gate 6 accepts the latest `APPROVE` when its `head` is the
 current head, or when both of these hold:
 
 1. the current change's patch-id, merge-base to head, equals the approved one;
@@ -1403,7 +1392,7 @@ before or after an APPROVE and during a running review round. CI and the six
 gates always rerun on the head being merged, since they test the change
 combined with the current `main`.
 
-Gate 5 names no toolchain. It reads the complete verified task pin's contract
+Gate 4 names no toolchain. It reads the complete verified task pin's contract
 (`setup`, `check`, `check_env`, `tests`, `test`, `docs`) through the shared
 fail-first engine. Neither the tested branch nor a mutable engine copy can
 change that contract. A scoped config edit cannot alter its own gates.
@@ -1413,9 +1402,9 @@ start/status) also accept the historical top-level `project:` block and refuse
 a duplicate. Old pins retain their recorded commit
 and location without repinning. External contracts remain approved private
 snapshots.
-Gate 5 asks for no new test only when every changed non-test path matches
+Gate 4 asks for no new test only when every changed non-test path matches
 the pinned `docs` globs; with none declared, nothing is exempt.
-An undeclared `check` where gate 5 must fall back to it, or a failed `setup`,
+An undeclared `check` where gate 4 must fall back to it, or a failed `setup`,
 fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 `setup` once in the checkout and reports the contract; `status` only reports it.
@@ -1444,7 +1433,7 @@ Preflight identities carry `mode: spec-preflight` and use a separate `-sp-`
 actor namespace with their own attempts. They do not advance ordinary review
 rounds or attempts. Older preflight directories remain readable and are excluded
 from ordinary attempt counting without rewriting their identity records.
-No preflight result is gate 7 approval, CI evidence or permission to merge.
+No preflight result is gate 6 approval, CI evidence or permission to merge.
 
 Every new worker invocation requires SPEC-OK for its exact pinned bytes. Missing,
 different or changed bytes exit 65 with the preflight command. A read-only
@@ -1521,7 +1510,7 @@ an APPROVE need not re-issue the list.
 T-135 replaces the following historical T-073 comment transport with local
 records. Every REJECT supplies criteria from round one; every reviewer from
 round two receives the local standing list and relevant prior rounds, with
-worker reasoning excluded. Gate 7 and fm-protocol.sh consume provenance-labelled
+worker reasoning excluded. Gate 6 and fm-protocol.sh consume provenance-labelled
 local verdicts, retain latest rejection precedence and fail with a reason when
 the local verdict is missing; optional comments never replace local authority.
 Until T-135 lands, the legacy launcher carries the protocol as follows (T-073). From round two (SK-007), given `--pr`, `fm-review.sh` reads the pull
@@ -1559,7 +1548,7 @@ repos/{owner}/{repo}/commits/<sha>/check-runs?check_name=<name>`), keeping
 only a run whose `head_sha` is the head and the latest of those; and the
 whole of `state/gates/<task-id>-<sha>.txt`, unfiltered and fenced with a
 per-run nonce, when that file exists. Its lines are `fm-gate.sh`'s own
-stdout: `  + gate N: …` or `  x gate N: …`. A required check that cannot be
+stdout: `  + gate N (name): …` or `  x gate N (name): …`. A required check that cannot be
 read, a check with no run for this head, a missing gate summary, and each
 gate the summary has no result line for (it stops at the first red gate, and
 an empty one has none) are stated plainly. A round without `--pr` is
@@ -1629,7 +1618,7 @@ sandbox; that work was reverted. Instead:
    **Executed**. Fail-first by hand is no longer its step: it reads the
    report and challenges a test the report lists only as a guard.
 
-**Fail-first in CI (T-153).** `bin/fm-failfirst.sh <base-ref>` asks gate 5's
+**Fail-first in CI (T-153).** `bin/fm-failfirst.sh <base-ref>` asks gate 4's
 question on GitHub's runner, as the `fail-first` job of every pull request,
 which the required `ci` job needs. From the merge-base of the base ref and
 the head it splits the change into test files (the declared `tests` globs;
@@ -1655,13 +1644,13 @@ when it touches behaviour and adds or changes no suite, when no `test` is
 declared, or when no assertion of a changed suite went red on base, naming
 the guards; **pass** (exit 0) when at least one went red. The one reading
 T-153's spec leaves open is taken this way: a behaviour change with no test
-change fails, as gate 5 fails it, rather than being not applicable. The
+change fails, as gate 4 fails it, rather than being not applicable. The
 report - per suite, the exit of each tree, the assertions red on base by
 name and the guards - goes to stdout, to `--report` (the artifact) and to
 `$GITHUB_STEP_SUMMARY`. It exits 70 when it cannot run (no merge-base, a
 worktree it cannot make, a setup that fails) and 64 on bad usage.
 
-T-157 shares changed-test selection with gate 5: an unchanged suite that
+T-157 shares changed-test selection with gate 4: an unchanged suite that
 names a changed test helper by a whole filename is selected too. A reference
 to changed implementation alone does not select a suite.
 
@@ -1723,7 +1712,7 @@ outweighs the heaviest bash shard is predicted over it. The shard then says
 The autopilot retains child output in durable job receipts, and `fm-gate.sh`
 writes its own head-bound report under `state/gates/<task-id>-<sha>.txt`.
 A missing report remains unknown; a receipt alone never proves green gates. The path
-and the `  + gate N: …` / `  x gate N: …` lines of `fm-gate.sh`'s own `say()`
+and the `  + gate N (name): …` / `  x gate N (name): …` lines of `fm-gate.sh`'s own `say()`
 are the contract that writer must follow.
 
 The point is to end the loop where each round fixes one thing and surfaces
@@ -2114,7 +2103,7 @@ The matching actor/spec-SHA evidence gives `preflight_outcome: spec-ok` or
 `spec-gaps`, both with `result: ok`. Without that receipt, signal exits are
 `interrupted`, exits before the vendor chain starts are `refused`, and other
 exits are `failed`, all with `result: failed`. No `review_opened` is emitted:
-review counters, gate 7 and a task's first real review round remain unchanged.
+review counters, gate 6 and a task's first real review round remain unchanged.
 The watch counts a live preflight as in-flight crew until its closing event.
 
 Crew figures and their animations belong only to the voyage. The board's
@@ -2517,8 +2506,8 @@ the entire job, including setup, so the script may have less than 600 seconds
 before GitHub cancels it. For T-017, Firstmate runs the same full local gate
 with `FM_CI_MAX_SECONDS=600 bash bin/ci.sh` before publication. Since T-043
 that budget is this repository's declared `project.check_env`, and a fresh
-worktree that runs the check - gate 5's fallback - runs the declared `setup` first, so it has the dependencies and
-browser the end-to-end stage needs instead of skipping it. (Gate 3 ran the
+worktree that runs the check - gate 4's fallback - runs the declared `setup` first, so it has the dependencies and
+browser the end-to-end stage needs instead of skipping it. (The retired local whole-project gate ran the
 whole check this way until T-114 retired it.) A functional
 pass at 208 seconds is within that authorized budget, but exceeds the default.
 
@@ -2730,7 +2719,7 @@ headers and out-of-range shards are excluded entirely before checking the
 remaining assignments. Coverage runs no stage; assigned suites that fail or
 never finish still fail their bash shard. The final job named `ci` — the
 required check's own name — `needs` all four and fails if any of them failed or was skipped, so
-branch protection and gate 6 read exactly what they read before. Every job
+branch protection and gate 5 read exactly what they read before. Every job
 keeps its own 10-minute `timeout-minutes`. Sharding turned the one
 `bun install` main had into eight — the six `bash` shards, `bun` and `e2e` —
 so every one of those jobs, not just one, caches bun's install cache
@@ -2990,7 +2979,7 @@ and `fm-review.sh` at a round's end, after its `agent_finished`
 (`finished: T-134 <actor> ok`, `failed: ... exit 1`, `review: T-134 APPROVE
 <head> #9`); the deck reconcile for a lost run (`lost: T-134 <actor>`);
 `fm-emit.sh` for a gate result written from outside a round
-(`gate: T-134 failed gate 6 #9`); and the board, as above (`card: D-51
+(`gate: T-134 failed gate 5 (ci) #9`); and the board, as above (`card: D-51
 answered A`, `merge: D-51 failed`). A wake pushed into an external project's
 store is also forwarded to the engine queue as one bounded item: `reason`
 `forwarded`, `origin_project`, `origin_reason`, and a line naming the project,
@@ -4877,7 +4866,7 @@ them from the host.
 The task list is `design/tasks/`, one file per task: `design/tasks/<id>.json`
 holds that task's entry and nothing else, with `id`, `title`, `milestone`,
 `depends_on`, `scope`, `bootstrap` and `acceptance`. `scope` is the glob
-allowlist gate 4 enforces. There is no table here: `bin/fm.sh tasks` prints
+allowlist gate 3 enforces. There is no table here: `bin/fm.sh tasks` prints
 it on demand, grouped by milestone, with id, title and dependencies. Nothing
 generated is committed.
 
@@ -4896,7 +4885,7 @@ edits only its file, and two branches that each add a task merge cleanly.
 **Readers.** Every reader goes through `bin/fm-config.sh`: `fm_tasks [dir]
 [rev]` lists every task (one JSON object per line, in id order), `fm_task <id>
 [dir] [rev]` reads one, and `fm_tasks_write` writes entries out as files. With
-a `rev`, they read a branch rather than the working copy — gate 4, the worker
+a `rev`, they read a branch rather than the working copy — gate 3, the worker
 and the reviewer read the branch under test. The board reads the list through
 the same `fm_tasks`. `bin/ci.sh`'s DAG stage runs `fm_tasks_check` on every
 registered task directory: every file parses, its `id` is its file name, every
@@ -5101,14 +5090,14 @@ version, engine code commit and base commit. External local approvals need no
 public engine commit. Self committed sources are re-derived; uncommitted self
 sources have explicit provenance and hash. One resolver verifies all hashes and
 supplies the latest authorized pin; a mutable branch cannot widen its own scope.
-Gate 4 refuses missing pins, mismatches, out-of-scope files and `.fm-*` artifacts.
+Gate 3 refuses missing pins, mismatches, out-of-scope files and `.fm-*` artifacts.
 Repin requires an exact project/task captain decision for changed snapshots,
 appends a version and emits `spec_repinned`; never rewrite old pins.
 
 A self task's branch file is the committed copy of the latest pin, written
 by `fm-worker.sh` at round start and committed with the round (T-207).
 A non-rebuilt round restores an edited file to the pin before publishing,
-and a rebuilt round that changes it is held (exit `75`); gate 4 is unchanged.
+and a rebuilt round that changes it is held (exit `75`); gate 3 is unchanged.
 
 Before each worker or reviewer round, the launcher materializes the verified
 snapshots byte for byte under that run's private `pinned/` directory as
@@ -5137,7 +5126,7 @@ spec, design, conventions and contract bytes are private local snapshots; resolv
 files to exist on public engine main. Every reader uses `fm_spec_pins.py`, which
 verifies the complete append-only chain, each snapshot hash, identity and
 approval provenance, and re-derives committed self sources. Workers and
-reviewers receive the pinned spec and context; gate 4 also rejects a self
+reviewers receive the pinned spec and context; gate 3 also rejects a self
 task entry that differs from the pin and any path component beginning `.fm-`.
 
 Initial authority comes from dispatch records only (T-171): the captain's
@@ -5179,14 +5168,14 @@ captain choice A for the same project/task names a commit through the existing
 `fm-decide.sh --expected-head <sha>` field whose task-file bytes exactly match
 the worktree. That choice must postdate dispatch authority. A prose-only card,
 a missing commit, or different bytes leaves the base snapshot in force, so gate
-4 refuses the changed task entry. The first pin keeps dispatch `approval` and
+3 refuses the changed task entry. The first pin keeps dispatch `approval` and
 records the separate `spec_approval`, with `approved-branch` source, commit and
 hash. Resolution rechecks the receipt and committed bytes. That decision is
 consumed as spec authority and cannot authorize a later repin; later approvals
 must postdate it. Design, conventions and contract still come from the accepted
 base. Existing pins are never silently replaced by branch files.
 No authorization or unavailable first-pin sources means no pin is written;
-the worker warns and continues, but gate 4 fails explicitly with `no pin`.
+the worker warns and continues, but gate 3 fails explicitly with `no pin`.
 A first-pin source failure is also retained in the round report. An empty pin
 directory containing only a lock or temporary file is still unpinned. Legacy unpinned reviewer context is labelled
 unapproved. A corrupt existing pin never falls back to mutable task data.
@@ -5204,7 +5193,7 @@ refuses reuse or an approval no later than the superseded pin approval, and appe
 Self repins identify uncommitted local spec/design/conventions explicitly;
 their gate contract still comes from accepted base. Omitted project and explicit
 `firstmate-workflow` retain the same self storage and behavior. The pin contains
-all contract fields, including `docs`; gate 5 passes the verified contract
+all contract fields, including `docs`; gate 4 passes the verified contract
 to the shared fail-first engine without consulting the target config.
 
 Before accepting evidence, synchronize and verify GitHub's authoritative PR head
@@ -5226,11 +5215,11 @@ Refresh/refuse on mismatch, remote movement or unreadability. T-051/T-052/T-138
 own regressions for that boundary; check again before presenting/using a card.
 
 T-135 owns trusted outside-round append-only local round records and their
-worker/reviewer/gate-7/protocol readers. T-138 extends those records with
+worker/reviewer/gate-6/protocol readers. T-138 extends those records with
 attempt, verified head/base, stable patch-id, files, spec/contract hashes,
 reviewer identity/vendor/model, final-answer provenance and text. Model-written
 transport receipts and transcript/quoted approval markers are not authority.
-Gate 7 consumes authentic final verdicts and latest rejection precedence. The
+Gate 6 consumes authentic final verdicts and latest rejection precedence. The
 standing list remains numbered, complete and closed; a protocol syntax checker
 cannot authenticate it or prove a regression/new-ground claim semantically.
 T-135 reads the approved local firstmate brief before its bounded context pack,
@@ -5262,12 +5251,12 @@ same round only when the written head is an ancestor, no non-merge commits
 outside the base follow it, and the task's stable patch-id and file list are
 unchanged against their respective merge bases. This permits only merges of the
 base and states the head the brief was written for. Any other head change needs
-a new brief, as gate 7 needs a new review for a changed patch.
+a new brief, as gate 6 needs a new review for a changed patch.
 External text cannot authorize a brief or
 waive coverage; firstmate verifies root causes before writing the approved brief.
 The reviewer gets the bounded external evidence without worker reasoning.
 `bin/fm-external.sh collect` exposes the same reader outside rounds, after
-verifying the remote head/base and local task ref. Gate 7 and merge readiness
+verifying the remote head/base and local task ref. Gate 6 and merge readiness
 refresh it rather than trusting any GitHub projection.
 
 Posting preserves the validated conventions mode. `local` writes no projection;
@@ -5286,15 +5275,15 @@ launcher/gate collection points remains T-141.
 
 ### 15.6 Gates, protection and landing
 
-Use six gates numbered **1, 2, 4, 5, 6, 7**; gate 3 is retired. Gates 1/2 use
-project or stacked PR base, gate 4 pinned scope, gate 5 pinned contract including
-docs and the fail-first engine, gate 6 current required check-runs **and commit
-statuses**, gate 7 authenticated review under project policy. Required names
+Use six gates: **1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci, 6 approval**. Gates 1/2 use
+project or stacked PR base, gate 3 pinned scope, gate 4 pinned contract including
+docs and the fail-first engine, gate 5 current required check-runs **and commit
+statuses**, gate 6 authenticated review under project policy. Required names
 come from readable protection and confirmed conventions. Missing/pending checks
 are pending, failed checks are failed, unreadable evidence is unknown. Bounded
 CI wait does not turn pending into failure or approval.
 A behind branch gets one bilingual stderr diagnostic after a passing gate 2,
-or before gate 6 in an `--only 6` run, with the commit count and resolved base
+or before gate 5 in an `--only 5` run, with the commit count and resolved base
 SHA. The diagnostic changes no gate result and does not enter the gate report.
 
 Private repositories are accepted. Unreadable protection (including 404) means
@@ -5364,11 +5353,11 @@ with a reason on stderr and a review_failed infrastructure_error event. At the
 final check, it retains the final answer as stale evidence instead of publishing
 current approval.
 The verdict stays bound to the original reviewed head, merge-base and patch-id;
-only gate 7's existing patch-id rule decides whether it covers a later head.
+only gate 6's existing patch-id rule decides whether it covers a later head.
 Accepted risk: a semantic conflict introduced by main outside the reviewed files
 (for example, main renames a function the PR calls) is not seen by the reviewer;
-it is caught only by required CI on the current head (gate 6), exactly as for
-today's gate 7 carry across a merge of main. Gate and merge candidate authority
+it is caught only by required CI on the current head (gate 5), exactly as for
+today's gate 6 carry across a merge of main. Gate and merge candidate authority
 remains T-138's shared binding.
 
 Dispatch records its session owner and keeper in the selected project's
@@ -5504,7 +5493,7 @@ isolated to their PR. The persistent poll sequence advances even on policy or
 network errors; retries, holds and pending markers are pruned when the head
 changes or the PR becomes terminal. Restacking follows confirmed policy and
 expected-head lease checks. Every new
-worker or base-update head runs gates. Gate 7 decides whether an approval
+worker or base-update head runs gates. Gate 6 decides whether an approval
 carries, whether changed pinned inputs require review, or whether a new worker
 change needs a verdict. A current-head REJECT wakes firstmate for a brief and
 never relaunches a worker. Returning
@@ -5530,7 +5519,7 @@ GitHub returns 201 or lists the reviewer as already requested, or the reviewer
 has reviewed that head. A 422 refusal wakes once with GitHub's message without
 retry; other failures retry at offsets 0, 1 and 3, then wake once.
 Review launch is decided from the review job recorded for that PR head, in any
-state: at most one autopilot-launched review per head. Gate 7 can request a
+state: at most one autopilot-launched review per head. Gate 6 can request a
 review even with a same-head verdict whose binding is stale. A failed start
 marks the job uncertain (or records an uncertain job if launch failed before
 recording one) and wakes firstmate once; later gate results do not retry it.
@@ -5625,7 +5614,7 @@ using the canonical branch/title task grammar and project-local deduplication.
 An event without a project belongs to the default project's log.
 
 A new worker head runs the standing-list protocol from round three, then the
-six gates. Gate exit 7 launches the next review round through the frozen
+six gates. Gate exit 6 launches the next review round through the frozen
 launcher. Updated CI or a bound local APPROVE triggers fresh gates. Exit 0
 enters the project's merge lock, verifies the captured base and authoritative
 head, reuses the lowest unused merge reservation, and requests a card only
@@ -5693,7 +5682,7 @@ GitHub requests or process probes. No wake or queue receipt proves delivery to a
 
 Captain revision, 2026-10-02: “好 T135安排 解耦外部repo convention”, clarified by “不是這個意思 135做完後 review和brief機制要能不依賴外部repo允許我們張貼每一輪工作日誌”. The brief and review loop must work without permission to post round work logs. “現在是第一輪reviewer就要給過關條件” confirms complete pass criteria on every REJECT from round one.
 
-T-135 runs in the first wave beside T-142 with no dependencies. It owns append-only state/evidence/<project>/<task>/ records for brief, pack, worker-report, ask and verdict, carrying project/task/round/actor/kind/head/time and authenticated final-answer provenance for verdicts. The worker reads local briefs and packs; reviewers receive prior rounds and standing lists from round two; gate 7 and fm-protocol.sh read local verdicts with latest-REJECT precedence. Ask only for a missing or unclear list before edits. The project comments/local switch defaults to comments for self compatibility; local mode posts nothing and completes the entire loop. T-138 depends on T-142 and T-135, extends the same records to private FM_HOME storage, adds signing/spec/patch binding and retains atomic merge-head enforcement. T-140 also gains T-135 and adds summary/check/threads projections. No external conventions or advanced stack are prerequisites for T-135. These are adopted implementation requirements, not claims that the readers already ship.
+T-135 runs in the first wave beside T-142 with no dependencies. It owns append-only state/evidence/<project>/<task>/ records for brief, pack, worker-report, ask and verdict, carrying project/task/round/actor/kind/head/time and authenticated final-answer provenance for verdicts. The worker reads local briefs and packs; reviewers receive prior rounds and standing lists from round two; gate 6 and fm-protocol.sh read local verdicts with latest-REJECT precedence. Ask only for a missing or unclear list before edits. The project comments/local switch defaults to comments for self compatibility; local mode posts nothing and completes the entire loop. T-138 depends on T-142 and T-135, extends the same records to private FM_HOME storage, adds signing/spec/patch binding and retains atomic merge-head enforcement. T-140 also gains T-135 and adds summary/check/threads projections. No external conventions or advanced stack are prerequisites for T-135. These are adopted implementation requirements, not claims that the readers already ship.
 
 Task JSON files are authoritative. T-142 depends on T-166 (the approved plan's
 original empty dependency is intentionally revised to require consolidation).

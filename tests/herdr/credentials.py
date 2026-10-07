@@ -140,8 +140,8 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         paths=eventually(lambda:list((self.repo/'state/runs').glob('*/orchestration-result.json')))
         self.assertTrue(paths)
         self.assertEqual(0,json.loads(paths[0].read_text())['process_exit'])
-        # Gate 7 requests a reviewer; gate execution itself is outside this test.
-        (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 7\n')
+        # Gate 6 requests a reviewer; gate execution itself is outside this test.
+        (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 6\n')
         answer=subprocess.run([sys.executable,str(root/'tests/lib/autopilot_turn.py'),str(self.repo)],
                               env=self.env,capture_output=True,text=True,timeout=WAIT)
         self.assertEqual(0,answer.returncode,answer.stderr)

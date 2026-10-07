@@ -4,7 +4,9 @@
 # processes appending at once and cannot grow a field nobody validates.
 #
 #   fm-emit.sh --actor worker-2 --type gate_failed --task T-004 [--pr 9]
-#              [--project example-app] [--data '{"gate":5}'] [--en "..." --tw "..."]
+#              [--project example-app] [--data '{"gate":"fail-first"}'] [--en "..." --tw "..."]
+#
+# FM_EMIT_LEGACY_GATE=1 is fixture-only: preserve numeric gates in old events.
 #
 # --project names the registered project the event is about (design section
 # 15.4) and is written as a top-level `project`. An event without it belongs
@@ -151,6 +153,17 @@ done
 case " $TYPES " in *" $type "*) ;; *) die "unknown type: $type" ;; esac
 command -v jq >/dev/null 2>&1 || die "jq is required"
 jq -e . >/dev/null 2>&1 <<<"$data" || die "--data is not valid JSON"
+GATE_LIST="$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json"
+if jq -e 'type == "object" and has("gate")' >/dev/null 2>&1 <<<"$data"; then
+  [ -r "$GATE_LIST" ] || { echo 'fm-emit: gate list unavailable: bin/lib/fm_gates.json' >&2; exit 70; }
+  case "$type" in gate_passed|gate_failed)
+    if ! jq -e --slurpfile gates "$GATE_LIST" --arg legacy "${FM_EMIT_LEGACY_GATE:-}" '
+      .gate as $gate | ($gates[0].gates | any(.name == $gate)) or
+      ($legacy == "1" and ($gate | type) == "number")' >/dev/null <<<"$data"; then
+      usage "data.gate takes a gate name since T-232: $(jq -r '[.gates[].name]|join(", ")' "$GATE_LIST")"
+    fi ;;
+  esac
+fi
 # A merged event moves its task's card, so its task is never a branch name or
 # a title: a value the grammar reads a task out of (t-117-…, "T-117: …")
 # without its being that task id is refused, naming the task it holds. Any
@@ -280,7 +293,7 @@ crew_status_stamp_write() {
   printf '%s\t%s\t%s\n' "$_crew_wstart" "$_crew_count" "$crew_fp" > "$stamp"
 }
 
-# A gate result - the six gates, gate 6 being the pull request's required
+# A gate result - the six gates, gate 5 being the pull request's required
 # check - wakes firstmate when whoever follows the check writes it (T-137):
 # the writer pushes the wake, so nothing watches GitHub for it. A crew
 # round's own gate_failed does not: its round's end already wakes
@@ -293,7 +306,9 @@ wake_on_gate() {
   local lib gate result
   lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fm_lifeline.py"
   [ -r "$lib" ] || return 0
-  gate="$(jq -r '.gate? // empty' <<<"$data" 2>/dev/null)"
+  gate="$(jq -r --slurpfile gates "$GATE_LIST" '.gate as $value | $gates[0] as $m |
+    (if ($value|type) == "number" then $m.legacy[$value|tostring] else $value end) as $name |
+    $m.gates[] | select(.name == $name) | "\(.n) (\(.name))"' <<<"$data" 2>/dev/null)"
   result="${type#gate_}"
   python3 "$lib" push "$ROOT" "gate-$(printf '%s' "${task:-none}" | tr -cd 'A-Za-z0-9')-$(date +%s)" gate \
     "gate: ${task:-?} $result${gate:+ gate $gate}${pr:+ #$pr}" \

@@ -27,7 +27,7 @@ test('T-118: an answered card leaves the captain lane, and a park chosen on a ca
   writeFileSync(join(root,'state/pending/D-1020.json'), JSON.stringify({id:'D-1020',kind:'choice',task:'T-030',
     ts:'2026-09-26T09:00:00Z',title:'Park T-030?',details:{...details,effect:{B:'park'}}}));
   writeFileSync(join(root,'state/pending/D-1031.json'), JSON.stringify({id:'D-1031',kind:'merge',task:'T-031',pr:31,
-    ts:'2026-09-26T09:00:01Z',title:'Merge #31',details,gates:[1,1,1,1,1,1,1]}));
+    ts:'2026-09-26T09:00:01Z',title:'Merge #31',details,gates:{branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:true}}));
   const b = await startBoard(root);
   const inLane = (k:string, id:string) => page.locator(`[data-lane="${k}"] [data-task="${id}"]`);
   try {
@@ -245,7 +245,7 @@ test('T-118: reopening moves a merged card out of merged, and a card under a fin
     await expect(page.locator('#log li').first()).toContainText('the captain reopened T-117');
     // a later merge card for #97 is shown and answerable
     writeFileSync(join(root,'state/pending/D-1119.json'), JSON.stringify({id:'D-1119',kind:'merge',task:'T-117',pr:97,
-      title:'Merge #97',details,gates:[1,1,1,1,1,1,1]}));
+      title:'Merge #97',details,gates:{branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:true}}));
     await expect(page.locator('#card-D-1119')).toHaveCount(1);
     await expect(page.locator('#card-D-1119 .final-note')).toHaveCount(0);
     await page.locator('#card-D-1119 .opt[data-c="A"]').click();

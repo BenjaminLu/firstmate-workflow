@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Feature-owned tests; suites are run by CI and gate 5, never by a worker.
+# Feature-owned tests; suites are run by CI and gate 4, never by a worker.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=tests/lib.sh

@@ -72,8 +72,8 @@ test("either mechanism picks the language on its own", async ({ page }) => {
   }
 });
 
-// Gate 3 is retired (T-114). A gate_failed naming it names no gate the board
-// knows, so the badge carries no number; one naming gate 4 keeps its number.
+// Legacy number 3 was retired (T-114); it maps to null.
+// Legacy number 4 maps to the current scope gate.
 test("a failed-gate badge numbers only a gate that exists: 3 is retired, 4 is kept", async ({ page }) => {
   const root = makeRoot([], false);
   const [three, four] = readTasks(root);
@@ -85,10 +85,10 @@ test("a failed-gate badge numbers only a gate that exists: 3 is retired, 4 is ke
     const gateBadge = (id: string) =>
       state.tasks.find((t: any) => t.id === id).badges.filter((x: any) => x.kind === 'gate');
     expect(gateBadge(three.id)).toEqual([{ kind: 'gate', gate: null }]);
-    expect(gateBadge(four.id)).toEqual([{ kind: 'gate', gate: 4 }]);
+    expect(gateBadge(four.id)).toEqual([{ kind: 'gate', gate: {n:3,name:'scope'} }]);
     await page.goto(`${b.url}/?lang=en`);
     await expect(page.locator(`[data-task="${three.id}"] .badge`)).toHaveText(EN.gateFailed);
-    await expect(page.locator(`[data-task="${four.id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}', '4'));
+    await expect(page.locator(`[data-task="${four.id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}', '3').replace('{label}', EN.gate_scope));
   } finally { await stopBoard(b); }
 });
 

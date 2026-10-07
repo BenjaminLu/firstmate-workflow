@@ -156,18 +156,18 @@ assert_eq "Wren" "$(jq -r '.tasks[]|select(.id=="T-E4")|.crew|map(.name)|join(",
   "a card names the crew aboard on it"
 assert_eq "0" "$(jq -r '.tasks[]|select(.id=="T-E4")|.badges|length' <<<"$sb0")" \
   "a task at work with nothing to report carries no badge"
-FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type gate_failed \
-  --data '{"gate":5}' --en "gate 5" --tw "第 5 道" >/dev/null
+FM_EMIT_LEGACY_GATE=1 FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type gate_failed \
+  --data '{"gate":5}' --en "gate 4" --tw "第 4 道" >/dev/null
 FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type ask_pass_criteria \
   --en "asked" --tw "已詢問" >/dev/null
 sb1="$(st)"
-assert_eq "5" "$(jq -r '.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="gate")|.gate' <<<"$sb1")" \
+assert_eq '{"n":4,"name":"fail-first"}' "$(jq -c '.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="gate")|.gate' <<<"$sb1")" \
   "the failing gate's number comes from the event"
 assert_eq "1" "$(jq -r '[.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="ask")]|length' <<<"$sb1")" \
   "an open ASK-PASS-CRITERIA is a badge"
 FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type criteria_returned \
   --en "listed" --tw "已列出" >/dev/null
-FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type gate_failed \
+FM_EMIT_LEGACY_GATE=1 FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type gate_failed \
   --en "no number" --tw "沒有編號" >/dev/null
 sb2="$(st)"
 assert_eq "0" "$(jq -r '[.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="ask")]|length' <<<"$sb2")" \

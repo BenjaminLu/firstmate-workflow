@@ -4,9 +4,10 @@
 # exercises its real implementation. Never install this in a production tree.
 binding_service_fixture() {
   mkdir -p "$1/bin/lib"
+  cp "$ROOT/bin/lib/fm_gates.json" "$1/bin/lib/"
   cp "$ROOT/bin/lib/fm_binding.py" "$1/bin/lib/fm_binding_real.py"
   cat > "$1/bin/lib/fm_binding.py" <<'PY'
-from fm_binding_real import source_binding, git, command, github, remote_head, sha, repository
+from fm_binding_real import gate_list, gate_entry, source_binding, git, command, github, remote_head, sha, repository
 def fetch_ref(*args, **kwargs):
     from fm_binding_real import fetch_ref as fetch
     return fetch(*args, **kwargs)
@@ -46,7 +47,7 @@ if __name__ == "__main__":
         print('{}')
     elif a.mode == 'candidate':
         if not re.fullmatch('[0-9a-f]{40}',a.head):raise SystemExit(1)
-        print(json.dumps(dict(head=a.head,task=a.task,pr=int(a.pr),gates=[1,2,4,5,6,7],signature='fixture')))
+        print(json.dumps(dict(head=a.head,task=a.task,pr=int(a.pr),gates=[g['name'] for g in json.loads(Path(__file__).with_name('fm_gates.json').read_text())['gates']],signature='fixture')))
 
 PY
 }

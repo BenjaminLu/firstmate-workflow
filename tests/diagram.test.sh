@@ -269,9 +269,9 @@ assert_contains "$cnb" 'lang="zh-CN"'         "the zh-CN page says so"
 assert_lacks "$enb" '<h1>' 'diagram has no duplicate card title'
 assert_lacks "$enb" '<ol class="lanes">' 'diagram has no duplicate lane strip'
 
-# the gates, because this one is a merge: fm-gate.sh's numbers, 3 retired
-for n in 1 2 4 5 6 7; do
-  assert_lacks "$enb" "$(jq -r ".gate$n" "$ROOT/i18n/ui.en.json")" "gate $n is not duplicated in the diagram"
+# the gates, because this one is a merge: the six named checks
+for name in branch rebase scope fail-first ci approval; do
+  assert_lacks "$enb" "$(jq -r '.["gate_'"$name"'"]' "$ROOT/i18n/ui.en.json")" "gate $name is not duplicated in the diagram"
 done
 assert_lacks "$enb" "Merge into main" "diagram does not duplicate action controls"
 
@@ -445,7 +445,7 @@ decision "$R" D-013 '{"id":"D-013","task":"T-099","kind":"choice","title":"pick 
 "$DG" --decision D-013 --repo "$R" >/dev/null 2>&1
 d13="$(cat "$R/board/public/diagrams/D-013.en.html" 2>/dev/null)"
 assert_contains "$d13" "before-after" "a choice without authored fragment uses its bespoke data"
-assert_lacks    "$d13" "$(jq -r .gate5 "$ROOT/i18n/ui.en.json")" "and carries no merge checklist"
+assert_lacks    "$d13" "$(jq -r .gate_ci "$ROOT/i18n/ui.en.json")" "and carries no merge checklist"
 
 # ----------------------------------- a drawing authored unevenly is refused
 #
@@ -618,7 +618,7 @@ rm -rf "$ro"
 # ------------------------------------------- the inputs it cannot do without
 #
 # A dictionary that is not there used to render every key as itself and exit
-# 0 - a whole page reading laneQueued, gate3, chooseA, delivered as a
+# 0 - a whole page reading laneQueued, gate_scope, chooseA, delivered as a
 # success, which is a broken install that looks exactly like a working one. A
 # missing KEY still renders as its key, on purpose: that is a bug report on
 # the page, and the page is where anyone would see it. A missing FILE is an

@@ -100,7 +100,7 @@ class SpecPins(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
         env.update(HERDR_ENV='0', FM_GATE_LOCK=str(Path(self.tmp.name) / 'gate.lock'))
         return subprocess.run(['bash', str(ROOT / 'bin/fm-gate.sh'), '--repo', str(self.root),
-            '--task', 'T-X', '--branch', 'main', '--only', '4'],
+            '--task', 'T-X', '--branch', 'main', '--only', '3'],
             env=env, capture_output=True, text=True)
 
     def test_legacy_cli_repin_replaces_authority_without_snapshot_change(self):
@@ -108,7 +108,7 @@ class SpecPins(unittest.TestCase):
         original = (self.p.directory / '1.json').read_bytes()
         with self.assertRaisesRegex(ValueError, 'pin authorization mismatch'):
             self.p.resolve()
-        self.assertEqual(self.legacy_gate().returncode, 4)
+        self.assertEqual(self.legacy_gate().returncode, 3)
         self.decision()
         result = self.pin_cli('--decision', 'D-1')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -583,9 +583,9 @@ class SpecPins(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
         env['FM_GATE_LOCK'] = str(Path(self.tmp.name) / 'gate.lock')
         result = subprocess.run(['bash', str(ROOT / 'bin/fm-gate.sh'), '--repo', str(self.root),
-                    '--task', 'T-X', '--branch', 'main', '--only', '4'], env=env, text=True,
+                    '--task', 'T-X', '--branch', 'main', '--only', '3'], env=env, text=True,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual(result.returncode, 4)
+        self.assertEqual(result.returncode, 3)
         self.assertIn('no pin', result.stderr)
 
 

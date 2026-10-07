@@ -225,8 +225,8 @@ rm -rf "$c"
 # any other event: in the same log, only the gate runner's result wakes.
 g="$(mktemp -d)"
 wq="$g/state/session/wake.jsonl"
-FM_ROOT="$g" "$EMIT" --actor autopilot --type gate_failed --task T-137 --pr 117 --data '{"gate":6}' >/dev/null 2>&1
-assert_eq "gate gate: T-137 failed gate 6 #117" "$(jq -r '"\(.reason) \(.line)"' "$wq" 2>/dev/null)" \
+FM_ROOT="$g" "$EMIT" --actor autopilot --type gate_failed --task T-137 --pr 117 --data '{"gate":"ci"}' >/dev/null 2>&1
+assert_eq "gate gate: T-137 failed gate 5 (ci) #117" "$(jq -r '"\(.reason) \(.line)"' "$wq" 2>/dev/null)" \
   "a gate result wakes firstmate with its line"
 FM_ROOT="$g" "$EMIT" --actor autopilot --type gate_passed --task T-137 --pr 117 >/dev/null 2>&1
 assert_eq "gate: T-137 passed #117" "$(jq -r .line "$wq" 2>/dev/null | tail -1)" "and a pass does too"

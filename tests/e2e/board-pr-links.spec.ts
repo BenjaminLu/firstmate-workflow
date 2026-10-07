@@ -39,7 +39,7 @@ test('every pull request number links to its pull request on the registered repo
   const said = {en:{...details.en, explanation:'Lands after #6 is in.'},
     'zh-TW':{...details['zh-TW'], explanation:'在 #6 之後合併。'}};
   writeFileSync(join(root,'state/pending/D-8.json'), JSON.stringify({
-    id:'D-8', kind:'merge', task:'T-W', pr:8, title:'Merge it', details:said, gates:[1,1,1,1,1,1,0]}));
+    id:'D-8', kind:'merge', task:'T-W', pr:8, title:'Merge it', details:said, gates:{branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:false}}));
   const events = () => readFileSync(join(root,'state/events.jsonl'),'utf8').trim().split('\n');
   // nothing leaves the machine: the opened tab gets a local page
   await page.context().route('https://github.com/**', r => r.fulfill({status:200, contentType:'text/html', body:'<title>pull</title>'}));
@@ -136,7 +136,7 @@ test('without a github entry a pull request number is plain text, never a guesse
     task:'T-W',type:'pr_opened',pr:8,summary:{en:'opened #8','zh-TW':'開了 #8'}}) + '\n');
   emitFixture(root,'github','T-W','commit_pushed','pushed, replaces #5','推送，取代 #5');
   writeFileSync(join(root,'state/pending/D-8.json'), JSON.stringify({
-    id:'D-8', kind:'merge', task:'T-W', pr:8, title:'Merge it', details, gates:[1,1,1,1,1,1,0]}));
+    id:'D-8', kind:'merge', task:'T-W', pr:8, title:'Merge it', details, gates:{branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:false}}));
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);

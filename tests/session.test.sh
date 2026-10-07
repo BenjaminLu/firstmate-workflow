@@ -1015,7 +1015,7 @@ class Session(SessionFixture):
         self.assertEqual([live], second['kept'])
         self.assertEqual(1, sum(1 for line in events.read_text().splitlines()
                                 if '"agent_finished"' in line and ghost in line))
-        # Gate 5: without retire_dead_crew the ghost stays aboard in the fold.
+        # Gate 4: without retire_dead_crew the ghost stays aboard in the fold.
         events.write_text(before)
         self.assertEqual('dispatched', m.crew_last_events(self.repo)[ghost]['type'])
     def test_execute_child_prints_heartbeat_while_adapter_runs(self):

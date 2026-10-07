@@ -35,3 +35,6 @@ store.append('readiness',1,'firstmate','a'*40,'',gate_base='c'*40,gates=[1,2,4,5
 archive = state/'runtime/archived-pending'
 archive.mkdir(parents=True, exist_ok=True)
 (archive/'D-999.json').write_text(json.dumps(dict(id='D-999', task='T-001', kind='choice', purpose='dispatch', details=card())))
+
+# T-232: the same projection for a new name-list record on the pending task.
+Store(state,project,'T-001',external=external).append('readiness',1,'firstmate','a'*40,'',gate_base='c'*40,gates=['branch','rebase','scope','fail-first','ci','approval'],checks=[{'name':'ci','conclusion':'SUCCESS'}])

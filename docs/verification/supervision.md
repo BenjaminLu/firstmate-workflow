@@ -33,7 +33,7 @@ not that a model follows them. Candidate-specific live acceptance remains requir
   | `bin/fm-worker.sh` | a round ends, after its `agent_finished` | `finished: T-134 worker-mira-t134-r1 ok #9`, `failed: ... exit 1` |
   | `bin/fm-review.sh` | a review round ends | `review: T-134 APPROVE 4ea1ec2 #9`, `review: T-134 REJECT ...`, `review: T-134 no verdict exit 3 ...` |
   | `bin/fm-herdr.py` (deck reconcile) | a run is found lost | `lost: T-134 worker-mira-t134-r1` |
-  | `bin/fm-emit.sh` | a `gate_passed`/`gate_failed` written by anyone but a crew round | `gate: T-134 failed gate 6 #9` |
+  | `bin/fm-emit.sh` | a `gate_passed`/`gate_failed` written by anyone but a crew round | `gate: T-134 failed gate 5 (ci) #9` |
   | `board/server.ts` (T-151) | a card is answered; a merge it started settles | `card: D-51 answered A`; `merge: D-51 merged`, `merge: D-51 failed` |
 
   A round's progress (`crew_status`) is never pushed. `bin/fm-decide.sh`

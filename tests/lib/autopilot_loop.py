@@ -119,7 +119,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
     def test_failed_review_launch_leaves_calling_gate_done(self):
         path = self.state / 'gate.json'
         path.with_suffix('.result.json').write_text(json.dumps(dict(kind='gate', task='T-001',
-            pr=PR, code=7, round=1, base=BASE)))
+            pr=PR, code=6, round=1, base=BASE)))
         self.pilot.data['jobs'] = {'gate': dict(kind='gate', task='T-001', number=12,
             head=HEAD, state='running', path=str(path))}
         with patch.object(self.pilot, 'start_job', side_effect=OSError('cannot start')):
@@ -178,7 +178,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
                 project=self.ctx['project'], details=details, head=argv[argv.index('--expected-head') + 1])))
         return ''
 
-    def gate_result(self, code=7, **extra):
+    def gate_result(self, code=6, **extra):
         self.pilot.job_completed(dict(kind='gate', task='T-001', pr=PR, base=BASE,
                                      round=1, code=code, output='', **extra))
 
@@ -186,7 +186,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.pilot.advance(PR, CHECKS, [])
         self.assertEqual(self.calls[-1][0], 'gate', 'a worker head must reach gates')
         self.gate_result()
-        self.assertEqual(self.calls[-1][0], 'review', 'exit 7 must launch a review')
+        self.assertEqual(self.calls[-1][0], 'review', 'exit 6 must launch a review')
         self.assertIn('--round', self.calls[-1][3])
         self.gate_result()
         self.assertEqual(sum(c[0] == 'review' for c in self.calls), 1)
@@ -250,9 +250,9 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertIn('no adapter vendor-x; log is at /kept/review.2.log', str(self.pilot.data['wakes']))
 
     def test_gate_failure_and_no_verdict_are_judgment(self):
-        self.gate_result(5); self.gate_result(5)
+        self.gate_result(4); self.gate_result(4)
         self.assertEqual(len(self.pilot.data['wakes']), 1)
-        self.assertIn('gate 5', str(self.pilot.data['wakes']))
+        self.assertIn('gate 4 (fail-first)', str(self.pilot.data['wakes']))
         self.pilot.job_completed(dict(kind='review', task='T-001', pr=PR, code=0, output='log is at /kept/a.log'))
         self.assertIn('no verdict', str(self.pilot.data['wakes']))
 
@@ -393,11 +393,11 @@ class LoopTests(BranchFixture, unittest.TestCase):
         failed = [dict(CHECKS[0], conclusion='failure')]
         self.pilot.advance(PR, failed, [])
         self.assertEqual(sum(c[0] == 'gate' for c in self.calls), 1)
-        self.gate_result(6)
+        self.gate_result(5)
         self.pilot.advance(PR, failed, [])
-        self.gate_result(6)
+        self.gate_result(5)
         self.assertEqual(len(self.pilot.data['wakes']), 1)
-        self.assertIn('stopped at gate 6', str(self.pilot.data['wakes']))
+        self.assertIn('stopped at gate 5 (ci)', str(self.pilot.data['wakes']))
 
     def test_only_meaningful_fingerprint_inputs_regate(self):
         self.pilot.advance(PR, CHECKS, [])
@@ -448,7 +448,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
 
     def test_external_review_and_handoff_keep_project_conventions(self):
         self.pilot.policy['review'] = 'external'
-        self.gate_result(7)
+        self.gate_result(6)
         self.assertFalse(any(c[0] == 'review' for c in self.calls))
         self.assertIn('external review required', str(self.pilot.data['wakes']))
         self.pilot.policy['land'] = 'handoff'
@@ -785,7 +785,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.details()
         before = copy.deepcopy(self.pilot.data)
         self.pilot.advance(PR, CHECKS, [])
-        for kind, codes in (('gate', (0, 6, 7)), ('protocol', (0, 1)), ('review', (0, 3))):
+        for kind, codes in (('gate', (0, 5, 6)), ('protocol', (0, 1)), ('review', (0, 3))):
             for code in codes:
                 self.pilot.job_completed(dict(kind=kind, task='T-001', pr=PR,
                     code=code, base=BASE, round=3, output=''))
@@ -820,8 +820,8 @@ class LoopTests(BranchFixture, unittest.TestCase):
                 (directory / 'D-alpha-T001-1.json').write_text(json.dumps(dict(record, **change)))
                 self.pilot.data['wakes'].clear()
                 self.assertFalse(self.pilot.landed('T-001', PR))
-                self.gate_result(6)
-                self.assertIn('stopped at gate 6', str(self.pilot.data['wakes']))
+                self.gate_result(5)
+                self.assertIn('stopped at gate 5 (ci)', str(self.pilot.data['wakes']))
 
     def test_closed_and_foreign_merged_events_still_gate_and_report(self):
         (self.state / 'events.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in (
@@ -830,7 +830,7 @@ class LoopTests(BranchFixture, unittest.TestCase):
             dict(type='merged', project='alpha', pr=13))))
         self.pilot.advance(PR, CHECKS, [])
         self.assertEqual(len(self.gates()), 1)
-        self.gate_result(6)
-        self.assertIn('stopped at gate 6', str(self.pilot.data['wakes']))
+        self.gate_result(5)
+        self.assertIn('stopped at gate 5 (ci)', str(self.pilot.data['wakes']))
 
 if __name__ == '__main__': unittest.main()
