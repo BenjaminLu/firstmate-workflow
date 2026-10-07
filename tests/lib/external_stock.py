@@ -237,7 +237,7 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
                 if public_title is None:
                     assert message == 'T-051: project work', message
                 else:
-                    assert message == 'T-051: ' + public_title, message
+                    assert message == public_title, message
                 calls = [json.loads(line) for line in (scratch / 'gh.jsonl').read_text().splitlines()]
                 create = next(call for call in calls if call[:2] == ['pr', 'create'])
                 assert create[create.index('--repo')+1] == 'owner/app'
@@ -246,10 +246,9 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
                 assert not (engine / 'state/worktrees/T-051').exists()
                 assert not (engine / 'state/runs').exists()
                 if public_title is not None:
-                    assert create[create.index('--title')+1] == 'T-051: ' + public_title
+                    assert create[create.index('--title')+1] == public_title
                     assert create[create.index('--body')+1] == (
-                        'The fixture widget uses blue.\n\n'
-                        'Captain acceptance and evidence are retained privately.')
+                        'The fixture widget uses blue.')
                     assert run(['git', '-C', str(engine), 'status', '--porcelain'], env) == ''
                     found = subprocess.run(['git', '-C', str(engine), 'grep', '-F', public_title],
                                            env=env, text=True, capture_output=True)

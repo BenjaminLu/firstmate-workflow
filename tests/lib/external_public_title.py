@@ -89,15 +89,17 @@ class PublicText(unittest.TestCase):
                               '  url="$(fm_github pr create')
         script = ('set -eu\nTASK=T-051; branch=t-051-work; num=9\n'
                   f'FM_EXTERNAL={external}; FM_CODE_ROOT={shlex.quote(str(ROOT))}\n'
-                  'spec=' + shlex.quote(json.dumps(spec)) + '\n' + prefix + '\n' +
+                  '''fm_conventions() { if [ "$1" = pr_format ]; then echo '{"pr_title":"plain","pr_sections":[],"pr_language":"en"}'; else echo '[]'; fi; }
+fm_project() { :; }; fm_project_reviewer_mode() { :; }; fm_cfg_in() { :; }; FM_SPEC_PIN_JSON='{}'
+''' + 'spec=' + shlex.quote(json.dumps(spec)) + '\n' + prefix + '\n' +
                   commit + publication + tail)
         return subprocess.run(['bash', '-c', script], capture_output=True,
                               text=True, env=self.env, timeout=10)
 
     def test_commit_and_pr_share_validated_text(self):
         for fields, external, title, body in (
-            ({'public_title': TITLE, 'public_summary': SUMMARY}, 1, TITLE, SUMMARY + '\n\n' + FOOTER),
-            ({'public_title': TITLE}, 1, TITLE, FOOTER),
+            ({'public_title': TITLE, 'public_summary': SUMMARY}, 1, TITLE, SUMMARY),
+            ({'public_title': TITLE}, 1, TITLE, ''),
             ({}, 1, 'project work', 'Task T-051. ' + FOOTER),
             ({'public_title': 'Utilize the widget'}, 1, 'project work', 'Task T-051. ' + FOOTER),
             ({}, 0, 'Private launch strategy', 'Dispatched by firstmate for T-051. Acceptance is in design/tasks/T-051.json.')
@@ -105,7 +107,8 @@ class PublicText(unittest.TestCase):
             with self.subTest(fields=fields, external=external):
                 p = self.shell(fields, external, tail='printf "%s\\n%s\\n%s" "$commit_msg" "$pr_title" "$pr_body"')
                 self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertEqual(p.stdout, f'T-051: {title}\nT-051: {title}\n{body}')
+                expected = title if external and fields.get('public_title') == TITLE else 'T-051: ' + title
+                self.assertEqual(p.stdout, f'{expected}\n{expected}\n{body}')
                 if external:
                     self.assertNotIn('Private launch strategy', p.stdout)
 
@@ -150,8 +153,9 @@ class PublicText(unittest.TestCase):
                 recorded = calls.read_text() if calls.exists() else ''
                 self.assertEqual(recorded.splitlines().count('edit'), edits)
                 if edits:
-                    self.assertIn('T-051: ' + TITLE, recorded)
-                    self.assertIn(SUMMARY + '\n\n' + FOOTER, recorded)
+                    self.assertIn('\n' + TITLE + '\n', recorded)
+                    self.assertIn(SUMMARY, recorded)
+                    self.assertNotIn(FOOTER, recorded)
                 if view_rc or edit_rc:
                     self.assertIn('fm-worker:', p.stderr)
                     self.assertTrue(any(ord(c) > 127 for c in p.stderr))
