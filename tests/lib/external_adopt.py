@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+os.environ['HERDR_ENV'] = '0'
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv[1])
 sys.path.insert(0, str(ROOT / 'bin/lib'))
@@ -351,7 +352,7 @@ class BaseBinding(AdoptionRounds):
     def test_base_required_checks_hold_exemption_and_pin(self):
         import fm_binding as binding
         import fm_adopt
-        view = dict(self.view, headRefOid=self.prev, baseRefName='release')
+        view = dict(self.view, headRefOid=self.prev, baseRefOid='b'*40, baseRefName='release')
         def github(repo, *args):
             if args[0] == 'pr': return view
             if '/check-runs?' in args[1]:

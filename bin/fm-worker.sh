@@ -2251,7 +2251,7 @@ note_unsent_published
 rebuild_args=(${adopt_data_args[@]+"${adopt_data_args[@]}"})
 if [ "$rebuilt" = 1 ]; then
   rebuild_args=(--data "$(jq -cn --arg prev "$rebuild_prev" --arg base "$BASE" \
-    --arg base_head "$rebuild_base" --arg head "$(git -C "$tree" rev-parse HEAD)" --arg adopt_pr "$adopt_pr" \
+    --arg base_head "$rebuild_base" --arg head "$(git -C "$tree" rev-parse HEAD)" --arg adopt_pr "${adopt_pr:-}" \
     '{rebuilt:{previous_head:$prev,base:$base,base_head:$base_head,head:$head,
       conflicts:$ARGS.positional}} + (if $adopt_pr == "" then {} else {adopt_pr:($adopt_pr|tonumber)} end)' --args ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"})")
 fi
@@ -2301,7 +2301,7 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
 else
   # Upgrade only the untouched external fallback title. Never replace a title
   # chosen by the captain, or one belonging to a different branch.
-  if [ "$FM_EXTERNAL" = 1 ] && [ -z "$adopt_pr" ] && [ -n "${public_text:-}" ]; then
+  if [ "$FM_EXTERNAL" = 1 ] && [ -z "${adopt_pr:-}" ] && [ -n "${public_text:-}" ]; then
     if current_pr="$(fm_github pr view "$num" --json title,headRefName 2>/dev/null)" &&
        jq -e 'type == "object" and (.title | type == "string") and (.headRefName | type == "string")' \
          <<<"$current_pr" >/dev/null 2>&1; then
