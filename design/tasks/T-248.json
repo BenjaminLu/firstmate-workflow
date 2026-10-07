@@ -1,0 +1,242 @@
+{
+  "id": "T-248",
+  "title": "spec preflight lists every check in one exhaustive numbered pass closed by PREFLIGHT-COMPLETE, and a re-preflight re-issues that standing list with done, open, NEW-GROUND and MISSED marks, so a spec converges in one or two rounds instead of many",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_spec_preflight.py",
+    "bin/lib/fm-spec-preflight.sh",
+    "bin/fm-herdr.py",
+    "bin/fm-canary.sh",
+    "tests/spec-preflight-standing.test.sh",
+    "tests/lib/spec_preflight_standing.py",
+    "tests/lib/spec_preflight_cases.py",
+    "tests/fixtures/spec-preflight/bold-headings.final.txt",
+    "tests/fixtures/spec-preflight/bold-headings-standing.final.txt",
+    "tests/lib/preflight_lifecycle.py",
+    "tests/spec-preflight-launcher.test.sh",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "skills/reviewer/SKILL.md",
+    "design/tasks/T-248.json"
+  ],
+  "acceptance": [
+    "Why. The captain (2026-10-07), verbatim: \"你spec改太多輪了, 能不能跟worker round一樣先要求reviewer一次列出來所有驗收項目\". Today spec preflight returns only the gaps it happens to find (prompt at bin/lib/fm_spec_preflight.py:29-80 asks for 'a numbered list of findings'; decision() at :16-27 only needs one numbered line and the closing SPEC-OK/SPEC-GAPS line), so each round surfaces new gaps: T-247 took nine rounds, T-241 and T-239 many. Worker reviews instead keep a standing numbered list closed by CRITERIA-COMPLETE with done/open marks and NEW-GROUND labels (skills/reviewer/SKILL.md:179-205). Spec preflight gets the same discipline.",
+    "Change 1, one exhaustive pass (bin/lib/fm_spec_preflight.py prompt()). prompt() gains an optional `previous` argument (default None; existing callers keep their two/three positional arguments). The first-pass prompt requires, before any verdict, one numbered checklist that covers every acceptance line of the spec (at least one item per acceptance line) and every standing category: why and its references; each Change; callers, fixtures and mirrors of every touched interface; scope completeness against the files the changes touch; test labels (new behaviour fails on base vs regression); migration of records, pins and tasks in flight; the design section named for each design.md edit (the existing check 5); i18n and lint reachability of new user-facing keys; privacy of external project text when FM_EXTERNAL=1. Each item starts `N. ok:` or `N. gap:` (the number may keep T-206 bold or heading markup; the status word may be bold), cites file:line, and states the expected spec change for a gap. The list is closed by a standalone line `PREFLIGHT-COMPLETE:<task>` immediately before the existing closing verdict line. The prompt states that every gap belongs in this one report and that a later pass may add only NEW-GROUND or MISSED items. The prompt keeps the existing sentence 'start each item with its plain number, `1.`, `2.` and so on, at the start of the line' (pinned by tests/lib/spec_preflight_cases.py:202-205, which stays unchanged) and adds the status word rule after it; the marker assertions at :131-147 stay and gain a check for PREFLIGHT-COMPLETE:<task>.",
+    "Change 2, re-preflight re-issues the standing list (bin/lib/fm_spec_preflight.py prompt() and a new `standing(store)` reader; bin/lib/fm-spec-preflight.sh:60-61 passes `--state \"$FM_STATE_DIR\" --project \"$(fm_evidence_project)\"` to the `prompt` command). The previous list is the latest record (by store sequence) of kind spec-preflight for the same task that carries a `standing` field (Change 3), whatever its actor, spec SHA or verdict; a list that ended in SPEC-OK is still the standing list for a later preflight, for example before a repin. When it exists, the prompt includes that list verbatim and requires the re-issued list to keep every earlier number in order, each marked `done` (was gap, now fixed), `open` (still a gap) or `ok` (was ok, still ok), and to append new items only with the next numbers and a label: `N. gap NEW-GROUND:` for text the amendment changed, or `N. gap MISSED:` for anything the earlier pass should have caught. Records without `standing` (every record written before this task) are ignored, so the next preflight of such a task is a first pass. Ordering: main validates the spec through prompt()'s existing checks first and reads the store only afterwards, and only when both --state and --project are non-empty; with either empty it builds a first-pass prompt. So tests/lib/spec_preflight_cases.py:116-129 (test_external_prompt_failure_keeps_launcher_exit_65, which runs the launcher text under bare bash with no fm_evidence_project and no FM_STATE_DIR) stays unchanged and still sees 'external spec needs a valid public_title:'.",
+    "Change 3, a strict structure check at retain time, and the existing parser kept (bin/lib/fm_spec_preflight.py). decision() :16-27 stays byte-for-byte as it is: bin/lib/fm_evidence.py:193-198 (Store.records()) re-validates every stored spec-preflight record with it, so every record written before this task, and every fixture written by Store.append, keeps reading back with its stored verdict; fm-herdr.py completion() :630-635 also keeps using it. A new function `structure(answer, task, acceptance_count, previous=None)` returns the parsed list or raises ValueError. It requires: decision() returns a verdict; the last non-blank line before the closing verdict line is exactly PREFLIGHT-COMPLETE:<task> (blank lines between the two are allowed, as for CRITERIA-COMPLETE in skills/reviewer/SKILL.md:190-192); the standing list is the last contiguous numbered block before that marker, read with the same rules as the worker standing list (skills/reviewer/SKILL.md:198-203): an item starts at a numbered line, and indented lines, bullets and wrapped text up to the next numbered line or a heading belong to it; the contiguous numbered block before that marker parses every item as `N. <ok|gap|done|open>[ NEW-GROUND| MISSED]:` with numbers 1..N ascending (T-206 bold or heading markup around the number and a bold status word are allowed); at least acceptance_count items; the verdict is consistent (SPEC-OK only when no item is gap or open, SPEC-GAPS only when at least one is); and, when `previous` is given, every earlier number is kept in order and every appended item has a label. retain() :95-105 calls structure() before Store.append and refuses with ValueError (exit 65 through main, message naming PREFLIGHT-COMPLETE) on any failure. retain() stores `standing` (list of {n, status, label, text first line}) and `missed` (count of MISSED items) as extra fields of the same signed record; Store.append already accepts extra fields. spec_sha256, verdict, provenance and require_ok() :83-93 are unchanged, so SPEC-OK stays bound to exact spec bytes. A list stored with SPEC-OK is still the standing list for a later preflight of the same task, for example before a repin. Allowed statuses: a first pass (no previous list) uses only ok and gap. A re-issue marks each kept item by its previous status: a previous gap or open becomes done or open; a previous ok or done becomes ok or open. A kept item may not be marked gap, and appended items are always `gap NEW-GROUND` or `gap MISSED`. Order inside retain(): the existing same-bytes waiver check (:100-103, 'SPEC-GAPS requires amended spec bytes before SPEC-OK') runs before structure(), so its message is unchanged. retain() derives acceptance_count as len(json.loads(data).get('acceptance') or []) (so tests/lib/preflight_lifecycle.py:41's T-191 fixture without `acceptance` needs at least zero items beyond the one numbered line decision() already requires), and gets `previous` itself from standing(store) for the same task before calling structure(). standing() and structure() only read stored records; they take no lock and create no directory.",
+    "Change 4, the managed vendor context (bin/fm-herdr.py role_context() :620). The spec-preflight tail line changes from 'End with SPEC-OK… after a numbered list' to name the PREFLIGHT-COMPLETE:<task> line before the verdict line. completion() :630-635 is unchanged.",
+    "Tests, new behaviour (each fails on base and passes after). New tests/spec-preflight-standing.test.sh running new tests/lib/spec_preflight_standing.py: (1) retain() refuses a final with a valid list but no PREFLIGHT-COMPLETE line; (2) retain() refuses SPEC-OK with a gap item, and SPEC-GAPS with no gap or open item; (3) retain() refuses an item without a status word; (4) retain() refuses a list shorter than the acceptance lines; (5) after a stored first pass, prompt() with the store includes the previous list verbatim and the done/open/NEW-GROUND/MISSED rules; (6) retain() of a re-issue that drops item 2, renumbers, or appends an unlabelled item is refused, and a valid re-issue is stored with `missed` counted; (7) a legacy record without `standing` yields a first-pass prompt; (8) Store.records() and require_ok() still read a legacy SPEC-OK record written by Store.append without `standing` or PREFLIGHT-COMPLETE. (9) a first pass using done or open is refused; a re-issue marking a kept item gap, a previous gap item ok, or a previous ok item done is refused; each allowed transition is accepted.",
+    "Tests, updated and regression. Fixture finals that go through retain() gain status words, PREFLIGHT-COMPLETE, a gap item when the verdict is SPEC-GAPS, and at least one item per acceptance line of their spec: tests/lib/spec_preflight_cases.py record() :33-36 (used for SPEC-OK and SPEC-GAPS, e.g. :98 and :103) builds its answer from standing(self.store): with no previous list a first pass (`1. ok:` for SPEC-OK, `1. gap:` for SPEC-GAPS); with a previous list a re-issue marking each kept item by its previous status: for SPEC-OK a previous gap or open becomes done and a previous ok or done stays ok; for SPEC-GAPS every kept item becomes open. With that rule test_other_bytes_refused_exact_bytes_accepted (:64-69) and test_repin_and_existing_inflight_pin_need_new_preflight (:88-95) store their second SPEC-OK as an ok→ok re-issue; test_require_reads_receipts_without_write_lock_or_directory_creation (:71-86) still gets IsADirectoryError at :85-86, because structure() and standing() only read records (no lock, no mkdir) and the valid re-issue reaches Store.append's lock; test_gaps_cannot_be_waived_on_same_bytes (:97-104) still passes, its same-bytes refusal coming from the waiver check that runs first and its amended-bytes call at :103 marking the previous gap done, and any other retain() call in that file, tests/lib/preflight_lifecycle.py:121 and :147, tests/spec-preflight-launcher.test.sh:52 (the fake vendor final reads the whole answer from FM_TEST_FINAL when that variable is set, and otherwise emits a first-pass final whose items are `ok` for SPEC-OK or `gap` for SPEC-GAPS; run 1 and the codex-branch run at :118-120 (a fresh FM_PROJECT=selected store, so a first pass) use that default; a re-issue final marking kept items open for the SPEC-GAPS run at :79, and a re-issue final marking them done for the amended-bytes SPEC-OK run at :98-100; the same-bytes waiver run at :84-87 still fails with 'amended spec bytes' because the waiver check runs first; each final has at least as many items as the T-Z fixture spec has acceptance lines), and bin/fm-canary.sh:536-539 (the canary fixture final). decision() and completion() cases in tests/lib/spec_preflight_cases.py stay as they are, and tests/fixtures/spec-preflight/bold-headings.final.txt stays unchanged and is still used by test_bold_heading_final_decisions (:154-157) for decision(). assert_bold_heading_retained (:159-174, both verdicts) switches to a new fixture tests/fixtures/spec-preflight/bold-headings-standing.final.txt with the same bold-heading layout, items numbered 1..N with bold status words, PREFLIGHT-COMPLETE:T-X and SPEC-OK:T-X; its SPEC-GAPS variant replaces one item's ok with gap. Fixtures that call Store.append directly stay unchanged: tests/lib/spec-preflight.sh:20, tests/lib/external_adopt.py:82 and :188, tests/lib/external_rebuild.py:97. Regression suites (pass on base and after): tests/spec-preflight.test.sh, tests/preflight-lifecycle.test.sh, tests/spec-preflight-launcher.test.sh, tests/preflight-traps.test.sh, tests/spec-preflight-worker.test.sh, tests/canary.test.sh, tests/spec-explain.test.sh, and every suite that seeds spec-preflight records through those fixtures: tests/decide.test.sh, tests/crew-end-to-end.test.sh, tests/e2e-loop.test.sh, tests/external-adopt.test.sh, tests/external-public-title.test.sh, tests/live-base-binding.test.sh, tests/merge.test.sh, tests/onboarding-crew.test.sh, tests/reconcile.test.sh, tests/worker-external-catchup.test.sh.",
+    "Callers, all listed. decision() (unchanged): fm_spec_preflight.retain and main, bin/fm-herdr.py completion() :634, bin/lib/fm_evidence.py:193-198 Store.records(). structure() (new): fm_spec_preflight.retain only. prompt(): fm_spec_preflight main (prompt command) called only by bin/lib/fm-spec-preflight.sh:60; tests/lib/spec_preflight_cases.py, tests/lib/external_public_title.py:79-83 and :174, tests/lib/spec_explain_cases.py:31, tests/lib/external_adopt.py:309-320 (all keep the three-argument form). retain(): fm_spec_preflight main, bin/fm-canary.sh:537, tests/lib/preflight_lifecycle.py, tests/lib/spec_preflight_cases.py. require_ok() (unchanged): bin/lib/fm_spec_pins.py:429/:445 and :471-473, bin/fm-worker.sh:1259-1268 through fm_spec_pins. Every other Store.records() reader is unaffected because decision() is unchanged. The board (board/server.ts, board/public/index.html, board/public/ship.js) and bin/lib/fm_autopilot.py:688-689 read only the event mode `spec-preflight`, not the answer text, and are unchanged.",
+    "Migration. Stored spec-preflight records are immutable and stay valid, because decision() and Store.records() are unchanged (test 8): every existing SPEC-OK still admits its exact bytes, and every pin stays as it is. Records without `standing` are treated as no previous list (test 7). A preflight whose vendor run started on the old prompt and finishes after this merges fails retain()'s structure check (exit 65, message naming PREFLIGHT-COMPLETE), and firstmate reruns it. Running worker rounds are not affected.",
+    "Docs. design/design.md §6 (the '### Spec preflight and migration (T-185)' subsection in Lifecycle and the gates): edit in place to describe the exhaustive checklist, PREFLIGHT-COMPLETE, the re-issued standing list with done/open/NEW-GROUND/MISSED and the stored `standing`/`missed` fields. skills/firstmate/SKILL.md '## Spec preflight before dispatch and repin (T-185)': firstmate reads the whole list, fixes every gap in one amendment and watches the MISSED count. skills/reviewer/SKILL.md: add a short preflight paragraph next to the standing-list protocol (:179-205) stating the same rules, without changing the implementation-review protocol."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "The first preflight lists every check in one numbered pass, and it marks each item ok or gap."
+        },
+        {
+          "kind": "fact",
+          "text": "A later preflight re-issues the same list and marks each item done, open or ok."
+        },
+        {
+          "kind": "fact",
+          "text": "A new item after the first pass carries a NEW-GROUND or MISSED label."
+        },
+        {
+          "kind": "fact",
+          "text": "The parser refuses a list without the closing marker or with a wrong verdict."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The captain asked on 2026-10-07 for one full list of checks, like the worker review list."
+        },
+        {
+          "kind": "fact",
+          "text": "Today each preflight round finds new gaps, and one spec took nine rounds."
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_spec_preflight.py: the prompt, the parser and the stored list",
+        "bin/lib/fm-spec-preflight.sh and bin/fm-herdr.py: the prompt inputs and the vendor context",
+        "bin/fm-canary.sh and preflight test fixtures",
+        "a new standing list suite",
+        "design section 6 and two skills"
+      ],
+      "scope_out": [
+        "the SPEC-OK binding to exact spec bytes",
+        "the implementation review protocol",
+        "the board and the autopilot"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the prompt asks for one item per acceptance line and per category. The new suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the prompt includes the previous list, and the parser checks the numbers. The new suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the parser refuses an appended item without a label, and it counts MISSED items. The new suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the parser needs PREFLIGHT-COMPLETE and a matching verdict. The new suite and the updated fixtures prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Old records stay valid for dispatch, because the SPEC-OK check reads only the verdict and the spec hash."
+        },
+        {
+          "kind": "caution",
+          "text": "A preflight that started on the old prompt fails, and firstmate runs it again."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Firstmate runs spec preflight"
+        },
+        {
+          "state": "gone",
+          "label": "Reviewer lists found gaps only"
+        },
+        {
+          "state": "gone",
+          "label": "Each round finds new gaps"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Firstmate runs spec preflight"
+        },
+        {
+          "state": "new",
+          "label": "Reviewer lists every check once"
+        },
+        {
+          "state": "new",
+          "label": "Later rounds re-issue that list"
+        },
+        {
+          "state": "new",
+          "label": "New items carry a label"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "第一次預檢用一份編號清單列出所有檢查項，每項標 ok 或 gap。"
+        },
+        {
+          "kind": "fact",
+          "text": "之後的預檢沿用同一份清單，每項標 done、open 或 ok。"
+        },
+        {
+          "kind": "fact",
+          "text": "第一輪之後新增的項目要標 NEW-GROUND 或 MISSED。"
+        },
+        {
+          "kind": "fact",
+          "text": "缺少結尾標記或判定不一致時，解析器拒收。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 要求像 worker 審查一樣先列出全部檢查項。"
+        },
+        {
+          "kind": "fact",
+          "text": "現在每輪預檢都找到新缺口，有一份 spec 跑了九輪。"
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_spec_preflight.py：提示、解析器和儲存的清單",
+        "bin/lib/fm-spec-preflight.sh 和 bin/fm-herdr.py：提示輸入和 vendor 情境",
+        "bin/fm-canary.sh 和預檢測試資料",
+        "新的 standing list 測試",
+        "設計第 6 節和兩份 skill"
+      ],
+      "scope_out": [
+        "SPEC-OK 綁定到確切的 spec 位元組",
+        "實作審查的流程",
+        "看板和 autopilot"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：提示要求每條驗收和每個類別各有一項。新測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：提示附上前一份清單，解析器檢查編號。新測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：解析器拒收沒有標籤的新增項目，並計算 MISSED 數量。新測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：解析器要求 PREFLIGHT-COMPLETE 和一致的判定。新測試和更新的測試資料證明這點。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "舊紀錄照樣能派工，因為 SPEC-OK 檢查只讀判定和 spec 雜湊。"
+        },
+        {
+          "kind": "caution",
+          "text": "用舊提示開始的預檢會失敗，firstmate 重新跑一次。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "firstmate 執行 spec 預檢"
+        },
+        {
+          "state": "gone",
+          "label": "審查只列出找到的缺口"
+        },
+        {
+          "state": "gone",
+          "label": "每輪都找到新缺口"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "firstmate 執行 spec 預檢"
+        },
+        {
+          "state": "new",
+          "label": "審查一次列出所有檢查"
+        },
+        {
+          "state": "new",
+          "label": "之後各輪沿用同一清單"
+        },
+        {
+          "state": "new",
+          "label": "新增項目帶有標籤"
+        }
+      ]
+    }
+  }
+}

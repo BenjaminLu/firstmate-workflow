@@ -173,6 +173,21 @@ resolved, or a worker edit, changes the patch and needs a new review. Base
 commits touching files the change reviewed no longer void it. CI and the gates
 always rerun on the head being merged; they are firstmate's, not yours.
 
+Spec preflight uses a separate exhaustive checklist (T-248). Before its verdict,
+cover every acceptance line (at least one item each) and all standing categories:
+why/references, each Change, callers/fixtures/mirrors, scope, test labels,
+records/pins/tasks-in-flight migration, named design sections, i18n/lint
+reachability and external-project privacy. First-pass items are `N. ok:` or
+`N. gap:`, with file:line evidence and the expected spec change for each gap.
+Close the list with standalone `PREFLIGHT-COMPLETE:<task>` immediately before
+SPEC-OK or SPEC-GAPS (blank lines allowed). Every gap belongs in that report.
+Later preflights, including after SPEC-OK, keep every number: gap/open becomes
+done/open; ok/done becomes ok/open. Append only `gap NEW-GROUND:` for changed
+text or `gap MISSED:` for prior omissions, using the next numbers. SPEC-OK has
+no gap/open items; SPEC-GAPS has at least one. The signed `standing` and `missed`
+fields preserve the list and count omissions. This preflight protocol does not
+change the implementation-review standing list below.
+
 ## Every REJECT closes its list
 
 Every `REJECT`, from round one, ends with the numbered, complete set of

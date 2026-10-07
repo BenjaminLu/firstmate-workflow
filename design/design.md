@@ -1454,9 +1454,35 @@ mirror, fixture and test; existing ids, formats, paths and interfaces; and an
 explicit, tested migration for validation, lint, gate, schema or record changes.
 Check 5 (T-189): when the scope lists design/design.md, the acceptance names the
 numbered section (§N or §N.M) it edits and adds nothing after the last one.
-Its numbered final may use bold or heading markup around an item's number
-(T-206). The closing line must be exactly `SPEC-OK:<task>` or `SPEC-GAPS:<task>`,
-unquoted, unfenced and last.
+The first final is one exhaustive numbered checklist (T-248), with at least one
+item per acceptance line and coverage of why and its references, each Change,
+callers/fixtures/mirrors, scope completeness, new-behaviour versus regression
+test labels, migration of records/pins/tasks in flight, the named design section,
+i18n and lint reachability, and external-project privacy. Each item starts
+`N. ok:` or `N. gap:`, cites file:line, and states the expected spec change for
+a gap. Bold or heading markup around the number (T-206) and bold status words
+are allowed. A standalone `PREFLIGHT-COMPLETE:<task>` closes the checklist
+immediately before `SPEC-OK:<task>` or `SPEC-GAPS:<task>`, unquoted, unfenced and
+last; blank lines between the two markers are allowed.
+
+Every later preflight re-issues the latest stored standing list, even after
+SPEC-OK or changed spec bytes. It keeps all earlier numbers: gap/open becomes
+done/open; ok/done becomes ok/open. It appends only the next numbers, marked
+`gap NEW-GROUND:` for amended text or `gap MISSED:` for something the earlier
+pass should have caught. Every gap belongs in the first report. Retention checks
+the final contiguous numbered block, acceptance count, numbering, transitions
+and verdict consistency: SPEC-GAPS requires a gap/open item, SPEC-OK forbids one.
+The signed receipt adds `standing` (number, status, label and verbatim first line)
+and `missed` (the count of MISSED items); the original answer preserves complete
+continuation text for the next prompt. Readers take no write lock or directory
+creation step. These structural checks do not prove exhaustive model inspection
+or that a NEW-GROUND/MISSED label is substantively correct.
+
+Existing preflight records stay immutable and their exact-byte SPEC-OK remains
+valid: the legacy decision parser is unchanged. Records without `standing` do
+not seed a list; their next preflight starts a first pass. A vendor run begun
+with the old prompt that reaches the new retention check fails with exit 65
+naming PREFLIGHT-COMPLETE; firstmate reruns it. Running workers are unaffected.
 
 The launcher retains signed `spec-preflight` evidence in the same project-local
 store as briefs and verdicts, bound to the spec SHA-256 and observed base. Managed

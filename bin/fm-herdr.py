@@ -617,7 +617,8 @@ def role_context(root, role, task, actor, prompt, spec_preflight=None):
         return (f'You are explicitly dispatched reviewer for spec preflight. '
                 f'Canonical crew identity: {actor}. Task: {task}. '
                 f'Spec SHA-256: {spec_preflight}. This explicit role overrides native startup routing.\n\n'
-                + prompt + f'\nEnd with SPEC-OK:{task} or SPEC-GAPS:{task}, after a numbered list.\n')
+                + prompt + f'\nClose the numbered list with PREFLIGHT-COMPLETE:{task} on its own line,\n'
+                f'then end with SPEC-OK:{task} or SPEC-GAPS:{task} on its own line.\n')
     skill = (Path(root) / 'skills' / role / 'SKILL.md').read_text()
     return (f'You are explicitly dispatched {role}. Canonical crew identity: {actor}. '
             f'Task: {task}. This explicit role wins over native startup routing.\n\n'

@@ -26,7 +26,114 @@ def decision(answer, task):
     return None
 
 
-def prompt(task, data, base):
+def standing(store):
+    """Latest checklist receipt in store sequence, including successful preflights."""
+    return next((record for record in reversed(store.records())
+                 if record['kind'] == 'spec-preflight' and 'standing' in record), None)
+
+
+def _standing_block(answer, task):
+    """Keep the final numbered block and its verbatim continuation lines."""
+    lines = answer.splitlines()
+    marker = 'PREFLIGHT-COMPLETE:' + task
+    ends = [n for n, line in enumerate(lines) if line == marker]
+    if not ends:
+        return [], ''
+    items, block = [], []
+    blank = label = False
+    fenced = None
+    for line in lines[:ends[-1]]:
+        fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence_match:
+            fence = fence_match[1]
+            if fenced is None:
+                fenced = fence
+            elif fence[0] == fenced[0] and len(fence) >= len(fenced):
+                fenced = None
+        if fence_match or fenced is not None or line.lstrip().startswith('>'):
+            # Quoted/fenced evidence is not a list item, but preserve it verbatim.
+            if items:
+                block.append(line)
+            continue
+        numbered = NUMBERED.match(line)
+        if numbered:
+            plain = re.sub(r'^ {0,3}(?:#{1,6} )?', '', line)
+            plain = plain.replace('**', '').replace('__', '')
+            number = int(re.match(r'(\d+)', plain)[1])
+            if number == 1 and (blank or label):
+                items, block = [], []
+            items.append((line, plain))
+            block.append(line)
+        elif not line.strip():
+            if items:
+                block.append(line)
+            blank = True
+            continue
+        elif items:
+            boundary = re.match(r'^ {0,3}(?:#{1,6}\s|(?:[-*_]\s*){3,}$)', line)
+            bullet = re.match(r'^ {0,3}[-+*]\s', line)
+            if boundary or (blank and not line[0].isspace() and not bullet):
+                items, block = [], []
+            else:
+                block.append(line)
+        blank = False
+        label = not numbered and bool(line) and not line[0].isspace()
+    return items, '\n'.join(block).rstrip('\n')
+
+
+def structure(answer, task, acceptance_count, previous=None):
+    """Validate new receipts without changing the legacy verdict reader."""
+    def refuse(reason):
+        raise ValueError('PREFLIGHT-COMPLETE:' + task + ': ' + reason)
+
+    verdict = decision(answer, task)
+    lines = [line for line in answer.splitlines() if line.strip()]
+    if not verdict:
+        refuse('requires a numbered list and closing SPEC-OK/SPEC-GAPS')
+    if len(lines) < 2 or lines[-2] != 'PREFLIGHT-COMPLETE:' + task:
+        refuse('requires the standalone marker immediately before the verdict')
+    raw, _ = _standing_block(answer, task)
+    parsed = []
+    for line, plain in raw:
+        match = re.fullmatch(r'(\d+)[.)]\s+(ok|gap|done|open)(?: (NEW-GROUND|MISSED))?:.*', plain)
+        if not match:
+            refuse('each numbered item needs a status word and colon')
+        parsed.append(dict(n=int(match[1]), status=match[2], label=match[3], text=line))
+    if not parsed:
+        refuse('requires a final numbered block before the marker')
+    if [item['n'] for item in parsed] != list(range(1, len(parsed) + 1)):
+        refuse('the final numbered block must keep numbers 1..N in order')
+    if len(parsed) < acceptance_count:
+        refuse('requires at least one item per acceptance line')
+    gaps = any(item['status'] in ('gap', 'open') for item in parsed)
+    if (verdict == 'SPEC-GAPS') != gaps:
+        refuse('verdict does not match gap/open statuses')
+    if previous is None:
+        if any(item['status'] not in ('ok', 'gap') for item in parsed):
+            refuse('first pass uses only ok or gap')
+        if any(item['label'] for item in parsed):
+            refuse('first-pass items cannot carry amendment labels')
+    else:
+        prior = previous['standing']
+        if len(parsed) < len(prior):
+            refuse('re-issue must retain every earlier number')
+        for old, new in zip(prior, parsed):
+            allowed = ('done', 'open') if old['status'] in ('gap', 'open') else ('ok', 'open')
+            if old['n'] != new['n']:
+                refuse('kept item numbers must match the previous list')
+            if new['status'] not in allowed:
+                refuse('kept items must follow the done/open/ok transition rules')
+            if new['label']:
+                refuse('kept items cannot carry amendment labels')
+        for item in parsed[len(prior):]:
+            if item['status'] != 'gap':
+                refuse('appended items must have gap status')
+            if item['label'] not in ('NEW-GROUND', 'MISSED'):
+                refuse('appended items require a NEW-GROUND or MISSED label')
+    return parsed
+
+
+def prompt(task, data, base, previous=None):
     spec = json.loads(data)
     if spec.get('id') != task or not spec.get('scope') or not spec.get('acceptance'):
         raise ValueError('preflight needs the task identity, scope and acceptance lines')
@@ -49,6 +156,21 @@ def prompt(task, data, base):
                 raise ValueError('STE check failed')
         except (ImportError, ValueError) as error:
             raise ValueError('explain: ' + str(error)) from error
+    history = ''
+    if previous is not None:
+        _, block = _standing_block(previous['text'], task)
+        history = f"""
+Previous standing list (verbatim):
+{block}
+
+Re-issue every earlier number in order, never dropping or renumbering an item.
+A previous gap or open becomes done (fixed) or open (still a gap).
+A previous ok or done becomes ok (still satisfied) or open (now a gap).
+Kept items cannot be gap and carry no new-item label.
+Append only at the next numbers: `N. gap NEW-GROUND:` for text the amendment
+changed, or `N. gap MISSED:` for anything the earlier pass should have caught.
+A previous SPEC-OK list still governs a later preflight, including a repin.
+"""
     return f'''# Spec preflight for {task}
 You are an isolated reviewer of a proposed spec, on current base {base}.
 Read-only review: inspect code and tests; do not edit files, run suites, dispatch
@@ -67,6 +189,23 @@ For EVERY acceptance line, report numbered evidence with file:line references:
    naming one, or that adds a section after the last numbered section, is a
    spec gap.
 Give a numbered list of findings (or checked evidence when there are no gaps); start each item with its plain number, `1.`, `2.` and so on, at the start of the line.
+After the number, use a status word and colon: `N. ok:` or `N. gap:` on the
+first pass. Bold or heading markup around the number and a bold status word
+are allowed. Cite file:line in each item and state the expected spec change
+for each gap.
+Before any verdict, give one exhaustive numbered checklist, with at least one item per acceptance line,
+and cover every standing category: why and its references; each Change;
+callers, fixtures and mirrors of every touched interface; scope completeness
+against every file the changes touch; test labels (new behaviour fails on base
+versus regression); migration of records, pins and tasks already in flight;
+the design section named for each design.md edit (check 5); i18n and lint reachability
+of new user-facing keys; privacy of external project text when FM_EXTERNAL=1.
+Every gap belongs in this one report. A later pass may add only NEW-GROUND or
+MISSED items, not silently introduce another round of unlabelled gaps.
+{history}
+Close the list with this standalone line immediately before the verdict
+(blank lines between them are allowed):
+PREFLIGHT-COMPLETE:{task}
 End the final assistant answer with exactly one standalone closing line:
 SPEC-OK:{task}
 or
@@ -95,15 +234,16 @@ def require_ok(store, data):
 
 def retain(store, data, base, actor, round_number, answer, provenance):
     verdict = decision(answer, store.task)
-    if not verdict:
-        raise ValueError('preflight final requires a numbered list and closing SPEC-OK/SPEC-GAPS')
     sha = hashlib.sha256(data).hexdigest()
     if verdict == 'SPEC-OK' and any(r['kind'] == 'spec-preflight'
             and r.get('spec_sha256') == sha and r.get('verdict') == 'SPEC-GAPS'
             for r in store.records()):
         raise ValueError('SPEC-GAPS requires amended spec bytes before SPEC-OK')
+    items = structure(answer, store.task, len(json.loads(data).get('acceptance') or []),
+                      standing(store))
     return store.append('spec-preflight', round_number, actor, base, answer,
-                        spec_sha256=sha, verdict=verdict, provenance=provenance)
+                        spec_sha256=sha, verdict=verdict, provenance=provenance,
+                        standing=items, missed=sum(item['label'] == 'MISSED' for item in items))
 
 
 def outcome(store, actor, sha, exit_code, started):
@@ -161,7 +301,13 @@ def main():
     data = (json.load(sys.stdin)['snapshots']['spec']['text'].encode() if a.pin_stdin
             else Path(a.spec).read_bytes())
     if a.command == 'prompt':
-        print(prompt(a.task, data, a.base)); return
+        body = prompt(a.task, data, a.base)  # Validate before reading any store.
+        if a.state and a.project:
+            previous = standing(Store(a.state, a.project, a.task))
+            if previous is not None:
+                body = prompt(a.task, data, a.base, previous)
+        print(body)
+        return
     store = Store(a.state, a.project, a.task)
     if a.command == 'require':
         require_ok(store, data); return

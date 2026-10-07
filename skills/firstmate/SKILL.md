@@ -1323,9 +1323,25 @@ Before every dispatch and every repin, obtain a recorded `SPEC-OK:<task>` for
 exactly the spec bytes to be pinned, using
 `bin/fm-review.sh --spec-preflight --task <task> --spec <file>` (and the selected
 `--project`). This is an isolated read-only review on the current base. Inspect
-its numbered findings for every acceptance line: scope feasibility, affected
-callers/mirrors/fixtures/tests, concrete identifiers and interfaces, and migration.
-A `SPEC-GAPS` item cannot be waved through: amend the spec and preflight again.
+its whole exhaustive numbered checklist, with at least one item per acceptance
+line and all standing categories: why/references, each Change, affected
+callers/mirrors/fixtures, scope completeness, new-behaviour versus regression
+tests, records/pins/tasks-in-flight migration, named design sections, i18n/lint
+reachability and external-project privacy. First-pass items use `N. ok:` or
+`N. gap:`, cite file:line, and specify the expected amendment for each gap.
+The checklist closes with `PREFLIGHT-COMPLETE:<task>` immediately before the
+SPEC verdict (blank lines allowed). Read the whole list and fix every gap in
+one amendment; a `SPEC-GAPS` item cannot be waved through.
+
+Re-preflight re-issues every earlier number, even after SPEC-OK: gap/open becomes
+done/open, and ok/done becomes ok/open. Only appended `gap NEW-GROUND:` (changed
+text) or `gap MISSED:` (previously overlooked) items may extend the list. Watch
+the signed receipt's `missed` count and inspect every MISSED item; repeated
+omissions defeat convergence. The receipt's `standing` field holds the parsed
+list, while its answer retains the verbatim checklist. Legacy receipts without
+`standing` still authorize their exact bytes and seed no list. If an old-prompt
+vendor final fails retention with PREFLIGHT-COMPLETE, rerun preflight. Structural
+validation cannot prove exhaustive inspection or the truth of amendment labels.
 Approval for different bytes cannot authorize dispatch, including after a repin.
 
 Every task changing a validation rule, lint, gate, schema or stored-record format
