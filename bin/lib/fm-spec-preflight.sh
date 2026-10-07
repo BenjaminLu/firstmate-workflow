@@ -66,7 +66,7 @@ if [ "${FM_EXTERNAL:-0}" = 1 ]; then
   export FM_PR_TITLE
 fi
 python3 "$preflight_py" prompt --task "$TASK" --spec "$FM_PINNED_DIR/spec.json" \
-  --base "$base_head" > "$preflight/prompt.md" || exit 65
+  --base "$base_head" --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" > "$preflight/prompt.md" || exit 65
 # An independent clone has no remote, linked git directory or mutable base ref.
 checkout_root="$(mktemp -d "${TMPDIR:-/tmp}/fm-spec-preflight.XXXXXX")" || exit 70
 checkout_root="$(cd "$checkout_root" && pwd -P)" || exit 70

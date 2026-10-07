@@ -118,7 +118,7 @@ class PreflightLifecycle(unittest.TestCase):
         actor = who['actor']
         store = Store(self.state,'self','T-191')
         data = (self.tasks / 'T-191.json').read_bytes()
-        P.retain(store,data,'a'*40,actor,1,'1. Checked.\nSPEC-OK:T-191',dict(level='legacy'))
+        P.retain(store,data,'a'*40,actor,1,'1. ok: Checked.\nPREFLIGHT-COMPLETE:T-191\nSPEC-OK:T-191',dict(level='legacy'))
         self.emit(actor,'crew_status',dict(role='reviewer',mode='spec-preflight'))
         pilot = A.Pilot(self.ctx)
         self.assertEqual(M.inventory(pilot),([],[],[]), 'preflight is not an implementation review in merge reminders')
@@ -144,7 +144,7 @@ class PreflightLifecycle(unittest.TestCase):
         store=Store(self.state,'self','T-191')
         data=(self.tasks/'T-191.json').read_bytes()
         sha=hashlib.sha256(data).hexdigest()
-        P.retain(store,data,'a'*40,'preflight-a',1,'1. Checked.\nSPEC-GAPS:T-191',dict(level='legacy'))
+        P.retain(store,data,'a'*40,'preflight-a',1,'1. gap: Checked.\nPREFLIGHT-COMPLETE:T-191\nSPEC-GAPS:T-191',dict(level='legacy'))
         self.assertEqual(P.outcome(store,'preflight-a',sha,65,1),'spec-gaps')
         self.assertEqual(P.outcome(store,'preflight-a',sha,143,1),'spec-gaps')
         self.assertEqual(P.outcome(store,'other',sha,65,1),'failed')

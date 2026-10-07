@@ -534,8 +534,10 @@ source = root / ('tasks' if external else 'repo/design/tasks') / (task + '.json'
 state = root / ('state' if external else 'repo/state')
 store = Store(state, 'destroy-fixture' if external else 'self', task, external=external)
 data = source.read_bytes()
-retain(store, data, base, 'canary-fixture', 1,
-       '1. Canary fixture for the hostile restoration drill.\nSPEC-OK:' + task,
+answer = ''.join(f'{n}. ok: Canary fixture for the hostile restoration drill.\n'
+                 for n in range(1, max(1, len(json.loads(data).get('acceptance') or [])) + 1))
+answer += 'PREFLIGHT-COMPLETE:' + task + '\nSPEC-OK:' + task
+retain(store, data, base, 'canary-fixture', 1, answer,
        {'level': 'legacy', 'canary_fixture': True})
 # Read through the dispatch validator before keeping a copy outside scratch.
 record = require_ok(store, data)
