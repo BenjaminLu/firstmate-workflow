@@ -5437,15 +5437,67 @@ clone before launch, using frozen engine scripts. A clean checked-out base may
 fast-forward to the fetched base; divergent or unpublished local work is retained
 and requires synchronization before launch. New task worktrees start at the
 fetched confirmed base. External task branch names carry generic task labels.
-External commit subjects and PR titles use the spec's validated `public_title`
-when present, else the generic task label; private spec titles stay private.
-Only `public_summary` supplies spec prose in the PR body. New external specs
-need a valid `public_title` at preflight; existing SPEC-OK receipts and pinned
-rounds keep the generic fallback without a new check. Both public fields live
-only in external specs under `FM_HOME/projects/<name>/tasks/`, never in tracked
-engine files. Public prose is plain English with no paths, regardless of posting
-languages. Later rounds rename only a PR whose title is still the exact generic
-label and whose head branch matches the task branch. PR/Actions requests
+External commit subjects and PR titles use the spec's validated `public_title`,
+stripped and without a firstmate task id. Missing or invalid public text keeps
+the generic task label and private-evidence fallback; private spec titles stay
+private. The public body uses only `public_summary` and optional `public_changes`
+(1–10 printable ASCII one-line items, each 1–200 characters, with the summary's
+path and STE checks). These public fields live only in external specs under
+`FM_HOME/projects/<name>/tasks/`, never in tracked engine files.
+
+T-247 adds three optional CONVENTIONS fields: `pr_title` (`plain` or
+`conventional`), `pr_sections` (0–12 unique non-empty one-line headings, each at
+most 80 characters and without `#`), and `pr_language` (`en`, `zh-TW`, `zh-CN`,
+or `auto`). Per field, the repository value wins over the private owner default
+in `FM_HOME/owners/<owner>.yaml`, which wins over `plain`, `[]`, `en`. The owner
+and root come from the policy repository and the resolved
+`<root>/projects/<name>/CONVENTIONS.md` path; other layouts have no owner default.
+Owner files use the same data-only `key: <JSON or bare enum>` line parser, with
+blank and comment lines ignored and only these three keys allowed. Bare values
+use `[a-z][a-z0-9_-]*`; quote `"zh-TW"` and `"zh-CN"` as JSON. Missing owner files
+supply no default; symlinked, unreadable or invalid ones make preflight refuse
+and the worker warn and use the generic fallback. Invalid format fields in
+CONVENTIONS refuse the project through the shared policy reader. Owner defaults
+are read at round time, not pinned or copied into CONVENTIONS. Onboarding writes
+format fields only from the captain's explicit answers. Firstmate git holds no
+owner default file or real owner name.
+
+Preflight requires a valid `public_title`. With `pr_title: conventional`, it
+also requires a conventional subject such as `fix(api): deduct the fee`, with
+an optional author-supplied `[KEY-123] ` ticket prefix. Firstmate never invents
+a ticket. Both preflight and rendering apply STE to the text after `: ` for
+recognized conventional subjects. Rendering accepts a previously pinned plain
+title under a later conventional setting, warns once, and still publishes it.
+Existing SPEC-OK receipts and pins need no repin. Public prose stays English
+ASCII with no paths; `pr_language` does not translate prose in v1.
+
+The renderer emits the confirmed headings verbatim and in order. Classification
+is case-insensitive and first match wins: `AI` plus `参与`, `參與`, `participation`
+or `involvement` means AI; `summary`, `摘要` or `概要` means summary; `test`, `测试`
+or `測試` means testing; `change`, `改动`, `变更` or `變更` means changes. Unknown
+headings and headings without content are omitted. Summary lines and change
+items become bullets. With no headings the body is the summary alone, or empty
+when absent. Valid public bodies have no private-evidence footer. The renderer
+never reads a repository PR template.
+
+Testing uses `<!-- fm:testing -->` and `<!-- /fm:testing -->` around unchecked
+required-check lines, initially `pending`. Review mode `run` and a pinned
+unrunnable contract can add generic local-test notices, never commands, reasons
+or local results. Autopilot refreshes this block on open, non-adopted external
+PRs from current-head CI: success/neutral/skipped pass, terminal failures fail,
+and other states remain pending. Duplicate names prefer failed over pending
+over passed. Unsettled CI resets existing required-check and analyser lines to
+pending. `Local tests` lines and all other body text remain unchanged. A saved
+head/evidence key suppresses duplicate PATCH requests even with a stale body;
+PATCH failures are recorded without blocking gates or merge. This body update
+applies under every post mode and never edits unmarked or adopted PRs.
+The AI block has exactly `- [x] 🤖 AI-Generated`, `- [ ] 🤝 AI-Assisted`, and
+`- [ ] 👤 Human-Written` on separate lines.
+
+Later rounds rename only a PR whose title is still the exact generic label and
+whose head branch matches the task branch; adopted PRs retain their title and
+body. Self-project commit subjects and PR bodies, draft question PRs, review
+comments, status policy, publication guards and gates stay unchanged. PR/Actions requests
 name the selected repository. Both initial and rebuilt isolated review checkouts
 clone the target repository with their own objects and no remote. External review
 requires a PR and compares its authoritative head and fresh base with local refs

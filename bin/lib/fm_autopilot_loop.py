@@ -191,6 +191,52 @@ class MechanicalLoop:
                 conclusions.append((name, source, latest.get('id'), conclusion))
         return conclusions
 
+    def refresh_pr_testing(self, pr, checks, task):
+        """Best-effort public CI evidence; never a gate or merge prerequisite."""
+        from fm_autopilot import key
+        from fm_pr_format import refresh_testing, START, END
+        if not self.ctx['external'] or pr.get('state') != 'open':
+            return
+        body = pr.get('body') or ''
+        if START not in body or END not in body:
+            return
+        number, head = str(pr['number']), pr['head']['sha']
+        try:
+            single, duplicates = self.adoptions()
+            if pr['number'] in single or pr['number'] in duplicates:
+                return
+            states = {}
+            if checks is None:
+                states = {name: 'pending' for name in
+                          self.policy.get('required_checks', []) + self.policy.get('analysers', [])}
+                fingerprint = head + '-pending'
+            else:
+                rank = {'passed': 0, 'pending': 1, 'failed': 2}
+                for name, _source, _id, conclusion in checks:
+                    state = ('passed' if conclusion in ('success', 'neutral', 'skipped') else
+                             'failed' if conclusion in ('failure', 'error', 'cancelled', 'timed_out', 'action_required')
+                             else 'pending')
+                    if name not in states or rank[state] > rank[states[name]]:
+                        states[name] = state
+                fingerprint = head + '-' + key(checks)
+            updated = refresh_testing(body, states)
+            testing = self.data.setdefault('testing', {})
+            if updated is None or updated == body or testing.get(number) == fingerprint:
+                return
+            rc, stdout, stderr = self.probe(self.gh('api', '-X', 'PATCH',
+                f'repos/{self.ctx["repository"]}/pulls/{number}', '-f', 'body=' + updated, '--include'))
+            codes = re.findall(r'^HTTP/\S+ (\d{3})\b', stdout, re.M)
+            if rc or not codes or codes[-1] != '200':
+                raise RuntimeError(stderr.strip() or 'PR testing PATCH did not return HTTP 200')
+            testing[number] = fingerprint
+            self.save()
+        except Exception as error:
+            # Even an unavailable failure recorder must not block advancement.
+            try:
+                self.branch_failure('testing-refresh', number, head, task, str(error))
+            except Exception:
+                pass
+
     def advance(self, pr, runs, statuses):
         from fm_autopilot import key
         self.data['pulls'].get(str(pr['number']), {}).pop('merge_evidence', None)
@@ -242,6 +288,7 @@ class MechanicalLoop:
         # new authored details or release of a project's merge slot. A timer
         # seeing identical inputs never launches another gate or model.
         checks = self.settled_checks(pr, runs, statuses)
+        self.refresh_pr_testing(pr, checks, task)
         # Reuse scheduling evidence already read here; reminders never fetch CI.
         self.data['pulls'].setdefault(str(pr['number']), dict(task=task, head=head))['merge_evidence'] = dict(
             head=head, approved=verdict.get('head') == head and verdict.get('verdict') == 'APPROVE',

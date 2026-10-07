@@ -280,14 +280,16 @@ fm_binding() { printf '%s\\n' "$*" > "$CALLS"; printf ''' + answer + '''; }
         public_spec = json.dumps(dict(title='Private launch strategy',
             public_title='Draw the fixture widget in blue',
             public_summary='The fixture widget uses blue.'))
-        p = self.shell('FM_EXTERNAL=1; FM_CODE_ROOT="$1"; TASK=T-051; '
+        p = self.shell('''fm_conventions() { if [ "$1" = pr_format ]; then echo '{"pr_title":"plain","pr_sections":[]}'; else echo '[]'; fi; }
+fm_project() { :; }; fm_project_reviewer_mode() { :; }; fm_cfg_in() { :; }; FM_SPEC_PIN_JSON='{}'
+''' + 'FM_EXTERNAL=1; FM_CODE_ROOT="$1"; TASK=T-051; '
                        "spec='" + public_spec + "'\n" +
                        'tree="$2"; fm_private_stage() { :; }\n' + commit + publication +
                        '\nprintf "%s\n%s\n%s" "$commit_msg" "$pr_title" "$pr_body"')
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout.splitlines()[:2],
-                         ['T-051: Draw the fixture widget in blue'] * 2)
-        self.assertTrue(p.stdout.split('\n', 2)[2].startswith('The fixture widget uses blue.\n\n'))
+                         ['Draw the fixture widget in blue'] * 2)
+        self.assertEqual(p.stdout.split('\n', 2)[2], 'The fixture widget uses blue.')
         self.assertNotIn('Private launch strategy', p.stdout)
 
 

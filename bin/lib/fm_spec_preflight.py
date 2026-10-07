@@ -37,7 +37,8 @@ def prompt(task, data, base):
         validate(spec['adopt'])
     if os.environ.get('FM_EXTERNAL') == '1':
         from fm_public_text import validate
-        problems = validate(spec.get('public_title'), spec.get('public_summary'))
+        problems = validate(spec.get('public_title'), spec.get('public_summary'),
+                            os.environ.get('FM_PR_TITLE', 'plain'), spec.get('public_changes'))
         if problems:
             raise ValueError('external spec needs a valid public_title: ' + '; '.join(problems))
     if 'explain' in spec:
