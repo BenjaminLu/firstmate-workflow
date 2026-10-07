@@ -5,6 +5,10 @@
   const put=(store,key,value)=>{try{store.setItem(key,value);}catch{}};
   let hidden=get(localStorage,'board.voyage.hidden','0')==='1';
   let full=get(sessionStorage,'board.voyage.mode','panel')==='full';
+  const narrow=matchMedia('(max-width:650px)');
+  let size=get(localStorage,'board.voyage.size',null);
+  if(size!=='strip' && size!=='full-size')size=null;
+  const isStrip=()=>size===null?narrow.matches:size==='strip';
   let lastEscape=null, snapshot=null, fighting=false, lang='en', label=k=>k;
   const listeners=new Set();
   let pending=[], cancelDelivery=null;
@@ -33,9 +37,11 @@
   const bar=document.createElement('div');bar.id='voyage-bar';
   const toggle=document.createElement('button');toggle.type='button';toggle.id='voyage-toggle';
   const drawerButton=document.createElement('button');drawerButton.type='button';drawerButton.id='voyage-workflow';
+  const sizeButton=document.createElement('button');sizeButton.type='button';sizeButton.id='voyage-size';
+  sizeButton.innerHTML='<span aria-hidden="true">↕</span>';
   const stage=document.createElement('div');stage.id='voyage-mount';
   const drawer=document.createElement('aside');drawer.id='voyage-drawer';
-  bar.append(toggle,drawerButton);panel.append(bar,stage,drawer);
+  bar.append(toggle,sizeButton,drawerButton);panel.append(bar,stage,drawer);
   document.querySelector('#counts').before(panel);
   const homes=['#readOnly','#counts','#deckwrap','.lanes-wrap'].map(selector=>{
     const node=document.querySelector(selector), marker=document.createComment('voyage workflow home');
@@ -66,12 +72,17 @@
   function labels(){
     toggle.textContent=label(hidden?'voyageShow':full?'voyagePanel':'voyageFull');
     drawerButton.textContent=label('voyageWorkflow');
+    sizeButton.title=label(isStrip()?'voyageGrow':'voyageShrink');
+    sizeButton.setAttribute('aria-label',sizeButton.title);
+    sizeButton.setAttribute('aria-expanded',String(!isStrip()));
     drawer.setAttribute('aria-label',label('voyageWorkflow'));
     if(iframe) iframe.title=label('voyageTitle');
   }
   function render(){
     document.body.classList.toggle('voyage-full',full && !hidden);
     document.body.classList.toggle('voyage-hidden',hidden);
+    panel.classList.toggle('voyage-strip',isStrip());
+    sizeButton.hidden=hidden || full;
     drawerButton.hidden=hidden || !full;
     drawer.hidden=hidden || !full;
     const inDrawer=full && !hidden;
@@ -106,6 +117,8 @@
     key, fight(on){fighting=on;}, get fighting(){return fighting;},get hidden(){return hidden;}
   };
   toggle.onclick=()=>{if(hidden){hidden=false;put(localStorage,'board.voyage.hidden','0');render();}else key('f');};
+  sizeButton.onclick=()=>{size=isStrip()?'full-size':'strip';put(localStorage,'board.voyage.size',size);panel.classList.add('voyage-resizing');render();setTimeout(()=>panel.classList.remove('voyage-resizing'),250);};
+  narrow.addEventListener('change',()=>{if(size===null)render();});
   drawerButton.onclick=()=>{drawer.hidden=!drawer.hidden;drawerButton.setAttribute('aria-expanded',String(!drawer.hidden));};
   // Capture the open control before the board's bubbling handler closes it.
   addEventListener('keydown',e=>{
