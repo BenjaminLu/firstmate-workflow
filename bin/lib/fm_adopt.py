@@ -28,6 +28,10 @@ def validate(value):
 def authorized_spec(env, task):
     if env.get('FM_EXTERNAL') != '1' or not env.get('FM_TASKS_DIR') or not task:
         return None
+    # Partial binding contexts cannot resolve pins or authorize adoption.
+    if not all(env.get(key) for key in ('FM_ENGINE_ROOT', 'FM_TARGET_ROOT',
+                                       'FM_STATE_DIR', 'FM_TASKS_DIR', 'FM_DESIGN')):
+        return None
     pin = Pins(env, task).resolve(if_present=True)
     if pin is not None:
         text = pin['snapshots']['spec']['text']

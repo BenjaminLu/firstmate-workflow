@@ -264,6 +264,22 @@ class Authority(unittest.TestCase):
         (self.root/'T-1.json').write_text(json.dumps(dict(adopt=self.value)))
         self.assertEqual(self.adopt.adoption(self.env, 'T-1'), self.value)
 
+    def test_adopt_incomplete_pin_environment_does_not_touch_pins(self):
+        with patch.object(self.adopt, 'Pins', side_effect=AssertionError('must not build Pins')):
+            self.assertIsNone(self.adopt.adoption(
+                dict(FM_EXTERNAL='1', FM_TASKS_DIR=str(self.root)), 'T-1'))
+            for key in ('FM_ENGINE_ROOT', 'FM_TARGET_ROOT', 'FM_STATE_DIR',
+                        'FM_TASKS_DIR', 'FM_DESIGN'):
+                for value in (None, ''):
+                    with self.subTest(key=key, value=value):
+                        env = dict(self.env)
+                        if value is None:
+                            del env[key]
+                        else:
+                            env[key] = value
+                        self.assertIsNone(self.adopt.authorized_spec(env, 'T-1'))
+                        self.assertIsNone(self.adopt.adoption(env, 'T-1'))
+
     def test_adopt_pin_wins_and_errors_are_isolated(self):
         (self.root/'T-1.json').write_text(json.dumps(dict(adopt=dict(self.value, pr=10))))
         pin = dict(snapshots=dict(spec=dict(text=json.dumps(dict(adopt=self.value)))))
