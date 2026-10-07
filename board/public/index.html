@@ -1109,7 +1109,7 @@ function intentBody(d, content, locked, detailOnly = false) {
   const visibleIntents = revealedSections.has(JSON.stringify([d.id, 'intent'])) ? (content.intent || []) : (content.intent || []).slice(0,6);
   const visibleDone = revealedSections.has(JSON.stringify([d.id, 'done'])) ? (content.done || []) : (content.done || []).slice(0,6);
   const parent = item => {
-    const match = item.text.match(/^(?:Intent|意圖)\s+(\d+)[:：]/);
+    const match = item.text.match(/^(?:Intent|\u610f\u5716)\s+(\d+)[:\uff1a]/);
     const n = match ? Number(match[1]) : 0;
     return n > 0 && n <= visibleIntents.length ? n : 0;
   };
@@ -1181,8 +1181,10 @@ function syncDecisionBars() {
   document.querySelectorAll('#deck .decision-bar').forEach(bar => decisionBarObserver.observe(bar));
 }
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape') return;
-  const sheet = document.activeElement?.closest('.decision-sheet') || document.querySelector('.decision-sheet:not([hidden])');
+  if (event.key !== 'Escape' || openTaskKey || menuOpen || confirming) return;
+  const focusedSheet = document.activeElement?.closest('.decision-sheet');
+  const sheet = focusedSheet?.checkVisibility() ? focusedSheet
+    : [...document.querySelectorAll('.decision-sheet:not([hidden])')].find(sheet => sheet.checkVisibility());
   if (sheet) { event.preventDefault(); event.stopImmediatePropagation(); closeDecisionSheet(sheet.dataset.id); }
 }, true);
 function questionAnswers(d) {

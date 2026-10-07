@@ -15,6 +15,10 @@ answer = body('answer')
 intent = body('intentBody')
 keys = ['intentHeading', 'howHeading', 'alignmentHeading', 'scopeHeading', 'notesHeading']
 positions = [intent.find("t('" + key + "')") for key in keys]
+def fragment_heading(name, key):
+    fragment = re.search(r'^  const ' + name + r' = (.*?)(?=^  (?:const |if |return )|\Z)', intent, re.M | re.S)
+    return bool(fragment and "<h4>${esc(t('" + key + "'))}</h4>" in fragment.group(1))
+captain = intent.split('if (detailOnly) return', 1)[-1].split('\n', 1)[-1]
 checks = [
     ('answered set declared', bool(re.search(r'\banswered\s*=\s*new Set\(\)', html))),
     ('full card lock includes answered', bool(re.search(r'const full = d =>.*?const locked = [^;]*answered.has\(d.id\)', html, re.S))),
@@ -23,7 +27,9 @@ checks = [
     ('validate retains answer lock', 'answered.has(id)' in body('validate')),
     ('render retires absent answered ids', bool(re.search(r'for \(const id of answered\).*?pendingIds.has\(id\).*?answered.delete\(id\)', html))),
     ('detailOnly keeps intent/how/alignment/scope/notes', 'if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`' in intent),
-    ('captain body keeps intent/how/scope/notes', '<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>' in intent),
+    ('captain body keeps intent/how/scope/notes', 'return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>' in captain),
+    *[(f'captain {name} binds {key}', fragment_heading(name, key)) for name, key in
+      [('pairedIntent', 'intentHeading'), ('how', 'howHeading'), ('scope', 'scopeHeading'), ('notes', 'notesHeading')]],
     ('detail headings are complete and ordered', all(p >= 0 for p in positions) and positions == sorted(positions)),
     ('intentBody replaces old alignment title', bool(intent) and "t('intentAlignment')" not in intent),
     ('optional Why line requires items', "hasItems('why') ?" in intent),

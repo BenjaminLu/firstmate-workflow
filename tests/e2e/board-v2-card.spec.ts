@@ -1,5 +1,5 @@
 import { expect } from '@playwright/test';
-import { test, makeRoot, startBoard, stopBoard } from './lib/fixture';
+import { test, makeRoot, startBoard, stopBoard, writeTasks } from './lib/fixture';
 import { intentCard } from './lib/intent-card';
 import { writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
@@ -50,6 +50,44 @@ test('captain rows, disclosures and sheet focus survive state and locale changes
   } finally { await stopBoard(b); }
 });
 
+for (const collapsed of [false, true]) test(`task detail owns Escape with a ${collapsed ? 'collapsed' : 'visible'} decision sheet`, async ({page}) => {
+  const root = makeRoot([], false);
+  writeTasks(root, [{id:'T-001', title:'Plan: Read the task.', depends_on:[], scope:[], acceptance:[]}]);
+  for (const id of ['D-211', 'D-212']) {
+    writeFileSync(join(root, `state/pending/${id}.json`), JSON.stringify(intentCard(id)));
+  }
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const strip = page.locator('#strip-D-212');
+    await strip.locator(':scope > summary').click();
+    await strip.locator('[data-decision-details]').click();
+    const sheet = strip.locator('.decision-sheet');
+    await expect(sheet).toBeVisible();
+    if (collapsed) {
+      await strip.locator(':scope > summary').click();
+      await expect(sheet).toBeHidden();
+      // An invisible sheet must not consume Escape or lose its saved open state.
+      await page.keyboard.press('Escape');
+      await expect(sheet).not.toHaveAttribute('hidden');
+    }
+    const task = page.locator('.card[data-task="T-001"]');
+    await task.click();
+    const panel = page.locator('#taskDetail');
+    await expect(panel).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+    await expect(task).toBeFocused();
+    await expect(sheet).not.toHaveAttribute('hidden');
+    if (collapsed) await strip.locator(':scope > summary').click();
+    await expect(sheet).toBeVisible();
+    await sheet.locator('[data-decision-close]').focus();
+    await page.keyboard.press('Escape');
+    await expect(sheet).toBeHidden();
+    await expect(strip.locator('[data-decision-details]')).toBeFocused();
+  } finally { await stopBoard(b); }
+});
+
 for (const lang of ['en','zh-TW','zh-CN']) test(`pairing respects visible intent rows and done cap in ${lang}`, async ({page}) => {
   const root = makeRoot([], false), d = intentCard();
   for (const locale of ['en','zh-TW']) {
@@ -73,7 +111,7 @@ for (const lang of ['en','zh-TW','zh-CN']) test(`pairing respects visible intent
       });
     });
     await expect(card.locator('.alignment-row')).toHaveCount(6);
-    await expect(card.locator('[data-reveal]').filter({hasText:'(1)'})).toHaveCount(1);
+    await expect(card.locator('[data-reveal]').filter({hasText:/[(（]1[)）]/})).toHaveCount(1);
   } finally { await stopBoard(b); }
 });
 
