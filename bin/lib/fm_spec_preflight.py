@@ -90,8 +90,18 @@ def structure(answer, task, acceptance_count, previous=None):
     lines = [line for line in answer.splitlines() if line.strip()]
     if not verdict:
         refuse('requires a numbered list and closing SPEC-OK/SPEC-GAPS')
-    if len(lines) < 2 or lines[-2] != 'PREFLIGHT-COMPLETE:' + task:
+    marker = 'PREFLIGHT-COMPLETE:' + task
+    if marker not in lines[:-1]:
         refuse('requires the standalone marker immediately before the verdict')
+    # Reviewers often add one short summary sentence between the marker and
+    # the verdict. Prose is allowed there; another list item, marker or verdict is not.
+    after = lines[len(lines) - 1 - lines[::-1].index(marker):-1][1:]
+    if any(line.lstrip().startswith(('```', '~~~', '>')) for line in after):
+        # A marker inside a fence or quote is not a standalone marker.
+        refuse('requires the standalone marker immediately before the verdict')
+    if any(re.match(r'\s*\d+[.)]\s', line) or line.lstrip().startswith(('PREFLIGHT-COMPLETE:', 'SPEC-'))
+           for line in after):
+        refuse('only prose may sit between the marker and the verdict')
     raw, _ = _standing_block(answer, task)
     parsed = []
     for line, plain in raw:
@@ -204,7 +214,7 @@ Every gap belongs in this one report. A later pass may add only NEW-GROUND or
 MISSED items, not silently introduce another round of unlabelled gaps.
 {history}
 Close the list with this standalone line immediately before the verdict
-(blank lines between them are allowed):
+(blank lines or one short summary sentence between them are allowed):
 PREFLIGHT-COMPLETE:{task}
 End the final assistant answer with exactly one standalone closing line:
 SPEC-OK:{task}
