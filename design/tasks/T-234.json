@@ -1,0 +1,231 @@
+{
+  "id": "T-234",
+  "title": "the stock dispatcher starts an external task on the captain's A card, the README, design and skill report the external flow generically, and a test keeps external names, private paths and FM_HOME control files out of this repository",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_concurrent.py",
+    "bin/lib/fm_spec_pins.py",
+    "tests/concurrent-projects.test.sh",
+    "tests/lib/concurrent_projects.py",
+    "tests/lib/external_stock.py",
+    "tests/external-stock-dispatch.test.sh",
+    "README.md",
+    "design/design.md",
+    "design/external-roadmap.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-234.json",
+    "tests/spec-pins.test.sh",
+    "tests/lib/spec_pins_cases.py",
+    "bin/fm-dispatch.sh",
+    "tests/lib/project-storage.sh",
+    "tests/lib/autopilot_entrypoints.py",
+    "tests/intent-change-authority.test.sh",
+    "tests/external-private-text.test.sh",
+    "board/server.ts",
+    "tests/board-card-effects.test.sh"
+  ],
+  "acceptance": [
+    "Why. The captain closed PR #159 (T-055, the first external project) on 2026-10-06: the external-project flow ran end to end on one of the captain's private repositories, but two things remain. (1) README.md:460-466, design/design.md §15 (intro :4940 'Until each task passes…', §15.8 first paragraph :5430-5438) and skills/firstmate/SKILL.md:1012-1016 still describe an empty local repository and an unrun pilot, and they print a local absolute path and the private project's name in this public repository. (2) The stock dispatcher cannot start an external task: on main 0790d5a, `bin/fm-dispatch.sh --project <external> --dry-run` exits 65 with 'fm-concurrent: no greenlit event - nothing is dispatched for <name>', so firstmate started every external round with `bin/fm-worker.sh --project` by hand, and the board's dispatch action (board/server.ts:1942-1953, which runs bin/fm-dispatch.sh --task) cannot start one either. Captain rule (2026-10-06, on this task's dispatch card): text that names an external repository or its private paths, or reports the pilot's specifics, never enters firstmate's version control — there is no need for it there; firstmate keeps any such note privately under FM_HOME, outside this task.",
+    "Root cause of (2), verified on main 0790d5a. bin/lib/fm_concurrent.py prepare() (:111-120) reads the project's own events (read_events :55-60, project_events :51-52 filter by project) and raises ValueError('no greenlit event - nothing is dispatched for <name>') unless some event in that store has type greenlit. The engine store has 15 greenlit events (the first, 2026-09-20 'board work green-lit', is project-wide), written by the captain or by bin/fm.sh:767 (self-update); the external store FM_HOME/projects/<name>/state/events.jsonl has none, and nothing in the onboarding or card paths ever writes one. Every external task was authorized by the captain's A on its own choice card (decision_made in the external store plus state/decisions/<id>.json with chosen A), which bin/lib/fm_spec_pins.py already accepts as a pin approval (answer() :102-113, approval() :115-132: kind choice, chosen A, task and project match, actor captain). Test fixtures hide the gap by seeding a greenlit event by hand (tests/lib/external_stock.py:102-103; tests/dispatch.test.sh say … greenlit).",
+    "Change 1, bin/lib/fm_concurrent.py prepare(). A task is greenlit when the project store has a greenlit event (today's rule, unchanged), OR when the store holds the captain's A on the task's readiness card exactly as bin/lib/fm_spec_pins.py approval(None) accepts it (:115-132), so a task fm-dispatch starts can always be pinned by the worker (bin/fm-worker.sh:1181 creates the pin with `fm_pin create --task` and no --decision, which calls approval(None)): the readiness record state/ready/<id>.json (readiness_decision() :93-100: a regular file, task equal to the id, its decision when episode is set, else ended) names a decision; a decision_made event in the store has task equal to the id, data.decision equal to that decision, actor captain, data.chosen A and a non-empty ts; and answer() (:102-113) accepts the decision file (regular, not a symlink, chosen A, kind choice or absent, task, id and project match). Implement this as one shared function in bin/lib/fm_spec_pins.py (e.g. readiness_card_approval(state, project, task) returning the matched event/answer or None) that approval(None) itself calls for its choice branch, and call it from prepare(); never a copy. Mind the self project: prepare() uses route name '' for the self project while answer() defaults to 'firstmate-workflow'; pass the resolved project name the way Pins does (bin/lib/fm_spec_pins.py:76). The project-level refusal stays only when the store has no greenlit event AND no task in it passes this check: then prepare() raises the same ValueError text as today. Otherwise a task without either greenlight is held exactly like the existing holds (bin/lib/fm_concurrent.py:150-157): its why is 'has no greenlit event and no captain A card', printed as 'fm-dispatch: <id> has no greenlit event and no captain A card' on stderr only when the task is ordered (or the why mentions cleared, unchanged rule); it is left out of the eligible list, and dispatch() then prints 'fm-dispatch: nothing is ready' and returns 0 (:236-238) when nothing else is eligible. No new exit code: the board's dispatchTask already reports any task it did not start as failed with that stderr line (board/server.ts:1951-1952), and an ordered task that does not start already exits 0 in every existing hold, so this one stays consistent. Only the project-wide refusal (ValueError, exit 65 at :292-295) remains for a store with no greenlit event and no qualifying task. A card in another project's store never greenlights a task here. Dependencies, parks, closed, in-flight, the readiness clearance (fm-ready cleared) and the concurrency limit keep applying exactly as today. The shared function takes the store's events already filtered by the caller (Pins.events() :86-91 keeps its 'firstmate-workflow' default for events without a project; prepare() passes its own project_events() list, which defaults to the config's default_project) plus the state folder, project and task, and an optional decision: approval(decision) (:116-131) and approval(None) both call it, so the rule exists once. Import rule: prepare() imports the shared function lazily (inside prepare(), not at module import), after putting bin/lib (the directory of fm_concurrent.py itself, Path(__file__).resolve().parent) on sys.path, so bin/fm-herdr.py:470-476, which loads fm_concurrent.py by file path for other functions, keeps working without fm_spec_pins.py, and so does every fixture that copies fm_concurrent.py; the fixtures that run the dispatcher's no-greenlit path copy fm_spec_pins.py (and fm_project_paths.py, which it imports at :19) alongside it: tests/lib/project-storage.sh:11 (used by tests/dispatch.test.sh, whose :95-97 case must keep its 'no greenlit event' refusal) and tests/lib/autopilot_entrypoints.py:31-33.",
+    "Change 2, board/server.ts (anchors on 0790d5a): the captain's A on a readiness card that carries the dispatch effect must greenlight the task before the board starts it. Today the answer handler writes state/decisions/<id>.json (:2591-2593), then awaits dispatchTask (:2615; dispatchTask at :1942-1953 runs fm-dispatch.sh --task), and only afterwards emits the captain's decision_made (:2622-2632), so prepare() and the worker's later approval(None) pin (bin/fm-worker.sh:1181) see no qualifying event while the effect runs. Only when the recorded choice is A and its effect is 'dispatch', the board emits one decision_made BEFORE running the effect, with actor captain, --task, the card's project and data {decision, chosen: 'A', outcome: 'running', effect: 'dispatch'} (fm-emit.sh writes ts; --en '<id>: A, dispatch running' / --tw '<id>：A，派工進行中'), which the recent log (:1619) shows next to the final event, as intended, and still emits the final decision_made with the outcome after the effect, as today. send_back and every other effect or choice are unchanged: one decision_made after the effect (send_back is often option B on merge cards, tests/board-card-effects.test.sh:215, :227). If the early emit fails, the effect is not run and the outcome is failed with reason 'decision event not recorded'. Readers of the two events: board/server.ts:1381 (handoffs: every decision_made becomes an 'order') and :1614 (outcomes: every decision_made) skip a decision_made whose data.effect is 'dispatch' and data.outcome is 'running' when a later decision_made for the same data.decision exists, so a dispatch answer still yields one 'order' handoff and one event-sourced outcome entry; merges keep today's behaviour (their running event at :2627-2633 and a failed merge's second event at :1837-1840 both stay, unchanged); the decision-file entry of outcomes (:1616) is untouched; bin/lib/fm_autopilot.py:664 wakes only on chosen B or C, so the early A event adds no wake (no autopilot change); readers that already take the last event per decision stay as they are (tests/board-card-effects.test.sh:118, tests/e2e/board-card-effects.spec.ts:158, bin/fm-reconcile.sh:264-266). Callers unchanged in code: bin/fm-dispatch.sh, skills/firstmate/SKILL.md's dispatch steps, bin/fm-ready.sh cleared; bin/fm-worker.sh stays untouched. board/server.ts:1413-1421 (firstmate's crew row 'queued' when the default store has no greenlit event) is not changed; note it as a known cosmetic gap in the PR.",
+    "Tests (fail-first; fail-first runs only *.test.sh). tests/concurrent-projects.test.sh (tests/lib/concurrent_projects.py) gains cases: (a) an external project whose store has NO greenlit event but the readiness record for T-012 plus the captain's A on that card (decision_made with data.chosen A and ts, and decisions/<id>.json as the board writes them) → `fm-dispatch --project beta --task T-012 --dry-run` exits 0 and prints T-012 — red on base with 'no greenlit event'; (b) each of these refuses with stderr containing 'no greenlit event': the file says A but the event's data.chosen is B; the event's actor is firstmate; the decision is not the one the readiness record names; the file's task is T-013 or its project is alpha; the file is a symlink; the event has no ts; (c) unordered `--project beta --dry-run` with one task carded as in (a) and one without lists only the carded one and does not raise; (d) the existing test_project_greenlight_verification_and_clearance_do_not_cross keeps passing unchanged; (e) beta has no greenlit event, T-013 has a valid captain A readiness card as in (a), and `fm-dispatch --project beta --task T-012 --dry-run` exits 0, does not print T-012 on stdout, prints 'fm-dispatch: T-012 has no greenlit event and no captain A card' on stderr and 'fm-dispatch: nothing is ready' — red on base, which raises the project-wide 'no greenlit event' refusal instead. tests/lib/external_stock.py keeps its hand-seeded greenlit so the existing stock run is unchanged; a second stock run in the same file seeds NO greenlit event, only the readiness record state/ready/T-051.json and the captain's A on that card, and proves the real dispatcher starts the external worker and the worker's pin succeeds (approval(None) through the shared function). tests/spec-pins cases that cover approval(None) keep passing (the shared function is the same rule). Pins keeps answer(), readiness_decision() and approval() as methods with their current signatures and results (approval(None) and approval(decision) delegate to the shared function); tests/intent-change-authority.test.sh (:42-55 calls Pins.answer('D-211'), pins.approval() and pins.approval('D-211'); it sources tests/lib/project-storage.sh at :8 and :12) must stay green unchanged: a 'change' record is still no approval, and the positive A control still approves. tests/board-card-effects.test.sh gains a case: an external project fixture with NO greenlit event, a readiness record for T-012 and a pending readiness card whose A carries the dispatch effect; POST the captain's A to /decisions; the stubbed fm-dispatch.sh (or the real one with a stub worker) is started after a decision_made with chosen A, outcome running and a ts is already in the project store, and the card's final outcome is done — red on base, where the dispatch runs before any decision_made exists and the outcome is failed with 'no greenlit event'. tests/board-card-effects.test.sh also asserts that a dispatch A answer yields exactly one 'order' handoff and exactly one event-sourced outcome entry (an entry carrying data.outcome, as opposed to the decision-file entry) in /api/state for that decision, that a failed merge answer still yields both its running and failed event-sourced entries, and that a send_back B answer on a merge card still writes exactly one decision_made (no early event).",
+    "Docs (generic wording only, edited in place, never appended). README.md:460-466 is replaced by a short paragraph: the external-project flow has been run end to end on a private repository (onboarding, private conventions and design under FM_HOME, dispatch by the captain's cards, isolated worker rounds and reviews, wakes forwarded to firstmate, catch-up rebuild with a lease, the six gates on the authoritative head, landing by the captain's card), and T-140/T-143/T-141 remain advanced integrations. design/design.md: the §15 heading text stays exactly as it is (tests/design-layout.test.sh:17-19 pins it through tests/fixtures/design-anchors-before-T189.json); the intro at :4940 says the basic external flow is proven and which contracts remain plan (advanced reviewers, stacking, autopilot beyond T-141/T-231); §15.8's first paragraph (:5430-5438) states the same generically; §6 (:1212-1215, '**`fm-dispatch.sh` dispatches nothing until a `greenlit` event exists.**…') and §15.10 :5715 ('greenlit, verified project') are rewritten to the new rule (a greenlit event in the project store, or the captain's A on the task's readiness card as approval(None) accepts it). The header comment of bin/fm-dispatch.sh:5 is rewritten to the same rule. skills/firstmate/SKILL.md:215-217 ('Actual dispatch checks for any recorded green light…') is rewritten to the new rule (firstmate still verifies the approval applies to the proposed work), and :1012-1016 drops the empty-bootstrap sentence and says a new external project is onboarded and then dispatched through the standard fm-dispatch path. design/external-roadmap.md:35 and :57 say the basic external flow has run (row text only). None of these texts names an external repository, an external project's registry name, a person's local path or a pilot record; task files under design/tasks/ are historical records and stay as they are, and tests/ fixtures are excluded from the check below (e.g. tests/e2e/board-chips.spec.ts uses a made-up long project name).",
+    "Change 3, the committed-files check: a new bash suite tests/external-private-text.test.sh, applied to the tracked files under README.md, design/*.md, skills/**, docs/**, bin/** and board/** (design/tasks/ and tests/ are excluded: task files are historical records, and test fixtures use made-up names). (i) Local paths: `git grep -nE '/Use[r]s/[^/]+/(Desktop|\\.firstmate)'` over those paths finds nothing — red on base at README.md:460 and design/design.md:5430, green after the rewrite. (ii) Names: the registry is the engine's own config.yaml (bin/lib/fm_concurrent.py:41 reads `fm_projects \"$2/config.yaml\"`; bin/fm-config.sh:146 and :327 default to config.yaml); external entries live there as uncommitted working-tree edits (design/design.md:5010-5014), while the committed config.yaml lists only the self project. On a machine whose working-tree config.yaml holds external projects, the suite reads each external project's registry name and GitHub owner/name at test time through bin/fm-config.sh (fm_projects / fm_project_get <name> github), writes them to a temporary pattern file outside the repository and asserts `git grep -nF -f <file>` over those paths finds nothing; on CI, where the checked-out config.yaml holds no external project, this part has no names and passes trivially, and the suite says so in one line. To prove (ii) without committing any real name, the suite builds a fixture repository with a fixture registry entry (a made-up external project name and GitHub name) and a tracked README line containing that name, and asserts (ii) is red there, and green after the line is removed. (iii) Control files: in that fixture repository a copied CONVENTIONS.md of the fixture project committed under projects/<name>/ or byte-identical anywhere turns the check red; in the real repository no tracked path lies under a registered project's FM_HOME root/state/tasks/design or a top-level projects/<name>/ copy, and no tracked file is byte-identical to that project's CONVENTIONS.md, design.md or tasks/*.json when those exist locally. This task file itself contains no external repository name and no local path.",
+    "Migration. No stored record or schema changes. An external project already onboarded needs no greenlit event: its existing and future captain A choice cards greenlight their tasks from the merge on. Self-project dispatch is unchanged, because its store already has project-wide greenlit events. Tasks already merged or dropped are unaffected (done/closed checks come first). Change 3 needs no migration: the files that carry a local path or the project name outside design/tasks/ and tests/ (README.md:460, design/design.md:5430, skills/firstmate/SKILL.md:1012, design/external-roadmap.md:35 and :57) are all rewritten by this task.",
+    "Scope. bin/lib/fm_concurrent.py, bin/lib/fm_spec_pins.py (the shared readiness-card function; approval(None) calls it), bin/fm-dispatch.sh (header comment only), tests/concurrent-projects.test.sh, tests/lib/concurrent_projects.py, tests/lib/external_stock.py, tests/external-stock-dispatch.test.sh, tests/spec-pins.test.sh, tests/lib/spec_pins_cases.py, tests/lib/project-storage.sh, tests/lib/autopilot_entrypoints.py, tests/intent-change-authority.test.sh (regression only, no edit expected), tests/external-private-text.test.sh (new), README.md, design/design.md (§6, §15 intro, §15.8, §15.10), design/external-roadmap.md, skills/firstmate/SKILL.md, design/tasks/T-234.json. board/server.ts (Change 2 only), tests/board-card-effects.test.sh. Not touched: bin/fm-worker.sh, bin/lib/fm_autopilot*.py, bin/fm-gate.sh (T-231 in flight). No docs/ file is added."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A captain A on the readiness card of a task is a greenlight for that task."
+        },
+        {
+          "kind": "fact",
+          "text": "A card in one project never greenlights a task in another project."
+        },
+        {
+          "kind": "fact",
+          "text": "The README, the design and the skill report the external flow in generic words."
+        },
+        {
+          "kind": "fact",
+          "text": "No committed file names an external repository, a private path or a control file of an external project."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "You closed PR #159 and asked for the follow-up task."
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_concurrent.py and fm_spec_pins.py",
+        "dispatch tests and the new private-text test",
+        "README, design, skill and roadmap text",
+        "board/server.ts: the early decision event"
+      ],
+      "scope_out": [
+        "bin/fm-worker.sh and the autopilot"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the board writes the A event first, and prepare() accepts the A card that the pin rule accepts. Test case a and the board case prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the card check compares the project of the decision file. Test case b proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the texts change in place to generic words. tests/external-private-text.test.sh proves no names remain."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the new suite checks local paths on CI, reads the names from the local registry, and a fixture repository proves each check red. Its cases prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "A pilot note that names the external repository stays private under FM_HOME, outside this task."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Captain answers A on the card"
+        },
+        {
+          "state": "gone",
+          "label": "Board dispatches before the event"
+        },
+        {
+          "state": "gone",
+          "label": "Dispatcher needs a greenlit event"
+        },
+        {
+          "state": "gone",
+          "label": "Firstmate starts the round by hand"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Captain answers A on the card"
+        },
+        {
+          "state": "new",
+          "label": "Board writes the A event first"
+        },
+        {
+          "state": "new",
+          "label": "Dispatcher reads the A card"
+        },
+        {
+          "state": "new",
+          "label": "Standard dispatch starts the round"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "船長在任務的就緒卡選 A，就算這個任務已核准開工。"
+        },
+        {
+          "kind": "fact",
+          "text": "一個專案的卡絕不核准另一個專案的任務。"
+        },
+        {
+          "kind": "fact",
+          "text": "README、design 和 skill 用一般的說法寫出外部流程。"
+        },
+        {
+          "kind": "fact",
+          "text": "進版控的檔案不含外部 repo 名稱、私有路徑或外部專案的控管檔案。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "你關閉了 PR #159，並要求開這個後續任務。"
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_concurrent.py 和 fm_spec_pins.py",
+        "派工測試和新的私有文字測試",
+        "README、design、skill 和 roadmap 文字",
+        "board/server.ts：提早寫入決策事件"
+      ],
+      "scope_out": [
+        "bin/fm-worker.sh 和 autopilot"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：看板先寫 A 事件，prepare() 接受 pin 規則接受的 A 卡。案例 a 和看板案例證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：卡片檢查比對決策檔的專案。測試案例 b 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：文字就地改成一般說法。tests/external-private-text.test.sh 證明不再有名稱。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：新測試在 CI 查本機路徑，從登記表讀名稱。fixture repo 證明每項檢查會紅。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "寫出外部 repo 名稱的試行紀錄只留在 FM_HOME，不在這個任務裡。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "船長在卡上選 A"
+        },
+        {
+          "state": "gone",
+          "label": "看板先派工後寫事件"
+        },
+        {
+          "state": "gone",
+          "label": "派工要 greenlit 事件"
+        },
+        {
+          "state": "gone",
+          "label": "firstmate 手動啟動"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "船長在卡上選 A"
+        },
+        {
+          "state": "new",
+          "label": "看板先寫 A 事件"
+        },
+        {
+          "state": "new",
+          "label": "派工讀 A 卡"
+        },
+        {
+          "state": "new",
+          "label": "標準派工啟動回合"
+        }
+      ]
+    }
+  }
+}

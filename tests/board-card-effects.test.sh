@@ -21,6 +21,25 @@ x="$(safe_tmpdir)"; mkdir -p "$x/bin" "$x/state/pending" "$x/state/runs" "$x/sta
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-herdr.py" "$x/bin/"; project_storage_fixture "$x/bin/"
 cp -R "$ROOT/bin/lib" "$x/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 binding_service_fixture "$x"
+# Refuse only a dispatch start event when the failure case requests it.
+cp "$x/bin/fm-emit.sh" "$x/bin/fm-emit-real.sh"
+cat > "$x/bin/fm-emit.sh" <<'SH'
+#!/usr/bin/env bash
+if (return 0 2>/dev/null); then . "$(dirname "${BASH_SOURCE[0]}")/fm-emit-real.sh"; return; fi
+if [ -e "$FM_ROOT/refuse-dispatch-event" ]; then
+  args=("$@")
+  while [ $# -gt 0 ]; do
+    if [ "$1" = --data ]; then
+      if jq -e '.effect=="dispatch" and .outcome=="running"' <<<"$2" >/dev/null; then exit 1; fi
+      break
+    fi
+    shift
+  done
+  set -- "${args[@]}"
+fi
+exec "$FM_ROOT/bin/fm-emit-real.sh" "$@"
+SH
+chmod +x "$x/bin/fm-emit.sh"
 cp "$ROOT/board/server.ts" "$x/board/"
 cp "$ROOT/board/public/index.html" "$x/board/public/"
 fm_tasks_write /dev/stdin "$x/design/tasks" <<'J'
@@ -34,6 +53,7 @@ fm_tasks_write /dev/stdin "$x/design/tasks" <<'J'
           {"id":"T-037","title":"a card withdrawn","milestone":"M2","depends_on":[]},
           {"id":"T-038","title":"answered, no effect","milestone":"M2","depends_on":[]},
           {"id":"T-039","title":"merged from a card","milestone":"M2","depends_on":[]},
+          {"id":"T-040","title":"failed merge","milestone":"M2","depends_on":[]},
           {"id":"T-044","title":"a run that vanished","milestone":"M2","depends_on":[]},
           {"id":"T-045","title":"a run that is alive","milestone":"M2","depends_on":[]},
           {"id":"T-046","title":"redispatched, then the old run found lost","milestone":"M2","depends_on":[]},
@@ -46,6 +66,7 @@ cat > "$x/bin/fm-merge.sh" <<'SH'
 printf '%s\n' "$*" >> "$FM_ROOT/merge-calls"
 pr=''; task=''
 while [ $# -gt 0 ]; do case "$1" in --pr) pr="$2"; shift 2 ;; --task) task="$2"; shift 2 ;; *) shift ;; esac; done
+[ ! -e "$FM_ROOT/fail-merge" ] || exit 1
 for _ in $(seq 1 300); do [ -e "$FM_ROOT/wait-merge" ] || break; sleep 0.1; done
 "$FM_ROOT/bin/fm-emit.sh" --actor captain --type merged --pr "$pr" ${task:+--task "$task"} \
   --en "merged #$pr from the board" --tw "從看板合併 #$pr" >/dev/null 2>&1 </dev/null
@@ -55,6 +76,15 @@ cat > "$x/bin/fm-dispatch.sh" <<'SH'
 #!/usr/bin/env bash
 task=''
 while [ $# -gt 0 ]; do case "$1" in --task) task="$2"; shift 2 ;; *) shift ;; esac; done
+if [ "${FM_PROJECT:-}" = beta ]; then
+  state="$(bash -c '. "$1/bin/fm-config.sh"; fm_project_get beta state "$1/config.yaml"' _ "$FM_ROOT")"
+  if ! jq -se --arg task "$task" 'any(.[]; .type=="decision_made" and .actor=="captain" and .project=="beta" and .task==$task and .data.chosen=="A" and .data.effect=="dispatch" and .data.outcome=="running" and (.ts|length)>0)' "$state/events.jsonl" >/dev/null; then
+    echo 'no greenlit event' >&2; exit 65
+  fi
+  printf '%s\n' "$task" >> "$FM_ROOT/external-dispatch-calls"
+  echo "$task"
+  exit 0
+fi
 printf '%s\n' "$task" >> "$FM_ROOT/dispatch-calls"
 for _ in $(seq 1 300); do [ -e "$FM_ROOT/wait-$task" ] || break; sleep 0.1; done
 if [ -e "$FM_ROOT/hold-$task" ]; then
@@ -100,13 +130,34 @@ case "${1-}:${2-}" in
   *) echo "gh stub: fm-decide asks nothing but pr view" >&2; exit 1 ;;
 esac
 SH
-for pair in '31 T-031' '35 T-035' '39 T-039' '97 T-117'; do
+for pair in '31 T-031' '35 T-035' '39 T-039' '40 T-040' '97 T-117'; do
   set -- $pair
   jq -cn --argjson n "$1" --arg b "$(tr 'T' 't' <<<"$2")-branch" --arg t "$2: title" \
     '{number:$n,state:"OPEN",headRefName:$b,title:$t}' >> "$x/prs.jsonl"
 done
 chmod +x "$x/bin/fm-merge.sh" "$x/bin/fm-dispatch.sh" "$x/bin/fm-worker.sh" "$x/bin/gh"
 emx() { FM_ROOT="$x" "$x/bin/fm-emit.sh" "$@" >/dev/null; }
+private_home="$(safe_tmpdir)"
+cat > "$x/config.yaml" <<CFG
+home: $private_home
+default_project: firstmate-workflow
+projects:
+  firstmate-workflow:
+    repo: .
+    github: fixture/engine
+    base: main
+    required_check: ci
+  beta:
+    github: fixture/beta
+    base: main
+    required_check: ci
+CFG
+beta_state="$private_home/projects/beta/state"
+mkdir -p "$beta_state/ready" "$beta_state/pending" "$beta_state/decisions" "$private_home/projects/beta/tasks"
+printf '%s\n' '{"id":"T-012","title":"External dispatch","depends_on":[]}' > "$private_home/projects/beta/tasks/T-012.json"
+printf '%s\n' '{"task":"T-012","episode":"ready-1","decision":"D-beta-T012-1"}' > "$beta_state/ready/T-012.json"
+printf '%s\n' '{"id":"D-beta-T012-1","project":"beta","task":"T-012","kind":"choice","details":{"effect":{"A":"dispatch"}},"options":[{"key":"A","en":"Start","zh-TW":"開始"}]}' > "$beta_state/pending/D-beta-T012-1.json"
+: > "$beta_state/events.jsonl"
 emx --actor captain --type greenlit --en "go" --tw "開工"
 FM_ROOT="$x" FM_PORT=0 bun run "$x/board/server.ts" > "$x/out" 2>&1 < /dev/null &
 pidx=$!
@@ -139,6 +190,24 @@ setaside() {   # setaside <task> <action> [extra JSON]: the HTTP status, the bod
   wcurl "$PORTX" -s -m 30 -o "$x/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
     -d "$body" "http://127.0.0.1:$PORTX/tasks"
 }
+
+# The dispatch child must see the captain event in the external store first.
+assert_eq 200 "$(answer D-beta-T012-1 A)" 'external readiness answer is accepted'
+assert_eq 'done' "$(jq -r .outcome "$x/post")" 'card-only external dispatch starts after its approval event'
+assert_eq T-012 "$(cat "$x/external-dispatch-calls")" 'the external dispatcher was called'
+assert_eq 'running,done' "$(jq -rs '[.[]|select(.type=="decision_made")|.data.outcome]|join(",")' "$beta_state/events.jsonl")" 'dispatch records its start and final outcome'
+beta_view="$(sx)"
+assert_eq 1 "$(jq '[.handoffs[]|select(.project=="beta" and .task=="T-012" and .kind=="order")]|length' <<<"$beta_view")" 'dispatch produces one order handoff'
+assert_eq 1 "$(jq '[.outcomes[]|select(.project=="beta" and .data.decision=="D-beta-T012-1" and .data.outcome)]|length' <<<"$beta_view")" 'dispatch produces one event-sourced outcome'
+
+# A durable answer without its approval event must not start the effect.
+jq '.id="D-beta-T012-2"' "$beta_state/decisions/D-beta-T012-1.json" > "$beta_state/pending/D-beta-T012-2.json"
+: > "$x/refuse-dispatch-event"
+assert_eq 200 "$(answer D-beta-T012-2 A)" 'a failed start event still records the answer'
+assert_eq 'failed decision event not recorded' "$(jq -r '"\(.outcome) \(.reason)"' "$x/post")" 'failed approval publication holds dispatch'
+assert_eq 1 "$(wc -l < "$x/external-dispatch-calls" | tr -d ' ')" 'event failure never invokes the dispatcher'
+assert_eq failed "$(jq -r .effect_outcome "$beta_state/decisions/D-beta-T012-2.json")" 'event failure is durable'
+rm "$x/refuse-dispatch-event"
 
 # T-030's real sequence: a dispatch in its history, a card asking for a
 # decision, the captain's B. The card names B's effect, park, as a card now
@@ -214,6 +283,7 @@ emx --actor worker-35 --task T-035 --type pr_opened --pr 35 --en "opened #35" --
 emx --actor worker-35 --task T-035 --type agent_finished --en "done" --tw "完成"
 card D-1035 T-035 merge '{"A":"merge","B":"send_back"}' 35
 assert_eq "200" "$(answer D-1035 B)" "the captain answers B, send back"
+assert_eq 1 "$(jq -rs '[.[]|select(.type=="decision_made" and .data.decision=="D-1035")]|length' "$x/state/events.jsonl")" 'send-back B has only its final decision event'
 assert_eq "send_back done" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "the round was started"
 assert_contains "$(cat "$x/worker-calls" 2>/dev/null)" "--task T-035" "by fm-worker.sh, for the task"
 assert_contains "$(cat "$x/worker-calls" 2>/dev/null)" "--pr 35" "on its pull request"
@@ -241,6 +311,14 @@ rm "$x/wait-merge"
 wait_for 20 jq -e '.merge=="merged"' "$x/state/decisions/D-1039.json"
 assert_eq "merged done" "$(record D-1039 '"\(.merge) \(.effect_outcome)"')" "and its record says it was done once it merged"
 assert_eq "merged" "$(lane T-039)" "the task is merged"
+
+# Failed merges retain both event-sourced outcomes; only dispatch is folded.
+card D-1239 T-040 merge null 40
+: > "$x/fail-merge"
+assert_eq 200 "$(answer D-1239 A)" 'the failed merge answer is recorded'
+wait_for 20 jq -e '.merge=="failed"' "$x/state/decisions/D-1239.json"
+assert_eq 'running,failed' "$(jq -r '[.outcomes[]|select(.data.decision=="D-1239" and .data.outcome)|.data.outcome]|join(",")' <<<"$(sx)")" 'failed merge keeps running and failed event entries'
+rm "$x/fail-merge"
 
 # --- set aside in flight: confirmed, crew stopped, the pull request left open
 emx --actor worker-50 --task T-050 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
@@ -579,5 +657,6 @@ for repo in $gh_repos; do
 done
 
 
+safe_rm_rf "$private_home"
 safe_rm_rf "$XDG_CONFIG_HOME"
 finish
