@@ -26,6 +26,7 @@ exec < /dev/null
 _fm_argv=("$@")
 
 REPO=''; TASK=''; BRANCH=''; PR=''; ONLY=''; ONLY_SET=0
+FAILFIRST_NOT_RUNNABLE=''
 BASE="${FM_BASE:-main}"
 
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
@@ -76,6 +77,7 @@ g() {   # g <n> <description> ; only gate 4 may return 3 with NOT_RUNNABLE
   NOT_RUNNABLE=''
   if "$@"; then say '+' "$n" "$desc"; return 0; else rc=$?; fi
   if [ "$rc" = 3 ] && [ "$n" = 4 ] && [ -n "$NOT_RUNNABLE" ]; then
+    FAILFIRST_NOT_RUNNABLE="$NOT_RUNNABLE"
     say '!' 4 "$desc: not runnable: $NOT_RUNNABLE"; return 0
   fi
   say 'x' "$n" "$desc"; exit "$n"
@@ -290,5 +292,9 @@ if [ -z "$ONLY" ] && [ -n "$PR" ]; then
   [ "$(git rev-parse "$TASK_REF^{commit}")" = "$VERIFIED_HEAD" ] || exit 5
   fm_binding ready --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD" --gate-report "$GATE_TRANSCRIPT" >/dev/null || exit 5
 fi
-echo "  all six gates green"
+if [ -n "$FAILFIRST_NOT_RUNNABLE" ]; then
+  echo "  fail-first did not run: $FAILFIRST_NOT_RUNNABLE; other selected gates passed"
+else
+  echo "  all six gates green"
+fi
 exit 0

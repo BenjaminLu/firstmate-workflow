@@ -54,6 +54,8 @@ assert_eq 0 "$?" 'full gate fixture retains signed approval'
 "$ROOT/bin/fm-gate.sh" --repo "$d" --task T-X --branch work --pr 9 > "$d/gate-output" 2>&1
 assert_eq 0 "$?" 'the complete six-gate entrypoint accepts pinned not-runnable fail-first'
 assert_contains "$(cat "$d/gate-output")" '  ! gate 4 (fail-first):' 'full transcript retains warning'
+assert_lacks "$(cat "$d/gate-output")" 'all six gates green' 'not-runnable summary never claims all gates green'
+assert_contains "$(cat "$d/gate-output")" 'fail-first did not run' 'not-runnable summary says fail-first did not run'
 assert_fail "test -e '$d/command-ran'" 'the pinned check command never ran'
 (
   . "$ROOT/bin/fm-config.sh"
