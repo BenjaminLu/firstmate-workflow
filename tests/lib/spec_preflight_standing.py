@@ -97,8 +97,11 @@ class Standing(unittest.TestCase):
         self.retain(self.answer(block, 'SPEC-GAPS'))
         body = P.prompt('T-X', self.data, 'b' * 40, P.standing(self.store))
         self.assertIn(block, body)
-        for rule in ('done', 'open', 'ok', 'N. gap NEW-GROUND:', 'N. gap MISSED:'):
+        for rule in ('done', 'open', 'ok', 'N. gap NEW-GROUND:', 'N. gap MISSED:',
+                     'Put any summary sentence before item 1.',
+                     "nothing but blank\nlines between the last item, the marker and the verdict"):
             self.assertIn(rule, body)
+        self.assertNotIn('one short summary sentence between them', body)
         path = self.root / 'spec.json'
         path.write_bytes(self.data)
         result = subprocess.run([sys.executable, str(ROOT / 'bin/lib/fm_spec_preflight.py'),
