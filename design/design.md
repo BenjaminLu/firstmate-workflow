@@ -5113,8 +5113,9 @@ The same confirmation writes an initial private design.md beside it (T-226): fir
 The public engine registry carries routing only; command configuration is
 `FM_HOME/projects/<name>/state/config.yaml`. Onboarding inserts the routing entry
 into the existing `projects:` block, allowing a trailing comment on its header
-and refusing a second block. The entry is a working-tree change to the tracked
-`config.yaml` that reaches main only through a captain-approved pull request.
+and refusing a second block. The entry stays an uncommitted local change to the
+tracked `config.yaml` and never reaches main; only the updated
+`tests/fixtures/private-name-digests.txt` is committed through a task pull request.
 Existing explicit-name and self routing remain supported.
 
 The conventions front matter uses data-only fields (strings quoted as JSON;
