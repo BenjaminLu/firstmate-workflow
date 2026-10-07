@@ -996,11 +996,26 @@ Confirm `pr_title`, `pr_sections` and `pr_language` through the captain's explic
 onboarding answers or conventions edits. Per field, CONVENTIONS wins over the
 private `FM_HOME/owners/<owner>.yaml` default, then the engine's `plain`, `[]`,
 `en`. Owner files use the same JSON-or-bare-enum line format, allow only those
-three keys, and require JSON quotes for `"zh-TW"` and `"zh-CN"`. Never store an
+three keys and `branch_prefix`, and require JSON quotes for `"zh-TW"`,
+`"zh-CN"` and a prefix such as `"feature/"`. Never store an
 owner file or a real owner name in firstmate git. Defaults apply at round time;
 onboarding must not infer or copy them into a repository's CONVENTIONS. Confirmed
 sections supply the summary/change bullets, marked CI Testing checklist and
 AI participation checklist; v1 does not translate public prose for `pr_language`.
+
+Onboarding inspects CI trigger files and recent PR heads, and proposes
+`branch_prefix`, `ci_branch_patterns` and `ci_pull_request` with cited evidence.
+Confirm these through explicit captain answers or conventions edits. The prefix
+is one lowercase segment ending in `/`; repository conventions override the
+owner default. CI patterns and the PR-trigger boolean belong only to repository
+conventions. Never treat an inspected proposal as permission. With a prefix,
+a new external branch uses `<prefix><task-slug>-<validated-public-title-slug>`
+(or `work` for missing/invalid public text); without it, `<task-slug>-work` stays.
+A round refuses a new branch that matches no recorded CI pattern unless the
+captain confirmed PR-triggered CI. Absent patterns warn and continue for
+migration; unreadable branch format refuses. Existing and adopted branches are
+never renamed. A branch trigger may also run deployment steps. A branch with
+one leading segment now names its task everywhere, including adoption checks.
 
 To continue a person's existing external PR, write `adopt` with exactly `pr`
 (a positive number), `head` (the full commit), and `base` (the branch) shown on

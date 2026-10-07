@@ -410,17 +410,36 @@ task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.jso
   [ -n "$j" ] || j="$(fm_task "$t")"
   printf '%s' "$j"
 }
+# External branch policy is captain-confirmed data; failure is never a default.
+branch_prefix=''
+branch_format='{"prefix":"","patterns":null,"pull_request":false}'
+if [ "$FM_EXTERNAL" = 1 ]; then
+  branch_format_err="$(scratch_new)" || exit 70
+  scratch_add "$branch_format_err"
+  if ! branch_format="$(fm_conventions branch_format 2>"$branch_format_err")"; then
+    branch_error="cannot read branch format: $(cat "$branch_format_err")"
+    echo "fm-worker: $branch_error" >&2
+    emit --type worker_crashed --en "$branch_error" --tw "無法讀取分支格式：$branch_error"
+    exit 65
+  fi
+  branch_prefix="$(jq -r .prefix <<<"$branch_format")"
+fi
 # the worker has no branch name yet - it is derived from the title - so
 # it looks for one already carrying this task. Local first, then origin:
 # a worktree can be swept between rounds and leave nothing local behind,
 # and a branch only origin remembers is still a branch to continue (T-037).
 slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
+branch_pattern="^$slug-"
+if [ -n "$branch_prefix" ]; then
+  escaped_prefix="$(python3 -c 'import re,sys; print(re.escape(sys.argv[1]))' "$branch_prefix")"
+  branch_pattern="^($escaped_prefix)?$slug-"
+fi
 branch_guess="$(git for-each-ref --format='%(refname:short)' refs/heads \
-  | grep -i "^$slug-" | head -1)"
+  | grep -Ei "$branch_pattern" | head -1)"
 if [ -z "$branch_guess" ]; then
   remote_guess="$(git ls-remote --heads origin 2>/dev/null \
     | sed -n 's#.*[[:space:]]refs/heads/##p' \
-    | grep -i "^$slug-" | head -1)"
+    | grep -Ei "$branch_pattern" | head -1)"
   if [ -n "$remote_guess" ] && git fetch -q origin "$remote_guess:$remote_guess" 2>/dev/null; then
     branch_guess="$remote_guess"
   fi
@@ -456,6 +475,20 @@ if [ -n "$branch_guess" ]; then
   branch="$branch_guess"
 elif [ "$FM_EXTERNAL" = 1 ]; then
   branch="$slug-work"
+  if [ -n "${branch_prefix:-}" ]; then
+    branch_short="$(python3 -c '
+import json, re, sys
+sys.path.insert(0, sys.argv[1])
+from fm_public_text import validate
+spec = json.load(sys.stdin)
+title = spec.get("public_title")
+short = ""
+if not validate(title, spec.get("public_summary"), style="plain", changes=spec.get("public_changes")):
+    short = re.sub("[^a-z0-9]+", "-", title.lower())[:40].strip("-")
+print(short or "work")
+' "$FM_CODE_ROOT/bin/lib" <<<"$spec")" || branch_short=work
+    branch="$branch_prefix$slug-$branch_short"
+  fi
 else
   branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
 fi
@@ -466,6 +499,25 @@ if [ -n "${adopt_pr:-}" ]; then
     || adopt_refuse 'selected branch differs from adopted PR branch'
 fi
 case "$branch" in main|master|"$BASE") echo 'fm-worker: refusing protected project base' >&2; exit 65 ;; esac
+# Existing and adopted heads retain their names and trigger policy.
+if [ "$FM_EXTERNAL" = 1 ] && [ -z "$branch_guess" ] && [ -z "${adopt_pr:-}" ]; then
+  branch_check="$(python3 - "$branch" "$branch_format" <<'PYCI'
+import fnmatch, json, sys
+branch, fmt = sys.argv[1], json.loads(sys.argv[2])
+patterns = fmt['patterns']
+if patterns is None:
+    print('no CI branch patterns recorded for this project; cannot prove CI runs on ' + branch)
+elif not fmt['pull_request'] and not any(fnmatch.fnmatchcase(branch, p.removeprefix('refs/heads/')) for p in patterns):
+    print('branch ' + branch + ' matches no CI trigger pattern (' + ','.join(patterns) + '); set branch_prefix in the project conventions')
+    sys.exit(65)
+PYCI
+)"; branch_check_rc=$?
+  if [ -n "$branch_check" ]; then echo "fm-worker: $branch_check" >&2; fi
+  if [ "$branch_check_rc" != 0 ]; then
+    emit --type worker_crashed --en "$branch_check" --tw "分支不符合 CI 觸發規則：$branch_check"
+    exit 65
+  fi
+fi
 [[ "$TASK" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || exit 65
 [ ! -L "$FM_WORKTREES/$TASK" ] || exit 65
 tree="$FM_WORKTREES/$TASK"

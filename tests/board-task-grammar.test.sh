@@ -10,7 +10,14 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # serves it to the page in front of diagram.js. The block is lifted out as
 # written and run against the shell functions over one table: ids, branches
 # (SK-001's and #96's real ones among them), titles, keys and owned ids.
-grammar_cases='T-117
+grammar_cases='feature/t-001-x
+FEATURE/T-001
+feature/sk-002-y
+feature/t-1170-z
+a/b/t-001
+/t-001
+hotfix/x
+T-117
 SK-001
 T-001
 T-1
@@ -41,6 +48,7 @@ T-1: too short
 t-117: lower case
 T-117 no colon'
 grammar_pairs="$(printf '%s\t%s\n' \
+  feature/t-005-x 'T-009: other task' \
   t-105-revert 'T-105: revert the crew sandbox' \
   t-117-t-105-again 'T-105: a title that disagrees' \
   board-fields 'T-116: the board shows each crew member' \
@@ -126,6 +134,11 @@ assert_contains "$sh_grammar" "owned D-firstmate-workflow-SK001-1|firstmate-work
   "an SK task's owned card id is owned by SK-001, in both grammars"
 assert_contains "$sh_grammar" "owned D-example-app-TA-3|example-app|T-A|3" "a fixture's T-A card is still owned"
 assert_contains "$sh_grammar" "owned D-a-SK01-1|-" "an SK key of two digits is no owned id"
+for pair in 'feature/t-001-x T-001' 'FEATURE/T-001 T-001' 'feature/sk-002-y SK-002' 'feature/t-1170-z T-1170' 'a/b/t-001 -' '/t-001 -' 'hotfix/x -'; do
+  read -r branch task <<<"$pair"
+  assert_contains "$sh_grammar" "$branch|n|-|$task|-" "one optional branch segment: $branch"
+done
+assert_contains "$sh_grammar" "$(printf 'feature/t-005-x\tT-009: other task|T-005')" "prefixed branch takes precedence over title"
 rm -rf "$gdir"
 
 

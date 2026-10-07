@@ -1,0 +1,255 @@
+{
+  "id": "T-250",
+  "title": "an external project's new branch uses the captain-confirmed branch_prefix so the repository CI runs on it, a round refuses a new branch that no recorded CI trigger pattern matches, the task grammar reads a task id after one leading path segment everywhere, and onboarding proposes the prefix and CI patterns from the CI files and recent branches",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-worker.sh",
+    "bin/fm-emit.sh",
+    "board/server.ts",
+    "bin/fm-reconcile.sh",
+    "bin/lib/fm_stack.py",
+    "bin/lib/fm_conventions.py",
+    "bin/lib/fm_onboard.py",
+    "tests/external-branch-prefix.test.sh",
+    "tests/lib/external_branch_prefix.py",
+    "tests/board-task-grammar.test.sh",
+    "tests/reconcile.test.sh",
+    "tests/stacking_cases.py",
+    "tests/onboarding.test.sh",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "tests/external-adopt.test.sh",
+    "design/tasks/T-250.json"
+  ],
+  "acceptance": [
+    "Why. The captain (2026-10-07) saw that firstmate opened an external pull request from a branch named `t-001-work`, which the repository CI never runs on, and said verbatim: \"t-001-work 你開的feature branch naming沒有遵照公司repo規定, 不會觸發CI, 你提PR之前應該要先調查好會執行CI的branch name prefix\", then \"從根本修\". Today bin/fm-worker.sh:417-461 names a new external branch `$slug-work` (:458) with no knowledge of the CI trigger rules. One managed repository's CI pipeline runs only on pushes to refs/heads/{develop,master,hotfix/*,feature/*,support/*,release/*,security/*,preview/pr-*,deployer/*}; another's pipeline trigger lives in an imported local jsonnet file (`trigger: utils.default_trigger`) and also lists feature/*; most merged pull requests in every managed repository use a `feature/` head branch. The branch-to-task grammar (bin/fm-emit.sh:41-47 `fm_task_of_branch`, the TypeScript twin at board/server.ts:638-641) only reads a task id at the start of the branch name, so a prefixed branch names no task.",
+    "Change 1, fields (bin/lib/fm_conventions.py). Three optional data-only CONVENTIONS front-matter fields, captain-confirmed like the pr_* fields: `branch_prefix` (a string matching ^[a-z0-9][a-z0-9._-]{0,30}/$, one path segment ending in a slash, e.g. \"feature/\"), `ci_branch_patterns` (a JSON list of 1-30 non-empty strings, each a branch glob such as \"feature/*\" or a ref glob such as \"refs/heads/feature/*\"), and `ci_pull_request` (bool: the CI also runs on pull_request events). `validate` refuses any other shape with a message naming the field. The private owner default file (FM_HOME/owners/<owner>.yaml, read by `pr_format` at :51-79) may also carry `branch_prefix` (only that one of the three; `ci_branch_patterns`/`ci_pull_request` there are refused as an unknown owner field, because CI rules belong to one repository). Precedence for branch_prefix: CONVENTIONS > owner default > none. `pr_format` accepts an owner file that also holds `branch_prefix` and still returns only the three pr_* keys (tests/lib/external_pr_format.py:139-146 compares that exact dict). A string value is JSON-quoted in both files (\"feature/\"), as parse_fields (:42-46) requires. A new CLI field `--field branch_format` prints JSON `{\"prefix\": <string or \"\">, \"patterns\": <list or null>, \"pull_request\": <bool>}`; patterns is null when CONVENTIONS has no `ci_branch_patterns`. The worker reads it through the existing `fm_conventions` wrapper (bin/fm-config.sh:1140-1146), unchanged.",
+    "Change 2, the worker branch (bin/fm-worker.sh). For an external project only (FM_EXTERNAL=1), before the branch guess at :417, read `fm_conventions branch_format`; when that call fails (for example a malformed owner file), the worker prints `fm-worker: cannot read branch format: <stderr>`, emits worker_crashed with that text and exits 65 before any worktree, push or pull request (the same refusal shape as adopt_refuse), because a guessed prefix could publish a branch CI never runs. Every new call in the slice that tests/external-execution.test.sh:262-272 lifts (from `if [ -n \"$branch_guess\" ]; then` to `case \"$branch\" in main|master`) is guarded by an empty-prefix default so that harness, which defines no fm_conventions, still yields `t-051-work`; the Change 3 check sits after that `case`. The guess at :418-427 (local refs, then origin heads) matches `^<escaped prefix>?<slug>-` case-insensitively, so it still finds an existing unprefixed `t-NNN-work` branch and also a prefixed `<prefix>t-NNN-…` one. When no branch is found and the task adopts no PR, the new branch is `<prefix><slug>-<short>` when a prefix is set, where <short> is built from the spec's `public_title` only when `fm_public_text.validate(public_title, public_summary, style='plain', changes=public_changes)` (bin/lib/fm_public_text.py, the same check the pull request text uses later at :2161-2174) returns no problem: the title lowercased, every run of characters outside [a-z0-9] turned into one hyphen, cut to 40 characters and stripped of edge hyphens; in every other case (public_title null, empty, or failing that check, or the slug empty) <short> is `work`, so unchecked text never reaches a public branch name; with no prefix the branch stays `$slug-work` exactly as today. An adopted PR (T-237 `adopt`) keeps its own branch and skips Change 3. The self project (FM_EXTERNAL=0) is byte-for-byte unchanged.",
+    "Change 3, the CI trigger check (bin/fm-worker.sh). Right after a new external branch name is chosen (only when the branch did not exist; never for an existing branch or an adopted PR) and before any commit, push or pull request: if branch_format.patterns is null, print one line `fm-worker: no CI branch patterns recorded for this project; cannot prove CI runs on <branch>` and continue (migration). Else, if branch_format.pull_request is true, continue. Else match the branch against every pattern after stripping a leading `refs/heads/` from the pattern, with Python fnmatch.fnmatchcase semantics; if none matches, refuse: print `fm-worker: branch <branch> matches no CI trigger pattern (<patterns joined by comma>); set branch_prefix in the project conventions`, emit the existing `worker_crashed` event type with that text (as `adopt_refuse` at :432-436 does), exit 65, and make no worktree commit, no push and no pull request.",
+    "Change 4, one task grammar with an optional prefix (bin/fm-emit.sh :37-47 and its comment, board/server.ts :638-641 between the task grammar markers). A branch may carry one leading path segment before the task id: the JavaScript copy becomes /^(?:[A-Za-z0-9._-]+\\/)?([tT]|[sS][kK])-?([0-9]{3,})(-.*)?$/ (capture indices unchanged); the bash copy, which is POSIX ERE with no `(?:` group and spells every bracket set out (fm-emit.sh:33), becomes re=\"^([${FM_TASK_UP}${FM_TASK_LOW}${FM_TASK_DIG}._-]+/)?([tT]|[sS][kK])-?([${FM_TASK_DIG}]{3,})(-.*)?$\" with the prefix and digits read from BASH_REMATCH[2] and BASH_REMATCH[3] (FM_TASK_UP/FM_TASK_LOW move above fm_task_of_branch so they are defined before it); both copies read so `feature/t-001-x` is T-001, `feature/sk-002-y` is SK-002, `feature/t-1170-z` is T-1170, while `a/b/t-001` (two segments), `/t-001` and `hotfix/x` name no task. This is generic, not per-project configuration, so every reader stays one call: bin/fm-merge.sh:102-104, bin/fm-decide.sh:320, bin/lib/fm_adopt.py:116, bin/lib/fm_autopilot_loop.py:86 and fm-emit's own merged-event check at :175 all go through `fm_task_of_branch`/`fm_task_of_pr` and need no edit. `fm_task_of_title` is unchanged.",
+    "Change 5, the remaining copies of the branch reading. bin/fm-reconcile.sh:350-351 `task_of` sources bin/fm-emit.sh and returns `fm_task_of_branch` instead of its own sed (closing the open item in design/design.md about reconcile reading `t-1170-…` as T-117 and missing `sk-…`); its `is_task_id` at :136 (pid-file names) is unchanged. bin/lib/fm_stack.py has four branch readers and each accepts the same one optional leading `[A-Za-z0-9._-]+/` segment: `select_base` (:61) strips it from the lowercased headRefName before its `^<dep>(-|$)` match; `release_parent` (:71) and `restack` (:94) allow it in their `^(?:t|sk)-\\d+(?:-|$)` task-branch checks (protected names main, master, HEAD and the base stay refused); the restack command (:239) reads the task from the part after the optional segment. So a stacked child on `feature/t-…` restacks and a merged parent on `feature/t-…` is deletable under the existing delete_branch rule; these paths are reached from bin/lib/fm_autopilot.py:369 and :570.",
+    "Change 6, onboarding (bin/lib/fm_onboard.py). `inspect_remote` (:59-99) also reads, through the same `observed` contents calls: `.drone.yml`, `.drone.jsonnet`, every local jsonnet file that `.drone.jsonnet` imports by a plain relative name (import 'x.jsonnet', one level, at most 5 files), and the `.github/workflows` directory listing plus each `*.yml`/`*.yaml` file in it (at most 20). It records them under evidence `ci_files`. `infer` (:121) proposes `ci_branch_patterns` (every `refs/heads/...` string and every `branch:`/`branches:` list item found in those files, deduplicated, `refs/tags/*` and tag-only entries dropped), `ci_pull_request` (true when a drone trigger lists event pull_request or a workflow has an `on.pull_request` or `on: [pull_request]` trigger), and `branch_prefix` (the most common first path segment plus `/` among the last 30 pull request head branches; when patterns were found, only heads that match a pattern count; when no patterns were found, every head with a segment counts; none when no head has a segment), each with its cited evidence (file paths and pull request numbers). `questions` (:181-192) adds them to the policy question's evidence. `approve` (:270-300) accepts the three fields only from the captain's answers, exactly like pr_title (:278-286): inspected or proposed values are dropped first. `edit` (:316-322) accepts the three fields. Parsing is plain text and regex: no YAML or jsonnet evaluation. A `.github/workflows` answer that is not a list (a file answer, an error, unknown) is recorded as unknown and adds no workflow files. Migration: `infer` treats evidence without `ci_files` (records written before this task, read by `drift` at :337 through the timed watcher bin/lib/fm_conventions_watch.py:88, and by bin/fm-canary.sh:670-673) as no CI evidence: it proposes no ci_branch_patterns and no ci_pull_request, proposes branch_prefix from the pull request heads by the no-patterns rule above, and never raises; `drift` does not compare the three new proposals (they are captain-confirmed fields, not drift keys).",
+    "Changed attribution, stated. A branch a person names `<segment>/t-NNN-…` or `<segment>/sk-NNN-…` now names that task wherever the grammar is read: bin/lib/fm_adopt.py:114-121 refuses adopting such a pull request for a different task (it accepted it before), and the autopilot (bin/lib/fm_autopilot_loop.py:86), fm-decide, fm-merge and reconcile attribute it to that task. No adoption is in flight on any managed project today; an in-flight adoption whose branch now names another task is refused at its next round by the existing check, which is the intended rule. Not changed, stated. The self project branch names, PR titles and grammar results for every existing unprefixed branch; gate 1 and every gate (they take the branch from the PR); the T-119 merged-event refusal semantics; existing external pull requests on `t-NNN-work` (nothing renames them, and they keep resolving to their task); post modes and PR text (T-247).",
+    "Tests, new behaviour (each fails on the base commit and passes after). New tests/external-branch-prefix.test.sh running tests/lib/external_branch_prefix.py against bin/fm-worker.sh with the existing external fixture style (git remotes on disk, a gh stub that answers `pr view --json headRefName` and `pr create` exactly as gh prints them): (1) branch_prefix \"feature/\" and a public_title give `feature/t-051-<slug of the title>` and the pull request is opened from it; (2) the owner default file supplies the prefix when CONVENTIONS lacks it, and a CONVENTIONS value beats it; (3) an existing remote `feature/t-051-x` branch is found by the guess and reused; (4) patterns [\"refs/heads/feature/*\"] with a `feature/` prefix pass; (5) patterns [\"release/*\"], ci_pull_request false and a `feature/` prefix: exit 65, the refusal text, a worker_crashed event, no push and no pull request; (6) the same with ci_pull_request true passes; (7) patterns absent: the warning line and the round continues; (8) fm_conventions.py validate refuses bad branch_prefix values (\"feature\", \"../\", \"a/b/\", \"-x/\") and a non-list ci_branch_patterns, and refuses ci_branch_patterns in an owner file; `--field branch_format` prints the documented JSON. tests/board-task-grammar.test.sh table rows (shell and TypeScript must agree): feature/t-001-x→T-001, FEATURE/T-001→T-001, feature/sk-002-y→SK-002, feature/t-1170-z→T-1170, a/b/t-001→none, /t-001→none, hotfix/x→none, and a pair row feature/t-005-x with title \"T-009: …\"→T-005. tests/reconcile.test.sh: a merged PR on `feature/t-021-x` reconciles to T-021 and one on `sk-002-y` to SK-002. tests/stacking_cases.py: select_base finds a parent PR on `feature/t-1-parent`; restack accepts a child on `feature/t-2-child`; release_parent deletes a merged parent on `feature/t-1-parent` under delete_branch and still refuses `feature` alone, main, master and the base. tests/external-adopt.test.sh: adopting a PR on `feature/t-001-x` for T-001 is accepted, and for T-002 is refused with \"names another task\". Worker case (9): a public_title that fails fm_public_text.validate gives `<prefix>t-051-work`. tests/onboarding.test.sh also: a workflows directory answer that is not a list is recorded as unknown; infer on evidence without ci_files proposes no patterns, proposes `feature/` from heads [feature/a, feature/b, fix/c], and does not raise; with patterns [\"release/*\"] and the same heads it proposes no branch_prefix; a malformed owner file makes the worker exit 65 with the refusal and no push (worker case 10). tests/onboarding.test.sh: with a gh stub that answers the contents API like GitHub (a file as {encoding:'base64', content}, a directory as a list of {name, path, type}), inspection records ci_files from .drone.yml, an imported jsonnet file and a workflow; infer proposes the three fields with evidence; approve drops proposed values unless answered and keeps answered ones; edit accepts them.",
+    "Tests, regression (pass on base and after). tests/external-execution.test.sh:262-272 still sees `t-051-work` (no prefix configured); tests/board-task-grammar.test.sh existing rows; tests/diagram.test.sh grammar lift (:788-1013); tests/lib/autopilot_cases.py (`t-001-work` and `human-work` heads); tests/external-pr-format.test.sh; tests/onboarding-crew.test.sh; tests/reconcile.test.sh existing cases; tests/stacking_cases.py existing cases; tests/stacking.test.sh; tests/stacking-restack.test.sh; tests/external-adopt.test.sh existing cases; tests/conventions-watch.test.sh (drift on old inspection records).",
+    "Callers, all listed. Branch grammar: bin/fm-emit.sh:41-59 and :175; board/server.ts:617-662 (taskOfBranch, taskOfPr) and the grammar text served in front of board/public/diagram.js (owned ids only, unaffected); bin/fm-merge.sh:102-104; bin/fm-decide.sh:320; bin/lib/fm_adopt.py:116; bin/lib/fm_autopilot_loop.py:86; bin/fm-reconcile.sh:350-351 (changed) and :422; bin/lib/fm_stack.py:61, :71, :94 and :239 (all changed), reached from bin/lib/fm_autopilot.py:369 and :570; bin/lib/fm_onboard.py drift (:332-340) via bin/lib/fm_conventions_watch.py:88. Worker branch: bin/fm-worker.sh:417-461 (guess, adopt, --pr headRefName, new name), :506 (round_two from branch_guess). Conventions: bin/lib/fm_conventions.py:13-147 and its wrapper bin/fm-config.sh:1140-1146; bin/lib/fm_onboard.py approve/edit/inspect/infer/questions and bin/fm-canary.sh:673 (calls approve with answers lacking the new keys; unchanged behaviour).",
+    "Migration. CONVENTIONS without the new fields: no prefix (branch stays `$slug-work`), and Change 3 prints the warning and continues. firstmate adds the fields to each managed project through `fm_onboard.py edit` after this merges, with the captain-confirmed values; that edit is not part of this task. Existing pull requests and branches are never renamed. Pins: CONVENTIONS is snapshotted but not compared (bin/lib/fm_spec_pins.py), so no repin is needed.",
+    "Docs. design/design.md: in §5.2 (heading at :249), the task-grammar paragraph \"One task-id grammar (T-119)\" at about :320-346 states the optional leading segment and replaces the open reconcile item with its fix; §15.2 (about :5048) lists the three fields and the owner default for branch_prefix; §15.7 (the external PR paragraph at about :5440) states the branch name rule and the CI trigger check. skills/firstmate/SKILL.md (the external spec paragraph at about :982-999): change the sentence at :997-999 that says owner files \"allow only those three keys\" to say they allow the three pr_* keys and branch_prefix; onboarding confirms branch_prefix and the CI patterns; a round refuses a branch that no CI pattern matches."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A new external branch uses the confirmed prefix of its repository, so the repository CI runs on it."
+        },
+        {
+          "kind": "fact",
+          "text": "A round refuses a new branch that no recorded CI trigger pattern matches."
+        },
+        {
+          "kind": "fact",
+          "text": "Firstmate still finds the task of a prefixed branch everywhere."
+        },
+        {
+          "kind": "fact",
+          "text": "Onboarding reads the CI trigger files and recent branches, and proposes the prefix with evidence."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The captain said on 2026-10-07 that the branch t-001-work did not trigger CI."
+        },
+        {
+          "kind": "fact",
+          "text": "Today a new external branch is always named t-NNN-work."
+        },
+        {
+          "kind": "fact",
+          "text": "Today the task grammar reads a task id only at the start of a branch name."
+        }
+      ],
+      "scope_in": [
+        "bin/fm-worker.sh: the branch name and the CI check",
+        "bin/fm-emit.sh and board/server.ts: the task grammar",
+        "bin/fm-reconcile.sh and bin/lib/fm_stack.py: branch readers",
+        "bin/lib/fm_conventions.py and fm_onboard.py: the fields",
+        "tests and docs"
+      ],
+      "scope_out": [
+        "The self project",
+        "Renaming existing branches",
+        "Edits of each project conventions"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the worker builds the prefixed branch name. Test cases 1, 2 and 3 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the worker matches the branch against the patterns before any push. Test cases 4 to 7 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the grammar accepts one leading segment. The grammar, reconcile and stacking cases prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: onboarding records the CI files and proposes the three fields. The onboarding cases prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "A push to a matching branch can also start a deploy step in that CI."
+        },
+        {
+          "kind": "caution",
+          "text": "Firstmate never renames a branch that already has a pull request."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Worker picks a new branch"
+        },
+        {
+          "state": "gone",
+          "label": "Name is t-NNN-work"
+        },
+        {
+          "state": "gone",
+          "label": "CI never runs"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Worker picks a new branch"
+        },
+        {
+          "state": "new",
+          "label": "Read prefix and CI patterns"
+        },
+        {
+          "state": "new",
+          "label": "Check the name matches"
+        },
+        {
+          "state": "new",
+          "label": "CI runs on the branch"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "新的外部分支使用 repo 確認過的前綴，CI 會執行。"
+        },
+        {
+          "kind": "fact",
+          "text": "新分支不符合任何 CI 觸發規則時，回合會拒絕。"
+        },
+        {
+          "kind": "fact",
+          "text": "firstmate 在各處都能讀出帶前綴分支的任務。"
+        },
+        {
+          "kind": "fact",
+          "text": "onboarding 讀 CI 觸發檔和近期分支，附證據提出前綴。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 指出 t-001-work 分支沒有觸發 CI。"
+        },
+        {
+          "kind": "fact",
+          "text": "現在新的外部分支一律叫 t-NNN-work。"
+        },
+        {
+          "kind": "fact",
+          "text": "現在任務文法只從分支名稱開頭讀任務編號。"
+        }
+      ],
+      "scope_in": [
+        "bin/fm-worker.sh：分支名稱和 CI 檢查",
+        "bin/fm-emit.sh 和 board/server.ts：任務文法",
+        "bin/fm-reconcile.sh 和 bin/lib/fm_stack.py：讀分支的程式",
+        "bin/lib/fm_conventions.py 和 fm_onboard.py：欄位",
+        "測試和文件"
+      ],
+      "scope_out": [
+        "self 專案",
+        "重新命名既有分支",
+        "修改各專案的慣例檔"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：worker 組出帶前綴的分支名稱。案例 1、2、3 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：worker 在推送前比對分支和規則。案例 4 到 7 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：文法接受一段前綴。文法、reconcile 和 stacking 案例證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：onboarding 記錄 CI 檔並提出三個欄位。onboarding 案例證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "推到符合的分支也會啟動該 CI 的部署步驟。"
+        },
+        {
+          "kind": "caution",
+          "text": "firstmate 不會重新命名已有 PR 的分支。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "worker 選新分支"
+        },
+        {
+          "state": "gone",
+          "label": "名稱是 t-NNN-work"
+        },
+        {
+          "state": "gone",
+          "label": "CI 不會執行"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "worker 選新分支"
+        },
+        {
+          "state": "new",
+          "label": "讀前綴和 CI 規則"
+        },
+        {
+          "state": "new",
+          "label": "確認名稱符合"
+        },
+        {
+          "state": "new",
+          "label": "CI 在分支上執行"
+        }
+      ]
+    }
+  }
+}
