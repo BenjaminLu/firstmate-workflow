@@ -158,7 +158,7 @@ class ProjectVendor(unittest.TestCase):
         # source_binding byte selection and digest for live versus pinned data.
         snapshot = {'snapshots': {key: {'text': text} for key, text in
                                  [('spec', '{"id":"T-238"}'), ('contract', original), ('conventions', '')]}}
-        with patch.dict(os.environ, env, clear=True), patch.object(fm_binding, 'change', return_value={}):
+        with patch.dict(os.environ, env, clear=True), patch.object(fm_binding, 'change', side_effect=lambda *a, **k: {}):
             for pin, same in [(None, False), (snapshot, True)]:
                 with patch.object(fm_spec_pins.Pins, 'resolve', return_value=pin):
                     self.private.write_text(original)
