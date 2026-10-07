@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Feature dependency: bin/lib/fm_pr_format.py
 # Dependencies: bin/lib/fm_public_text.py bin/lib/fm_spec_preflight.py bin/lib/fm_ste.py
 # bin/fm-worker.sh tests/lib/crew_blocks.py tests/lib/external_public_title.py
 # tests/lib/external_stock.py tests/lib/external_registry.py tests/lib/spec-preflight.sh

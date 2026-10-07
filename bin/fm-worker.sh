@@ -2145,22 +2145,34 @@ public_text=''
 if [ "$FM_EXTERNAL" = 0 ]; then
   commit_msg="$TASK: $(jq -r .title <<<"$spec")"
 elif [ -n "${spec:-}" ] && [ -n "${FM_CODE_ROOT:-}" ]; then
-  # One guarded lookup from the pinned spec already held by this round.
-  # Keep validated public prose in memory, never in an engine-tracked file.
-  public_text="$(python3 -c '
-import json, sys
-sys.dont_write_bytecode = True
-sys.path.insert(0, sys.argv[1])
-from fm_public_text import validate
-spec = json.load(sys.stdin)
-if validate(spec.get("public_title"), spec.get("public_summary")):
-    sys.exit(65)
-summary = spec.get("public_summary") or ""
-body = (summary + "\n\n" if summary else "") + "Captain acceptance and evidence are retained privately."
-print(json.dumps(dict(title=spec["public_title"].strip(), body=body)))
-' "$FM_CODE_ROOT/bin/lib" <<<"$spec" 2>/dev/null)" || public_text=''
+  # Read current private format data, but publish only the pinned public prose.
+  if pr_format="$(fm_conventions pr_format 2>/dev/null)"; then
+    pr_review_mode="$(fm_project_reviewer_mode)"
+    if [ -z "$pr_review_mode" ]; then
+      pr_review_mode="$(fm_cfg_in reviewer mode)"
+    fi
+    pr_review_mode="${pr_review_mode:-diff}"
+    pr_unrunnable=0
+    if pin_unrunnable="$(jq -r '.contract.unrunnable // empty' <<<"${FM_SPEC_PIN_JSON:-}" 2>/dev/null)" &&
+       [ -n "$pin_unrunnable" ]; then
+      pr_unrunnable=1
+    fi
+    if pr_checks="$(fm_conventions required_checks 2>/dev/null)"; then
+      public_text="$(python3 "$FM_CODE_ROOT/bin/lib/fm_pr_format.py" render \
+        --spec /dev/stdin --format "$pr_format" --required-checks "$pr_checks" \
+        --review-mode "$pr_review_mode" --unrunnable "$pr_unrunnable" <<<"$spec" \
+        2>/dev/null)" || public_text=''
+    fi
+  else
+    echo 'fm-worker: cannot read the PR format; using the generic title' >&2
+  fi
   if [ -n "$public_text" ]; then
-    commit_msg="$TASK: $(jq -r .title <<<"$public_text")"
+    commit_msg="$(jq -r .title <<<"$public_text")"
+    if [ "$(jq -r .pr_title <<<"$pr_format")" = conventional ] &&
+       ! FM_PR_TITLE=conventional python3 "$FM_CODE_ROOT/bin/lib/fm_public_text.py" check /dev/stdin \
+         <<<"$spec" >/dev/null 2>&1; then
+      echo 'fm-worker: public_title does not follow the conventional style' >&2
+    fi
   fi
 fi
 fm_private_stage "$tree" || exit 65
@@ -2283,7 +2295,7 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   else
     pr_body="Task $TASK. Captain acceptance and evidence are retained privately."
     if [ -n "${public_text:-}" ]; then
-      pr_title="$TASK: $(jq -r .title <<<"$public_text")"
+      pr_title="$(jq -r .title <<<"$public_text")"
       pr_body="$(jq -r .body <<<"$public_text")"
     fi
   fi
@@ -2307,7 +2319,7 @@ else
          <<<"$current_pr" >/dev/null 2>&1; then
       if jq -e --arg title "$TASK: project work" --arg branch "$branch" \
            '.title == $title and .headRefName == $branch' <<<"$current_pr" >/dev/null; then
-        if ! fm_github pr edit "$num" --title "$TASK: $(jq -r .title <<<"$public_text")" \
+        if ! fm_github pr edit "$num" --title "$(jq -r .title <<<"$public_text")" \
              --body "$(jq -r .body <<<"$public_text")" >/dev/null 2>&1; then
           echo 'fm-worker: could not update the public PR title / 無法更新公開 PR 標題' >&2
         fi

@@ -978,12 +978,29 @@ roadmap, not a claim of shipped external execution. Finish the accepted engine
 repairs first. T-142 waits for T-166; preserve each dependency and coordinate
 shared-file edits for parallel evidence/brief work. Never edit live runtimes.
 
-When writing an external spec, add `public_title` (English, plain, no paths)
-and an optional `public_summary`. These are the only spec prose for public
-commits and PRs. Keep both fields only in the external task spec under
-`FM_HOME/projects/<name>/tasks/`; never copy real external titles or repository
-names into tracked engine files. Preflight checks new specs; existing SPEC-OK
-receipts stay valid, and older pinned rounds use the generic public label.
+When writing an external spec, add `public_title` (English ASCII, no paths),
+an optional `public_summary`, and optional `public_changes` (1–10 one-line
+items of 1–200 printable ASCII characters, with the same path and STE checks).
+These are the only spec prose for public commits and PRs. Keep the fields only
+in the external task spec under `FM_HOME/projects/<name>/tasks/`; never copy real
+external titles or repository names into tracked engine files. External titles
+have no firstmate task prefix. When the effective `pr_title` is `conventional`,
+preflight requires a subject such as `fix(api): deduct the fee`; an optional
+`[KEY-123] ` prefix must come from the spec author, never firstmate. STE checks
+the prose after `: ` for conventional subjects in both preflight and rendering.
+Existing SPEC-OK receipts stay valid; a pinned plain title still publishes under
+a later conventional setting with a warning, and invalid or absent public text
+keeps the generic fallback.
+
+Confirm `pr_title`, `pr_sections` and `pr_language` through the captain's explicit
+onboarding answers or conventions edits. Per field, CONVENTIONS wins over the
+private `FM_HOME/owners/<owner>.yaml` default, then the engine's `plain`, `[]`,
+`en`. Owner files use the same JSON-or-bare-enum line format, allow only those
+three keys, and require JSON quotes for `"zh-TW"` and `"zh-CN"`. Never store an
+owner file or a real owner name in firstmate git. Defaults apply at round time;
+onboarding must not infer or copy them into a repository's CONVENTIONS. Confirmed
+sections supply the summary/change bullets, marked CI Testing checklist and
+AI participation checklist; v1 does not translate public prose for `pr_language`.
 
 To continue a person's existing external PR, write `adopt` with exactly `pr`
 (a positive number), `head` (the full commit), and `base` (the branch) shown on

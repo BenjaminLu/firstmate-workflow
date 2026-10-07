@@ -15,6 +15,8 @@ ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 import fm_autopilot as A
 from autopilot_branch_fixture import BranchFixture, response, recheck_response
+# Shared feature cases: tests/lib/external_pr_format.py
+from external_pr_format import TestingRefreshCases
 
 HEAD = 'a' * 40
 PR = dict(number=12, node_id='PR_node_12', state='open', head=dict(sha=HEAD, ref='t-001-work'),
@@ -22,7 +24,7 @@ PR = dict(number=12, node_id='PR_node_12', state='open', head=dict(sha=HEAD, ref
           mergeable_state='clean', draft=False)
 
 
-class PilotTests(BranchFixture, unittest.TestCase):
+class PilotTests(TestingRefreshCases, BranchFixture, unittest.TestCase):
     def setUp(self):
         env = patch.dict(os.environ, {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}, clear=True)
         env.start(); self.addCleanup(env.stop)
