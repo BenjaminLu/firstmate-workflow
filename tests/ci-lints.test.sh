@@ -130,13 +130,15 @@ for portability_file in bin/lib/probe.sh tests/lib/probe.sh .githooks/probe; do
     else
       portability_line="$json_line"; portability_label='escaped JSON in command substitutions'
     fi
-    printf '#!/usr/bin/env bash\n%s\n' "$portability_line" > "$q/$portability_file"
+    # Keep shellcheck clean so only the portability lint can fail this stage.
+    printf '#!/usr/bin/env bash\ns=x\n%s\necho "${s}${out}"\n' "$portability_line" > "$q/$portability_file"
     portability_rc=0
     out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || portability_rc=$?
     assert_eq '1' "$portability_rc" "$portability_kind in $portability_file fails fast checks"
     assert_contains "$out" "x $portability_label" "the portability lint rejects $portability_kind"
-    assert_contains "$out" "$portability_file:2:" "the portability lint names file and line"
-    printf '#!/usr/bin/env bash\n  # %s\n# fm:allow-portability: deliberate fixture\n%s\n' \
+    assert_contains "$out" "$portability_file:3:" "the portability lint names file and line"
+    assert_lacks "$out" 'x shellcheck' "shellcheck does not mask $portability_kind in $portability_file"
+    printf '#!/usr/bin/env bash\ns=x\n  # %s\n# fm:allow-portability: deliberate fixture\n%s\necho "${s}${out}"\n' \
       "$portability_line" "$portability_line" > "$q/$portability_file"
     portability_rc=0
     out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || portability_rc=$?
@@ -183,7 +185,7 @@ done
 rm -f "$q/tests/probe.txt" "$q/tests/probe.sh" "$q/games/probe.sh"
 rmdir "$q/games"
 # Safe data expansion, assignment outside substitution, and comma-free JSON.
-printf '#!/usr/bin/env bash\na=x; b="%s"; s=x\nout="${s//$a/$b}"\npayload="%s"\nout="$(cmd "%s")"\n' \
+printf '#!/usr/bin/env bash\na=x; b="%s"; s=x\nout="${s//$a/$b}"\necho "$out"\npayload="%s"\necho "$payload"\nout="$(cmd "%s")"\necho "$out"\n' \
   "$amp" "$json_word" "$json_single" > "$q/tests/lib/probe.sh"
 portability_rc=0
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || portability_rc=$?
