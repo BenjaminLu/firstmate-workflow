@@ -63,7 +63,7 @@ assert_ok "git -C '$ROOT' check-ignore --no-index -q board/public/voyage2d/capta
 assert_eq 200 "$status" "voyage Live bundle is served by the real board"
 assert_contains "$page" 'src="game.js"' "board page loads the voyage controller"
 for locale in en zh-TW; do
-  for key in voyageShow voyagePanel voyageFull voyageWorkflow voyageTitle; do
+  for key in voyageShow voyagePanel voyageFull voyageWorkflow voyageTitle voyageShrink voyageGrow; do
     assert_ok "jq -e --arg key '$key' '.[\$key] | type == \"string\" and length > 0' '$ROOT/i18n/ui.$locale.json'" "voyage label $key exists in $locale"
   done
 done
