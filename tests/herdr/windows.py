@@ -205,6 +205,79 @@ class CallerContext(unittest.TestCase):
             self.assertEqual([('pane', 'get', 'caller'), ('api', 'snapshot')], calls)
 
 class Entrypoints(EntrypointsFixture):
+    def test_project_sync_ensures_workspace_and_honors_opt_out(self):
+        # Keep the existing fake Herdr first on PATH, but use real Git with a
+        # local remote so this exercises sync's actual shell wiring.
+        (self.fake/'git').unlink()
+        storage = tempfile.TemporaryDirectory(); self.addCleanup(storage.cleanup)
+        env = {k:v for k,v in self.env.items() if not k.startswith('GIT_')}
+        env.update(FM_HOST='herdr', FM_HOME=storage.name,
+                   FM_GITHUB_URL=str(self.repo/'remotes'),
+                   GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
+        (self.repo/'.githooks').mkdir()
+        (self.repo/'remotes/owner').mkdir(parents=True)
+        (self.repo/'config.yaml').write_text(
+            'projects:\n  demo:\n    github: owner/demo\n    base: main\n    required_check: ci\n')
+        remote = self.repo/'remotes/owner/demo.git'
+        seed = self.repo/'seed'
+        for args in (['init', '-q', '-b', 'main', str(seed)],
+                     ['-C', str(seed), '-c', 'core.hooksPath=/dev/null',
+                      '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid',
+                      'commit', '-qm', 'base', '--allow-empty'],
+                     ['clone', '-q', '--bare', str(seed), str(remote)]):
+            result = subprocess.run(['git', *args], env=env, cwd=self.repo,
+                                    capture_output=True, text=True, timeout=WAIT)
+            self.assertEqual(0, result.returncode, result.stderr)
+        command = [str(self.repo/'bin/fm-project.sh'), 'sync', 'demo', '--repo', str(self.repo)]
+        without_herdr = dict(env, HERDR_ENV='0')
+        without_herdr.pop('HERDR_PANE_ID')
+        # Establish the clone and capture the normal repeat-sync result.
+        for _ in range(2):
+            baseline = subprocess.run(command, env=without_herdr, cwd=self.repo,
+                                      capture_output=True, text=True, timeout=WAIT)
+            self.assertEqual(0, baseline.returncode, baseline.stderr)
+        controls = self.repo/'controls'
+        self.assertFalse(controls.exists())
+        disabled = subprocess.run(command, env=dict(env, FM_HERDR_WORKSPACE='0'),
+                                  cwd=self.repo, capture_output=True, text=True, timeout=WAIT)
+        self.assertEqual((baseline.returncode, baseline.stdout),
+                         (disabled.returncode, disabled.stdout), disabled.stderr)
+        # Gate 4: removing sync's != 0 guard makes this assertion fail.
+        self.assertFalse(controls.exists(), 'disabled sync must make no Herdr call')
+        clone = Path(storage.name)/'projects/demo/repo'
+        for count in (1, 2):
+            result = subprocess.run(command, env=env, cwd=self.repo,
+                                    capture_output=True, text=True, timeout=WAIT)
+            self.assertEqual((baseline.returncode, baseline.stdout),
+                             (result.returncode, result.stdout), result.stderr)
+            calls = [json.loads(line) for line in controls.read_text().splitlines()] if controls.exists() else []
+            # Gate 4: removing the sync ensure step leaves no create call.
+            self.assertEqual([['workspace', 'create', '--cwd', str(clone.resolve()),
+                               '--label', 'demo', '--no-focus']],
+                             [c for c in calls if c[:2] == ['workspace', 'create']])
+            self.assertEqual(count, calls.count(['workspace', 'list']))
+            self.assertEqual(1, len(list(self.repo.glob('ws-*'))))
+
+    def test_external_prepare_disables_workspace_during_sync(self):
+        code = self.repo/'recording-code/bin'; code.mkdir(parents=True)
+        service = code/'fm-project.sh'
+        service.write_text('#!/bin/sh\n'
+                           'printf "%s:%s\\n" "$1" "${FM_HERDR_WORKSPACE-unset}" >> "$FM_TEST_CALLS"\n')
+        service.chmod(0o755)
+        calls = self.repo/'prepare-calls'
+        result = subprocess.run(['bash', '-uc', '''
+. "$1/bin/fm-config.sh"
+fm_target_validate() { return 0; }
+fm_external_prepare
+''', 'prepare', str(self.repo)], cwd=self.repo,
+            env=dict(self.env, FM_EXTERNAL='1', FM_PROJECT='demo',
+                     FM_ENGINE_ROOT=str(self.repo), FM_CODE_ROOT=str(code.parent),
+                     FM_TEST_CALLS=str(calls), FM_HERDR_WORKSPACE='1'),
+            capture_output=True, text=True, timeout=WAIT)
+        self.assertEqual(0, result.returncode, result.stderr)
+        # Gate 4: removing the sync prefix records sync:1 instead of sync:0.
+        self.assertEqual(['sync:0', 'verify:1'], calls.read_text().splitlines())
+
     def test_ensure_workspace_cli_creates_reuses_and_swallows_failure(self):
         clone = self.repo/'projects/demo/repo'; clone.mkdir(parents=True)
         command = [sys.executable, str(self.repo/'bin/fm-herdr.py'), 'ensure-workspace',
