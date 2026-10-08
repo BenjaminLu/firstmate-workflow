@@ -153,6 +153,7 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
     await page.setViewportSize({width,height:width===1440?900:844}); await page.emulateMedia({colorScheme:'light'});
     await page.route('**/api/session',route=>route.fulfill({json:{writable:false}}));
     let warningCrewId='';
+    let isolatedEventStreams=0;
     await page.route('**/api/state',async route=>{
       const response=await route.fetch(), state=await response.json();
       state.crew=state.crew.filter((c:any)=>c.state!=='queued');
@@ -164,7 +165,13 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
       Object.assign(warningCrew,{host_recorded:true,host_confirmed:false,vendor:'vendor-alpha',model_mismatch:true,model_requested:'requested',model:'actual'});
       await route.fulfill({response,json:state});
     });
+    // Keep this static palette fixture authoritative across application reconnects.
+    await page.route(b.url+'/events',async route=>{
+      await route.fulfill({status:204,body:''});
+      isolatedEventStreams++;
+    });
     await page.goto(b.url+'/?lang=en');
+    await expect.poll(()=>isolatedEventStreams, {message:'contrast fixture must fulfill /events with HTTP 204'}).toBeGreaterThan(0);
     await expect(page.locator('[data-count="waiting"] b')).toHaveText('2');
     await expect(page.locator('#engine')).toBeVisible();
     await expect(page.locator('#readOnly')).toBeVisible();
