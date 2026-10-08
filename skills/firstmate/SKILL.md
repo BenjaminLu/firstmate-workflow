@@ -166,7 +166,11 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    and `run.log` in its attempt directory under `state/runs/<actor>/`. A
    terminal host (`host:` in `config.yaml`, or Herdr, cmux or tmux detected)
    only adds a window that follows `run.log`: a Herdr tab, a cmux workspace or
-   a tmux window, labelled with the actor. Every window is a log follower, so a
+   a tmux window, labelled with the actor. An external project's new Herdr tabs
+   use the workspace labelled with its project name, reused or created with
+   `--no-focus` and also ensured by sync, falling back to the caller workspace
+   if lookup fails; the self project and recorded-pane reuse are unchanged.
+   Every window is a log follower, so a
    window is never evidence that a round is alive, and closing one stops
    nothing; the round's own `runner.pid` and lifetime lock are. Its
    `window.json` records the window, `none` included. `FM_TRANSPORT=direct`
