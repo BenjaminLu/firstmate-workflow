@@ -1060,7 +1060,7 @@ const positionTaskDetail = () => detailPanel.style.setProperty('--task-detail-to
 new ResizeObserver(positionTaskDetail).observe(document.querySelector('.top'));
 window.addEventListener('scroll', positionTaskDetail, { passive: true });
 window.addEventListener('resize', positionTaskDetail);
-const detailSignature = task => JSON.stringify(task ? [task.stage, task.pr, task.last_review, task.crew, task.badges] : null);
+const detailSignature = task => JSON.stringify(task ? [task.stage, task.pr, task.last_review, task.crew, task.badges, ...(task.project && task.project !== latest.default_project ? [Math.floor(Date.now()/60000)] : [])] : null);
 const detailCard = key => document.querySelector(`.card[data-key="${CSS.escape(key)}"]`);
 function closeTaskDetail() {
   const key = openTaskKey;
@@ -1109,7 +1109,7 @@ async function refreshTaskDetail() {
 }
 function drawTaskDetail() {
   if (!openTaskKey || !detailData) return;
-  const { task, cards, tests, readiness, rounds, brief, notes } = detailData;
+  const { task, cards, tests, readiness, external_review, rounds, brief, notes } = detailData;
   const source = [...cards].reverse().find(card => card.details &&
     (['dispatch','repin','merge'].includes(card.kind) || ['dispatch','repin','merge'].includes(cardKind(card))));
   const authored = source ? { ...source } : task.explain ? {
@@ -1124,6 +1124,9 @@ function drawTaskDetail() {
     const keys = {'not dispatched yet':'detailNotDispatched','no PR yet':'detailNoPr','no readiness record yet':'detailNoReadiness'};
     return keys[value] ? t(keys[value]) : value.startsWith('evidence unreadable:') ? t('detailEvidenceUnreadable') + value.slice('evidence unreadable:'.length) : value;
   };
+  const externalSection = external_review ? `<section data-detail-section="detailExternalReview"><h4>${esc(t("detailExternalReview"))}</h4><ul>` +
+    Object.entries(external_review.states).map(([reviewer, state]) => `<li>${esc(reviewer)} <span class="badge">${esc(state.state)}</span> · ${esc(state.covers ? t("detailCoversPatch") : t("detailOlderPatch"))}</li>`).join('') +
+    '</ul><ul>' + external_review.findings.map(finding => `<li>${esc(finding.reviewer)} · <code>${esc(finding.path && finding.line != null ? finding.path + ':' + finding.line : t("detailNoCitedLine"))}</code>${finding.current ? ' · ' + esc(t("detailCurrentHead")) : ''} · ${esc(finding.resolved ? t("detailResolved") : t("detailUnresolved"))}</li>`).join('') + '</ul></section>' : '';
   const translatedTitle = lang !== 'en' && task.title_tw ? words(task.title_tw) : null;
   const colon = translatedTitle?.indexOf(':') ?? -1;
   const headline = translatedTitle ? (colon < 0 ? translatedTitle : translatedTitle.slice(0,colon)) : task.headline;
@@ -1140,6 +1143,7 @@ function drawTaskDetail() {
     }).join('') + '</ol>') +
     section('detailTests', (tests.length ? `<ul>${tests.map(test => `<li><code>${esc(test.path)}</code> · ${esc(t(test.source === 'acceptance' ? 'detailSourceAcceptance' : 'detailSourceScope'))}</li>`).join('')}</ul>` : `<p>${esc(t('detailNoTests'))}</p>`) +
     `<div><h5>${esc(t('detailReadiness'))}</h5>${readiness ? `<p>${esc(t('detailHead'))}: <code>${esc(readiness.head)}</code></p><p>${esc(t('detailGateBase'))}: <code>${esc(readiness.gate_base || '—')}</code></p><p>${esc(t('detailGates'))}: ${esc((readiness.gates_unmapped ? (readiness.gates || []).join(', ') + ' (' + t('gateListUnavailable') + ')' : (readiness.gates || []).map(g => g.n + ' ' + t('gate_' + g.name)).join(' · ')))}</p><p>${esc(t('detailCi'))}: ${esc(checks || '—')}</p>` : `<p>${esc(t('detailNoReadiness'))}</p>`}</div>`) +
+    externalSection +
     section('detailProgress', (rounds.length ? `<div class="rounds-scroll"><table><thead><tr>${['detailRound','detailWorker','detailReviewer','detailVendor','detailHead','detailWorkerHead','detailVerdict'].map(key => `<th>${esc(t(key))}</th>`).join('')}</tr></thead><tbody>${rounds.map(round => `<tr>${[round.round,round.worker,round.reviewer,[round.worker_vendor,round.reviewer_vendor].filter(Boolean).join(' / '),round.head,round.worker_head,round.verdict].map(value => `<td>${esc(value ?? '—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : `<p>${esc(t('detailNotDispatched'))}</p>`) +
     `<h5>${esc(t('detailCards'))}</h5>` + (cards.length ? `<ul>${cards.map(card => `<li><b>${esc(card.id)}</b> · ${esc(card.chosen || t('detailPending'))} ${esc(card.ts || '')}` + (card.answers || []).map(answer => `<p>${esc(t(answer.ok ? 'answerYes' : 'answerNo'))}${answer.ok === false ? ': ' + esc(answer.text || '') : ''}</p>`).join('') + '</li>').join('')}</ul>` : `<p>${esc(t('detailNoCards'))}</p>`) +
     (brief ? `<h5>${esc(t('detailBrief'))}</h5><p>${esc(brief)}</p>` : '') + list(notes.map(note))));
