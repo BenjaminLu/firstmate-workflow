@@ -23,11 +23,8 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-class Experiments(unittest.TestCase):
+class ExperimentFixture(unittest.TestCase):
     def setUp(self):
-        # This API assertion is deliberately red on the prefeature base.
-        self.assertTrue(hasattr(Store, 'experiments'), 'Store must collect exact-bound experiments separately')
-        self.module = importlib.import_module('fm_experimental_evidence')
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
@@ -146,6 +143,13 @@ class Experiments(unittest.TestCase):
         for ref, sha in (('refs/fm/head', self.head), ('refs/fm/base', self.base)):
             subprocess.run(['git', '-C', str(tree), 'update-ref', ref, sha], check=True)
         return tree
+
+class Experiments(ExperimentFixture):
+    def setUp(self):
+        # Keep the separate API fail-first assertion before the lazy import.
+        self.assertTrue(hasattr(Store, 'experiments'), 'Store must collect exact-bound experiments separately')
+        self.module = importlib.import_module('fm_experimental_evidence')
+        super().setUp()
 
     def test_real_pin_signed_retention_and_readonly_copies(self):
         self.frozen_contract()
@@ -973,5 +977,96 @@ assert 'fm_experimental_evidence' not in sys.modules
             store.records()
 
 
+class StockRetentionCLI(ExperimentFixture):
+    """Reach the real command on old runtimes without any new API prerequisite."""
+    def test_stock_cli_retains_signed_exact_bound_declared_bytes(self):
+        self.frozen_contract()
+        self.manifest['project'] = 'firstmate-workflow'
+        manifest = self.bundle/'manifest.json'
+        manifest.write_text(json.dumps(self.manifest))
+        command = ['bash', str(self.code/'bin/lib/fm-evidence.sh'), 'experiment-retain',
+                   '--project', 'firstmate-workflow', '--repo', str(self.repo),
+                   '--task', 'T-264', '--head', self.head, '--base', self.base,
+                   '--code', str(self.code), '--file', str(manifest)]
+        result = subprocess.run(command, env=dict(os.environ, HERDR_ENV='1'),
+                                capture_output=True, text=True)
+        # On the prefeature runtime this fails on unsupported CLI behavior,
+        # before any feature-only record helper is imported or called.
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        store = Store(self.store.state, 'firstmate-workflow', 'T-264')
+        records = store.records()
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record['signature'], store.signature(record))
+        self.assertEqual(record['kind'], 'experimental-evidence')
+        self.assertEqual(record['actor'], 'firstmate')
+        self.assertEqual(record['head'], self.head)
+        self.assertEqual(record['binding']['base'], self.base)
+        self.assertEqual(record['provenance'], dict(level='operator-attested-existing',
+                                                  execution='unverified-by-stock'))
+        experiment = record['experiments'][0]
+        self.assertEqual(experiment['source_sha'], self.head)
+        self.assertEqual(experiment['claimed_result']['exit_code'], 1)
+        self.assertNotIn('measured_result', record)
+        self.assertNotIn('measured_result', experiment)
+        module = importlib.import_module('fm_experimental_evidence')
+        selected, unavailable = store.experiments(self.head, self.base, self.code)
+        self.assertEqual(selected, [record])
+        self.assertFalse(unavailable)
+        tree = self.checkout('cli-checkout')
+        _, index, count = module.attach(store, selected, [], 'run', tree)
+        self.assertEqual(count, 1)
+        artifact = experiment['artifacts'][0]
+        data = (Path(index).parent/artifact['sha256']).read_bytes()
+        self.assertEqual(data, b'ASSERTION FAILED: unlocked reader\n')
+        self.assertEqual(digest(data), artifact['sha256'])
+
+
+class NamedResult(unittest.TextTestResult):
+    """Stock scanner lines reflect unittest outcomes, never inferred log text."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.identities = {}
+
+    def report(self, test, outcome):
+        identity = test.id()
+        occurrence = self.identities.get(identity, 0) + 1
+        self.identities[identity] = occurrence
+        if occurrence > 1:
+            identity += ' [occurrence=' + str(occurrence) + ']'
+        self.stream.writeln('    ' + identity + ' ' + outcome)
+        self.stream.flush()
+
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        self.report(test, 'ok')
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self.report(test, 'FAIL')
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        self.report(test, 'ERROR')
+
+    def addSubTest(self, test, subtest, err):
+        super().addSubTest(test, subtest, err)
+        outcome = ('ok' if err is None else
+                   'FAIL' if issubclass(err[0], test.failureException) else 'ERROR')
+        self.report(subtest, outcome)
+
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        self.report(test, 'SKIP')
+
+    def addExpectedFailure(self, test, err):
+        super().addExpectedFailure(test, err)
+        self.report(test, 'EXPECTED_FAILURE')
+
+    def addUnexpectedSuccess(self, test):
+        super().addUnexpectedSuccess(test)
+        self.report(test, 'UNEXPECTED_SUCCESS')
+
+
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(testRunner=unittest.TextTestRunner(resultclass=NamedResult, verbosity=0))
