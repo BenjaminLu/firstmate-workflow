@@ -79,6 +79,36 @@ jobs:
         run: bun install --frozen-lockfile
       - name: install bubblewrap
         run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - name: read-only bubblewrap runner diagnostics
+        run: |
+          set +e
+          printf 'Diagnostic only; existing mandatory suites still decide CI.\n'
+          printf 'ImageOS=%s ImageVersion=%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          uname -a
+          cat /etc/os-release
+          command -v bwrap
+          bwrap --version
+          dpkg-query -W bubblewrap
+          stat -c '%n owner=%U:%G mode=%a' /usr/bin/bwrap
+          for file in /proc/self/attr/current /proc/sys/kernel/unprivileged_userns_clone /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/user/max_user_namespaces; do
+            printf 'Read %s\n' "$file"
+            cat "$file" 2>&1
+            printf 'read_exit=%s\n' "$?"
+          done
+          sed -n '/^Uid:/p; /^Gid:/p; /^Cap/p; /^NoNewPrivs:/p; /^Seccomp/p' /proc/self/status
+          if [ -r /sys/kernel/security/apparmor/profiles ]; then
+            grep -i bwrap /sys/kernel/security/apparmor/profiles
+          fi
+          for file in /etc/apparmor.d/bwrap /etc/apparmor.d/usr.bin.bwrap; do
+            if [ -r "$file" ]; then printf 'Read profile %s\n' "$file"; cat "$file"; fi
+          done
+          printf 'Minimal network namespace, stock-style automatic user namespace\n'
+          timeout 10s /usr/bin/bwrap --unshare-net --ro-bind / / --proc /proc --dev /dev -- /bin/true
+          printf 'minimal_stock_style_exit=%s\n' "$?"
+          printf 'Diagnostic comparison only: explicit isolated user namespace\n'
+          timeout 10s /usr/bin/bwrap --unshare-user --unshare-net --ro-bind / / --proc /proc --dev /dev -- /bin/true
+          printf 'minimal_explicit_user_exit=%s\n' "$?"
+          exit 0
       - name: "bin/ci.sh --stage bash --shard ${{ matrix.shard }}/6"
         env:
           FM_BASH_TIMINGS: ${{ needs.bash-timings.outputs.timings }}
@@ -220,6 +250,36 @@ jobs:
       # own sets up nothing and succeeds at once.
       - name: install bubblewrap
         run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - name: read-only bubblewrap runner diagnostics
+        run: |
+          set +e
+          printf 'Diagnostic only; existing mandatory suites still decide CI.\n'
+          printf 'ImageOS=%s ImageVersion=%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          uname -a
+          cat /etc/os-release
+          command -v bwrap
+          bwrap --version
+          dpkg-query -W bubblewrap
+          stat -c '%n owner=%U:%G mode=%a' /usr/bin/bwrap
+          for file in /proc/self/attr/current /proc/sys/kernel/unprivileged_userns_clone /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/user/max_user_namespaces; do
+            printf 'Read %s\n' "$file"
+            cat "$file" 2>&1
+            printf 'read_exit=%s\n' "$?"
+          done
+          sed -n '/^Uid:/p; /^Gid:/p; /^Cap/p; /^NoNewPrivs:/p; /^Seccomp/p' /proc/self/status
+          if [ -r /sys/kernel/security/apparmor/profiles ]; then
+            grep -i bwrap /sys/kernel/security/apparmor/profiles
+          fi
+          for file in /etc/apparmor.d/bwrap /etc/apparmor.d/usr.bin.bwrap; do
+            if [ -r "$file" ]; then printf 'Read profile %s\n' "$file"; cat "$file"; fi
+          done
+          printf 'Minimal network namespace, stock-style automatic user namespace\n'
+          timeout 10s /usr/bin/bwrap --unshare-net --ro-bind / / --proc /proc --dev /dev -- /bin/true
+          printf 'minimal_stock_style_exit=%s\n' "$?"
+          printf 'Diagnostic comparison only: explicit isolated user namespace\n'
+          timeout 10s /usr/bin/bwrap --unshare-user --unshare-net --ro-bind / / --proc /proc --dev /dev -- /bin/true
+          printf 'minimal_explicit_user_exit=%s\n' "$?"
+          exit 0
       - name: "bin/fm-failfirst.sh --shard=${{ matrix.shard }}/6"
         env:
           FM_FF_TIMINGS: ${{ needs.fail-first-timings.outputs.timings }}
