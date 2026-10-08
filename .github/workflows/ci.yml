@@ -116,8 +116,167 @@ jobs:
           FM_CI_TIMINGS_IN: /tmp/timings.txt
           FM_CI_TIMINGS_OUT: /tmp/suite-timings-${{ matrix.shard }}.txt
         run: |
+          # Captain-approved T-264 v5 temporary bwrap-only attachment.
+          set -euo pipefail
+          fm_logs="$RUNNER_TEMP/firstmate-bwrap-control"
+          mkdir -p "$fm_logs"
+          fm_profile=/etc/apparmor.d/firstmate-ci-bwrap
+          fm_hash=9282ddad7c69ba6ac8261ac95f8aa8708695c44da42dca19c53a705a29a98c78
+          fm_owned=0
+          fm_parser=/sbin/apparmor_parser
+          [ -x "$fm_parser" ] || { echo 'ASK:T-264 missing AppArmor parser' >&2; exit 1; }
+          [ "$(id -u)" != 0 ]
+          grep -qx 'VERSION_ID="24.04"' /etc/os-release
+          [ "$(stat -c '%u:%g:%a' /usr/bin/bwrap)" = 0:0:755 ]
+          timeout 10s dpkg-query -W bubblewrap apparmor
+          timeout 10s "$fm_parser" --version
+          stat -c '%n owner=%U:%G mode=%a' "$fm_parser" /usr/bin/bwrap
+          fm_max="$(cat /proc/sys/user/max_user_namespaces)"
+          fm_globals() {
+            local clone restrict maximum
+            clone="$(cat /proc/sys/kernel/unprivileged_userns_clone)"
+            restrict="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+            maximum="$(cat /proc/sys/user/max_user_namespaces)"
+            printf 'globals clone=%s restrict=%s max=%s\n' "$clone" "$restrict" "$maximum"
+            [ "$clone" = 1 ] && [ "$restrict" = 1 ] && [ "$maximum" = "$fm_max" ] &&
+            [ "$(stat -c '%u:%g:%a' /usr/bin/bwrap)" = 0:0:755 ]
+          }
+          fm_compare() {
+            local phase="$1" expected="$2" form rc bad=0
+            for form in automatic explicit; do
+              local args=()
+              if [ "$form" = explicit ]; then args+=(--unshare-user); fi
+              if timeout 10s /usr/bin/bwrap "${args[@]}" --unshare-net --ro-bind / / --proc /proc --dev /dev -- /bin/true > "$fm_logs/$phase-$form.stdout" 2> "$fm_logs/$phase-$form.stderr"; then rc=0; else rc=$?; fi
+              printf '%s\n' "$rc" > "$fm_logs/$phase-$form.status"
+              cat "$fm_logs/$phase-$form.stdout" "$fm_logs/$phase-$form.stderr"
+              printf '%s %s exit=%s\n' "$phase" "$form" "$rc"
+              if [ "$expected" = failure ]; then
+                [ "$rc" = 1 ] && grep -q 'RTM_NEWADDR' "$fm_logs/$phase-$form.stderr" || bad=1
+              else
+                [ "$rc" = 0 ] || bad=1
+              fi
+            done
+            [ "$bad" = 0 ]
+          }
+          fm_cleanup() {
+            local result=$? cleanup_bad=0 remove_rc
+            trap - EXIT
+            set +e
+            if [ "$fm_owned" = 1 ]; then
+              if [ -f "$fm_profile" ] && [ ! -L "$fm_profile" ] && [ "$(sha256sum "$fm_profile" | cut -d ' ' -f 1)" = "$fm_hash" ]; then
+                timeout 10s sudo "$fm_parser" -R "$fm_profile" > "$fm_logs/remove.stdout" 2> "$fm_logs/remove.stderr"
+                remove_rc=$?
+                printf '%s\n' "$remove_rc" > "$fm_logs/remove.status"
+                cat "$fm_logs/remove.stdout" "$fm_logs/remove.stderr"
+                [ "$remove_rc" = 0 ] || cleanup_bad=1
+                sudo rm -- /etc/apparmor.d/firstmate-ci-bwrap || cleanup_bad=1
+              else
+                echo 'ASK:T-264 owned profile integrity changed; refusing unrelated removal' >&2
+                cleanup_bad=1
+              fi
+              fm_globals || cleanup_bad=1
+              fm_compare rollback failure || cleanup_bad=1
+              timeout 10s cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-rollback.txt" || cleanup_bad=1
+              if grep -q 'firstmate_ci_.*bwrap' "$fm_logs/profiles-rollback.txt"; then cleanup_bad=1; fi
+            fi
+            if [ "$cleanup_bad" != 0 ]; then echo 'ASK:T-264 profile cleanup/rollback refused' >&2; result=1; fi
+            exit "$result"
+          }
+          trap fm_cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          fm_globals
+          timeout 10s cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-before.txt"
+          cat "$fm_logs/profiles-before.txt"
+          [ ! -e "$fm_profile" ] && [ ! -L "$fm_profile" ]
+          if grep -qi bwrap "$fm_logs/profiles-before.txt"; then
+            echo 'ASK:T-264 existing bwrap profile requires approved takeover' >&2; exit 1
+          fi
+          # Bounded read-only kernel attachment inventory; no host private-root enumeration.
+          timeout 10s python3 - <<'FM_ATTACHMENTS'
+          from pathlib import Path
+          from fnmatch import fnmatchcase
+          root=Path('/sys/kernel/security/apparmor/policy/profiles')
+          entries=list(root.iterdir())
+          if len(entries)>4096: raise SystemExit('ASK:T-264 policy inventory exceeds bound')
+          for entry in entries:
+              with (entry/'attach').open('rb') as stream: attachment=stream.read(4097)
+              if len(attachment)>4096: raise SystemExit('ASK:T-264 attachment exceeds bound')
+              if fnmatchcase('/usr/bin/bwrap', attachment.strip().decode('utf-8')):
+                  raise SystemExit('ASK:T-264 conflicting bwrap attachment')
+          FM_ATTACHMENTS
+          fm_compare before failure
+          cat > "$fm_logs/profile" <<'FM_PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile firstmate_ci_bwrap /usr/bin/bwrap flags=(attach_disconnected) {
+            allow capability,
+            allow file rwlkm /{**,},
+            allow network,
+            allow unix,
+            allow ptrace,
+            allow signal,
+            allow mqueue,
+            allow io_uring,
+            allow userns,
+            allow mount,
+            allow umount,
+            allow pivot_root,
+            allow dbus,
+            allow px /** -> firstmate_ci_bwrap//&firstmate_ci_unpriv_bwrap,
+          }
+          profile firstmate_ci_unpriv_bwrap flags=(attach_disconnected) {
+            allow file rwlkm /{**,},
+            allow network,
+            allow unix,
+            allow ptrace,
+            allow signal,
+            allow mqueue,
+            allow io_uring,
+            allow userns,
+            allow mount,
+            allow umount,
+            allow pivot_root,
+            allow dbus,
+            allow pix /** -> &firstmate_ci_unpriv_bwrap,
+            audit deny capability,
+          }
+          FM_PROFILE
+          [ "$(sha256sum "$fm_logs/profile" | cut -d ' ' -f 1)" = "$fm_hash" ]
+          if timeout 10s "$fm_parser" -Q "$fm_logs/profile" > "$fm_logs/parse.stdout" 2> "$fm_logs/parse.stderr"; then fm_parse_rc=0; else fm_parse_rc=$?; fi
+          printf '%s\n' "$fm_parse_rc" > "$fm_logs/parse.status"
+          cat "$fm_logs/parse.stdout" "$fm_logs/parse.stderr"
+          [ "$fm_parse_rc" = 0 ]
+          # Fixed exclusive creation, never overwrite existing host policy.
+          sudo /bin/bash -c 'set -eC; exec 3> /etc/apparmor.d/firstmate-ci-bwrap; trap "rm -- /etc/apparmor.d/firstmate-ci-bwrap" EXIT; cat >&3; trap - EXIT' < "$fm_logs/profile"
+          fm_owned=1
+          [ "$(sha256sum "$fm_profile" | cut -d ' ' -f 1)" = "$fm_hash" ]
+          if timeout 10s sudo "$fm_parser" -a "$fm_profile" > "$fm_logs/load.stdout" 2> "$fm_logs/load.stderr"; then fm_load_rc=0; else fm_load_rc=$?; fi
+          printf '%s\n' "$fm_load_rc" > "$fm_logs/load.status"
+          cat "$fm_logs/load.stdout" "$fm_logs/load.stderr"
+          [ "$fm_load_rc" = 0 ]
+          fm_globals
+          fm_compare after success
+          # Additional fixed normal-uid probe observes child transition and capabilities.
+          if timeout 10s /usr/bin/bwrap --unshare-net --ro-bind / / --proc /proc --dev /dev -- /bin/sh -c 'cat /proc/self/attr/current; grep "^CapEff:" /proc/self/status' > "$fm_logs/child.stdout" 2> "$fm_logs/child.stderr"; then fm_child_rc=0; else fm_child_rc=$?; fi
+          printf '%s\n' "$fm_child_rc" > "$fm_logs/child.status"
+          cat "$fm_logs/child.stdout" "$fm_logs/child.stderr"
+          [ "$fm_child_rc" = 0 ]
+          grep -q 'firstmate_ci_unpriv_bwrap' "$fm_logs/child.stdout"
+          grep -Eq '^CapEff:[[:space:]]+0+$' "$fm_logs/child.stdout"
+          # Unchanged mandatory controls include all metadata denials and external roots.
+          bash tests/pinned-context.test.sh
+          bash tests/review-experiment-evidence.test.sh
+          fm_globals
           printf '%s\n' "$FM_BASH_TIMINGS" > /tmp/timings.txt
           bash bin/ci.sh --stage bash --shard "${{ matrix.shard }}/6"
+      - name: retain bubblewrap causal controls
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bwrap-controls-bash-${{ matrix.shard }}
+          path: ${{ runner.temp }}/firstmate-bwrap-control
+          if-no-files-found: ignore
       - name: upload suite timings
         if: always()
         uses: actions/upload-artifact@v4
@@ -284,10 +443,169 @@ jobs:
         env:
           FM_FF_TIMINGS: ${{ needs.fail-first-timings.outputs.timings }}
         run: |
+          # Captain-approved T-264 v5 temporary bwrap-only attachment.
+          set -euo pipefail
+          fm_logs="$RUNNER_TEMP/firstmate-bwrap-control"
+          mkdir -p "$fm_logs"
+          fm_profile=/etc/apparmor.d/firstmate-ci-bwrap
+          fm_hash=9282ddad7c69ba6ac8261ac95f8aa8708695c44da42dca19c53a705a29a98c78
+          fm_owned=0
+          fm_parser=/sbin/apparmor_parser
+          [ -x "$fm_parser" ] || { echo 'ASK:T-264 missing AppArmor parser' >&2; exit 1; }
+          [ "$(id -u)" != 0 ]
+          grep -qx 'VERSION_ID="24.04"' /etc/os-release
+          [ "$(stat -c '%u:%g:%a' /usr/bin/bwrap)" = 0:0:755 ]
+          timeout 10s dpkg-query -W bubblewrap apparmor
+          timeout 10s "$fm_parser" --version
+          stat -c '%n owner=%U:%G mode=%a' "$fm_parser" /usr/bin/bwrap
+          fm_max="$(cat /proc/sys/user/max_user_namespaces)"
+          fm_globals() {
+            local clone restrict maximum
+            clone="$(cat /proc/sys/kernel/unprivileged_userns_clone)"
+            restrict="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+            maximum="$(cat /proc/sys/user/max_user_namespaces)"
+            printf 'globals clone=%s restrict=%s max=%s\n' "$clone" "$restrict" "$maximum"
+            [ "$clone" = 1 ] && [ "$restrict" = 1 ] && [ "$maximum" = "$fm_max" ] &&
+            [ "$(stat -c '%u:%g:%a' /usr/bin/bwrap)" = 0:0:755 ]
+          }
+          fm_compare() {
+            local phase="$1" expected="$2" form rc bad=0
+            for form in automatic explicit; do
+              local args=()
+              if [ "$form" = explicit ]; then args+=(--unshare-user); fi
+              if timeout 10s /usr/bin/bwrap "${args[@]}" --unshare-net --ro-bind / / --proc /proc --dev /dev -- /bin/true > "$fm_logs/$phase-$form.stdout" 2> "$fm_logs/$phase-$form.stderr"; then rc=0; else rc=$?; fi
+              printf '%s\n' "$rc" > "$fm_logs/$phase-$form.status"
+              cat "$fm_logs/$phase-$form.stdout" "$fm_logs/$phase-$form.stderr"
+              printf '%s %s exit=%s\n' "$phase" "$form" "$rc"
+              if [ "$expected" = failure ]; then
+                [ "$rc" = 1 ] && grep -q 'RTM_NEWADDR' "$fm_logs/$phase-$form.stderr" || bad=1
+              else
+                [ "$rc" = 0 ] || bad=1
+              fi
+            done
+            [ "$bad" = 0 ]
+          }
+          fm_cleanup() {
+            local result=$? cleanup_bad=0 remove_rc
+            trap - EXIT
+            set +e
+            if [ "$fm_owned" = 1 ]; then
+              if [ -f "$fm_profile" ] && [ ! -L "$fm_profile" ] && [ "$(sha256sum "$fm_profile" | cut -d ' ' -f 1)" = "$fm_hash" ]; then
+                timeout 10s sudo "$fm_parser" -R "$fm_profile" > "$fm_logs/remove.stdout" 2> "$fm_logs/remove.stderr"
+                remove_rc=$?
+                printf '%s\n' "$remove_rc" > "$fm_logs/remove.status"
+                cat "$fm_logs/remove.stdout" "$fm_logs/remove.stderr"
+                [ "$remove_rc" = 0 ] || cleanup_bad=1
+                sudo rm -- /etc/apparmor.d/firstmate-ci-bwrap || cleanup_bad=1
+              else
+                echo 'ASK:T-264 owned profile integrity changed; refusing unrelated removal' >&2
+                cleanup_bad=1
+              fi
+              fm_globals || cleanup_bad=1
+              fm_compare rollback failure || cleanup_bad=1
+              timeout 10s cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-rollback.txt" || cleanup_bad=1
+              if grep -q 'firstmate_ci_.*bwrap' "$fm_logs/profiles-rollback.txt"; then cleanup_bad=1; fi
+            fi
+            if [ "$cleanup_bad" != 0 ]; then echo 'ASK:T-264 profile cleanup/rollback refused' >&2; result=1; fi
+            exit "$result"
+          }
+          trap fm_cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          fm_globals
+          timeout 10s cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-before.txt"
+          cat "$fm_logs/profiles-before.txt"
+          [ ! -e "$fm_profile" ] && [ ! -L "$fm_profile" ]
+          if grep -qi bwrap "$fm_logs/profiles-before.txt"; then
+            echo 'ASK:T-264 existing bwrap profile requires approved takeover' >&2; exit 1
+          fi
+          # Bounded read-only kernel attachment inventory; no host private-root enumeration.
+          timeout 10s python3 - <<'FM_ATTACHMENTS'
+          from pathlib import Path
+          from fnmatch import fnmatchcase
+          root=Path('/sys/kernel/security/apparmor/policy/profiles')
+          entries=list(root.iterdir())
+          if len(entries)>4096: raise SystemExit('ASK:T-264 policy inventory exceeds bound')
+          for entry in entries:
+              with (entry/'attach').open('rb') as stream: attachment=stream.read(4097)
+              if len(attachment)>4096: raise SystemExit('ASK:T-264 attachment exceeds bound')
+              if fnmatchcase('/usr/bin/bwrap', attachment.strip().decode('utf-8')):
+                  raise SystemExit('ASK:T-264 conflicting bwrap attachment')
+          FM_ATTACHMENTS
+          fm_compare before failure
+          cat > "$fm_logs/profile" <<'FM_PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile firstmate_ci_bwrap /usr/bin/bwrap flags=(attach_disconnected) {
+            allow capability,
+            allow file rwlkm /{**,},
+            allow network,
+            allow unix,
+            allow ptrace,
+            allow signal,
+            allow mqueue,
+            allow io_uring,
+            allow userns,
+            allow mount,
+            allow umount,
+            allow pivot_root,
+            allow dbus,
+            allow px /** -> firstmate_ci_bwrap//&firstmate_ci_unpriv_bwrap,
+          }
+          profile firstmate_ci_unpriv_bwrap flags=(attach_disconnected) {
+            allow file rwlkm /{**,},
+            allow network,
+            allow unix,
+            allow ptrace,
+            allow signal,
+            allow mqueue,
+            allow io_uring,
+            allow userns,
+            allow mount,
+            allow umount,
+            allow pivot_root,
+            allow dbus,
+            allow pix /** -> &firstmate_ci_unpriv_bwrap,
+            audit deny capability,
+          }
+          FM_PROFILE
+          [ "$(sha256sum "$fm_logs/profile" | cut -d ' ' -f 1)" = "$fm_hash" ]
+          if timeout 10s "$fm_parser" -Q "$fm_logs/profile" > "$fm_logs/parse.stdout" 2> "$fm_logs/parse.stderr"; then fm_parse_rc=0; else fm_parse_rc=$?; fi
+          printf '%s\n' "$fm_parse_rc" > "$fm_logs/parse.status"
+          cat "$fm_logs/parse.stdout" "$fm_logs/parse.stderr"
+          [ "$fm_parse_rc" = 0 ]
+          # Fixed exclusive creation, never overwrite existing host policy.
+          sudo /bin/bash -c 'set -eC; exec 3> /etc/apparmor.d/firstmate-ci-bwrap; trap "rm -- /etc/apparmor.d/firstmate-ci-bwrap" EXIT; cat >&3; trap - EXIT' < "$fm_logs/profile"
+          fm_owned=1
+          [ "$(sha256sum "$fm_profile" | cut -d ' ' -f 1)" = "$fm_hash" ]
+          if timeout 10s sudo "$fm_parser" -a "$fm_profile" > "$fm_logs/load.stdout" 2> "$fm_logs/load.stderr"; then fm_load_rc=0; else fm_load_rc=$?; fi
+          printf '%s\n' "$fm_load_rc" > "$fm_logs/load.status"
+          cat "$fm_logs/load.stdout" "$fm_logs/load.stderr"
+          [ "$fm_load_rc" = 0 ]
+          fm_globals
+          fm_compare after success
+          # Additional fixed normal-uid probe observes child transition and capabilities.
+          if timeout 10s /usr/bin/bwrap --unshare-net --ro-bind / / --proc /proc --dev /dev -- /bin/sh -c 'cat /proc/self/attr/current; grep "^CapEff:" /proc/self/status' > "$fm_logs/child.stdout" 2> "$fm_logs/child.stderr"; then fm_child_rc=0; else fm_child_rc=$?; fi
+          printf '%s\n' "$fm_child_rc" > "$fm_logs/child.status"
+          cat "$fm_logs/child.stdout" "$fm_logs/child.stderr"
+          [ "$fm_child_rc" = 0 ]
+          grep -q 'firstmate_ci_unpriv_bwrap' "$fm_logs/child.stdout"
+          grep -Eq '^CapEff:[[:space:]]+0+$' "$fm_logs/child.stdout"
+          # Unchanged mandatory controls include all metadata denials and external roots.
+          bash tests/pinned-context.test.sh
+          bash tests/review-experiment-evidence.test.sh
+          fm_globals
           printf '%s\n' "$FM_FF_TIMINGS" > /tmp/timings.txt
           FM_CI_TIMINGS_IN=/tmp/timings.txt bash bin/fm-failfirst.sh \
             --shard="${{ matrix.shard }}/6" --part="/tmp/fail-first-part-${{ matrix.shard }}.json" \
             --setup 'bun install --frozen-lockfile' "origin/${{ github.base_ref }}"
+      - name: retain bubblewrap causal controls
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bwrap-controls-fail-first-${{ matrix.shard }}
+          path: ${{ runner.temp }}/firstmate-bwrap-control
+          if-no-files-found: ignore
       - name: upload the shard's part
         if: always()
         uses: actions/upload-artifact@v4
