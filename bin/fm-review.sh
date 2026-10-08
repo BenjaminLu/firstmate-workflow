@@ -564,7 +564,16 @@ keep_log() {
 # closed from inside the comment, and whatever follows it would read as the
 # launcher's own words.
 closed_list() {
-  fm_evidence history --reviewer || return 1
+  local history
+  history="$(fm_evidence history --reviewer)" || return 1
+  printf '%s\n' "$history"
+  if printf '%s\n' "$history" | awk -v marker="ASK-PASS-CRITERIA:$TASK" '
+    /^----- begin [0-9a-f]+ -----$/ { quoted=1; next }
+    /^----- end [0-9a-f]+ -----$/ { quoted=0; next }
+    !quoted && $0 == marker { found=1 }
+    END { exit !found }'; then
+    printf '\nASK clarification: Before any truthful verdict, including APPROVE or REJECT, independently reissue the complete contiguous numbered standing list, preserve every prior numbered item and explain its finding associations, mark each done/open with factual evidence, and close it with CRITERIA-COMPLETE:%s before the verdict. This ASK exception applies even though ordinary no-ASK APPROVE need not reissue a list. Do not invent regressions or new ground, renumber away findings, require technical changes without findings, or choose a verdict to repair syntax.\n' "$TASK"
+  fi
   printf '\nEvery REJECT supplies the complete numbered standing list and CRITERIA-COMPLETE:%s. Preserve numbering and done/open states; label new items REGRESSION:%s or NEW-GROUND:%s. Syntax checks do not prove finding semantics.\n' "$TASK" "$TASK" "$TASK"
 }
 
@@ -862,8 +871,6 @@ fm_round_pinned reviewer "$spec" || exit 65
   if [ "$ROUND" -ge 2 ]; then
     printf '\n# The closed list\n'
     closed_list
-  elif [ "$ROUND" -ge 3 ]; then
-    printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
   fi
 } > "$work/history.md"
 {
