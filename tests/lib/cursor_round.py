@@ -33,6 +33,11 @@ class CursorRound(unittest.TestCase):
         self.prompt.write_text('Reply with exactly: OK')
         self.long_tmp = self.home / ('long-caller-' + 'x' * 100)
         self.long_tmp.mkdir()
+        # Only the control socket needs a short parent. Keep fm-round (and
+        # therefore Cursor's HOME) under long_tmp to exercise its 84-char limit.
+        self.control_temp = tempfile.TemporaryDirectory(prefix='fmct.', dir='/tmp')
+        self.addCleanup(self.control_temp.cleanup)
+        self.control_parent = Path(self.control_temp.name).resolve()
         self.record = self.home / 'record'
         self.record.mkdir()
         # A deliberately broken cleanup must fail assertions without leaking
@@ -46,6 +51,10 @@ class CursorRound(unittest.TestCase):
         self.hook.write_text('''mktemp() {
   if [ "$*" = '-d /tmp/fmc.XXXXXX' ] && [ "${CASE:-}" = mktemp ]; then return 1; fi
   local made
+  if [ "$#" -eq 2 ] && [ "$1" = -d ] &&
+      [ "$2" = "$CURSOR_TEST_CALLER_TMP/fm-ctl.XXXXXX" ]; then
+    set -- -d "$CURSOR_TEST_CONTROL_PARENT/fm-ctl.XXXXXX"
+  fi
   made="$("$REAL_MKTEMP" "$@")" || return $?
   printf '%s\\n' "$made" >> "$RECORD/allocations"
   printf '%s\\n' "$made"
@@ -120,6 +129,8 @@ sys.exit(1)
                         HOME=str(PK / 'home'), TMPDIR=str(self.long_tmp), FM_CONTEXT_READY='1',
                         FM_POLICY=str(PK / 'none.json'), RECORD=str(self.record),
                         BASH_ENV=str(self.hook), REAL_MKTEMP=shutil.which('mktemp'),
+                        CURSOR_TEST_CALLER_TMP=str(self.long_tmp),
+                        CURSOR_TEST_CONTROL_PARENT=str(self.control_parent),
                         PYTHONDONTWRITEBYTECODE='1',
                         PROFILE_ROOT=str(PK), EVENTS=str(self.events), FM_MODEL='',
                         CURSOR_DATA_DIR=str(self.home / 'inherited'), FM_ADAPTER_ARGS='')
