@@ -1,0 +1,208 @@
+{
+  "id": "T-245",
+  "title": "board v2 captain card: the open card reads intent rows first, then how it works, scope chips and notes, with the explanation behind one toggle and no per-sentence STE chips; the current card's options sit in a slim bar pinned to the bottom with a details sheet for pros, cons and questions, while expanded strips keep their bars inline",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [
+    "T-241"
+  ],
+  "scope": [
+    "board/public/index.html",
+    "board/public/board.css",
+    "board/public/board.js",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "i18n/tw2cn.tsv",
+    "tests/board-card-layout.test.sh",
+    "tests/e2e/board-card-lock.spec.ts",
+    "tests/e2e/board-intent-cards.spec.ts",
+    "tests/e2e/board-decisions.spec.ts",
+    "tests/e2e/board-v2-card.spec.ts",
+    "tests/e2e/lib/intent-card.ts",
+    "design/design.md",
+    "design/tasks/T-245.json"
+  ],
+  "acceptance": [
+    "Why. The captain reviewed four prototype rounds of the board on 2026-10-07 and approved the last one, verbatim: \"看板樣式可以了, 可以以這個版本開發\". Earlier notes from the captain, verbatim in substance: the page had no unity and too much text, the captain card needs the largest area, a dark mode toggle is needed, and the voyage game stays pinned at the top and larger. Later that day: \"船員名冊顯示的太窄, 高度太限縮, 閱讀順序應該是先看意圖重點列表, 再帶到動畫邏輯帶看\". The approved design is in the round's local brief (firstmate records state/briefs/T-245.design.md for every round); its prototype code is reference only and holds no board data. Board v2 is split into three tasks: T-241 the shell, T-245 the captain card, T-246 the sheets.",
+    "Change 1, the card body order (index.html intentBody and full). This applies to captain cards only: the task detail panel's call `intentBody(authored, content, true, true)` (its detailOnly branch) keeps today's order, headings (Intent, How it works, Alignment, Scope, Notes) and per-sentence STE chips, so tests/e2e/board-task-detail.spec.ts passes unchanged. On a captain card the body headings become, in order: Intent, How it works, Scope, Notes. Under Intent: one row per intent item; each `done` item whose text starts with `Intent N:` (en) or `意圖 N：`/`意圖 N:` (zh-TW) is shown nested under row N; `done` items with no such prefix are shown as plain rows after the intent rows; an intent with no matching done item shows its row alone; a done item whose N is greater than the number of intent items, or whose intent row is hidden behind the intent rows' existing sectionItems('intent') cap, is shown as a plain row after the intent rows. The ✓ glyph on a nested done item means only that the item is listed; nothing marks it satisfied. The six-row cap and 'Show more (n)' keep counting the done items exactly as sectionItems counts them today, so a card with one intent and seven done items still shows 'Show more (1)'. The alignment list is still built from `const alignment = hasItems('done') ?`; the 'Alignment' heading goes, and the alignmentHeading key stays as the list's aria-label. How it works keeps the diagram iframe (iframe.dg[data-decision] from DIAGRAM.embed) with the .change-fallback as its next sibling exactly as today, so diagram.js (not edited) still shows the before/after prose when there is no diagram; the iframe is shown full card width and at least 320px high on desktop. Scope shows scope_in as solid file chips and scope_out as outlined chips. Notes keep their caution styling. On intent cards only (cards whose details carry intent items), the explanation, why and outcome move behind one 'Why you see this' toggle (new key `whyYouSeeThis`); merge, readiness and legacy cards keep their .explanation shown as today, so board-crew.spec.ts:20, board-pr-links.spec.ts:75 and board-decisions.spec.ts:119 pass unchanged. Every sentence stays available verbatim.",
+    "Change 2, STE on the captain card. The per-sentence STE chips (steChip and the ste-sentence wrappers) are no longer rendered on captain cards. The card header's `STE · n/m` pill from stePill(d) stays, so board-intent-cards.spec.ts:53,75 keep their 'STE · 6/7' and 'STE · 2/3' checks and line 102 stays as it is. The task detail panel's inline pass/fail pill (`.ste-pill` with detailStePass/detailSteFail, written in drawTaskDetail) and its per-sentence chips stay as they are. fm_ste and the server's ste fields are unchanged.",
+    "Change 3, the decision bar. For the current card only (the first card in #deck, rendered by full(d)), the options render in a bar `.decision-bar` inside #card-<id> that is position:sticky at the bottom of the viewport; an expanded strip (details.dstrip, which also renders full(d)) renders the same bar inline, not sticky, so only one bar is ever pinned. The bar holds the option buttons from the existing builders: the non-intent builder that starts `const options = [` and ends `.join('')` keeps its nine parameters and output (tests/board-readiness.test.sh evaluates it), and inside the bar CSS hides its `<p class=\"tradeoffs\">` paragraphs; the intent builder that starts ``const options = `<section class=\"acts intent-options\">`` keeps building its buttons with pros and cons, which CSS hides inside the bar. The bar also holds the answering controls that must stay visible without opening anything: the custom button, the custom textarea, the validation span, the refusal line and the `.confirm` control, for intent and non-intent cards alike. A details button opens `.decision-sheet` (role=\"dialog\", inside #card-<id>, closed by Esc or its close button, focus returning to the opener) that shows each option's pros, cons and tradeoffs text and the card's questions with their existing Yes/No and No-text inputs (nothing else; the board renders no change table). The intent builder's `<h4>Options</h4>` moves into the sheet with the pros and cons; the bar itself has no h4. The bar and the sheet use solid theme colours (no background-image, no gradient) whose text meets 4.5:1 in both themes, and the sticky bar never covers the card's own controls (for example 'Show more' at 390x844): the card keeps bottom padding at least the bar's height. Open state survives re-renders: the deck is redrawn by SHIP.patch, which drops attributes the fresh markup lacks (ship.js:109), so the open sheet and the open 'Why you see this' toggle are kept in JS sets keyed by decision id and written into the markup on every render, the same pattern as `expanded` and `revealedSections` in index.html; when focus was inside the open sheet before a render, it returns to the same control (or the sheet's close button) after it. Every answering behaviour stays: the confirm control, the validate, questionAnswers and answer rules, the T-229 click lock, custom text, D on readiness cards, read-only mode and error feedback. The `.acts` rules ship.css pins keep applying. New keys `decisionDetails`, `decisionClose`; every new key is called as t(\"key\") with double quotes so tests/i18n.test.sh's key scan sees it. When T-246's Decisions and Fleet tabs exist, the bar is pinned only while the Decisions tab is shown; this task does not assume the lanes share the page with the card.",
+    "Not changed, stated. board/server.ts, the card data, diagram.js and the diagram pages, ship.css, ship.js, the voyage game, the deck order, #capstage and the captain portrait, the strips under #alsoWaiting and the expanded set, the gate list rendering (latest?.gates, gates[name], latest.gateLegacy) and T-240's not-runnable warning (.gates li.w and ciOnlyEvidence), and the task detail panel's layout, order, headings and chips.",
+    "Tests, new behaviour (fail on base, pass after). tests/e2e/board-v2-card.spec.ts: the card body h4 order is Intent, How it works, Scope, Notes; prefixed done items sit under their intent row and unprefixed ones as plain rows; no .ste-chip on a captain card; the current card's .decision-bar is sticky at the viewport bottom, and an expanded strip's bar is not; the details sheet opens as a dialog, shows pros, cons and questions, and Esc closes it without hiding the voyage stage; the 'Why you see this' toggle shows the explanation; the open sheet, the open toggle and focus inside the sheet survive a state push and a locale change; a done item whose N is greater than the number of intent rows is a plain row; a done item whose intent row is hidden by the sectionItems('intent') cap is a plain row; a zh-TW `意圖 N：` prefix nests its done item, also in the zh-CN view; one intent with seven done items still shows 'Show more (1)'. Body headings are read with `.intent-alignment h4` (the card body) and sheet headings with `.decision-sheet h4`; the fixture tests/e2e/lib/intent-card.ts may gain prefixed done items only through a new builder option, so its current output stays.",
+    "Tests, updated and regression. tests/board-card-layout.test.sh checks intentHeading, howHeading, scopeHeading, notesHeading in that order for the captain card inside intentBody, checks that the detailOnly branch keeps its intent, how, alignment, scope, notes order, still finds `const alignment = hasItems('done') ?`, `const full = d =>`, `answered = new Set()` and the answer, validate and intentBody functions, and both dictionaries keep alignmentHeading and optionsHeading. tests/e2e/board-card-lock.spec.ts: its card-body h4 list (read with a body locator such as `.intent-alignment h4`, not `card.locator('h4')`) becomes ['Intent','How it works','Scope','Notes'] and its details-sheet list ['Options','Questions to confirm']; its six-row cap and 'Show more (1)' assertions stay on the alignment rows; its .tradeoffs 16px check reads the sheet; its [data-question] clicks and textarea[data-question] fills (lines 28-30, 76-77) open the details sheet first; its single visible iframe-or-fallback check under How it works stays. tests/e2e/board-intent-cards.spec.ts: the h4 list (read with body and sheet locators as above) becomes ['Intent','How it works'] in the body and ['Options'] in the sheet, the 'Alignment' heading check becomes a check on the alignment list's aria-label, its per-sentence STE chip checks become checks on the card copy, and its [data-question] clicks and fills (lines 64-67, 132-133) open the details sheet first. tests/e2e/board-decisions.spec.ts opens the details sheet where it read pros or questions, and keeps toHaveCount(6) for gates. tests/e2e/board-task-detail.spec.ts, tests/e2e/board-v2-shell.spec.ts (including its light-theme contrast sweep and overflow check), tests/e2e/board-layout.spec.ts, tests/e2e/board-card-effects.spec.ts, tests/e2e/board-locales.spec.ts, tests/e2e/board-projects.spec.ts, tests/e2e/board-auth.spec.ts, tests/e2e/firstmate-host.spec.ts, tests/e2e/game.spec.ts, tests/e2e/board-continuation.spec.ts, tests/e2e/board-merges.spec.ts, tests/e2e/board-crew.spec.ts, tests/e2e/board-pr-links.spec.ts, tests/i18n.test.sh, tests/board-readiness.test.sh, tests/gate.test.sh, tests/board-identity.test.sh, tests/diagram.test.sh and tests/ship.spec.ts pass unchanged.",
+    "Migration. Display only; no stored data changes.",
+    "Docs. design/design.md §8 'The captain's board': edit in place for the card order, the pairing rule, the decision bar and the sheet."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "You read the intent rows first, then how it works, then the scope and the notes."
+        },
+        {
+          "kind": "fact",
+          "text": "The card shows no STE chip after each sentence, and every sentence stays one click away."
+        },
+        {
+          "kind": "fact",
+          "text": "The options of the current card sit in a slim bar at the bottom, with a details sheet."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "You approved the board prototype on 2026-10-07: \"看板樣式可以了, 可以以這個版本開發\"."
+        },
+        {
+          "kind": "fact",
+          "text": "You asked to read the intent list first, and you said the decision panel took too much width."
+        }
+      ],
+      "scope_in": [
+        "index.html, board.css and board.js: the card and the bar",
+        "i18n labels",
+        "the card layout test and four board tests",
+        "design section 8"
+      ],
+      "scope_out": [
+        "the card data, diagram.js and ship.css",
+        "the strips, the portrait and the gate rendering",
+        "the task detail panel layout"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: intentBody renders the rows in the new order. The new card test proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the card skips the STE chips, and the toggle shows the prose. The new card test proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: only the current card pins its bar, and the sheet holds the details. The new card test proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "A check mark means the item is listed. It does not mean the item is met."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Card reads its details"
+        },
+        {
+          "state": "gone",
+          "label": "Long card with every section"
+        },
+        {
+          "state": "gone",
+          "label": "Options inside the card"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Card reads its details"
+        },
+        {
+          "state": "new",
+          "label": "Intent rows come first"
+        },
+        {
+          "state": "new",
+          "label": "Slim bar and details sheet"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "先看意圖列，再看運作方式，然後是範圍和備註。"
+        },
+        {
+          "kind": "fact",
+          "text": "卡片不再在每句後面顯示 STE 標籤，原文點開就看得到。"
+        },
+        {
+          "kind": "fact",
+          "text": "目前卡片的選項放在底部窄列，詳情放在抽屜。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 核准看板原型：\"看板樣式可以了, 可以以這個版本開發\"。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長要求先看意圖列表，並說決策區塊太佔寬度。"
+        }
+      ],
+      "scope_in": [
+        "index.html、board.css 和 board.js：卡片和窄列",
+        "i18n 標籤",
+        "卡片版面測試和四個看板測試",
+        "設計第 8 節"
+      ],
+      "scope_out": [
+        "卡片資料、diagram.js 和 ship.css",
+        "收合卡、船長頭像和關卡顯示",
+        "任務詳情面板版面"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：intentBody 依新順序顯示。新的卡片測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：卡片不顯示 STE 標籤，切換鈕顯示說明。新的卡片測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：只有目前卡片固定窄列，詳情在抽屜裡。新的卡片測試證明這點。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "勾號只代表項目有列出，不代表已經達成。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "卡片讀取內容"
+        },
+        {
+          "state": "gone",
+          "label": "長卡片列出所有段落"
+        },
+        {
+          "state": "gone",
+          "label": "選項在卡片裡"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "卡片讀取內容"
+        },
+        {
+          "state": "new",
+          "label": "意圖列放最前面"
+        },
+        {
+          "state": "new",
+          "label": "窄列和詳情抽屜"
+        }
+      ]
+    }
+  }
+}
