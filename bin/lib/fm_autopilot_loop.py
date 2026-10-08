@@ -76,10 +76,28 @@ class MechanicalLoop:
                         record.get('kind') == 'merge' and record.get('task') == task
                         and record.get('project', self.ctx.get('default_project', owner)) == owner)
                     if not relevant: continue
-                    if record.get('kind') == 'choice': continue
-                    # Explicit dispatch intent also covers ordinary legacy cards
-                    # without kind; contradictory merge records remain a hold.
-                    if 'kind' not in record and record.get('purpose') == 'dispatch': continue
+                    nonmerge = record.get('kind') == 'choice' or (
+                        'kind' not in record and record.get('purpose') == 'dispatch')
+                    if nonmerge:
+                        # Intent cannot erase outcome/binding or retained merge
+                        # events. Check contradictions before either exemption.
+                        merge_keys = ('merge', 'merged', 'merge_settled', 'merge_reason',
+                                      'merge_started', 'binding')
+                        if (record.get('purpose') == 'merge' or record.get('effect') == 'merge'
+                                or any(k in record for k in merge_keys)):
+                            return [], 'unverified identity'
+                        event_path = self.state / 'events.jsonl'
+                        for line in event_path.read_text().splitlines() if event_path.exists() else []:
+                            row = json.loads(line)
+                            if not isinstance(row, dict): return [], 'unverified settlement'
+                            data = row.get('data', {})
+                            if (row.get('type') == 'decision_made' and isinstance(data, dict)
+                                    and isinstance(data.get('decision'), str)
+                                    and data['decision'] in (path.stem, record.get('id'))
+                                    and (data.get('effect') == 'merge' or data.get('purpose') == 'merge'
+                                         or any(k in data for k in merge_keys))):
+                                return [], 'unverified identity'
+                        continue
                     if record.get('kind') != 'merge' or record.get('purpose') == 'dispatch':
                         return [], 'unverified identity'
                     if folder == 'pending': return [], 'outstanding card'
@@ -134,7 +152,13 @@ class MechanicalLoop:
                         return [], 'unverified settlement'
                     stamp = datetime.datetime.fromisoformat(row['ts'].replace('Z', '+00:00'))
                     when = datetime.datetime.fromisoformat(settled.replace('Z', '+00:00'))
-                    if stamp.tzinfo is None or stamp < when: return [], 'unverified settlement'
+                    # The stock emitter truncates to seconds: its timestamp
+                    # denotes [stamp, stamp + 1s), not proven subsecond order.
+                    whole_second = re.fullmatch(
+                        r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})', row['ts'])
+                    if (stamp.tzinfo is None or (stamp < when and not (
+                            whole_second and when < stamp + datetime.timedelta(seconds=1)))):
+                        return [], 'unverified settlement'
                     matches.append(row['ts'])
                 if not matches: return [], 'unverified settlement'
                 binding = record.get('binding')
