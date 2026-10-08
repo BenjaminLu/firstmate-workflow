@@ -24,6 +24,7 @@ ROOT = Path(sys.argv.pop(1)).resolve()
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 import fm_autopilot as A
 import fm_lifeline as life
+import autopilot_reload_observation as observation
 
 
 class Reload(unittest.TestCase):
@@ -72,12 +73,18 @@ class Reload(unittest.TestCase):
         return A.read_json(self.directory / (name + '.json'))
 
     def wait_for(self, predicate, seconds=25):
-        deadline = time.monotonic() + seconds
+        started = time.monotonic()
+        deadline = started + seconds
         while time.monotonic() < deadline:
             result = predicate()
             if result: return result
             time.sleep(.05)
-        self.fail('timed out; service.log: ' + (self.directory / 'service.log').read_text())
+        try:
+            report = observation.timeout_report(self.directory, time.monotonic() - started)
+            detail = json.dumps(report, sort_keys=True)
+        except Exception as error:
+            detail = 'diagnostic_error=' + type(error).__name__
+        self.fail('timed out; fixture state: ' + detail)
 
     def shell(self, mode='ensure', ok=True):
         self.assertNotIn('FM_CODE_ROOT', self.env)
@@ -117,13 +124,12 @@ class Reload(unittest.TestCase):
         life.ring_events(self.root / 'state', 'fixture request')
 
     def reloaded(self, old, target):
-        record = self.wait_for(lambda: self.read('owner').get('started_ok') and
-                               self.read('owner').get('pid') != old['pid'] and
-                               self.read('owner').get('code') == target and self.read('owner'))
+        record, reload = self.wait_for(lambda: observation.completed(
+            observation.read_completion(self.directory), target, old_pid=old['pid']))
         self.assertTrue(A.live(self.directory))
-        self.assertEqual('reloaded', self.read('reload')['outcome']['kind'])
-        self.assertEqual(target, self.read('reload')['outcome']['to'])
-        self.assertEqual([], self.read('reload')['failed_ids'])
+        self.assertEqual('reloaded', reload['outcome']['kind'])
+        self.assertEqual(target, reload['outcome']['to'])
+        self.assertEqual([], reload['failed_ids'])
         # A shared probe must fail while the one exclusive holder serves.
         with (self.directory / 'service.lock').open('a') as lock:
             with self.assertRaises(BlockingIOError): fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -283,9 +289,10 @@ class Reload(unittest.TestCase):
         result = self.shell()
         if import_failure: self.assertIn('failed (', result.stderr)
         self.assertIn('reload requested', result.stderr)
-        self.wait_for(lambda: self.read('owner').get('code') == fixed and self.read('owner').get('started_ok'))
-        self.assertEqual('reloaded', self.read('reload')['outcome']['kind'])
-        self.assertEqual([target], self.read('reload')['failed_ids'])
+        _, reload = self.wait_for(lambda: observation.completed(
+            observation.read_completion(self.directory), fixed))
+        self.assertEqual('reloaded', reload['outcome']['kind'])
+        self.assertEqual([target], reload['failed_ids'])
 
     def test_import_failure_falls_back_to_old_snapshot(self): self.failure(True)
     def test_death_after_ready_is_failure_not_reload(self): self.failure(False)

@@ -1,0 +1,211 @@
+{
+  "id": "T-257",
+  "title": "Reload tests read owner readiness and the final outcome under one start lock; a controlled write gap proves the read waits, and timeout reports capture fixture owner, reload, lock and process state without changing service behavior",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "tests/lib/autopilot_reload.py",
+    "tests/lib/autopilot_reload_observation.py",
+    "tests/lib/autopilot_reload_observation_cases.py",
+    "tests/autopilot-reload-observation.test.sh",
+    "design/tasks/T-257.json"
+  ],
+  "acceptance": [
+    "Why. PR 233 (T-250) run 37717181397 fails tests/lib/autopilot_reload.py:287: expected reloaded, observed previous failed. PR 232 (T-251) run 37717225867 times out in the identity reload test at :146 with an empty service.log. PR 237 (T-254) has the same repaired-outcome failure in its retained CI diagnosis. Existing pins do not cover this shared test repair. This proposed task requires captain dispatch approval and exact-byte SPEC-OK before implementation. Evidence: firstmate operational diagnosis recorded on 2026-10-08; source and controlled write-gap verification remain independently reviewed.",
+    "Known race. bin/lib/fm_autopilot.py started():885-904 holds start.lock, writes owner.started_ok=True at :888-889 and then reload.outcome at :891-904. tests/lib/autopilot_reload.py failure():286 waits for the repaired owner, then :287 reads the outcome without that lock. reloaded():120-129 likewise reads owner and reload separately. A permitted write/read interleaving exposes the old failed outcome despite a successful candidate. This task changes test observation, not production publication.",
+    "Change 1, coherent reads. Add tests/lib/autopilot_reload_observation.py with a small test-only read_completion(directory) helper. It opens the existing directory / start.lock and tries an exclusive nonblocking flock. A busy lock returns no snapshot immediately. With the lock held it reads owner.json and the normalized reload state, releases the lock and returns both snapshots. This observation cannot block a bounded wait past its deadline. Do not take service.lock or change either JSON file. Replace the readiness/outcome boundary in Reload.reloaded() and the repaired-candidate wait in Reload.failure() with this helper. A successful completion requires owner.started_ok, the exact target code and final outcome.kind reloaded with outcome.to equal to the target. reloaded() additionally requires the replacement pid differs from old. Preserve all later target/from, failed_ids, old-process exit, live service, exclusive service holder, fallback snapshot and once-only wake/outcome assertions. A timeout remains a failure.",
+    "Change 2, deterministic new regression. Add tests/lib/autopilot_reload_observation_cases.py and tests/autopilot-reload-observation.test.sh using tests/lib.sh. A separate fixture writer holds start.lock, writes ready owner with a repaired target, signals the test and pauses before replacing the previous failed outcome. The test calls read_completion only after that signal and asserts no snapshot while the writer holds the lock. Release the writer through a fixture handshake, write the target reloaded outcome before unlocking, acknowledge the completed write, then assert the reader returns both final records. The completion wait remains pending on the busy result. An unlocked owner/outcome reader fails the no-snapshot assertion deterministically. Use bounded subprocess/pipe handshakes and terminate/reap only fixture children on cleanup, never real service processes. Do not use a sleep to choose the write-gap ordering. Add helper cases for no files, starting owner, previous target outcome and failed current target: none qualifies as successful completion. Behavioral proof: retain the new wrapper, case harness and helper module API, and replace only read_completion with an unlocked reader of owner.json followed by normalized reload.json. The controlled writer remains paused between the two writes; that mutation must fail the no-snapshot assertion because it returns a ready owner with the previous failed outcome. The locked implementation passes the same controlled case. Historical-base experiment, separate from ordinary CI fail-first: record the exact accepted base commit, create an isolated temporary checkout of that commit, overlay the new wrapper, observation case harness and helper module, and replace only read_completion with the two unlocked reads that model the base observer at tests/lib/autopilot_reload.py:120-124 and :286-287. Retain every harness file and public helper interface; do not remove the helper and count an import error as proof. Run the controlled case through the retained wrapper and retain the base SHA, injected observer bytes and assertion output; the expected failure is the no-snapshot behavioral assertion. Ordinary fm-failfirst.sh classifies all these files under tests/** and keeps changed test files in its comparison. There is no runtime behavior to revert in this test-only scope, so record its test-only classification truthfully rather than claim that CI removes this helper or proves a runtime fail-first. The existing 14-test reload module provides regression coverage, including real-service integration, stand-in-lock and rule tests; it is not 14 real-service executions.",
+    "Change 3, timeout evidence. Enhance Reload.wait_for() at :73-80 to append a bounded fixture-only report on failure: raw parsed owner/reload state, coherent snapshot if start.lock is immediately available, start-lock busy status otherwise, service-lock liveness, recorded owner/service pid liveness, elapsed monotonic seconds and service.log tail (at most 8 KiB). Never block obtaining start.lock after the deadline; use a nonblocking probe and label unavailable state rather than wait indefinitely. Do not invoke running/ensure, clear a request, emit a wake, kill a service or fetch network from this reporter. Probe failures appear as diagnostic classes and cannot replace the original timeout assertion. Unit-test ready-state and lock-busy reports, missing files and a failing diagnostic probe, plus the 8 KiB log cap.",
+    "Unknown timeout. The identity test :140-144 spins shared-lock probes while serve() :972-982 waits up to two seconds for an exclusive service lock. Starvation is a hypothesis, not established by the retained CI log; one main and four parallel isolated local executions passed. This task gathers evidence and preserves the original probe thread and 25-second test bound. It does not change lock retry bounds, service startup/recovery code or classify the remote failure as harmless. If new evidence proves a production defect, firstmate raises a separate or amended scope card before a production fix.",
+    "Callers and migration. Only this test suite imports the helper. Reload.reloaded() is used by identity, dirty/unknown owner, dirty snapshot, head-moves and slow-start cases; each keeps its existing meaning with coherent completion observation. Reload.failure() covers import failure and death after ready; both keep failed-candidate fallback and repaired-candidate recovery checks. No stored file format, runtime config, pin, wake or service policy changes. Existing tests keep their assertion counts and behavior, except the false failure caused by a permitted publication gap. No new design section is needed because this is a test observer and diagnostic change, not a runtime contract change.",
+    "Validation. The new observation wrapper and the existing 14-test reload module, including service integration, stand-in-lock and rule cases pass on the final head. CI and gates validate the full Bash shard under normal concurrent suite load and exact-head required jobs. Local isolated passing tests alone do not establish readiness. No CI skip, retry-as-success, removed assertion, arbitrary readiness sleep or remote status rewrite. After this repair merges and the local engine updates, autopilot owns base catch-up and required CI for PRs 233, 232 and 237; their own reviews and captain merge decisions remain necessary.",
+    "Out of scope. bin/lib/fm_autopilot.py and all other production code; changing the two-second duplicate-service bound, 25-second test bound or shared-probe loop; board changes; external review policy; manual merge; claiming the unproven identity timeout fixed."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "Reload tests read owner readiness and the final outcome as one view."
+        },
+        {
+          "kind": "fact",
+          "text": "A controlled test proves that reads wait across the write gap."
+        },
+        {
+          "kind": "fact",
+          "text": "Timeout reports record fixture state without changing service rules."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "CI read the previous failed outcome after it saw the repaired owner ready."
+        },
+        {
+          "kind": "fact",
+          "text": "The identity timeout lacks evidence of a service defect."
+        }
+      ],
+      "scope_in": [
+        "reload test reads and a test helper",
+        "controlled write gap tests",
+        "timeout state reports"
+      ],
+      "scope_out": [
+        "service code and lock bounds",
+        "CI bypass and manual merge",
+        "external reviewer policy"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: Tests check the target owner and outcome under one lock. All fallback and once-only checks stay."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: A controlled gap keeps completion pending until the writer saves the outcome."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: Timeout reports show owner, request, outcome, service lock and process state."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Local tests passed. Remote required CI is still red."
+        },
+        {
+          "kind": "caution",
+          "text": "This task gathers identity timeout evidence. It does not claim to fix that timeout."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "gone",
+          "label": "Read owner before outcome"
+        },
+        {
+          "state": "gone",
+          "label": "Timeout shows only service.log"
+        },
+        {
+          "state": "same",
+          "label": "CI blocks merge"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "new",
+          "label": "Read both under start lock"
+        },
+        {
+          "state": "new",
+          "label": "Prove the write gap"
+        },
+        {
+          "state": "new",
+          "label": "Record timeout state"
+        },
+        {
+          "state": "same",
+          "label": "CI blocks merge"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "重載測試在同一次讀取檢查 owner 就緒及最終結果。"
+        },
+        {
+          "kind": "fact",
+          "text": "受控測試證明讀取等待寫入間隔結束。"
+        },
+        {
+          "kind": "fact",
+          "text": "逾時報告記錄測試狀態，服務規則維持現狀。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "CI 讀到修復後 owner 就緒，卻讀到先前失敗結果。"
+        },
+        {
+          "kind": "fact",
+          "text": "重載逾時尚缺服務缺陷證據。"
+        }
+      ],
+      "scope_in": [
+        "重載測試讀取及測試 helper",
+        "受控寫入間隔測試",
+        "逾時狀態報告"
+      ],
+      "scope_out": [
+        "服務程式及鎖定時限",
+        "跳過 CI 及手動合併",
+        "外部審查政策"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：測試在同一鎖內檢查目標 owner 與結果。保留 fallback 與 once-only 檢查。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：受控間隔維持讀取等待，直到寫入者儲存結果。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：逾時報告顯示 owner、請求、結果、服務鎖及程序狀態。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "本機測試通過。遠端必要 CI 仍失敗。"
+        },
+        {
+          "kind": "caution",
+          "text": "此任務收集重載逾時證據，不宣稱修好此逾時。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "gone",
+          "label": "先讀 owner 才有結果"
+        },
+        {
+          "state": "gone",
+          "label": "逾時只顯示服務日誌"
+        },
+        {
+          "state": "same",
+          "label": "CI 阻擋合併"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "new",
+          "label": "啟動鎖內讀兩份記錄"
+        },
+        {
+          "state": "new",
+          "label": "驗證寫入間隔"
+        },
+        {
+          "state": "new",
+          "label": "記錄逾時狀態"
+        },
+        {
+          "state": "same",
+          "label": "CI 阻擋合併"
+        }
+      ]
+    }
+  }
+}
