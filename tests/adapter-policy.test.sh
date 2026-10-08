@@ -128,7 +128,7 @@ round_locations() {   # round_locations <vendor> <os> -> the variables naming a 
   case "$1" in
     claude) printf '%s\n' CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR ;;
     codex) printf '%s\n' CODEX_HOME ;;
-    # cursor-agent is handed no location of its own: its login is a variable
+    cursor-agent) printf '%s\n' CURSOR_DATA_DIR ;;
     gemini) printf '%s\n' HOME GEMINI_CLI_HOME ;;
   esac
 }
@@ -166,7 +166,7 @@ for loc_role in worker run-review; do
         writable_in "$loc_os" "$loc_p"
         assert_eq "0" "$?" "and may write it: $loc_n=$loc_p ($loc_at)"
       done < <(round_locations "$v" "$loc_os")
-      # cursor-agent's login is CURSOR_API_KEY (T-117 round 6): no config
+      # Regression guard (unchanged on base): cursor-agent's login is CURSOR_API_KEY (T-117 round 6): no config
       # home of fm's moves it off its own ~/.cursor/cli-config.json
       if [ "$v" = cursor-agent ]; then
         assert_eq "${XDG_CONFIG_HOME:-}" "$(sed -n 's/^XDG_CONFIG_HOME=//p' <<< "$loc_env")" \

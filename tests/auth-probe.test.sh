@@ -239,6 +239,7 @@ for fixture in signed-in key-rejected signed-out; do
       assert_eq 'cursor-agent 沒有收到 crew 的 Cursor API key；請執行 fm doctor' "$(field "$out" tw)" "missing received key names doctor in Traditional Chinese" ;;
   esac
 done
+# T-219 regression guard: existing Cursor quota/expiry cases pass on base.
 for pair in 'quota-exhausted|quota exceeded' 'expired|session expired'; do
   fake cursor-agent 2026.10.01-e373342 "$(printf 'Available models\n%s' "${pair#*|}")" 0
   assert_eq "${pair%%|*}" "$(field "$(run cursor-agent)" status)" "${pair%%|*} wins over Available models"
@@ -422,10 +423,15 @@ crew_claude; crew_cursor; codex_auth
 fake claude "claude 2.1.3" "Your session has expired" 1
 assert_eq "expired" "$(field "$(run claude)" status)" "an expired session is reported as expired, not unauthenticated"
 
+# Existing quota cases are regression guards, unchanged on base.
 # --- quota-exhausted -------------------------------------------------------
 fake codex "codex-cli 0.1.0" "quota exceeded for this organisation" 1
 out="$(run codex)"
 assert_eq "quota-exhausted" "$(field "$out" status)" "a quota message is reported as quota-exhausted"
+
+# T-219 fail-first: captured Codex status diagnostic (U+2019).
+fake codex "codex-cli 0.1.0" "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 7:58 AM." 1
+assert_eq "quota-exhausted" "$(field "$(run codex)" status)" "Codex usage limit is quota-exhausted"
 
 # --- indeterminate: exit 0 and nothing to show, or noise this probe cannot read
 fake claude "claude 2.1.3" "" 0
