@@ -1,0 +1,191 @@
+{
+  "id": "T-258",
+  "title": "The session heartbeat test holds its real fixture child alive until it observes a heartbeat, then releases and reaps the child through a bounded handshake; production heartbeat behavior and intervals stay unchanged",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "tests/session.test.sh",
+    "tests/lib/session_heartbeat_fixture.py",
+    "design/tasks/T-258.json"
+  ],
+  "acceptance": [
+    "Why. The captain asked firstmate to coordinate CI repairs rather than wait. T-250 / PR 233 exact head 6da1ce45c0c3381f6bd4bd828080e128b11bfc96, run 37720250557 job 113126511389 fails tests/session.test.sh:1046, test_execute_child_prints_heartbeat_while_adapter_runs: still running is absent, although started and finished exit=0 after 0s appear. The session module ran 37 tests with one failure. This separate task needs captain dispatch approval and exact SPEC preflight; T-257 does not cover this file.",
+    "Cause and limit. tests/session.test.sh:1021-1047 uses an adapter that sleeps 0.45 seconds and FM_HEARTBEAT_SECS=0.15. bin/fm-herdr.py execute_child:1832-1846 creates the child, saves execution.json, prints started, then starts timing and waits. The test assumes the child still runs at the first wait. The child can finish during execution-state persistence or parent scheduling, causing an immediate successful first wait and legitimately no heartbeat. Current logs establish this missing-heartbeat outcome, not the exact delay. These two source files have no diff between accepted base 2b8826dc26ef94722dc05acb0f7293c0b21aab93 and that PR head. Production heartbeat correctness is not disproven.",
+    "Change, only the named heartbeat case. Replace the fixed 0.45-second adapter lifetime with a real fixture child that announces readiness and stays alive until a fixture release signal. Use an adapter script with the absolute sys.executable and fixture-local paths; do not depend on vendor auth, PATH stubs or external projects. Preserve FM_HEARTBEAT_SECS=0.15. Capture stdout through a test-local StringIO-compatible observer that records every original write and releases the child only when it observes the actual execute_child still running text. Use one release per case. The child then writes the same done transcript and exits 0. A bounded child deadline exits nonzero if no release arrives, so suppressed heartbeat cannot hang the suite. File polling inside the isolated child is acceptable for a release signal, but no fixed sleep chooses the heartbeat ordering. Keep the existing test name and started/heartbeat/finished assertions.",
+    "Deterministic setup and safety. The child readiness signal and captured heartbeat create explicit ordering: ready child, production first bounded wait, production timeout print, fixture release, real child exit. The test observes readiness with a bounded handshake rather than a fixed setup delay. A test-local wrapper around execution.json persistence may wait for the readiness signal so parent setup delay cannot make the child finish first. It delegates the original save and touches no other save call. If a helper is needed, place only this fixture logic in tests/lib/session_heartbeat_fixture.py. Cleanup releases or stops/reaps only the fixture child after a bounded deadline; retain the subprocess object through a scoped test-local Popen wrapper if necessary. Restore every patched function/environment/stdout on exit. Assert execution.json child pid, final result exit_code=0, a single completion path and no live retained fixture child. Do not emit production wakes or change genuine managed session/crew state.",
+    "Behavioral proof, separate from ordinary fail-first. Retain the new case and helper API; in an isolated temporary engine copy suppress only the still running print in execute_child while leaving TimeoutExpired handling, waits, started/finished and child launch intact. The handshake receives no heartbeat and the bounded fixture deadline fails the existing heartbeat/exit assertions; retain the exact mutation bytes and assertion output. Production files in the real PR stay unchanged. Ordinary fm-failfirst.sh classifies tests/** as tests and keeps changed tests; no runtime behavior is reverted in this test-only scope. Report that classification honestly, not a runtime fail-first success.",
+    "Historical-base experiment. Record accepted base SHA; create an isolated temporary checkout, retain the original short-child test and add a test-only scheduling shim. Capture the real child Popen object; after the original execution.json save, hold the parent until that captured child poll confirms exit within a bounded deadline. Then continue execute_child. This deterministically reproduces the original missing still running assertion with finished exit=0. Retain shim bytes, SHA and output. Do not call an absent-helper import error a behavioral proof. This constructed experiment models a permitted setup delay; it does not claim to identify the exact remote delay. The new handshake case runs against unchanged base production code and passes because it repairs a fixture assumption, not a runtime defect.",
+    "Callers and regressions. tests/session.test.sh imports session_fixture and only this named case changes. Production execute_child is shared with normal managed sessions; its source and callers stay byte-identical. The other 36 session tests keep existing assertions. The complete 37-test session module remains regression coverage; a real adapter child remains in the heartbeat case, so a mock wait alone does not replace lifecycle coverage. The helper is fixture-only and must not add inherited FM_/HERDR_ routing or read external private state.",
+    "Migration/design/validation. No runtime or stored-record contract changes; no design section, i18n key, config or pin migration is needed. CI and gates validate the targeted heartbeat case, full 37-test session module and the final-head Bash shard under normal concurrency, then all required exact-head checks. Test observers and handshakes have explicit bounds and report fixture deadlines truthfully. No larger fixed sleep, raised production heartbeat interval, assertion removal, CI skip, retry-as-success or manual status rewrite. Workers follow their no-suite execution rule; firstmate/CI/gates retain actual test evidence. After merge, autopilot owns base catch-up for affected open PRs.",
+    "Out of scope. bin/fm-herdr.py and every production file; heartbeat intervals; service time bounds; unrelated session tests; the T-257 reload fix; external branch policy; manual merge. A proven production defect needs a separate or amended approved scope before edits."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "The heartbeat fixture stays alive until the parent prints a heartbeat."
+        },
+        {
+          "kind": "fact",
+          "text": "The test releases and reaps its child with a bounded cleanup path."
+        },
+        {
+          "kind": "fact",
+          "text": "A controlled missing-heartbeat mutation fails the test."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The fixed child lifetime makes the heartbeat assertion depend on parent setup time."
+        },
+        {
+          "kind": "fact",
+          "text": "The production wait loop prints a heartbeat only when the child wait times out."
+        }
+      ],
+      "scope_in": [
+        "one heartbeat case in tests/session.test.sh",
+        "a test helper if the case needs one"
+      ],
+      "scope_out": [
+        "production session code",
+        "heartbeat intervals and service time bounds",
+        "CI skips and manual merge"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: A handshake holds the real fixture child through the first heartbeat wait."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: The test checks started, heartbeat, finished and exit status. It reaps fixture children after failure."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: Suppressed heartbeat text fails a retained test harness. The historical short-child experiment stays separate from CI fail-first."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "The failure affects an existing base test. It does not prove a production heartbeat defect."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "gone",
+          "label": "Child sleeps for 0.45 seconds"
+        },
+        {
+          "state": "same",
+          "label": "Parent saves execution state"
+        },
+        {
+          "state": "gone",
+          "label": "CI speed decides heartbeat"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "new",
+          "label": "Child waits for observed heartbeat"
+        },
+        {
+          "state": "same",
+          "label": "Parent saves execution state"
+        },
+        {
+          "state": "new",
+          "label": "Handshake releases fixture child"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "heartbeat 測試子程序存活至父程序印出 heartbeat。"
+        },
+        {
+          "kind": "fact",
+          "text": "測試以有限時清理路徑釋放並回收子程序。"
+        },
+        {
+          "kind": "fact",
+          "text": "受控移除 heartbeat 的 mutation 使測試失敗。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "固定子程序存活時間讓 heartbeat 檢查依賴父程序準備時間。"
+        },
+        {
+          "kind": "fact",
+          "text": "production 等待迴圈只在子程序等待逾時時印出 heartbeat。"
+        }
+      ],
+      "scope_in": [
+        "tests/session.test.sh 的一個 heartbeat 案例",
+        "案例所需的測試 helper"
+      ],
+      "scope_out": [
+        "production session 程式",
+        "heartbeat 間隔及服務時限",
+        "跳過 CI 及手動合併"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：握手維持真實測試子程序存活，直到第一次 heartbeat 等待。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：測試檢查啟動、heartbeat、結束及退出狀態。失敗後回收測試子程序。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：保留測試 harness，移除 heartbeat 文字後失敗。歷史短暫子程序實驗與 CI fail-first 分開。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "失敗來自既有 base 測試，不證明 production heartbeat 缺陷。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "gone",
+          "label": "子程序睡眠 0.45 秒"
+        },
+        {
+          "state": "same",
+          "label": "父程序儲存執行狀態"
+        },
+        {
+          "state": "gone",
+          "label": "CI 速度決定 heartbeat"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "new",
+          "label": "子程序等待觀察到 heartbeat"
+        },
+        {
+          "state": "same",
+          "label": "父程序儲存執行狀態"
+        },
+        {
+          "state": "new",
+          "label": "握手釋放測試子程序"
+        }
+      ]
+    }
+  }
+}
