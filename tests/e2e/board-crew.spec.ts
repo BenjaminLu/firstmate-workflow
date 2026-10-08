@@ -43,6 +43,7 @@ test("nothing here can reach a model", async () => {
   // bin/lib/fm_lifeline.py, the lifeline module the merge helper runs under
   // (T-151). It starts and rings only what fm names and reaches no model; the
   // line below pins bin/lib to the lifeline files and the read-only storage resolver.
+  // fm-emit.sh sources the task grammar library, which only defines shell functions and reaches no model.
   // The board runs bin/lib/fm_ste.py only to read the STE rule table (T-210/T-211), which reaches no model.
   // The board runs bin/lib/fm_evidence.py summary only to read evidence metadata (T-230), which reaches no model.
   // T-232: the board reads fm_gates.json; fm_evidence imports fm_binding only for gate_list/gate_entry. Neither reaches a model.
@@ -50,7 +51,7 @@ test("nothing here can reach a model", async () => {
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
   expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "lib"]);
   // lib/ contains the lifeline and config helpers, nothing that calls a model
-  expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm_binding.py", "fm_config_runtime.py", "fm_config_tasks.py", "fm_config_values.py", "fm_evidence.py", "fm_gates.json", "fm_lifeline.py", "fm_project_paths.py", "fm_registry.py", "fm_spec_preflight.py", "fm_ste.py"]);
+  expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm-task-grammar.sh", "fm_binding.py", "fm_config_runtime.py", "fm_config_tasks.py", "fm_config_values.py", "fm_evidence.py", "fm_gates.json", "fm_lifeline.py", "fm_project_paths.py", "fm_registry.py", "fm_spec_preflight.py", "fm_ste.py"]);
   const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);
   expect([...called].sort()).toEqual(["fm_board_port", "fm_evidence", "fm_gates", "fm_language", "fm_lifeline", "fm_project_get", "fm_project_resolve", "fm_projects", "fm_ste", "fm_tasks"]);
 });

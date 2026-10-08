@@ -672,6 +672,8 @@ class EmitStatusFixture(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root/'bin').mkdir(); (self.root/'state').mkdir()
         shutil.copy(root/'bin/fm-emit.sh', self.root/'bin/fm-emit.sh')
+        (self.root/'bin/lib').mkdir()
+        shutil.copy(root/'bin/lib/fm-task-grammar.sh', self.root/'bin/lib/fm-task-grammar.sh')
         shutil.copy(root/'bin/fm-herdr.py', self.root/'bin/fm-herdr.py')
 
     def events(self):
@@ -690,6 +692,8 @@ class AgentLostFixture(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root/'bin').mkdir(); (self.root/'state/runs').mkdir(parents=True)
         shutil.copy(root/'bin/fm-emit.sh', self.root/'bin/fm-emit.sh')
+        (self.root/'bin/lib').mkdir()
+        shutil.copy(root/'bin/lib/fm-task-grammar.sh', self.root/'bin/lib/fm-task-grammar.sh')
         self.log = self.root/'state/events.jsonl'
         # a pid that existed and is gone: its own child, started and reaped
         gone = subprocess.Popen(['true']); gone.wait(); self.dead = gone.pid

@@ -318,9 +318,11 @@ it is T-105's, and its card is a merge card for T-105. The board hands a task's 
 with the server's reason) otherwise.
 
 **One task-id grammar (T-119).** Which ids are tasks, and which task a branch
-or title names, is written once, in `bin/fm-emit.sh`, which every script
-already depends on; `fm-decide.sh` and `fm-merge.sh` source
-it (sourced, `fm-emit.sh` runs nothing past the grammar), and
+or title names, is written once, in `bin/lib/fm-task-grammar.sh`, a library
+that only defines the grammar. `fm-emit.sh` sources it, so `fm-decide.sh`,
+`fm-merge.sh`, `fm-diagram.sh` and the autopilot still get the grammar by
+sourcing `fm-emit.sh` (which runs nothing past its grammar block when sourced).
+Reconcile sources the library itself, never the event writer.
 `board/server.ts` carries its TypeScript twin between `// --- task grammar
 (T-119) ---` markers, which `tests/board.test.sh` lifts out and runs against
 the shell functions over one table. A task is `T-<3+ digits>` or
@@ -328,7 +330,11 @@ the shell functions over one table. A task is `T-<3+ digits>` or
 merged pull requests use. A branch names its task with the prefix in either
 case, the hyphen after it optional as in the earliest `t004-…`, and the whole
 run of digits: `t-117-…` is T-117, `sk-001-…` is SK-001, `t-1170-…` is
-T-1170, never T-117. A title leads with the task and a colon; GitHub's
+T-1170, never T-117. One optional leading `[A-Za-z0-9._-]+/` segment is
+allowed (T-250): `feature/t-001-x` names T-001 and `feature/sk-002-y`
+names SK-002. Two segments, `/t-001` and `hotfix/x` name no task.
+This attribution also applies to human branches: adoption by a different task
+is refused, including at the next round of an existing adoption. A title leads with the task and a colon; GitHub's
 `Revert "T-105: …"` names none. A decision id holds a task's key, the task
 without its hyphen (`T047`, `SK001`); card ids have always taken
 `T-<letters and digits>` too, and the fixtures (`T-A`, `T-1`) still do, so a
@@ -339,10 +345,13 @@ naming the task it holds. Any other name passes, because the suites write
 `merged` for fixture tasks named `A`, `C` and `D`; `fm-merge.sh`, the one
 writer of `merged` outside the suites and `fm-autopilot.sh`, already refuses
 a task that is not the pull request's. It checks no other event's task.
-One copy of the old reading is left, outside T-119's scope, and is **open**:
-`bin/fm-reconcile.sh`'s `task_of` still has the old `sed` (no `sk-…`
-branch; `t-1170-…` read as T-117) and its `is_task_id` takes only
-`T-<3 digits>`, so recovery misses SK merges; it should source this grammar.
+T-250 makes `bin/fm-reconcile.sh` source the library for branch attribution,
+so it reads SK merges and whole numbers such as T-1170. The remaining open
+item is its pid-file `is_task_id` at `bin/fm-reconcile.sh:136`, which still
+accepts only `T-<3 digits>`. All four stacking branch readers allow the
+same optional segment; protected branch and expected-head deletion rules remain.
+Unprefixed branches, self branch names, PR titles, gates and T-119's merged-event
+refusal semantics are unchanged.
 
 So a skill update merges through the board like any task: an approved,
 green SK-* task gets an owned merge card, `D-<project>-SK<n>-<m>` from
@@ -5277,6 +5286,27 @@ arrays and objects as JSON; named policy enums may be bare). Mandatory policy
 includes repository/base binding, land, review, post, merge_method,
 delete_branch, required_checks, stacking, force_with_lease, captain, intent,
 product, confirmed_at, confirmed, policy_confirmed and timer values.
+T-250 adds optional, captain-confirmed `branch_prefix`, `ci_branch_patterns`
+and `ci_pull_request`. The prefix matches `^[a-z0-9][a-z0-9._-]{0,30}/$`,
+one segment ending in `/`, JSON-quoted as `"feature/"`. CI patterns are a JSON
+list of 1–30 non-empty branch or `refs/heads/` globs; `ci_pull_request` is a
+boolean, default false. Missing patterns remain unknown, not an empty list.
+The repository prefix wins over `FM_HOME/owners/<owner>.yaml`, then no prefix.
+Owner files allow `branch_prefix` beside the three `pr_*` keys; CI rules are
+repository-specific and refused in owner files. `branch_format` returns
+`{"prefix":"","patterns":null,"pull_request":false}` when nothing is recorded.
+
+Inspection also records `.drone.yml`, `.drone.jsonnet`, up to five direct local
+jsonnet imports, and up to twenty YAML files from `.github/workflows` under
+`ci_files`. Plain-text parsing proposes branch/ref patterns and PR triggers,
+with file paths as evidence. Recent PR heads propose the most common first
+segment among heads matching a recorded pattern, or all segmented heads when
+no patterns are found, with PR numbers as evidence. The policy question shows
+these proposals; approval drops them unless the captain explicitly answers,
+and conventions edit accepts the three fields. Older inspection records have
+no CI evidence but can still propose a prefix. These confirmed fields are not
+drift keys. A non-directory workflows response is unknown, never a file list.
+
 Publication reads the same contract as merge and prompt construction. Missing,
 invalid or unconfirmed policy refuses external publication; self defaults stay
 unchanged. Merge methods and retention follow the contract; land: handoff
@@ -5624,7 +5654,23 @@ T-051's target execution path synchronizes and verifies the managed external
 clone before launch, using frozen engine scripts. A clean checked-out base may
 fast-forward to the fetched base; divergent or unpublished local work is retained
 and requires synchronization before launch. New task worktrees start at the
-fetched confirmed base. External task branch names carry generic task labels.
+fetched confirmed base. With a confirmed prefix, new external branches are
+`<prefix><task-slug>-<short>`. The suffix comes only from a `public_title`
+whose title, summary and changes pass plain public-text validation: lowercase,
+non-ASCII-alphanumeric runs become hyphens, cut to 40 characters and trim edge
+hyphens. Missing, invalid or empty results use `work`. Without a prefix the
+name remains `<task-slug>-work`. Existing local and remote branches are reused,
+including legacy unprefixed branches; adopted PRs retain their own heads.
+
+Before a new external branch creates a worktree or publishes anything, the
+worker reads `branch_format`. Read failure emits `worker_crashed` and exits 65.
+Absent CI patterns print a migration warning and continue. Otherwise a confirmed
+PR trigger permits the branch; without it, at least one pattern must match by
+Python `fnmatch.fnmatchcase`, stripping a leading `refs/heads/`. A mismatch
+prints the branch and patterns, emits `worker_crashed`, and exits 65 before any
+worktree, commit, push or PR. Existing/adopted branches skip the trigger check.
+Matching a branch trigger can also run that repository's deployment steps.
+No migration renames existing branches or changes self-project naming.
 External commit subjects and PR titles use the spec's validated `public_title`,
 stripped and without a firstmate task id. Missing or invalid public text keeps
 the generic task label and private-evidence fallback; private spec titles stay
@@ -5641,10 +5687,11 @@ in `FM_HOME/owners/<owner>.yaml`, which wins over `plain`, `[]`, `en`. The owner
 and root come from the policy repository and the resolved
 `<root>/projects/<name>/CONVENTIONS.md` path; other layouts have no owner default.
 Owner files use the same data-only `key: <JSON or bare enum>` line parser, with
-blank and comment lines ignored and only these three keys allowed. Bare values
+blank and comment lines ignored; only these three keys and `branch_prefix` are
+allowed. Bare values
 use `[a-z][a-z0-9_-]*`; quote `"zh-TW"` and `"zh-CN"` as JSON. Missing owner files
 supply no default; symlinked, unreadable or invalid ones make preflight refuse
-and the worker warn and use the generic fallback. Invalid format fields in
+and the worker refuse branch selection with exit 65. Invalid format fields in
 CONVENTIONS refuse the project through the shared policy reader. Owner defaults
 are read at round time, not pinned or copied into CONVENTIONS. Onboarding writes
 format fields only from the captain's explicit answers. Firstmate git holds no

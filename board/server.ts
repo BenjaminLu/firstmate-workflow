@@ -615,12 +615,13 @@ const prNumber = (n: unknown): number | null => {
 // (T-112): fm.sh self-update raises it, fm-decide.sh --await and fm-ready.sh
 // read its answer under that pattern only, and it names no owner.
 // --- task grammar (T-119) ---
-// The TypeScript twin of bin/fm-emit.sh's task-id grammar, the one place the
+// The TypeScript twin of bin/lib/fm-task-grammar.sh's task-id grammar, the one place the
 // scripts read it from; tests/board.test.sh lifts this block out and runs it
 // against the shell functions over one table, so the two cannot drift. A
 // task is T-<3+ digits> or SK-<3+ digits>. A branch names its task, prefix in
 // either case, the hyphen after it optional, the number whole (t-117-… is
-// T-117, sk-001-… is SK-001, t-1170-… is T-1170); a title leads with it and
+// T-117, sk-001-… is SK-001, t-1170-… is T-1170). One leading
+// [A-Za-z0-9._-]+/ segment is optional; a title leads with the task and
 // a colon ("T-117: …"); a pull request's task is its branch's, else its
 // title's. A decision id holds a task's key, the task without its hyphen,
 // and card ids have always taken T-<letters and digits> too; an owned
@@ -636,7 +637,7 @@ function taskGrammar() {
   const OWNED = new RegExp(`^D-([a-z0-9-]{1,24})-(${TASK_KEY})-([1-9][0-9]{0,5})$`);
   const isTask = (id) => typeof id === "string" && TASK_ID.test(id);
   const taskOfBranch = (branch) => {
-    const m = /^([tT]|[sS][kK])-?([0-9]{3,})(-.*)?$/.exec(typeof branch === "string" ? branch : "");
+    const m = /^(?:[A-Za-z0-9._-]+\/)?([tT]|[sS][kK])-?([0-9]{3,})(-.*)?$/.exec(typeof branch === "string" ? branch : "");
     return m ? `${m[1].toUpperCase()}-${m[2]}` : null;
   };
   const taskOfTitle = (title) => {
