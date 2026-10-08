@@ -79,6 +79,14 @@ if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ];
 fi
 fm_conventions "" >/dev/null || exit 65
 fm_refuse_herdr_bypass fm-review || exit $?
+# Pin before the first managed launch, including spec preflight. A short-lived
+# launcher shell must not become the owner, nor be walked again after it exits.
+if review_owner="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_lifeline.py" session-owner 2>&1)"; then
+  export FM_SESSION_PID="$review_owner"
+else
+  echo "fm-review: no session owns this review: $review_owner. Start it in the foreground of the session, or with the harness's background mode, or name the owner with FM_SESSION_PID." >&2
+  exit 75
+fi
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 fm_external_prepare || exit 65
 fm_target_validate || exit 65
@@ -594,7 +602,7 @@ required_names() {
     REQ_SOURCE="captain-confirmed CONVENTIONS.md checks/statuses"
     return 0
   fi
-  if got="$($GH api "repos/$repository/branches/$BASE/protection/required_status_checks" 2>/dev/null </dev/null)"; then
+  if got="$(fm_gh_read "$GH" api "repos/$repository/branches/$BASE/protection/required_status_checks" 2>/dev/null </dev/null)"; then
     REQ_NAMES="$(jq -r '(.contexts[]?, .checks[]?.context) | strings' <<<"$got" 2>/dev/null | awk 'NF && !s[$0]++')"
     REQ_SOURCE="the protection of the base branch $BASE"
     [ -z "$REQ_NAMES" ] || return 0
@@ -618,7 +626,7 @@ check_runs_of() {
     python3 "$_fm_code_dir/lib/fm_project_checks.py" "$GH_REPO" "$1" "$2"
     return $?
   fi
-  got="$($GH api "repos/$repository/commits/$1/check-runs?$2" 2>/dev/null </dev/null)" || return 1
+  got="$(fm_gh_read "$GH" api "repos/$repository/commits/$1/check-runs?$2" 2>/dev/null </dev/null)" || return 1
   jq -e '.check_runs | type == "array"' >/dev/null 2>&1 <<<"$got" || return 1
   printf '%s' "$got"
 }
