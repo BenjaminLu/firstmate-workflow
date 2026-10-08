@@ -554,5 +554,12 @@ $runargv
 done
 
 
+# T-219: copied immutable snapshots and faithful Cursor data-path stub.
+# Literal helper dependency lets gate 4 select this consuming suite.
+python3 "$ROOT/tests/lib/cursor_round.py" "$ROOT" "$pk" "$closed_path" \
+  "$ROOT/tests/lib/cursor_round_old/cursor-agent.sh" \
+  "$ROOT/tests/lib/cursor_round_old/_lib.sh"
+assert_eq 0 "$?" "Cursor private round data and frozen snapshot contract"
+
 safe_rm_rf "$pk" "$closed_path"
 finish
