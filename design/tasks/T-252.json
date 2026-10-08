@@ -1,0 +1,185 @@
+{
+  "id": "T-252",
+  "title": "the autopilot finishes the self project's merge path without hand scripts: it builds merge card details from the answered dispatch card when none are authored, and wakes once for a draft pull request",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_merge_details.py",
+    "bin/lib/fm_autopilot_loop.py",
+    "tests/autopilot-merge-path.test.sh",
+    "tests/lib/autopilot_merge_path.py",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-252.json",
+    "tests/lib/autopilot_task_resolution.py",
+    "docs/verification/supervision.md"
+  ],
+  "acceptance": [
+    "Why. The captain (2026-10-07) reviewed which firstmate habits live only in memory and answered verbatim: \"好 先B再C 其他照你的意思改\", approving that rules become code first. All day firstmate ran its merge path by hand with untracked local scripts (review wait, CI wait, a merge-card lock, update-branch, a coverage count, fm-gate, the merge-card request). Those scripts matched their own wrapper process, miscounted suites and left a stale lock. The autopilot (bin/lib/fm_autopilot_loop.py) already owns the same path on origin/main 4d4374f: gates, review launch on gate 6, the merge lock, base and head checks, and the merge-card request at :470-510. What it lacks is why the hand scripts existed: it stops at :503-507 with a wake whenever no merge-card details file exists, and it returns silently for a draft pull request at :286. This task closes those two gaps for the self project so firstmate needs no hand chain. Network stall timeouts belong to T-253, and a rerun rule for known flaky tests is a later task; this task touches neither.",
+    "Change 1, merge-card details from the dispatch card (new bin/lib/fm_merge_details.py, bin/lib/fm_autopilot_loop.py). `build(state, project, task, pr_number)` runs for the self project only (external projects, which can carry a not-runnable fail-first gate from T-240 and do not reload the board on merge, keep today's wake with the reason \"external project: author the details\"). It reads, among the answered decisions for the task whose purpose is dispatch and whose chosen option is A, the one with the highest `<n>` (state/decisions/D-<project>-<task key>-<n>.json; its `details` holds the en and zh-TW intent-card fields), and returns merge-card details with the same contract fm-decide.sh --kind merge checks today (design :430-438): every intent field copied (intent, why, scope_in, scope_out, done, notes, before_nodes, after_nodes); `done` gains a first item \"CI, review and the six gates are green on this head.\" / \"這個 head 的 CI、審查和六關全綠。\"; `title` is \"MERGE CARD — merge PR #<n>: \" plus the dispatch title without its leading \"Dispatch <task>: \" when that prefix is present, else the whole dispatch title (zh-TW \"【合併卡】合併 PR #<n>：\" plus the dispatch title without \"派工 <task>：\" when present, else the whole title); `explanation` is \"The review approved <task>. CI, coverage and the six gates must be green on this head before you see this card.\" (zh-TW \"審查核准了 <task>。這個 head 的 CI、覆蓋檢查和六關都必須全綠。\"); `before` and `after` are copied from the dispatch card in each locale; `outcome` \"Option A merges only PR #<n>. The board then replaces itself on the new code.\" (zh-TW \"選項 A 只合併 PR #<n>。之後看板自己換上新程式。\"); options: A with description \"Merge #<n>\" (zh-TW \"合併 #<n>\") and the dispatch card's A pros and cons; B with description \"Hold the merge\" (zh-TW \"暫緩合併\"), pros \"The code stays the same.\" (zh-TW \"程式維持原樣。\") and the dispatch card's B cons; C with description \"Ask for a fix\" (zh-TW \"要求修正\"), pros \"You can change the scope.\" (zh-TW \"你可以改範圍。\") and cons \"A change needs a new review, CI and six gates.\" (zh-TW \"修改需要重新審查、CI 和六關。\"); every fixed sentence here passes `fm_ste` (checked on base); `questions` = the dispatch card's questions when present, else one fact \"The change stays inside the pinned scope.\" / \"改動不超出固定的範圍。\"; `change_table` = one row whose text is the first intent item, A ✓, B —, C —. It then runs `fm_ste` check-details with kind merge on the result, which also covers the fields fm-decide.sh --request requires (bin/fm-decide.sh:385-395). In merge_card at :503-507, when the authored file state/decision-details/<id>.json is missing, the autopilot calls build and writes the result to state/decision-details-built/<id>.json, a directory outside the inputs that the advance fingerprint reads (:297-310 globs only state/decision-details/), so writing it or a failed --request never changes the fingerprint and never starts another gate run; it then passes that path to fm-decide.sh --request --details. The authored file, when present, always wins and is never overwritten. When build cannot produce a passing file, the wake keeps its existing prefix \"<task> ready: merge card details needed (<id>)\" and adds the reason: \"no answered dispatch card\", the checker's structural error text (for example a dispatch card without intent fields, a `done` list that would exceed its limit, or locale count mismatches; fm_ste raises ValueError for these), or the failing STE lines.",
+    "Change 2, draft pull requests (bin/lib/fm_autopilot_loop.py). In advance at :286, a draft pull request of any project that has no running job for the task queues one wake per head through `queue` with identity `draft-<n>-<head>`: \"<task> #<n> is a draft at <head12>: the merge path waits; mark it ready\" / zh-TW \"<task> #<n> 仍是草稿：合併流程在等待，請標成 ready\", then returns as today. tests/lib/autopilot_task_resolution.py drives draft pull requests through this branch: the assertions at :119, :124, :130, :133, :135, :141, :143 and :170 (test_answered_ask_and_wrong_head_never_wake, whose draft now reaches :286) add the expected `draft-<n>-<head>` identity; the upgrade-test assertions at :157, :160 and :163 return before the draft check and stay as they are; no other change. It never marks a pull request ready itself. The worker is unchanged; a later task can make a finished round mark its own draft ready. On the first poll after this lands, each open draft pull request gets one wake.",
+    "Not changed, stated. Red CI handling, including reruns of flaky tests (a later task); network timeouts (T-253); the gate list, the merge lock and its blocker, the order of gates and review, the captain's click as the only merge, fm-decide's validation, external projects' handling of red CI, and authored merge-card details.",
+    "Tests, new behaviour (each fails on the base commit and passes after). New tests/autopilot-merge-path.test.sh (committed executable) running tests/lib/autopilot_merge_path.py with the existing autopilot fixtures, with gh stubs that answer like real gh JSON: (1) self project, gates green, no details file, an answered dispatch card: state/decision-details-built/<id>.json appears with the merge title, the done first item and all intent fields, and fm-decide --request runs once with that path; (2) after (1), a second poll with unchanged inputs starts no new gate job; (3) two answered dispatch cards: the one with the higher <n> is used; (4) a dispatch title without the \"Dispatch <task>: \" prefix: the merge title carries the whole title; (5) a dispatch card whose zh-TW text fails STE: no built file, the wake names the failing line; (6) a dispatch card without intent fields: no built file, the wake carries the checker's field error; (7) no dispatch card: no built file, the wake says so; (8) an external project with gates green and no authored details: no built file, the wake names the external reason; (9) a draft pull request with no running job queues one wake per head and none on a second poll.",
+    "Tests, regression (pass on base and after). An authored details file is used unchanged and is never overwritten (tests/e2e-loop.test.sh:139-143, tests/lib/run_project_turns.py:90-92 write authored details); tests/autopilot.test.sh, tests/autopilot-loop.test.sh (its wake assertion at tests/lib/autopilot_loop.py:216-222 uses assertIn on \"T-001 ready: merge card details needed\", and that prefix stays), tests/autopilot-jobs.test.sh keep their merge-card cases; tests/decide.test.sh merge validation; tests/lib/autopilot_task_resolution.py gains the draft wake identities named in Change 2.",
+    "Callers, all listed. merge_card is called only from job_completed at bin/lib/fm_autopilot_loop.py:445. advance at :240 is called from pull at bin/lib/fm_autopilot.py:463, which the poll loop calls at :563. The draft branch at :286 is the only draft check on the advancement path; bin/lib/fm_autopilot.py:500 and :513 check drafts only for branch updates and are unchanged. Merge-card details are read by fm-decide.sh --request (design :430-438) and by the autopilot at :503; the built path is new and read only by the same merge_card call.",
+    "Migration. No stored format changes. Authored decision-details files keep priority. The new state/decision-details-built/ directory holds autopilot-built files only. Each open draft pull request gets one wake on the first poll after upgrade.",
+    "Docs, edited in place. design/design.md §5.2 (\"Captain decisions\", the merge-card details paragraph at :449-455: for the self project the autopilot builds details from the answered dispatch card when none are authored, into state/decision-details-built/); §15.8 sub-heading \"Autopilot owns PR advancement (T-175)\" at :5791: the sentence \"requests a card only from firstmate-authored details\" (:5803-5804) and \"Missing details queues one wake\" (:5807) are updated for built details and the external case, and the draft wake is added; skills/firstmate/SKILL.md :228-238 (the wake list including missing merge-card details) and :916-926: firstmate no longer runs a merge path by hand and authors details only when the autopilot's wake asks; docs/verification/supervision.md :50-53: the wake kinds gain the draft wake and the missing-details wording names the build fallback."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "For the self project, the autopilot builds the merge card details from the answered dispatch card."
+        },
+        {
+          "kind": "fact",
+          "text": "A draft pull request wakes firstmate once instead of stopping the merge path without a word."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The captain answered on 2026-10-07: \"好 先B再C 其他照你的意思改\"."
+        },
+        {
+          "kind": "fact",
+          "text": "Firstmate ran the merge path by hand with untracked scripts, and they failed in several ways."
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_merge_details.py: details from the dispatch card",
+        "bin/lib/fm_autopilot_loop.py: details and the draft wake",
+        "tests and docs"
+      ],
+      "scope_out": [
+        "The gates and the merge lock",
+        "External projects' merge card details",
+        "Network timeouts (T-253)",
+        "Reruns of flaky tests"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the autopilot writes checked details outside the gated inputs when none are authored. Test cases 1 to 8 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the autopilot wakes once for each draft head. Test case 9 proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Firstmate removes its local hand scripts after this task merges."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Gates pass on the head"
+        },
+        {
+          "state": "gone",
+          "label": "Wake asks for card details"
+        },
+        {
+          "state": "gone",
+          "label": "Firstmate runs a hand chain"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Gates pass on the head"
+        },
+        {
+          "state": "new",
+          "label": "Autopilot builds checked details"
+        },
+        {
+          "state": "new",
+          "label": "Merge card asks the captain"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "self 專案的 autopilot 從已回答的派工卡產生合併卡內容。"
+        },
+        {
+          "kind": "fact",
+          "text": "草稿 PR 會通知 firstmate 一次，不再無聲地卡住合併流程。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 回答：「好 先B再C 其他照你的意思改」。"
+        },
+        {
+          "kind": "fact",
+          "text": "firstmate 用未追蹤的腳本手動跑合併流程，這些腳本多次出錯。"
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_merge_details.py：從派工卡產生內容",
+        "bin/lib/fm_autopilot_loop.py：內容和草稿通知",
+        "測試和文件"
+      ],
+      "scope_out": [
+        "關卡和合併鎖",
+        "外部專案的合併卡內容",
+        "網路逾時（T-253）",
+        "flaky 測試重跑"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：沒有手寫內容時，autopilot 在關卡輸入之外寫出檢查過的內容。案例 1 到 8 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：每個草稿 head 只通知一次。案例 9 證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "任務合併後，firstmate 移除本機的手動腳本。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "關卡在 head 上通過"
+        },
+        {
+          "state": "gone",
+          "label": "通知要求卡片內容"
+        },
+        {
+          "state": "gone",
+          "label": "firstmate 手動跑流程"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "關卡在 head 上通過"
+        },
+        {
+          "state": "new",
+          "label": "autopilot 產生檢查過的內容"
+        },
+        {
+          "state": "new",
+          "label": "合併卡請船長決定"
+        }
+      ]
+    }
+  }
+}
