@@ -51,8 +51,9 @@ def restack_fixture(*, local=B, remote_error=None, git_errors=None, retarget_err
         context.enter_context(patch.object(fm_adopt, 'pinned_adoption', create=True, side_effect=lambda env, task:
             dict(pr=2 if task == 'T-002' else 1, head=B, base='wrong' if wrong_parent else 'human-parent') if pinned else None))
         context.enter_context(patch.object(fm_adopt, 'event_rows', create=True, return_value=[]))
-        context.enter_context(patch.object(stack, 'remote_head', side_effect=[
-            child, dict(child, headRefOid=C) if moved else child, remote_error or final]))
+        context.enter_context(patch.object(stack, 'remote_head', side_effect=(
+            [remote_error or final] if adopted else
+            [child, dict(child, headRefOid=C) if moved else child, remote_error or final])))
         views = iter([child, dict(child, **(changed_identity or {})), final])
         def github_answer(repository, *args):
             if args[:3] == ('pr', 'view', '2'):
