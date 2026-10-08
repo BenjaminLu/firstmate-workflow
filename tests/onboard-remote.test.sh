@@ -9,9 +9,9 @@ for k in $(env | sed -nE 's/^(FM_[^=]*|HERDR_[^=]*|GH_REPO)=.*$/\1/p'); do unset
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 t="$(safe_tmpdir)"; eng="$t/engine"; seed="$t/seed"
-mkdir -p "$eng" "$t/host/consenlabs"
+mkdir -p "$eng" "$t/host/example-org"
 cp -R "$ROOT/.githooks" "$eng/"
-printf 'default_project: self\nprojects:\n  self:\n    repo: .\n    github: consenlabs/tokenlon-mm-agent\n    base: master\n    required_check: ci\n' > "$eng/config.yaml"
+printf 'default_project: self\nprojects:\n  self:\n    repo: .\n    github: example-org/example-repo\n    base: master\n    required_check: ci\n' > "$eng/config.yaml"
 export FM_HOME="$t/private" FM_GITHUB_URL="file://$t/host" FM_GH="$ROOT/tests/lib/onboarding/gh.py" ONBOARD_GH_LOG="$t/gh.log"
 git init -q -b master "$seed"
 git -C "$seed" config user.name Fixture
@@ -21,9 +21,9 @@ git -C "$seed" add app
 git -C "$seed" -c core.hooksPath=/dev/null commit -qm 'feat: initial'
 printf 'second\n' >> "$seed/app"
 git -C "$seed" -c core.hooksPath=/dev/null commit -qam 'fix: second'
-git clone -q --bare "$seed" "$t/host/consenlabs/tokenlon-mm-agent.git"
+git clone -q --bare "$seed" "$t/host/example-org/example-repo.git"
 P="$ROOT/bin/fm-project.sh"
-"$P" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" > "$t/proposal"
+"$P" add example-org/example-repo --name agent --repo "$eng" > "$t/proposal"
 assert_eq 0 "$?" "remote add crosses shell and gh boundaries"
 assert_eq unknown "$(jq -r '.inferred.protection.status' "$t/proposal")" "gh nonzero with JSON stdout is unknown protection"
 assert_contains "$(jq -r '.inferred.protection.reason' "$t/proposal")" 'HTTP 404' "gh stderr explains unknown fact"
@@ -33,23 +33,23 @@ assert_ok "test ! -e '$FM_HOME/projects/agent/repo'" "inspection creates no unma
 cat > "$t/answers" <<'EOF'
 {"confirmed":true,"policy_confirmed":true,"captain":"captain","intent":"Maintain agent","product":"Private agent brief","required_checks":["continuous-integration/drone/pr"],"contract":{"check":"npm test"}}
 EOF
-"$P" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" --answers "$t/answers" > "$t/out"
+"$P" add example-org/example-repo --name agent --repo "$eng" --answers "$t/answers" > "$t/out"
 assert_eq 0 "$?" "remote add writes approved private policy"
 assert_eq 'base github required_check' "$(sed -n '/  agent:/,/  self:/p' "$eng/config.yaml" | sed -nE 's/^    ([a-z_]+):.*/\1/p' | sort | paste -sd ' ' -)" "remote registry entry contains routing only"
 assert_lacks "$(cat "$eng/config.yaml")" 'Private agent brief' "private product stays out of registry"
 ONBOARD_DRIFT=1 "$P" drift agent --repo "$eng" > "$t/drift"
 assert_eq 0 "$?" "drift CLI re-inspects registered repository"
 assert_contains "$(cat "$t/drift")" delete_branch "drift CLI proposes changed fact"
-"$P" add consenlabs/tokenlon-mm-agent --name self --repo "$eng" --answers "$t/answers" > "$t/out" 2>&1
+"$P" add example-org/example-repo --name self --repo "$eng" --answers "$t/answers" > "$t/out" 2>&1
 assert_eq 65 "$?" "remote add refuses self replacement"
 assert_contains "$(cat "$t/out")" "cannot replace the self project" "self refusal identifies protected registry entry"
 sed 's/"required_checks"/"repository":"other\/repo","required_checks"/' "$t/answers" > "$t/wrong"
-"$P" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" --answers "$t/wrong" > "$t/out" 2>&1
+"$P" add example-org/example-repo --name agent --repo "$eng" --answers "$t/wrong" > "$t/out" 2>&1
 assert_eq 65 "$?" "remote add refuses existing name with different binding"
 assert_contains "$(cat "$t/out")" "existing registry binding differs" "name refusal identifies conflicting binding"
 # A prior onboarding version left a shallow no-checkout repo. Sync repairs it.
 home="$FM_HOME/projects/agent"
-git clone -q --depth 1 --no-checkout "$FM_GITHUB_URL/consenlabs/tokenlon-mm-agent.git" "$home/repo"
+git clone -q --depth 1 --no-checkout "$FM_GITHUB_URL/example-org/example-repo.git" "$home/repo"
 "$P" sync agent --repo "$eng" > "$t/sync" 2>&1
 assert_eq 0 "$?" "sync repairs legacy inspection clone"
 assert_eq false "$(git -C "$home/repo" rev-parse --is-shallow-repository)" "sync deepens legacy clone"
@@ -61,20 +61,20 @@ assert_contains "$(cat "$home/repo/.git/info/exclude")" '.fm-*' "sync installs s
 export GIT_CONFIG_GLOBAL="$t/gitconfig" GIT_CONFIG_NOSYSTEM=1
 ln -s "$t/host" "$t/alias"
 git config --global "url.file://$t/alias/.insteadOf" "file://$t/host/"
-assert_eq "file://$t/alias/consenlabs/tokenlon-mm-agent.git" "$(git -C "$home/repo" remote get-url origin)" "onboard global rewrite setup loaded"
-"$ROOT/bin/fm-onboard.sh" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" > "$t/out" 2>&1
+assert_eq "file://$t/alias/example-org/example-repo.git" "$(git -C "$home/repo" remote get-url origin)" "onboard global rewrite setup loaded"
+"$ROOT/bin/fm-onboard.sh" add example-org/example-repo --name agent --repo "$eng" > "$t/out" 2>&1
 assert_eq 0 "$?" "onboard accepts correct configured origin under global rewrite"
 unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
 # Onboarding must also refuse unsafe push routing, without a global rewrite.
 git -C "$home/repo" config --local remote.origin.pushurl "$t/wrong.git"
 assert_eq "$t/wrong.git" "$(git -C "$home/repo" config --includes --get-all remote.origin.pushurl)" "onboard pushurl setup loaded"
-"$P" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" > "$t/out" 2>&1
+"$P" add example-org/example-repo --name agent --repo "$eng" > "$t/out" 2>&1
 assert_eq 65 "$?" "onboard refuses managed pushurl elsewhere"
 assert_contains "$(cat "$t/out")" 'origin does not match' "pushurl refusal keeps onboard wording"
 git -C "$home/repo" config --unset remote.origin.pushurl
 git -C "$home/repo" config --local "url.$t/elsewhere/.insteadOf" "file://$t/host/"
-assert_eq "$t/elsewhere/consenlabs/tokenlon-mm-agent.git" "$(git -C "$home/repo" remote get-url origin)" "onboard local rewrite setup loaded"
-"$P" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" > "$t/out" 2>&1
+assert_eq "$t/elsewhere/example-org/example-repo.git" "$(git -C "$home/repo" remote get-url origin)" "onboard local rewrite setup loaded"
+"$P" add example-org/example-repo --name agent --repo "$eng" > "$t/out" 2>&1
 assert_eq 65 "$?" "onboard refuses local transport rewrite"
 assert_contains "$(cat "$t/out")" 'origin does not match' "local rewrite refusal keeps onboard wording"
 git -C "$home/repo" config --unset "url.$t/elsewhere/.insteadOf"
@@ -98,7 +98,7 @@ assert_eq trunk "$(git -C "$empty" config firstmate.base)" "empty sync installs 
 assert_eq "$eng/.githooks" "$(git -C "$empty" config core.hooksPath)" "empty sync installs engine hooks"
 assert_contains "$(cat "$empty/.git/info/exclude")" '.fm-*' "empty sync installs scratch excludes"
 git -C "$home/repo" remote set-url origin "$t/wrong.git"
-"$P" add consenlabs/tokenlon-mm-agent --name agent --repo "$eng" > "$t/out" 2>&1
+"$P" add example-org/example-repo --name agent --repo "$eng" > "$t/out" 2>&1
 assert_eq 65 "$?" "remote add refuses mismatched managed origin"
 assert_contains "$(cat "$t/out")" 'origin does not match' "origin refusal names the cause"
 safe_rm_rf "$t"

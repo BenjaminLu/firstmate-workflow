@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# bin/lib/fm_private_names.py
 # Registry insertion follows the reader's block boundaries without changing routing.
 set -uo pipefail
 for k in $(env | sed -nE 's/^(FM_[^=]*|HERDR_[^=]*|GH_REPO)=.*$/\1/p'); do unset "$k"; done
@@ -44,6 +45,16 @@ cp "$eng/config.yaml" "$t/expected"
 cat "$t/entry" >> "$t/expected"
 add_seed
 assert_eq 0 "$?" 'commented header accepts a new project'
+assert_contains "$(cat "$t/err")" 'fm-onboard: private-name digests updated (3 added); commit tests/fixtures/private-name-digests.txt through a task PR' 'registration reports digest additions'
+python3 - "$eng" <<'PYTEST'
+import hashlib
+from pathlib import Path
+import sys
+lines = (Path(sys.argv[1]) / 'tests/fixtures/private-name-digests.txt').read_text().splitlines()
+assert {hashlib.sha256(n.encode()).hexdigest() for n in ('seed', 'owner/product', 'product')} == {s for s in lines if not s.startswith('#')}, 'onboarding records external names but excludes self owner'
+PYTEST
+assert_eq 0 "$?" 'onboarding writes the new project digests'
+
 assert_eq 1 "$(grep -c '^projects:' "$eng/config.yaml")" 'commented header retains exactly one projects block'
 assert_eq owner/product "$(routing github)" 'new github routing is visible through fm_project_get'
 assert_eq main "$(routing base)" 'new base routing is visible through fm_project_get'
@@ -160,5 +171,16 @@ PY
   assert_ok 'cmp "$t/expected" "$eng/config.yaml"' "$shape preserves surrounding bytes and separates the new entry"
   assert_eq owner/product "$(routing github)" "$shape routing is readable"
 done
+# A destination that cannot be replaced must not interrupt private setup.
+fixture
+rm "$eng/tests/fixtures/private-name-digests.txt"
+mkdir "$eng/tests/fixtures/private-name-digests.txt"
+rm "$FM_HOME/projects/seed/CONVENTIONS.md" "$FM_HOME/projects/seed/state/config.yaml"
+add_seed
+assert_eq 0 "$?" 'digest write failure does not fail onboarding'
+assert_contains "$(cat "$t/err")" 'fm-onboard: private-name digests not updated:' 'digest failure is reported'
+assert_contains "$(cat "$t/err")" "run python3 bin/lib/fm_private_names.py update --repo $eng" 'digest failure supplies recovery command'
+assert_eq owner/product "$(routing github)" 'routing survives digest failure'
+assert_ok 'test -s "$FM_HOME/projects/seed/CONVENTIONS.md" && test -s "$FM_HOME/projects/seed/state/config.yaml"' 'private setup survives digest failure'
 safe_rm_rf "$t"
 finish
