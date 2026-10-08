@@ -497,6 +497,16 @@ class Pilot(BranchUpdates, MechanicalLoop):
             import fm_adopt
             adopted = self.adoptions()[0].get(pr['number']) == task
             can_update = not adopted or fm_adopt.pushed(self.rows(), task, pr['number'])
+            if adopted:
+                env = self.adoption_env()
+                try:
+                    fm_adopt.effective_base({'baseRefName': pr['base']['ref']},
+                                            fm_adopt.adoption(env, task), env, task, self.ctx['repository'])
+                except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+                    can_update = False
+                    self.queue(f'adopt-base-{number}', task,
+                               f'{task} #{number}: adopted base needs verified restack',
+                               f'{task} #{number} 接手基底需要經驗證的 restack')
             if can_update and pr.get('mergeable') is not False and not pr.get('draft'):
                 token = f'update:{number}:{head}'
                 if self.retry_due(token):
@@ -562,11 +572,23 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     raise ValueError('incomplete or stale check/status response')
                 self.pull(pr, reviews, comments, runs['check_runs'], statuses['statuses'])
                 adopted = self.ctx['external'] and pr['number'] in self.adoptions()[0]
-                if not adopted and pr['base']['ref'] != self.ctx['base'] and self.task(pr):
+                if pr['base']['ref'] != self.ctx['base'] and (self.pr_task(pr) if adopted else self.task(pr)):
                     from urllib.parse import quote
                     parents = self.pages('pulls?state=closed&head=' + quote(self.ctx['repository'].split('/')[0] + ':' + pr['base']['ref'], safe=''))
                     for parent in parents:
                         if parent['head']['ref'] == pr['base']['ref'] and parent.get('merged_at'):
+                            if adopted:
+                                import fm_adopt
+                                task = self.pr_task(pr)
+                                env = self.adoption_env()
+                                dependencies = (fm_adopt.authorized_spec(env, task) or {}).get('depends_on', [])
+                                if self.pr_task(parent) not in dependencies:
+                                    break
+                                if not fm_adopt.pinned_adoption(env, task) or not fm_adopt.pushed(self.rows(), task, number):
+                                    self.queue(f'adopt-restack-{number}', task,
+                                               f'{task} #{number}: run fm-restack.sh before catch-up',
+                                               f'{task} #{number} 追趕前請執行 fm-restack.sh')
+                                    break
                             self.restack(pr, parent)
                             break
             self.network_success()
