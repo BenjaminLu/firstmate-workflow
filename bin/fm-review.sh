@@ -568,9 +568,14 @@ closed_list() {
   history="$(fm_evidence history --reviewer)" || return 1
   printf '%s\n' "$history"
   if printf '%s\n' "$history" | awk -v marker="ASK-PASS-CRITERIA:$TASK" '
-    /^----- begin [0-9a-f]+ -----$/ { quoted=1; next }
-    /^----- end [0-9a-f]+ -----$/ { quoted=0; next }
-    !quoted && $0 == marker { found=1 }
+    # Only the enclosing generated nonce can end a quotation. Nested fence
+    # text is record content and must never replace that nonce or expose ASK.
+    quoted {
+      if ($0 == "----- end " nonce " -----") { quoted=0; nonce="" }
+      next
+    }
+    /^----- begin [0-9a-f]+ -----$/ { nonce=$3; quoted=1; next }
+    $0 == marker { found=1 }
     END { exit !found }'; then
     printf '\nASK clarification: Before any truthful verdict, including APPROVE or REJECT, independently reissue the complete contiguous numbered standing list, preserve every prior numbered item and explain its finding associations, mark each done/open with factual evidence, and close it with CRITERIA-COMPLETE:%s before the verdict. This ASK exception applies even though ordinary no-ASK APPROVE need not reissue a list. Do not invent regressions or new ground, renumber away findings, require technical changes without findings, or choose a verdict to repair syntax.\n' "$TASK"
   fi
