@@ -24,6 +24,13 @@ for k in logLoadOlder logLoadFailed staleCursor badCursor; do
   assert_ok "jq -e --arg k '$k' 'has(\$k)' '$en' >/dev/null && jq -e --arg k '$k' 'has(\$k)' '$tw' >/dev/null" "log paging key $k exists in both dictionaries"
 done
 
+# T-246: every tab, sheet and client pager label exists in both dictionaries.
+for key in tabDecisions tabFleet secLog sheetCrew sheetLog sheetClose sheetBack pagerFirst pagerPrev pagerNext pagerPosition; do
+  for dictionary in "$en" "$tw"; do
+    assert_ok "jq -e '.${key} | type == \"string\" and length > 0' '$dictionary' >/dev/null" "T-246 $key in $dictionary"
+  done
+done
+
 # every key the page asks for has to exist
 missing=''
 # a word boundary, or the t at the end of get(" matches too

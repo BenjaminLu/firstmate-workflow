@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeTasks } from './lib/fixture';
 import { intentCard } from './lib/intent-card';
@@ -71,6 +72,7 @@ for (const collapsed of [false, true]) test(`task detail owns Escape with a ${co
       await page.keyboard.press('Escape');
       await expect(sheet).not.toHaveAttribute('hidden');
     }
+    await showFleet(page);
     const task = page.locator('.card[data-task="T-001"]');
     await task.click();
     const panel = page.locator('#taskDetail');
@@ -79,12 +81,67 @@ for (const collapsed of [false, true]) test(`task detail owns Escape with a ${co
     await expect(panel).toBeHidden();
     await expect(task).toBeFocused();
     await expect(sheet).not.toHaveAttribute('hidden');
+    await page.locator('#tabDecisions').click();
     if (collapsed) await strip.locator(':scope > summary').click();
     await expect(sheet).toBeVisible();
     await sheet.locator('[data-decision-close]').focus();
     await page.keyboard.press('Escape');
     await expect(sheet).toBeHidden();
     await expect(strip.locator('[data-decision-details]')).toBeFocused();
+  } finally { await stopBoard(b); }
+});
+
+for (const action of ['Escape', 'close button', 'state', 'locale']) test(`immediate strip reopen survives ${action} rerender`, async ({page}) => {
+  const root = makeRoot([], false);
+  for (const id of ['D-211', 'D-212'])
+    writeFileSync(join(root, `state/pending/${id}.json`), JSON.stringify(intentCard(id)));
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const strip = page.locator('#strip-D-212'), sheet = strip.locator('.decision-sheet');
+    await strip.locator(':scope > summary').click();
+    await strip.locator('[data-decision-details]').click();
+    await expect(sheet).toBeVisible();
+    // Fetch first, then keep collapse/render/reopen/action in one browser task:
+    // native toggle delivery cannot synchronize disclosure between these steps.
+    const result = await page.evaluate(async action => {
+      const state = await (await fetch('/api/state')).json();
+      const w = window as any;
+      let strip = document.querySelector('#strip-D-212') as HTMLDetailsElement;
+      (strip.querySelector(':scope > summary') as HTMLElement).click();
+      w.render(state);
+      strip = document.querySelector('#strip-D-212') as HTMLDetailsElement;
+      const collapsed = !strip.open;
+      const hiddenSheet = strip.querySelector('.decision-sheet') as HTMLElement;
+      document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
+      const savedSheet = !hiddenSheet.hidden;
+      (strip.querySelector(':scope > summary') as HTMLElement).click();
+      const close = strip.querySelector('[data-decision-close]') as HTMLElement;
+      close.focus();
+      if (action === 'Escape') close.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
+      else if (action === 'close button') close.click();
+      else {
+        if (action === 'locale') (document.querySelector('[data-l="zh-TW"]') as HTMLElement).click();
+        state.pending.find((d:any) => d.id === 'D-212').details.en.title = 'Refreshed strip';
+        w.render(state);
+      }
+      strip = document.querySelector('#strip-D-212') as HTMLDetailsElement;
+      return {collapsed, savedSheet, open:strip.open,
+        focused:document.activeElement === strip.querySelector(
+          action === 'Escape' || action === 'close button' ? '[data-decision-details]' : '[data-decision-close]')};
+    }, action);
+    expect(result).toEqual({collapsed:true, savedSheet:true, open:true, focused:true});
+    await expect(strip).toHaveJSProperty('open', true);
+    if (action === 'Escape' || action === 'close button') {
+      await expect(sheet).toBeHidden();
+      await expect(strip.locator('[data-decision-details]')).toBeVisible();
+      await expect(strip.locator('[data-decision-details]')).toBeFocused();
+    } else {
+      await expect(sheet).toBeVisible();
+      await expect(sheet.locator('[data-decision-close]')).toBeFocused();
+      if (action === 'locale') await expect(page.locator('html')).toHaveAttribute('lang', 'zh-TW');
+      else await expect(strip.locator('h3')).toHaveText('Refreshed strip');
+    }
   } finally { await stopBoard(b); }
 });
 

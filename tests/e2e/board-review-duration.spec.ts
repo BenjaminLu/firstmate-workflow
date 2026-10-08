@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -16,6 +17,7 @@ test('T-145: a task\'s card shows how long its last review round took and how it
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);
+    await showFleet(page);
     const line = page.locator('#lanes .card[data-task="T-034"] .lastrev');
     await expect(line).toHaveText(EN.lastReview.replace('{time}', '17:00').replace('{outcome}', EN.lastReviewApproved));
     await expect(line).toHaveAttribute('data-last-review', '1020');
