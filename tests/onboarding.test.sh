@@ -63,11 +63,11 @@ class Onboarding(unittest.TestCase):
                 if path in files:
                     return dict(encoding='base64', content=base64.b64encode(files[path].encode()).decode())
                 raise ValueError('404')
-            if endpoint == 'repos/consenlabs/tokenlon-mm-agent': return payload('repository')
+            if endpoint == 'repos/example-org/example-repo': return payload('repository')
             if '/pulls?' in endpoint:
                 return [dict(number=i+1, head=dict(ref=b)) for i,b in enumerate(['feature/a','feature/b','fix/c'])]
             return {}
-        e = inspect_remote('consenlabs/tokenlon-mm-agent', gh)
+        e = inspect_remote('example-org/example-repo', gh)
         for path in files:
             self.assertEqual(e['ci_files'][path]['text'], files[path])
         p = infer(e)
