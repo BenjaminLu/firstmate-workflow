@@ -157,16 +157,16 @@ assert_eq 0 "$?" 'TERM forwards to the whole command group and exits 143'
 cat > "$d/pack-gh" <<'SH'
 #!/usr/bin/env bash
 case "$1 $2" in
-  'pr view') printf '{"headRefOid":"HEAD","mergeStateStatus":"CLEAN"}' ;;
+  'pr view') printf '{"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mergeStateStatus":"CLEAN"}' ;;
   'pr checks') echo '[{"name":"ci","state":"FAILURE","bucket":"fail","link":"https://github.com/o/r/actions/runs/1/job/2"}]' ;;
-  'api '*) echo '{"check_runs":[{"id":2,"head_sha":"HEAD","name":"ci","conclusion":"failure","status":"completed","details_url":"https://github.com/o/r/actions/runs/1/job/2"}]}' ;;
+  'api '*) echo '{"check_runs":[{"id":2,"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"ci","conclusion":"failure","status":"completed","details_url":"https://github.com/o/r/actions/runs/1/job/2"}]}' ;;
   'run view') exec sleep 30 ;;
 esac
 SH
 chmod +x "$d/pack-gh"
 echo '{"id":"T-Z","acceptance":["bounded evidence"]}' > "$d/spec.json"
 start=$SECONDS
-python3 "$ROOT/bin/lib/fm_context_pack.py" --state "$d/state" --project self --task T-Z --head HEAD --actor worker-test --root "$d/repo" --spec "$d/spec.json" --output "$d/pack.md" --coverage "$d/coverage.json" --round 1 --pr 9 --gh "$d/pack-gh"
+python3 "$ROOT/bin/lib/fm_context_pack.py" --state "$d/state" --project self --task T-Z --head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --actor worker-test --root "$d/repo" --spec "$d/spec.json" --output "$d/pack.md" --coverage "$d/coverage.json" --round 1 --pr 9 --gh "$d/pack-gh"
 assert_eq 0 "$?" 'pack survives failed-log timeout'
 assert_ok "test $((SECONDS-start)) -lt 10" 'pack timeout is bounded'
 assert_contains "$(cat "$d/pack.md")" 'timed out' 'pack records failed-log timeout gap'
@@ -177,7 +177,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1])/'bin/lib'))
 from fm_context_pack import Collector
 home = Path(sys.argv[2])
-collector = Collector(home, str(home/'pack-gh'), 'HEAD')
+collector = Collector(home, str(home/'pack-gh'), 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
 try:
     collector.command(['sleep', '30'])
     raise AssertionError('command timeout must report unavailable evidence')

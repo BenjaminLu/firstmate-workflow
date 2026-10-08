@@ -2311,7 +2311,7 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   [ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
   if first_round_question; then
     mkdir -p "$FM_STATE_DIR/drafts" && : > "$FM_STATE_DIR/drafts/$TASK-$num" || {
-      echo "fm-worker: could not record ownership of draft #$num" >&2; exit 70; }
+      echo "fm-worker: warning: could not record ownership of draft #$num" >&2; }
   fi
   emit_status "Pull request #$num opened" "已開 PR #$num"
   emit --type pr_opened --pr "$num" ${rebuild_args[@]+"${rebuild_args[@]}"} \

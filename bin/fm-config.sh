@@ -1103,7 +1103,8 @@ fm_with_timeout() {
     use warnings;
     use POSIX qw(SIG_BLOCK SIG_SETMASK SIGTERM SIGINT SIGHUP SIGALRM);
     use Time::HiRes qw(alarm sleep);
-    my $seconds = shift @ARGV;
+    my $seconds = $ARGV[0];
+    splice(@ARGV, 0, 1);
     die "fm_with_timeout: expected positive seconds and an executable\n"
       unless defined($seconds) && $seconds =~ /^\d+(?:\.\d+)?$/ && $seconds > 0 && @ARGV;
     my $blocked = POSIX::SigSet->new(SIGTERM, SIGINT, SIGHUP, SIGALRM);
@@ -1171,6 +1172,9 @@ fm_gh_read() (
   local -a delays
   output="$(mktemp "${TMPDIR:-/tmp}/fm-gh.XXXXXX")" || return 70
   trap 'rm -f "$output"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   read -r -a delays <<<"${FM_GH_RETRY_DELAYS:-5 15}"
   while :; do
     rc=0

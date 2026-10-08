@@ -3,7 +3,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/worker.sh
 . "$ROOT/tests/lib/worker.sh"
-for scenario in ready handmade already_ready question work_and_question first_question ready_failure read_timeout; do
+for scenario in ready handmade already_ready question work_and_question first_question marker_failure ready_failure read_timeout; do
   d="$(fixture)"; r="$d/repo"; gh="$(ghstub "$d")"
   cat > "$gh" <<'SH'
 #!/usr/bin/env bash
@@ -24,7 +24,7 @@ SH
   cat > "$r/bin/adapters/mock.sh" <<'SH'
 #!/usr/bin/env bash
 case "$FM_READY_CASE" in
-  question|first_question) printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md" ;;
+  question|first_question|marker_failure) printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md" ;;
   work_and_question)
     mkdir -p "$3/src"; echo work > "$3/src/done"
     printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md" ;;
@@ -34,7 +34,13 @@ SH
   chmod +x "$r/bin/adapters/mock.sh"
   mkdir -p "$r/state/drafts"
   [ "$scenario" = handmade ] || touch "$r/state/drafts/T-Z-9"
-  pr=(--pr 9); [ "$scenario" != first_question ] || pr=()
+  pr=(--pr 9)
+  case "$scenario" in first_question|marker_failure) pr=() ;; esac
+  if [ "$scenario" = marker_failure ]; then
+    # A regular file blocks the directory even when CI runs as root.
+    rm -rf "$r/state/drafts"
+    printf 'blocked\n' > "$r/state/drafts"
+  fi
   out="$(cd "$r" && FM_READY_CASE="$scenario" FM_ROOT="$r" FM_GH="$gh" FM_GH_TIMEOUT=1 FM_GH_RETRY_DELAYS='0 0' bin/fm-worker.sh --task T-Z ${pr[@]+"${pr[@]}"} 2>&1)"; rc=$?
   assert_eq 0 "$rc" "$scenario round completes"
   calls="$(cat "$d/ghcalls")"
@@ -46,6 +52,11 @@ SH
     first_question)
       assert_contains "$calls" --draft 'first question opens draft'
       assert_ok "test -f '$r/state/drafts/T-Z-42'" 'first question records draft ownership' ;;
+    marker_failure)
+      assert_contains "$calls" --draft 'marker failure still opens draft'
+      assert_contains "$out" 'fm-worker: warning: could not record ownership of draft #42' 'marker failure warns'
+      assert_contains "$(jq -r .type "$r/state/events.jsonl")" pr_opened 'marker failure still records opened pull request'
+      assert_contains "$(cat "$r/state/events.jsonl")" 'Pull request #42 opened' 'marker failure still emits opened status' ;;
     ready_failure)
       assert_eq 1 "$(grep -c '^gh pr ready 9$' "$d/ghcalls")" 'ready write failure is never retried'
       assert_contains "$out" 'fm-worker: could not mark pull request #9 ready for review' 'ready failure warns without failing pushed round'
