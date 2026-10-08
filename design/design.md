@@ -4073,7 +4073,7 @@ in `bin/fm-config.sh`:
 | vendor | its login, read by fm outside the round | handed in as | what of its own the round opens | temp | mach services |
 |---|---|---|---|---|---|
 | claude | a `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is; else the crew's own long-lived token (T-126), made once with `claude setup-token`: macOS keychain item `firstmate-claude-token`, account the operator's user; else, when `secret-tool` is on the operator's PATH, the libsecret item `firstmate-claude-token`/account the operator's user (T-126 round 2, Linux's rough equivalent of the keychain; its absence is skipped, not refused); else `~/.config/firstmate/claude-token`, refused unless its mode is the operator's alone (600). Only with none of those does it fall back to the operator's own interactive login as before T-126 - macOS keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json` - field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`; that fallback warns, in the round's log and on the board, that the round can die when that login refreshes | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
-| cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message; with `AGENT_CLI_CREDENTIAL_STORE=memory`, so cursor keeps the login in memory and never in the keychain (plan B, 2026-10-05) | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
+| cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message; with a private short per-round `CURSOR_DATA_DIR` (§13.2) and `AGENT_CLI_CREDENTIAL_STORE=memory`, so cursor keeps the login in memory and never in the keychain (plan B, 2026-10-05) | nothing of `~/.config/cursor` or `~/.config/firstmate`; `CURSOR_DATA_DIR/projects` read and written in its private short directory; other Cursor files remain under the round HOME | the round's own | none |
 | codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is only when `config.yaml`'s `billing:` chose api-key for codex; otherwise the round sheds it (T-121) | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
 | gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is only when `config.yaml`'s `billing:` chose api-key for gemini; otherwise the round sheds it (T-121) | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
 
@@ -4257,7 +4257,7 @@ The vendors' own flags, against the proposal's section 4
 |---|---|---|---|
 | claude | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --settings`: file rules on the worktree and the round's TMPDIR, deny rules, the shell allowed | the same | its own sandbox is off, so the settings carry no `allowedDomains` (under the escape hatch it is on, with them). On macOS it is a seatbelt, which cannot be applied inside another. On Linux its commands would reach the network through claude's own proxy, which has no way out of the round's namespace and names no host it refuses. The registries are enforced by the OS layer's proxy instead |
 | codex | `--sandbox workspace-write` with its network switch on, `approval_policy="never"`, the scrub list as `shell_environment_policy.exclude`, `mcp_servers={}`, a `CODEX_HOME` of the round's own holding a copy of the login less its refresh token, so no user profile | `--sandbox danger-full-access` (a seatbelt cannot nest); the rest the same | the network switch is on because codex has only on and off, and off would keep its commands from the proxy |
-| cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps` | `--trust --sandbox disabled -f` (a seatbelt cannot nest) | on macOS `-f` comes back, inside the OS sandbox only: with its own sandbox off, a print-mode round approves no shell command, and the canary on 2026-09-26 saw cursor-agent sign in, exit 0 and never run its probe. The OS sandbox confines what `-f` lets through, as it does claude's shell; under the escape hatch there is no OS sandbox, so its own is on and `-f` is not passed. On Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
+| cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps`; private short `CURSOR_DATA_DIR` (§13.2) | `--trust --sandbox disabled -f` (a seatbelt cannot nest) | on macOS `-f` comes back, inside the OS sandbox only: with its own sandbox off, a print-mode round approves no shell command, and the canary on 2026-09-26 saw cursor-agent sign in, exit 0 and never run its probe. The OS sandbox confines what `-f` lets through, as it does claude's shell; under the escape hatch there is no OS sandbox, so its own is on and `-f` is not passed. On Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
 | gemini | `--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none` | the same | no `--sandbox`: it is a container or a seatbelt, neither of which starts inside the OS sandbox. `yolo`, not `auto_edit`: headless, `auto_edit` refuses every shell command, and the OS sandbox is what confines them. No `--policy` file: which gemini versions take one is unverified, and an unknown flag would fail every gemini round |
 
 **A blocked host.** The proxy records every host it refused to the round's
@@ -4543,8 +4543,8 @@ round it makes.
 `XDG_CONFIG_HOME` is the one exception, left exactly as the caller had it
 (round 4 review): a vendor's own config directory is already a separate,
 existing contract, set per adapter, not by a generic XDG variable here -
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, gemini's own `HOME`. cursor-agent has no
-config-directory variable of its own at all (its login is `CURSOR_API_KEY`);
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, gemini's own `HOME`. cursor-agent keeps its login in `CURSOR_API_KEY` and its project data in the
+separate `CURSOR_DATA_DIR` described below;
 overriding `XDG_CONFIG_HOME` here too would move it off wherever the
 caller's environment already put it, which
 `tests/adapter-contract.test.sh`'s "cursor-agent is handed no
@@ -4555,6 +4555,33 @@ default when `XDG_CONFIG_HOME` is unset) already moves with it for anything
 that falls back to that default; `tests/sandbox.test.sh` asserts the round is
 handed the caller's own `XDG_CONFIG_HOME` unchanged, next to the `HOME`/
 `XDG_CACHE_HOME`/`XDG_DATA_HOME` assertions above it.
+
+Cursor's project data needs a short path (T-219). Its bundle tries
+`$CURSOR_DATA_DIR/projects` (default `$HOME/.cursor/projects`), then the
+base itself if that exceeds 84 characters, then hard-coded `/tmp/.cursor`
+if the base also exceeds 84. The round's long HOME triggers that last
+fallback, which the sandbox correctly denies. After policy setup, the
+unconfined Cursor adapter creates a private, operator-owned mode 0700
+`/tmp/fmc.XXXXXX` directory with explicit `/tmp`, never the long TMPDIR.
+It installs exit cleanup immediately, before resolving the physical path;
+if allocation fails or the resolved path plus `/projects` exceeds 84
+characters, it refuses with exit 70. It exports this fixed `CURSOR_DATA_DIR`,
+overwriting any inherited value. `FM_ADAPTER_ARGS` supplies argv, not an
+environment override. The model-list preflight remains before allocation.
+
+Only sandbox `run` mode receives `--write=<cursor data>`; `plain` receives
+the variable without a write grant. Every exit, including the existing
+INT/TERM/HUP-to-EXIT paths, removes Cursor's directory alongside the round
+temp and control directories. No two rounds share project state, and
+neither `/tmp` as a whole nor `/tmp/.cursor` becomes a write root.
+`XDG_CONFIG_HOME`, other vendors' directories and the crew keychain denial
+keep their existing contracts.
+
+Existing rounds and sessions/autopilots retain their immutable code snapshots
+and need no restart. A new session snapshot containing this fix gives newly
+dispatched rounds the short Cursor path and the Codex classification below;
+retained `FM_CODE_ROOT` snapshots are never rewritten. No stored record, pin
+format or configuration migration is required.
 
 **The shell a vendor runs commands through (T-147).** The first codex
 worker round (T-146, 2026-09-29) stopped at once and changed nothing, and
@@ -4770,6 +4797,18 @@ against the service), not whether the service takes it, which is left to
 the round's own outage signatures. codex's and cursor-agent's plain-text
 answers are read with the same kind of phrase list the adapters use
 (`_FM_SIG`), narrowed to what a status check itself says.
+
+Codex's recorded “You’ve hit your usage limit” diagnostic is quota exhaustion
+(T-219). Both the adapter signature and auth-probe quota list match
+`hit your usage limit`, avoiding the apostrophe so literal U+2019 and its
+JSON `\u2019` escape both match. Managed Codex reads only `error` and
+`turn.failed` diagnostics for this classification; model and tool payloads
+remain non-diagnostic. A refusal returns adapter exit 2, so the existing
+fallback chain advances to the next vendor. Legacy whole-transcript scanning
+also recognizes the phrase and otherwise keeps its existing behavior.
+The auth probe reports `quota-exhausted`; launch eligibility requires a fresh
+probe, never the recorded historical reset date. Doctor's quota summary and
+its `try again at` reset-time parsing remain separate follow-up work.
 
 On macOS, only the cursor-agent model-list check runs through `sandbox-exec`
 (or `FM_SANDBOX_TOOL`), using a minimal allow-default profile with the same
