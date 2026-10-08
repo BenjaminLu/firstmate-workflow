@@ -1713,7 +1713,7 @@ note_landed() {   # note_landed <pr> <sha256>: found=0, absent=1, lookup failed=
   local endpoint bodies
   endpoint="repos/{owner}/{repo}/issues/$1/comments"
   [ "${FM_EXTERNAL:-0}" != 1 ] || endpoint="repos/$GH_REPO/issues/$1/comments"
-  bodies="$(cd "$tree" && "${GH:-${FM_GH:-gh}}" api "$endpoint" --paginate --jq '.[].body')" || return 2
+  bodies="$(cd "$tree" && fm_gh_read "${GH:-${FM_GH:-gh}}" api "$endpoint" --paginate --jq '.[].body')" || return 2
   grep -Fq -- "<!-- fm-note sha256=$2 -->" <<<"$bodies"
 }
 post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
@@ -1926,6 +1926,7 @@ fi
 held=''
 held_settled=0
 held_has_work=0
+round_had_work=0
 lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
   held_settled=1
   echo "fm-worker: the run ended (exit $1) before the worker's note reached a pull request" >&2
@@ -2035,6 +2036,7 @@ if [ "$rebuilt" = 1 ]; then
       "這輪中途 HEAD 離開了重建的基底 ${rebuild_base}"
   fi
 fi
+if worker_changed_files || [ "$rebuilt" = 1 ]; then round_had_work=1; fi
 git -C "$tree" add -A || { echo "fm-worker: could not stage the round on $branch" >&2; exit 70; }
 # A rebuilt round is committed only once every handed-over conflict is
 # resolved. Every file this commit carries is read - on a rebuild that is
@@ -2307,6 +2309,10 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   # request by it, and an event without it leaves the gates checking nothing
   num="$(printf '%s' "$url" | sed -n 's|.*/\([0-9][0-9]*\)$|\1|p')"
   [ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
+  if first_round_question; then
+    mkdir -p "$FM_STATE_DIR/drafts" && : > "$FM_STATE_DIR/drafts/$TASK-$num" || {
+      echo "fm-worker: warning: could not record ownership of draft #$num" >&2; }
+  fi
   emit_status "Pull request #$num opened" "已開 PR #$num"
   emit --type pr_opened --pr "$num" ${rebuild_args[@]+"${rebuild_args[@]}"} \
        --en "opened #$num" --tw "已開 #$num"
@@ -2331,6 +2337,23 @@ else
   emit_status "Pushed another round to #$num" "已推第二輪到 #$num"
   emit --type commit_pushed --pr "$num" ${rebuild_args[@]+"${rebuild_args[@]}"} \
        --en "pushed another round to #$num" --tw "第二輪已推上 #$num"
+  # Mark only a draft opened by firstmate after a later round delivers work.
+  if [ -z "${adopt_pr:-}" ] && [ "${asked:-0}" = 0 ] &&
+     [ "${round_had_work:-0}" = 1 ] && [ -f "$FM_STATE_DIR/drafts/$TASK-$num" ]; then
+    if is_draft="$(fm_github pr view "$num" --json isDraft --jq .isDraft 2>/dev/null)"; then
+      if [ "$is_draft" = true ]; then
+        if fm_github pr ready "$num" >/dev/null 2>&1; then
+          rm -f "$FM_STATE_DIR/drafts/$TASK-$num"
+          emit_status "Pull request #$num marked ready for review" "PR #$num 已標成 ready for review"
+        else
+          echo "fm-worker: could not mark pull request #$num ready for review" >&2
+        fi
+      fi
+    else
+      echo "fm-worker: could not read draft status for pull request #$num" >&2
+    fi
+  fi
+  # End owned draft transition.
 fi
 # The reviewer reads the pull request, and after a rebuild the diff it saw
 # last is gone from the branch. The previous head is what it compares

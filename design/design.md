@@ -1188,6 +1188,15 @@ rebuilt one publishes nothing.
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
 did not happen.
 
+A question round opens its pull request as a draft and records firstmate's
+ownership in project runtime state at `drafts/<task>-<number>`. A later round
+that delivers work (including a rebuilt round), asks no question and uses the
+existing, non-adopted PR marks that draft ready for review. Success removes
+the marker; failed reads or ready writes warn without failing already pushed
+work. A hand-made draft, an adopted PR or a draft from before these markers
+existed stays as it is; firstmate raises a captain card for an older draft
+that needs to become ready. Draft creation during a question round is unchanged.
+
 | String | Posted by | Meaning |
 |---|---|---|
 | `APPROVE:<task-id>` | reviewer | the only valid pass signal |
@@ -3130,6 +3139,12 @@ guesses: when a parent cannot be read, the walk reaches pid 1, or it runs
 a long-lived process never ends up owned by the shell that launched it. A keeper watching a pid exports it as `FM_SESSION_PID`, so the board
 hands its own owner on to what it starts. A process that must outlive its
 starter names the longer-lived owner it belongs to, never none.
+A review resolves `session-owner` before its first managed launch and before
+spec preflight or identity allocation, then exports the returned pid as
+`FM_SESSION_PID`. Later launches retain that owner even if the starting shell
+exits. A refusal (the resolver's exit 70) becomes `fm-review.sh` exit 75 with
+guidance: start in the foreground of the session, use the harness's background
+mode, or explicitly name the owner with `FM_SESSION_PID`.
 `tests/lifeline.test.sh` fails on any `start_new_session`, `setsid`,
 `nohup`, `disown` or `detached: true` in the code of `bin/`, `board/` or the
 skills outside the primitive. `bin/fm-worker.sh`'s mirror watcher (13.1) still
@@ -3694,6 +3709,36 @@ global skills.
 ---
 
 ## 12. Failure and recovery
+
+Git network calls inherit stall bounds from `fm-config.sh`: SSH appends
+`-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4`
+to an existing `GIT_SSH_COMMAND` unless it already contains
+`ServerAliveInterval`. An explicit `GIT_SSH` executable is left alone.
+Otherwise the base is `git config --get core.sshCommand`, or `ssh`.
+HTTPS defaults to `GIT_HTTP_LOW_SPEED_LIMIT=1000` and
+`GIT_HTTP_LOW_SPEED_TIME=60`, preserving values already set. A stalled
+transfer typically ends within 60–80 seconds; a slow but live transfer can
+run longer. The SSH base is resolved once in the repository sourcing config:
+a later `git -C` call overrides that clone's own `core.sshCommand` with the
+exported value. Managed clones set none today; a project needing a deploy key
+uses `GIT_SSH_COMMAND` or a global `core.sshCommand` instead.
+
+`fm_github` and the round launchers' direct `fm_gh_read` calls bound each gh
+attempt to `FM_GH_TIMEOUT` seconds (default 120). The foreground Perl runner
+owns the command group: a timeout sends TERM, then KILL after two seconds,
+and returns 124. TERM, INT and HUP forward to that group with the same cleanup
+and return 128 plus the signal; an unexecutable command returns 127.
+Only read calls retry a timeout, up to two times after `FM_GH_RETRY_DELAYS`
+(default `5 15`). Reads are PR view/list/checks, run view/list, and API GET:
+field/input flags imply a write unless an explicit GET method is supplied.
+Other failures return immediately. Writes and file downloads never retry.
+Each read attempt buffers stdout; only the last attempt is printed.
+The worker context pack also uses `FM_GH_TIMEOUT` for git evidence, gh JSON
+and failed-job logs, without retries; a timeout records missing evidence and
+the pack is still written. Existing bounded autopilot and project-check
+calls retain their limits. Short operator calls in `fm-merge.sh`,
+`fm-cleanup.sh`, `fm-decide.sh`, `fm-reconcile.sh`, `fm-project.sh`,
+`lib/fm-stack.sh` and `fm.sh` remain follow-up work for gh bounds.
 
 - The truth is `state/events.jsonl`; state is rebuilt by replaying it on start.
   No snapshots.

@@ -114,6 +114,11 @@ never `setsid`, `nohup`, `disown` or a bare `&`. The ops-side sweep for
 orphaned processes is a fuse that should reap zero; anything it reaps is a
 bug to report, not routine cleanup.
 
+A review pins its session owner at start as `FM_SESSION_PID`, before managed
+launch and spec preflight. Exit 75 from `fm-review.sh` means no session owns
+that review: start it in the foreground of the session, use the harness's
+background mode, or explicitly name the owner with `FM_SESSION_PID`.
+
 A wake file never wakes a conversational agent by itself: it only writes to
 disk. `start` and `status` list every wake firstmate has not acknowledged
 (`unacknowledged` in the JSON, plus a short summary on standard error) and
