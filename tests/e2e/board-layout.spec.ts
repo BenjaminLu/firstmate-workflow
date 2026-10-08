@@ -200,7 +200,10 @@ test('a closed voyage keeps the roster and captain portrait synchronized', async
     await expect(page.locator('#voyage-stage')).toHaveCount(1);
     await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
     await expect(page.locator('#voyage-stage')).toHaveCount(0);
-    await expect(page.locator('#decisionsPanel')).toBeVisible();
+    // A selected empty panel has no height while its deck is hidden.
+    await expect(page.locator('#tabDecisions')).toHaveAttribute('aria-selected','true');
+    await expect(page.locator('#decisionsPanel')).toHaveJSProperty('hidden',false);
+    await expect(page.locator('#deckwrap')).toBeHidden();
     await expect(page.locator('#capstage')).toBeHidden();
     emitFixture(root, 'worker-hidden', task, 'dispatched', 'Still working with voyage closed', '航程關閉時繼續工作', {role:'worker'});
     writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',kind:'choice',task,details}));
