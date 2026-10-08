@@ -118,6 +118,9 @@ cursor_data="$(mktemp -d /tmp/fmc.XXXXXX)" || {
 # INT/TERM/HUP traps turn signals into this same EXIT path.
 # shellcheck disable=SC2064  # allocation paths are fixed now
 trap "rm -rf '$FM_ROUND_TMP' '$FM_ROUND_CTL' '$cursor_data'" EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 cursor_resolved="$(cd "$cursor_data" && pwd -P)" || {
   echo "cursor-agent: cannot make a short data directory for cursor; refusing the round" >&2
   exit 70
