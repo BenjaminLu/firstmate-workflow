@@ -59,7 +59,7 @@ done
 assert_eq "3" "$(grep -c 'is a new script; it is committed executable' <<<"$rb_out")" "X: and no other file"
 # X2: the same in a rebuilt round, read against the base it is made on
 dX2="$(RB_HOOKS=1 rb_fixture)"; bX2="$(rb_branch "$dX2")"
-rb_replay_conflict "$dX2"
+rb_replay_conflict "$dX2" || exit 1
 printf 'printf "#!/usr/bin/env bash\\necho tool\\n" > bin/fm-tool\n' > "$dX2/tool.sh"
 rb_round_two "$dX2" "$dX2/tool.sh"
 rb_rebuilt "$dX2" "X2"
@@ -71,8 +71,8 @@ assert_eq "100755" "$(git --git-dir="$dX2/remote.git" ls-tree "$bX2" -- bin/fm-t
 dX4="$(RB_HOOKS=1 rb_fixture)"; bX4="$(rb_branch "$dX4")"
 ( cd "$dX4/repo/state/worktrees/T-Z" && printf '#!/usr/bin/env bash\necho old\n' > bin/fm-earlier \
     && chmod -x bin/fm-earlier && git add bin/fm-earlier && rb_commit -m 'an earlier round' \
-    && git push -q origin HEAD ) || echo "fm-test: could not set up X4" >&2
-rb_replay_conflict "$dX4"
+    && git push -q origin HEAD ) || { echo "fm-test: could not set up X4" >&2; exit 1; }
+rb_replay_conflict "$dX4" || exit 1
 rb_round_two "$dX4" "$dX2/tool.sh"
 rb_rebuilt "$dX4" "X4"
 assert_eq "0" "$rb_rc" "X4: the rebuilt round completes"
@@ -83,7 +83,7 @@ assert_eq "100644" "$(git --git-dir="$dX4/remote.git" ls-tree "$bX4" -- bin/fm-e
 # X5: the index will not take the bit. The round's commit is not made
 # without it; on a rebuild, which the exit never publishes, nothing is.
 dX5="$(RB_HOOKS=1 rb_fixture)"; bX5="$(rb_branch "$dX5")"
-rb_replay_conflict "$dX5"; oldX5="$(rb_head "$dX5" "$bX5")"
+rb_replay_conflict "$dX5" || exit 1; oldX5="$(rb_head "$dX5" "$bX5")"
 PATH="$(rb_gitwrap "$dX5"):$PATH" FM_T_GIT_FAIL=" update-index --chmod=+x " rb_round_two "$dX5" "$dX2/tool.sh"
 rb_rebuilt "$dX5" "X5"
 assert_eq "70" "$rb_rc" "X5: a bit the index refuses stops the round"
