@@ -174,7 +174,7 @@ def required_checks(root, repository, pr, head, *, task=None):
     adopt = fm_adopt.adoption(os.environ, task)
     view = remote_head(repository, pr)
     if adopt:
-        fm_adopt.base_matches(view, adopt)
+        fm_adopt.effective_base(view, adopt, os.environ, task, repository)
     if view['headRefOid'] != head:
         raise ValueError('checks belong to stale head')
     verified_base(view, repository, root)
@@ -344,8 +344,8 @@ def main():
             if str(adopt['pr']) != args.pr:
                 raise ValueError('PR does not match authorized adoption')
             repo = repository(root)
-            fm_adopt.base_matches(remote_head(repo, args.pr), adopt)
-            fm_adopt.sync_base(root, repo, adopt['base'])
+            effective = fm_adopt.effective_base(remote_head(repo, args.pr), adopt, os.environ, args.task, repo)
+            fm_adopt.sync_base(root, repo, effective)
     if args.mode == 'local-gate-base':
         print(local_gate_base(root, args.pr, args.project_base)); return
     repo = repository(root)

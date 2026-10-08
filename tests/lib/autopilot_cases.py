@@ -132,12 +132,84 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         head_spec.start(); self.addCleanup(head_spec.stop)
         rows = [dict(type='commit_pushed', task='T-001', data={})]
         self.pilot.rows = lambda: rows
+        github = patch('fm_adopt.binding.github', side_effect=self.adopt_github)
+        github.start(); self.addCleanup(github.stop)
+        self.adopt_view = copy.deepcopy(PR); self.adopt_parents = []
         self.pull_at(PR)
         self.assertEqual(self.graphqls(), [])
         rows.append(dict(type='commit_pushed', task='T-001', data=dict(adopt_pr=12)))
         self.pull_at(PR)
         self.assertEqual(len(self.graphqls()), 1)
         self.assertIn('updateMethod:REBASE', ' '.join(self.graphqls()[0]))
+
+    def adopt_github(self, repo, *args):
+        self.calls.append(['adopt-gh', repo, *args])
+        if args[:2] == ('pr', 'view'):
+            return dict(number=self.adopt_view['number'], headRefName=self.adopt_view['head']['ref'],
+                        baseRefName=self.adopt_view['base']['ref'], headRefOid=self.adopt_view['head']['sha'])
+        self.assertEqual(args[:2], ('pr', 'list'))
+        state, branch = args[args.index('--state')+1], args[args.index('--head')+1]
+        return [dict(number=p['number'], headRefName=p['head']['ref'],
+                     baseRefName=p.get('base', {}).get('ref', 'main'), isCrossRepository=False)
+                for p in self.adopt_parents if p['head']['ref'] == branch
+                and bool(p.get('merged_at')) == (state == 'merged')]
+
+    def test_adopted_retarget_requires_restack_event_for_catchup(self):
+        import fm_adopt
+        self.external_pilot()
+        spec = dict(id='T-001', depends_on=['T-002'], adopt=dict(pr=12, head=HEAD, base='t-002-parent'))
+        (Path(self.context['tasks'])/'T-001.json').write_text(json.dumps(spec))
+        self.adopt_view = copy.deepcopy(PR)
+        self.adopt_view['head']['ref'] = 'human-child'
+        self.adopt_parents = [dict(number=9, head=dict(ref='t-002-parent'), merged_at='now')]
+        rows = [dict(type='commit_pushed', project='self', task='T-001', data=dict(adopt_pr=12))]
+        self.pilot.rows = lambda: rows
+        with patch('fm_spec_pins.Pins.resolve', return_value=dict(snapshots=dict(spec=dict(text=json.dumps(spec))))), \
+             patch('fm_adopt.binding.github', side_effect=self.adopt_github):
+            # FAIL-FIRST: even a previously pushed adoption must not replay its parent's commits.
+            (self.state/'events.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
+            self.pull_at(self.adopt_view); self.pull_at(self.adopt_view)
+            self.assertEqual(self.graphqls(), [])
+            wake = 'autopilot-' + A.key(['self', 'adopt-base-12'])
+            self.assertEqual(self.pilot.data['wakes'][wake]['line'], 'T-001 #12: adopted base needs verified restack')
+            rows.append(dict(type='commit_pushed', project='self', task='T-001', data=dict(adopt_pr=12, restacked=True)))
+            (self.state/'events.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
+            self.assertEqual(fm_adopt.event_rows(self.pilot.adoption_env()), self.pilot.rows())
+            self.pull_at(self.adopt_view)
+            self.assertEqual(len(self.graphqls()), 1)
+            self.assertIn('updateMethod:REBASE', ' '.join(self.graphqls()[0]))
+
+    def test_adopted_restack_poll_authority(self):
+        # FAIL-FIRST: only a pinned, previously pushed managed stack is automatic.
+        for pinned, pushed, owner, merged in ((True, True, 'T-002', True), (False, True, 'T-002', True),
+                (True, False, 'T-002', True), (True, True, '', True), (True, True, 'T-003', True),
+                (True, True, 'T-002', False)):
+            with self.subTest(pinned=pinned, pushed=pushed, owner=owner, merged=merged):
+                self.external_pilot(); self.pilot.data['wakes'].clear()
+                spec = dict(id='T-001', depends_on=['T-002'], adopt=dict(pr=12, head=HEAD, base='human-parent'))
+                (Path(self.context['tasks'])/'T-001.json').write_text(json.dumps(spec))
+                pr = copy.deepcopy(PR); pr['head']['ref'] = 'human-child'; pr['base']['ref'] = 'human-parent'
+                parent = dict(number=9, head=dict(ref='human-parent'), title=(owner+': parent') if owner else '', merged_at='now' if merged else None)
+                rows = [dict(type='commit_pushed', task='T-001', data=dict(adopt_pr=12))] if pushed else []
+                self.pilot.rows = lambda: rows
+                pin = dict(snapshots=dict(spec=dict(text=json.dumps(spec)))) if pinned else None
+                self.pilot.pages = lambda url: [pr] if url == 'pulls?state=open' else [parent] if 'head=' in url else []
+                def api(url):
+                    if url == 'pulls/12': return pr
+                    if '/check-runs?' in url: return dict(check_runs=[], total_count=0)
+                    if '/status?' in url: return dict(statuses=[], sha=HEAD)
+                    return []
+                self.pilot.api = api
+                with patch('fm_spec_pins.Pins.resolve', return_value=pin), \
+                     patch.object(self.pilot, 'pull'), patch.object(self.pilot, 'observe_pr'), \
+                     patch.object(self.pilot, 'inspect_policy'), patch.object(self.pilot, 'restack') as restack:
+                    self.pilot.poll(); self.pilot.poll()
+                    self.assertEqual(self.pilot.data['failures'], 0)
+                    self.assertEqual(restack.call_count, 2 if pinned and pushed and owner == 'T-002' and merged else 0)
+                wakes = [v for v in self.pilot.data['wakes'].values() if 'run fm-restack.sh' in v['line']]
+                # REGRESSION: unrelated/unknown parents and long-lived bases are silent.
+                self.assertEqual(len(wakes), int(owner == 'T-002' and merged and not (pinned and pushed)))
+                if wakes: self.assertEqual(wakes[0]['line'], 'T-001 #12: run fm-restack.sh before catch-up')
 
     def graphqls(self):
         return [x for x in self.calls if isinstance(x, list) and x[1:3] == ['api', 'graphql']]
@@ -251,32 +323,27 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertIn(['git', '-C', str(self.root), 'update-ref',
                        'refs/heads/' + PR['head']['ref'], new['head']['sha'], HEAD], self.calls)
         self.assertNotIn('12', self.pilot.data['updates'])
-
     def test_external_rebased_head_syncs_clean_worktree_with_keep(self):
         new = self.rebase_second_pull(worktree=True)
         self.assertEqual(self.local_refs[PR['head']['ref']], new['head']['sha'])
         self.assertIn(['git', '-C', self.worktree, 'reset', '-q', '--keep', new['head']['sha']], self.calls)
         self.assertNotIn('12', self.pilot.data['updates'])
-
     def test_external_rebase_preserves_unrelated_local_work(self):
         self.rebase_second_pull(local='d' * 40)
         self.assertEqual(self.local_refs[PR['head']['ref']], 'd' * 40)
         self.assertIn('12', self.pilot.data['updates'])
         self.pilot.prune_branches('12')
         self.assertNotIn('12', self.pilot.data['updates'])
-
     def test_external_legacy_update_is_pruned_and_divergent_local_ref_stays(self):
         self.rebase_second_pull(method=None)
         self.assertEqual(self.local_refs[PR['head']['ref']], HEAD)
         self.assertNotIn('12', self.pilot.data['updates'])
-
     def test_self_divergent_local_ref_stays_even_with_rebase_record(self):
         self.pilot.data['updates']['12'] = dict(head='d' * 40, seq=0, method='rebase')
         self.local_refs[PR['head']['ref']] = 'd' * 40
         self.ancestor = 1
         self.pull_at(PR, keep_local=True)
         self.assertEqual(self.local_refs[PR['head']['ref']], 'd' * 40)
-
     def test_external_rebase_sync_holds_dirty_or_active_work_and_records_reset_failure(self):
         self.dirty = True
         new = self.rebase_second_pull(worktree=True)
@@ -294,12 +361,10 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(self.local_refs[PR['head']['ref']], HEAD)
         self.assertIn('sync:12:' + new['head']['sha'], self.pilot.data['retries'])
         self.assertIn('12', self.pilot.data['updates'])
-
     # Review eligibility formerly compared base-only patch metadata here.
     # T-175 delegates all eligibility to the real gates; the replacement
     # assertions are in autopilot_loop.py (worker head -> gate -> review,
     # carried approval -> gate -> card, and current-head REJECT -> brief).
-
     def test_failure_and_findings_batch_per_reviewer(self):
         pr = copy.deepcopy(PR); pr['mergeable_state'] = 'clean'
         runs = [dict(id=1, name='ci', head_sha=HEAD, status='completed', conclusion='failure')]
@@ -319,7 +384,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pull_at(pr, reviews, comments, runs, status)
         self.pilot.flush()
         self.assertEqual(len([x for x in self.calls if x[0] == 'wake']), 3)
-
     def test_local_judgment_reasons_survive_restart(self):
         events = [dict(type=t, task='T-001', data={}) for t in
                   ('worker_crashed', 'agent_lost', 'review_failed', 'conventions_drift')]
@@ -333,7 +397,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         for i, event in enumerate(events): restored.event(event, str(i))
         self.assertEqual(len(restored.data['wakes']), 5)
         self.assertTrue(all(v['line'] for v in restored.data['wakes'].values()))
-
     def test_unsent_note_wakes_once_even_while_busy_and_survives_restart(self):
         event = dict(type='worker_note_unsent', task='T-001', pr=12, data={})
         self.pilot.busy = lambda task: True
@@ -346,11 +409,9 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         restored.busy = lambda task: True
         restored.event(event, 'unsent-1')
         self.assertEqual(restored.data['wakes'], self.pilot.data['wakes'])
-
     def test_project_identity_prevents_cross_project_task_wakes(self):
         self.pilot.event(dict(type='agent_lost', task='T-001', project='other'), '1')
         self.assertEqual(self.pilot.data['wakes'], {})
-
     def test_stacking_requires_confirmed_force_policy_and_expected_head(self):
         pr = copy.deepcopy(PR); pr['base']['ref'] = 't-002-parent'
         parent = dict(number=9, merged_at='2026-10-01', head={'ref':'t-002-parent'})
@@ -362,16 +423,13 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertIn('--expected-head', argv)
         self.assertIn(HEAD, argv)
         self.assertIn('--project', argv)
-
     def restack_inputs(self):
         self.pilot.policy.update(stacking='allowed', force_with_lease=True)
         pr = copy.deepcopy(PR)
         pr['base']['ref'] = 't-002-parent'
         return pr, dict(number=9, merged_at='now', head=dict(ref='t-002-parent'))
-
     def restack_calls(self):
         return [c for c in self.calls if isinstance(c, list) and c[0].endswith('lib/fm-restack.sh')]
-
     def test_restack_done_is_per_head_without_ledger(self):
         pr, parent = self.restack_inputs()
         self.pilot.restack(pr, parent)
@@ -385,7 +443,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertNotIn('12', self.pilot.data['restacks'])
         self.pilot.restack(pr, parent)
         self.assertEqual(len(self.restack_calls()), 2)
-
     def test_restack_active_work_and_helper_lock_hold_silently(self):
         pr, parent = self.restack_inputs()
         for name in ('round_live', 'busy'):
@@ -402,7 +459,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
             self.assertEqual(self.pilot.data['restacks'], {})
             self.assertEqual(self.pilot.data['retries'], {})
             self.assertEqual(self.pilot.data['wakes'], {})
-
     def test_restack_moved_requires_fresh_confirmation(self):
         pr, parent = self.restack_inputs()
         self.restack_answer = (67, '', 'head moved')
@@ -413,7 +469,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                          dict(head=HEAD, parent=9, task='T-001', outcome='moved'))
         self.assertEqual(self.pilot.data['retries'], {})
         self.assertEqual(self.pilot.data['wakes'], {})
-
     def test_restack_generic_failures_retry_offsets_and_last_line(self):
         for answer in ((68, '', 'noise\nlast refusal\n\n'), (65, '', 'last refusal'),
                        (64, '', 'last refusal'), (70, '', 'last refusal'),
@@ -442,7 +497,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.pilot.restack(pr, parent)
             self.assertEqual(self.pilot.data['retries']['restack:12:' + HEAD]['count'], 1)
             self.assertEqual(self.pilot.data['restacks'], {})
-
     def test_restack_conflict_and_published_wake_once(self):
         for rc, outcome, reason in ((66, 'conflict', 'rebase conflict'),
                                     (69, 'published', 'published but did not finish')):
@@ -470,7 +524,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.assertEqual(self.pilot.data['retries'], {})
                 self.pilot.prune_branches('12')
                 self.assertEqual(self.pilot.data['restacks'], {})
-
     def test_restack_unknown_outcomes_hold_across_heads(self):
         for answer in (subprocess.TimeoutExpired('restack', 120), (71, '', 'push unknown'),
                        (1, '', 'traceback'), (-9, '', ''), (137, '', 'killed')):
@@ -492,7 +545,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.assertIn('outcome unknown', next(iter(self.pilot.data['wakes'].values()))['line'])
                 self.assertEqual(self.pilot.data['retries'], {})
                 self.assertNotIn('actions', self.pilot.data)
-
     def test_restack_started_is_saved_before_probe_and_recovered_after_retarget(self):
         pr, parent = self.restack_inputs()
         def killed(argv):
@@ -519,7 +571,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.restart_branch_pilot(); self.pilot.recover(); self.pilot.flush()
         self.assertEqual(self.pilot.data, first)
         self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 1)
-
     def test_failed_update_retries_at_one_and_three_then_wakes_once(self):
         self.put_answer = response('503 Service Unavailable', 'try later')
         for expected in (1, 2, 2, 3, 3, 3):
@@ -528,7 +579,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(len(self.pilot.data['wakes']), 1)
         self.assertIn('HTTP/2.0 503 Service Unavailable', str(self.pilot.data['wakes']))
         self.assertNotIn('actions', self.pilot.data)
-
     def test_task_lookup_and_observation_do_not_use_operation_channel(self):
         self.pilot.command = lambda *a, **kw: self.fail('task lookup used operation channel')
         for number, ref, title, expected in (
@@ -545,7 +595,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.assertEqual(self.pilot.task(pr), expected)
                 self.pilot.observe_pr(pr)
                 self.assertEqual(self.calls[-1][1][0:2], ('pr_opened', expected))
-
     def test_migrated_launchers_use_their_own_interpreter(self):
         endpoints = self.root / 'bin'
         endpoints.mkdir()
@@ -559,7 +608,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 result = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, 'shebang-selected\n')
-
     def test_retry_backoff_is_bounded_and_resets(self):
         first = self.pilot.network_failure('offline')
         second = self.pilot.network_failure('offline')
@@ -568,7 +616,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertLessEqual(delay, 3600)
         self.pilot.network_success()
         self.assertEqual(self.pilot.data['failures'], 0)
-
     def test_conditional_http_304_reuses_only_endpoint_cache(self):
         responses = iter(['HTTP/2.0 200 OK\nETag: "one"\n\n[{"number":12}]',
                           'HTTP/2.0 304 Not Modified\nETag: "one"\n\n'])
@@ -579,7 +626,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(self.pilot.api('pulls'), [{'number':12}])
         self.assertIn('If-None-Match: "one"', self.calls[-1])
         self.assertIn('repos/owner/repo/pulls', self.calls[-1])
-
     def test_review_edits_extend_only_their_reviewers_quiet_period(self):
         pr = copy.deepcopy(PR); pr['mergeable_state'] = 'clean'
         alice = dict(id=1, user={'login':'alice'}, state='CHANGES_REQUESTED', body='first')
@@ -590,7 +636,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pull_at(pr, [alice, bob], [], [], [])
         self.assertEqual(self.pilot.data['batches']['12:alice']['due'], 1280)
         self.assertEqual(self.pilot.data['batches']['12:bob']['due'], 1180)
-
     def test_overdue_wakes_notify_once_without_claiming_delivery(self):
         self.pilot.queue('failure', 'T-001', 'CI failed', 'CI 失敗')
         self.pilot.flush()
@@ -599,7 +644,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
             self.pilot.flush(); self.pilot.flush()
         self.assertEqual(len([x for x in self.calls if x[0] == 'notify']), 1)
         self.assertTrue(any(x[0] == 'emit' and x[1][0] == 'autopilot_waiting' for x in self.calls))
-
     def test_events_consume_complete_lines_only(self):
         log = self.state / 'events.jsonl'
         row = json.dumps(dict(type='agent_lost', task='T-001'))
@@ -609,7 +653,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         log.write_text(row + '\n')
         self.pilot.local()
         self.assertEqual(len(self.pilot.data['wakes']), 1)
-
     def test_ready_task_holds_and_queues_firstmate_judgment_once(self):
         def command(argv, **kwargs):
             self.calls.append(argv)
@@ -621,7 +664,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertIn('T-001 ready: readiness card needed', str(self.pilot.data['wakes']))
         self.assertFalse(any('--request' in x or 'judged' in x for x in self.calls))
         self.assertTrue(any(x[0] == 'wake' for x in self.calls))
-
     def recheck_setup(self, *, old=True):
         self.pilot.policy.update(reviewers=['alice'], post='threads')
         if old:
@@ -646,7 +688,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
             return out if '--include' in argv else out.partition('\r\n\r\n')[2]
         self.pilot.probe, self.pilot.command = probe, command
         return [dict(id=1, user={'login':'alice'}, commit_id='b'*40, state='APPROVED')]
-
     def test_recheck_respects_local_projection(self):
         reviews = self.recheck_setup()
         self.pilot.policy['post'] = 'local'
@@ -660,7 +701,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pull_at(pr, reviews); self.pull_at(pr, reviews)
         self.assertEqual(len(self.review_posts), 1)
         self.assertNotIn('actions', self.pilot.data)
-
     def test_recheck_head_record_completes_after_one_post(self):
         reviews = self.recheck_setup()
         self.pull_at(PR, reviews); self.pull_at(PR, reviews)
@@ -669,7 +709,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
             'repos/owner/repo/pulls/12/requested_reviewers', '-f', 'reviewers[]=alice', '--include'])
         self.assertEqual(self.pilot.data['rechecked']['12'], dict(head=HEAD, names=[]))
         self.assertNotIn('actions', self.pilot.data)
-
     def test_recheck_transient_failures_retry_at_zero_one_three(self):
         reviews = self.recheck_setup()
         self.review_answer = recheck_response(503, 'Service Unavailable',
@@ -679,7 +718,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(len(self.pilot.data['wakes']), 1)
         self.assertIn('HTTP/2.0 503 Service Unavailable', str(self.pilot.data['wakes']))
         self.assertNotIn('actions', self.pilot.data)
-
     def test_recheck_transport_and_missing_status_failures_are_bounded(self):
         reviews = self.recheck_setup()
         for index, answer in enumerate((RuntimeError('connection reset'), (1, '', ''), (1, '', 'gh: offline'))):
@@ -694,7 +732,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertIn('connection reset', str(self.pilot.data['wakes']))
         self.assertIn('missing HTTP status line', str(self.pilot.data['wakes']))
         self.assertIn('gh: offline', str(self.pilot.data['wakes']))
-
     def test_recheck_success_or_requested_clears_pending_retry(self):
         reviews = self.recheck_setup()
         success = self.review_answer
@@ -712,7 +749,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.assertEqual(self.pilot.data['rechecked']['12']['names'], [])
                 self.assertEqual(self.pilot.data['retries'], {})
                 self.assertEqual(self.pilot.data['wakes'], {})
-
     def test_recheck_refusals_wake_once_without_retry(self):
         reviews = self.recheck_setup()
         messages = [
@@ -733,7 +769,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.assertTrue(self.pilot.data['wakes'][ident]['summary']['zh-TW'])
                 self.assertEqual(self.pilot.data['retries'], {})
                 self.assertEqual(self.pilot.data['rechecked']['12']['names'], [])
-
     def test_recheck_already_requested_and_first_observation_do_not_post(self):
         reviews = self.recheck_setup(old=False)
         self.pull_at(PR, reviews)
@@ -743,7 +778,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pull_at(pr, reviews)
         self.assertEqual(self.review_posts, [])
         self.assertEqual(self.pilot.data['rechecked']['12']['names'], [])
-
     def test_recheck_head_change_replaces_pending_and_prunes_old_token(self):
         reviews = self.recheck_setup()
         self.review_answer = recheck_response(503, 'Service Unavailable', {}, 'Service Unavailable')
@@ -758,7 +792,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         pr.update(state='closed', merged_at='now')
         self.pilot.closed_pull(pr)
         self.assertNotIn('12', self.pilot.data['rechecked'])
-
     def test_recheck_review_at_head_completes_pending_without_post(self):
         reviews = self.recheck_setup()
         self.review_answer = RuntimeError('transport unavailable')
@@ -768,12 +801,10 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(len(self.review_posts), 1)
         self.assertEqual(self.pilot.data['rechecked']['12']['names'], [])
         self.assertEqual(self.pilot.data['retries'], {})
-
     def test_protected_base_never_updated_even_with_task_like_name(self):
         self.pilot.ctx['base'] = PR['head']['ref']
         self.pull_at(PR, [], [], [], [])
         self.assertEqual(self.calls, [])
-
     def test_team_merge_is_observed_once_without_invoking_merge(self):
         def emit(kind, task, en, tw, pr=None, actor='autopilot'):
             self.calls.append(('emit', (kind, task, en, tw, pr)))
@@ -794,7 +825,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(len(self.calls), 2, 'closed PR events are retained as well as merges')
         self.assertEqual(self.calls[-1][1][0], 'closed')
         self.assertTrue(self.pilot.data['wakes'])
-
     def test_external_policy_and_wakes_stay_in_private_project(self):
         from fm_onboard import approve, infer
         home = self.root / 'private/projects/other'
@@ -819,7 +849,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         pilot.command = lambda *a, **k: self.fail('invalid conventions must not authorize operations')
         pilot.poll()
         self.assertTrue(pilot.policy_error)
-
     def test_resolved_policy_writer_rings_private_fifo_without_changing_routing(self):
         home = self.root / 'private/projects/other'
         home.mkdir(parents=True)
@@ -829,7 +858,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
             self.assertTrue(bell.wait(0))
             self.assertTrue(pilot.wait(0), 'policy updates also notify autopilot')
         self.assertFalse((self.state/'session').exists())
-
     def test_pending_update_waits_twenty_poll_steps(self):
         self.pull_at(self.behind())
         first = self.pilot.data['poll_seq']
@@ -839,7 +867,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pull_at(self.behind())
         self.assertEqual(len(self.puts()), 2)
         self.assertEqual(self.pilot.data['updates']['12']['seq'], first + 20)
-
     def test_expected_head_422_is_moved_without_reread_or_retry(self):
         self.put_answer = response('422 Unprocessable Entity', "Expected Head SHA didn't match current head ref.")
         self.pull_at(self.behind())
@@ -848,7 +875,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertFalse(any(isinstance(c, list) and c[1:3] == ['pr', 'view'] for c in self.calls))
         self.pull_at(self.behind())
         self.assertEqual(len(self.puts()), 2)
-
     def test_other_422_rereads_uncached_head_before_retry(self):
         self.put_answer = response('422 Unprocessable Entity', 'cannot update')
         original = self.command
@@ -865,7 +891,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.assertEqual(bool(self.pilot.data['retries']), result != 'c' * 40)
                 self.assertEqual(self.pilot.data['wakes'], {})
         self.pilot.command = original
-
     def test_poll_sequence_advances_before_policy_and_network_errors(self):
         self.pilot.policy_error = 'bad policy'
         self.pilot.poll()
@@ -875,7 +900,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pilot.poll()
         self.assertEqual(self.pilot.data['poll_seq'], 2)
         self.assertEqual(self.pilot.data['failures'], 1)
-
     def test_update_failures_are_isolated_per_pr_in_poll(self):
         first = self.behind()
         second = self.behind(); second['number'] = 13
@@ -912,7 +936,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
                 self.assertEqual(self.pilot.data['updates']['13']['head'], 'c' * 40)
                 self.assertEqual(sum(isinstance(c, list) and '--verify' in c for c in self.calls), 2)
-
     def seed_branch_state(self):
         self.pilot.data['pulls']['12'] = dict(task='T-001', head=HEAD)
         for number in ('12', '13'):
@@ -920,7 +943,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
             self.pilot.data['retries']['update:' + number + ':' + HEAD] = dict(count=2, due_seq=10)
             self.pilot.data['holds'][number] = dict(head=HEAD, count=2)
             self.pilot.data['updates'][number] = dict(head=HEAD, seq=1)
-
     def test_branch_state_prunes_on_head_change_closed_and_merged_event(self):
         for transition in ('head', 'closed', 'merged', 'event'):
             with self.subTest(transition=transition):
@@ -939,7 +961,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.assertNotIn('12', self.pilot.data['updates'])
                 self.assertIn('13', self.pilot.data['holds'])
                 self.assertIn('update:13:' + HEAD, self.pilot.data['retries'])
-
     def restart_branch_pilot(self):
         self.pilot.save()
         self.pilot = A.Pilot(self.context, clock=lambda: 1000)
@@ -949,7 +970,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pilot.read_head_spec = lambda pr, task: dict(id=task)
         self.pilot.push = lambda *args: self.calls.append(('wake', args))
         self.pilot.emit = lambda *args, **kw: None
-
     def test_retry_and_hold_survive_restart_and_deduplicate_wakes(self):
         self.pilot.data['poll_seq'] = 4
         self.pilot.data['retries']['update:12:' + HEAD] = dict(count=2, due_seq=6)
@@ -974,7 +994,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pull_at(self.behind()); self.pilot.flush()
         self.assertEqual(len(self.pilot.data['wakes']), 2)
         self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 2)
-
     def test_t205_migration_all_classes_and_defaults_once(self):
         actions = self.pilot.data['actions'] = {}
         removed, retained, delivered = set(), set(), {}
@@ -1045,7 +1064,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(self.pilot.path.read_bytes(), state)
         self.assertEqual({p.name: p.read_bytes() for p in folder.iterdir()}, queue)
         self.assertEqual(len(self.calls), calls)
-
     def test_t205_no_conversion_creates_no_jobs(self):
         for actions in (None, {}, {'old': dict(identity=['update', 12, HEAD], state='started')}):
             with self.subTest(actions=actions):
@@ -1057,7 +1075,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                 self.restart_branch_pilot()
                 self.assertEqual(self.pilot.data, dict(expected, migrated_t205=True))
                 self.assertNotIn('jobs', self.pilot.data)
-
     def test_t205_malformed_and_missing_identities_reconcile_without_jobs(self):
         actions = self.pilot.data['actions'] = {}
         expected = {}
@@ -1085,7 +1102,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         before = copy.deepcopy(self.pilot.data)
         self.restart_branch_pilot(); self.pilot.recover()
         self.assertEqual(self.pilot.data, before)
-
     def test_t205_review_actions_block_gate7_without_second_job(self):
         for status in ('started', 'uncertain'):
             for existing in (False, True):
@@ -1115,7 +1131,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                         launch.assert_not_called()
                     self.assertEqual(self.pilot.data, before)
                     self.assertEqual(len(self.pilot.data['wakes']), 1)
-
     def test_t205_existing_reconcile_wakes_are_preserved(self):
         self.pilot.data['actions'] = {}
         folder = self.state / 'wake-queue'; folder.mkdir()
@@ -1139,7 +1154,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pilot.flush()
         for path, payload in delivered.items(): self.assertEqual(path.read_bytes(), payload)
         self.assertEqual(len([c for c in self.calls if c[0] == 'wake']), 2)
-
     def test_probe_returns_nonzero_and_checked_raises_with_argv_and_last_line(self):
         result = subprocess.CompletedProcess(['git'], 128, 'body', 'noise\nfatal: last line\n\n')
         with patch.object(A.subprocess, 'run', return_value=result):
@@ -1152,7 +1166,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertNotIn('noise', str(raised.exception))
         self.pilot.probe = lambda argv: (0, 'stdout', '')
         self.assertEqual(self.pilot.checked(['git']), 'stdout')
-
     def test_http_status_controls_outcome_even_with_unusual_exit_code(self):
         self.put_answer = (1, response()[1], 'unexpected exit')
         self.pull_at(self.behind())
@@ -1162,7 +1175,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.put_answer = (0, response('503 Service Unavailable', 'error')[1], '')
         self.pull_at(self.behind())
         self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
-
     def test_raised_transport_failure_is_reread_and_retried(self):
         original = self.pilot.probe
         def probe(argv):
@@ -1173,7 +1185,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
         self.assertTrue(any(isinstance(c, list) and c[1:3] == ['pr', 'view'] for c in self.calls))
         self.assertEqual(self.pilot.data['failures'], 0)
-
     def test_poll_terminal_observation_prunes_branch_state(self):
         for merged in (None, 'now'):
             self.seed_branch_state()
@@ -1187,7 +1198,5 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
             self.assertNotIn('12', self.pilot.data['holds'])
             self.assertNotIn('12', self.pilot.data['updates'])
             self.assertFalse(any(k.split(':')[1] == '12' for k in self.pilot.data['retries']))
-
-
 if __name__ == '__main__':
     unittest.main()
