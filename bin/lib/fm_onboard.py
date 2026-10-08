@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 sys.dont_write_bytecode = True
 import fm_origin
+import fm_private_names
 from fm_conventions import read_policy, validate
 from fm_project_paths import external_home
 
@@ -512,7 +513,7 @@ def register(engine, name, p):
              if re.match(r'projects:\s*(#.*)?$',line.rstrip('\r\n'))]
     if len(headers) > 1:
         raise ValueError('config.yaml has more than one projects: block; merge them by hand before onboarding')
-    # The public registry receives routing only. Existing names must match;
+    # The local, uncommitted registry receives routing only. Existing names must match;
     # onboarding never overwrites another project or private nested contract.
     if any(re.match(r'^  '+re.escape(name)+r':[ \t]*(#.*)?$',line.rstrip('\r\n')) for line in lines):
         for field,value in [('github',p['repository']),('base',p['base'])]:
@@ -536,6 +537,14 @@ def register(engine, name, p):
     else:
         text+='\nprojects:\n'+entry
     atomic(path,text)
+    try:
+        added = fm_private_names.update(engine)
+        print(f'fm-onboard: private-name digests updated ({added} added); '
+              'commit tests/fixtures/private-name-digests.txt through a task PR', file=sys.stderr)
+    except (OSError, ValueError) as error:
+        reason = os.strerror(error.errno) if isinstance(error, OSError) and error.errno else type(error).__name__
+        print(f'fm-onboard: private-name digests not updated: {reason}; '
+              f'run python3 bin/lib/fm_private_names.py update --repo {engine}', file=sys.stderr)
 
 
 def main(argv=None):
