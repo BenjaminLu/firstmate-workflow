@@ -13,10 +13,99 @@ import re
 import sys
 import shutil
 import tempfile
+import argparse
+import os
 
 CAP = 512 * 1024
 QUOTE_CAP = 16 * 1024
 PARTS = ('intro', 'history', 'evidence', 'diff', 'outro')
+
+
+def prepare_experiments(directory, mode, checkout, head, base, code):
+    from fm_evidence import Store
+    store = Store(os.environ['FM_STATE_DIR'], os.environ.get('FM_EVIDENCE_PROJECT')
+                  or os.environ.get('FM_PROJECT') or 'self', os.environ['FM_TASK'])
+    records, unavailable = store.experiments(head, base, code)
+    text, index, count = '', '', 0
+    if records or unavailable:
+        from fm_experimental_evidence import attach
+        text, index, count = attach(store, records, unavailable, mode, checkout)
+    standard = directory / 'evidence-standard.md'
+    if not standard.exists():
+        standard.write_bytes((directory/'evidence.md').read_bytes())
+    (directory/'evidence.md').write_bytes(standard.read_bytes() + text.encode())
+    (directory/'experiment-status.json').write_text(json.dumps(dict(
+        has_experiments=bool(count), experiment_count=count, provenance_level='unverified', index=index)))
+
+
+def verify_effective_experiment_policy(args):
+    # The marker is a location, never an authority token or extra read grant.
+    # This fixed mode is invoked only after the final adapter policy/launch exist.
+    from fm_experimental_evidence import canonical_directory, regular_bytes, digest, PROVENANCE
+    root = canonical_directory(args.tree)
+    temporary = canonical_directory(args.tmp)
+    control = canonical_directory(args.ctl)
+    if (args.outer_os not in ('darwin', 'linux') or args.unsandboxed
+            or args.outer_os != ('darwin' if sys.platform == 'darwin' else 'linux' if sys.platform.startswith('linux') else '')):
+        raise ValueError('experimental review requires supported effective outer OS confinement')
+    tool_name = 'sandbox-exec' if args.outer_os == 'darwin' else 'bwrap'
+    trusted_tool = shutil.which(tool_name, path=os.defpath)
+    effective_tool = shutil.which(os.environ.get('FM_SANDBOX_TOOL') or tool_name)
+    if (not trusted_tool or not effective_tool
+            or Path(trusted_tool).resolve() != Path(effective_tool).resolve()
+            or os.environ.get('FM_SANDBOX_OS', args.outer_os) != args.outer_os):
+        raise ValueError('experimental review requires the actual trusted OS sandbox tool')
+    policy_path = Path(args.policy)
+    if policy_path != control/'review-policy.json':
+        raise ValueError('experimental review requires private final reviewer policy')
+    raw = regular_bytes(control, policy_path.name, 64*1024)
+    policy = json.loads(raw)
+    if (digest(raw) != args.policy_sha256 or policy.get('role') != 'reviewer'
+            or policy.get('write') != ['{root}', '{tmp}']
+            or policy.get('review_git_readonly') is not True):
+        raise ValueError('experimental review effective policy changed or lacks readonly metadata')
+    if (root == temporary or root in temporary.parents or temporary in root.parents
+            or control == root or root in control.parents or control in root.parents
+            or control == temporary or temporary in control.parents or control in temporary.parents):
+        raise ValueError('experimental review roots must be separate')
+    engine = Path(__file__).resolve().parents[2]
+    launch = args.launch
+    if launch[:1] == ['--']:
+        launch = launch[1:]
+    if (len(launch) < 3 or launch[0] != str(engine/'bin/fm-sandbox.sh')
+            or launch[1] != 'run' or launch[-1] != '--'):
+        raise ValueError('experimental review final launcher is unconfined or unsupported')
+    values = {}
+    for word in launch[2:-1]:
+        if not word.startswith('--') or '=' not in word:
+            raise ValueError('experimental review launcher has malformed arguments')
+        key, value = word[2:].split('=', 1)
+        if key not in ('policy', 'root', 'tmp', 'vendor', 'started', 'ctl', 'shed', 'blocked'):
+            raise ValueError('experimental review launcher grants unsupported capability')
+        if key in values and key != 'shed':
+            raise ValueError('experimental review launcher has duplicate capability')
+        values[key] = value
+    for key, expected in (('policy', str(policy_path)), ('root', str(root)), ('tmp', str(temporary)),
+                          ('vendor', 'codex'), ('ctl', str(control)), ('started', str(control/'started'))):
+        if values.get(key) != expected:
+            raise ValueError('experimental review final launcher binding differs')
+    git = root/'.git'
+    index = Path(args.index)
+    if (not git.is_dir() or git.is_symlink() or git.resolve() != git
+            or index.name != 'index.json' or index.parent.parent != git
+            or not re.fullmatch(r'\.fm-review-experiments-[A-Za-z0-9_-]+', index.parent.name)):
+        raise ValueError('experimental index must be in the fresh checkout own readonly metadata')
+    directory = canonical_directory(str(index.parent))
+    retained = json.loads(regular_bytes(directory, index.name, 128*1024))
+    if retained.get('version') != 1 or retained.get('provenance') != PROVENANCE or not retained.get('records'):
+        raise ValueError('experimental review index is unsupported')
+    for record in retained['records']:
+        for experiment in record['experiments']:
+            for artifact in experiment['artifacts']:
+                if digest(regular_bytes(directory, artifact['sha256'], 256*1024)) != artifact['sha256']:
+                    raise ValueError('experimental readonly copy integrity failure')
+    # No producer, model, credential helper or subprocess is used here. Policy
+    # bytes are private outside both model write roots until the launcher reads.
 
 
 def read(path):
@@ -162,11 +251,22 @@ def compose(directory, mode, checkout):
 
 def main():
     try:
+        if sys.argv[1:2] == ['prepare-experiments']:
+            _, directory, mode, checkout, head, base, code = sys.argv[1:]
+            prepare_experiments(Path(directory), mode, checkout, head, base, code)
+            return 0
+        if sys.argv[1:2] == ['verify-effective-experiment-policy']:
+            parser = argparse.ArgumentParser()
+            for key in ('policy', 'policy-sha256', 'outer-os', 'unsandboxed', 'tree', 'tmp', 'ctl', 'index'):
+                parser.add_argument('--'+key, required=True)
+            parser.add_argument('launch', nargs=argparse.REMAINDER)
+            verify_effective_experiment_policy(parser.parse_args(sys.argv[2:]))
+            return 0
         directory, mode, checkout = sys.argv[1:]
         if mode not in ('run', 'diff'):
             raise ValueError('invalid review mode')
         compose(Path(directory), mode, checkout)
-    except (ValueError, OSError, KeyError) as error:
+    except (ValueError, OSError, KeyError, TypeError) as error:
         print(f'fm-review: {error}', file=sys.stderr)
         return 65
     return 0

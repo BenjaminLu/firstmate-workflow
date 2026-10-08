@@ -1541,6 +1541,24 @@ Missing or untested migration in a rule-changing diff is a REJECT finding.
 
 ## 7. The standing list
 
+**Factual experimental evidence (T-264).** Review history still contains only
+verdicts and ASK-PASS-CRITERIA markers. A separate validated collection accepts
+strict version 1 operator-attested-existing manifests through experiment-retain,
+with declared argv/results and bounded regular artifacts. Stock does not run
+producers or apply overlays. Signed retention authenticates binding and bytes,
+not execution, assertion coverage, captain approval or merge authority.
+Current source must equal the reviewed head. Historical controls must precede
+the reviewed base, with exact source Git input bytes, ordered replace/add
+overlays and a one-based current acceptance association. Accepted-base status
+is an operator declaration. Historical failures/comparisons never become
+current-head passes or CI. Truncation cannot prove an omitted assertion, and
+reviewers retain authority to request independent reproducible experiments.
+The bounded factual index preserves commands, declared exits, provenance,
+signatures and digests separately from worker reasoning and required criteria.
+Both checkout refresh paths reconstruct verified copies and fresh paths,
+including uncapped prompts. Missing/stale artifacts are unavailable; corrupt
+records fail closed before model invocation. No record silently replaces CI.
+
 **The list comes with the first REJECT (captain, 2026-09-29; SK-007).**
 Every `REJECT`, from round one, ends with the task's standing list: the
 numbered, complete set of changes that would make this head pass, closed by
@@ -3801,6 +3819,21 @@ calls retain their limits. Short operator calls in `fm-merge.sh`,
 
 ### 13.1 Crew permissions (T-105, T-117)
 
+Experimental reviewer artifacts (T-264) live only under the fresh clone's own
+actual `.git/.fm-review-experiments-<nonce>` directory. Stock admits run-mode
+attachment only to Codex with supported outer OS enforcement, exact root/tmp
+write policy and review_git_readonly=true. A fixed frozen verifier checks the
+private final effective policy and actual launch argv immediately before each
+Codex invocation; retries and fallbacks receive separate checks. Unsupported
+vendors, unconfined/native-only execution and the OS-less hatch refuse
+experiment-bearing launches with bilingual reasons. File modes alone are not
+confinement. There is no broader state read grant and the key remains private.
+Diff-mode indices explicitly disclose that files are inaccessible. Retention
+refuses crews before I/O or subprocesses; after operator admission only bounded
+trusted local Git binding operations may execute, never manifest argv, network,
+login/model helpers or overlays. Existing sandbox networking is unchanged and
+is not an absolute no-network producer confinement claim.
+
 A worker used to inherit the operator's personal CLI settings: on the
 captain's machine that allowed gh-axi, Herdr, a browser, reading any path
 and editing `~/.claude/skills`, and refused bun, npm, python and chmod.
@@ -5434,6 +5467,25 @@ and capacity checks intact. T-139 conventions choose card versus handoff;
 T-141 never auto-merges. A recorded order is not proof of a successful merge.
 
 ### 15.5 Immutable pins and authoritative heads
+
+Experimental evidence (T-264) binds the full verified project/repository,
+head/base/patch/files, exact approved input hashes, full canonical pin digest,
+frozen bin-byte engine digest and snapshot manifest digest. The engine digest
+is the existing source_binding digest of snapshot bin bytes, not a committed
+Git identity. Missing or unauthorized pins, mutable code and changed inventory
+refuse retention. Artifacts use no-follow bounded reads and immutable
+digest-addressed private storage; HMAC seals retention only. Unsigned legacy
+brief/pack/worker-report/ask/verdict records without binding remain readable;
+unsigned experimental records never do. Changed heads/inputs/engines make old
+records unavailable, with no carry policy or relabeling. A new frozen reviewer
+round may use additive attachment without repinning unchanged approved bytes.
+Running old rounds keep their snapshots, contexts and receipts untouched, and
+simultaneous rounds own separate read copies. For experiment-bearing external
+reviews the complete verdict and normal signed authority stay private; optional
+comments suppress the entire body even under review=fm, publishing only fixed
+status/task/head/decision and an opaque reference. Events and metadata expose
+only fixed presence/count and unverified provenance, never experimental bodies,
+argv, paths, signatures, artifact digests or raw diagnostics.
 
 An external task may adopt one human-opened PR with `adopt: {pr, head, base}`:
 record its number, the full commit the captain saw, and its base branch. The

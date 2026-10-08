@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Operator entrypoint: resolve private project state before retaining a brief.
 set -euo pipefail
+# Refuse crews before sourcing config, resolving projects, or creating state.
+for argument in "$@"; do
+  if [ "$argument" = experiment-retain ]; then
+    if [ "${FM_ROLE:-}" = worker ] || [ "${FM_ROLE:-}" = reviewer ] ||
+       [ "${FM_IN_ROUND:-}" = 1 ] || [ "${HERDR_ENV:-}" = 1 ] || [ -n "${FM_RUN_DIR:-}" ]; then
+      echo 'fm-evidence: experimental retention requires the outside-round operator' >&2
+      exit 65
+    fi
+  fi
+done
 config_lib="$(dirname "${BASH_SOURCE[0]}")/../fm-config.sh"
 [ -f "$config_lib" ] || { echo "${0##*/}: missing $config_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
