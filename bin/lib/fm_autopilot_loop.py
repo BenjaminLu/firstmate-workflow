@@ -55,6 +55,136 @@ class MechanicalLoop:
                     return True
         return False
 
+    def failed_card_evidence(self, task, pr):
+        """Read-only historical eligibility, never an approval or current readiness.
+
+        Board-owned files/events supply retained local captain provenance, not
+        a cryptographic captain signature. Store verifies the old gate binding.
+        Return (evidence, hold): empty evidence preserves ordinary scheduling.
+        """
+        from fm_binding import sha
+        from fm_evidence import Store
+        from fm_merge_outcome import merge_outcome
+        owner = self.ctx['project'] or 'firstmate-workflow'
+        prefix = 'D-' + owner + '-' + task.replace('-', '') + '-'
+        history = []
+        try:
+            for folder in ('pending', 'decisions'):
+                for path in sorted((self.state / folder).glob('*.json')):
+                    record = read_json(path)
+                    relevant = path.stem.startswith(prefix) or (
+                        record.get('kind') == 'merge' and record.get('task') == task
+                        and record.get('project', self.ctx.get('default_project', owner)) == owner)
+                    if not relevant: continue
+                    nonmerge = record.get('kind') == 'choice' or (
+                        'kind' not in record and record.get('purpose') == 'dispatch')
+                    if nonmerge:
+                        # Intent cannot erase outcome/binding or retained merge
+                        # events. Check contradictions before either exemption.
+                        merge_keys = ('merge', 'merged', 'merge_settled', 'merge_reason',
+                                      'merge_started', 'binding')
+                        if (record.get('purpose') == 'merge' or record.get('effect') == 'merge'
+                                or any(k in record for k in merge_keys)):
+                            return [], 'unverified identity'
+                        event_path = self.state / 'events.jsonl'
+                        for line in event_path.read_text().splitlines() if event_path.exists() else []:
+                            row = json.loads(line)
+                            if not isinstance(row, dict): return [], 'unverified settlement'
+                            data = row.get('data', {})
+                            if (row.get('type') == 'decision_made' and isinstance(data, dict)
+                                    and isinstance(data.get('decision'), str)
+                                    and data['decision'] in (path.stem, record.get('id'))
+                                    and (data.get('effect') == 'merge' or data.get('purpose') == 'merge'
+                                         or any(k in data for k in merge_keys))):
+                                return [], 'unverified identity'
+                        continue
+                    if record.get('kind') != 'merge' or record.get('purpose') == 'dispatch':
+                        return [], 'unverified identity'
+                    if folder == 'pending': return [], 'outstanding card'
+                    ident = record.get('id')
+                    if (not isinstance(ident, str) or path.stem != ident
+                            or not re.fullmatch(re.escape(prefix) + r'[1-9][0-9]*', ident)
+                            or record.get('identity') != 'decision:' + ident
+                            or record.get('project', self.ctx.get('default_project', owner)) != owner
+                            or record.get('task') != task or str(record.get('pr')) != str(pr['number'])):
+                        return [], 'unverified identity'
+                    if (record.get('chosen') != 'A' or record.get('merge') != 'failed'
+                            or merge_outcome(record) != 'failed'):
+                        return [], 'final or unknown answer'
+                    old_head = sha(record.get('expected_head'))
+                    settled = record.get('merge_settled')
+                    when = datetime.datetime.fromisoformat(settled.replace('Z', '+00:00'))
+                    if when.tzinfo is None: return [], 'unverified settlement'
+                    history.append((ident, old_head, settled, record))
+            if not history: return [], ''
+            if self.policy['land'] != 'card' or pr.get('state') != 'open':
+                return [], 'not an open card candidate'
+            head = sha(pr['head']['sha'])
+            if any(head == old_head for _, old_head, _, _ in history):
+                return [], 'same failed head'
+            # Read disk again under merge-turn.lock; a poll's cached event rows
+            # must not hide a newly visible settlement or conflicting record.
+            events = []
+            for line in (self.state / 'events.jsonl').read_text().splitlines():
+                row = json.loads(line)
+                if not isinstance(row, dict): return [], 'unverified settlement'
+                events.append(row)
+            records = Store(str(self.state), self.ctx['evidence_project'], task,
+                            external=self.ctx['external']).records()
+            evidence = []
+            for ident, old_head, settled, record in history:
+                matches = []
+                for row in events:
+                    data = row.get('data', {})
+                    if not isinstance(data, dict): continue
+                    if row.get('type') != 'decision_made' or data.get('decision') != ident: continue
+                    # The initial running-answer event is not a settlement.
+                    if (row.get('actor') == 'captain' and row.get('task') == task
+                            and row.get('project', self.ctx.get('default_project', owner)) == owner
+                            and data.get('chosen') == 'A' and data.get('effect') == 'merge'
+                            and data.get('outcome') == 'running' and 'merge' not in data): continue
+                    if (row.get('actor') != 'captain'
+                            or row.get('project', self.ctx.get('default_project', owner)) != owner
+                            or row.get('task') != task or data.get('chosen') != 'A'
+                            or data.get('merge') != 'failed' or data.get('outcome') != 'failed'
+                            or data.get('expected_head') != old_head
+                            or ('pr' in row and str(row['pr']) != str(pr['number']))):
+                        return [], 'unverified settlement'
+                    stamp = datetime.datetime.fromisoformat(row['ts'].replace('Z', '+00:00'))
+                    when = datetime.datetime.fromisoformat(settled.replace('Z', '+00:00'))
+                    # The stock emitter truncates to seconds: its timestamp
+                    # denotes [stamp, stamp + 1s), not proven subsecond order.
+                    whole_second = re.fullmatch(
+                        r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})', row['ts'])
+                    if (stamp.tzinfo is None or (stamp < when and not (
+                            whole_second and when < stamp + datetime.timedelta(seconds=1)))):
+                        return [], 'unverified settlement'
+                    matches.append(row['ts'])
+                if not matches: return [], 'unverified settlement'
+                binding = record.get('binding')
+                signature = binding.get('signature') if isinstance(binding, dict) else None
+                if not signature or not any(
+                        r.get('kind') == 'readiness' and r.get('signature') == signature
+                        and r.get('head') == old_head and str(r.get('pr')) == str(pr['number'])
+                        and r.get('repository') == self.ctx['repository'] and binding == r for r in records):
+                    return [], 'unverified old readiness'
+                evidence.append([ident, old_head, settled, sorted(set(matches))])
+            return ['failed-card-replacement-v1', head, sorted(evidence)], ''
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return [], 'unverified failed history'
+
+    def failed_card_hold(self, task, pr, reason):
+        # Fixed categories only: never project private reasons/details/evidence.
+        translations = {'outstanding card': '已有待處理決策卡',
+            'unverified identity': '身分無法驗證', 'final or unknown answer': '回答已定案或結果未知',
+            'unverified settlement': '結算紀錄無法驗證', 'same failed head': '仍是失敗的版本',
+            'not an open card candidate': '不是可提出決策卡的開啟 PR',
+            'unverified old readiness': '舊關卡證據無法驗證',
+            'unverified failed history': '失敗歷史無法驗證'}
+        self.attention('failed-card-' + reason, task, pr,
+            f'{task} #{pr["number"]} replacement held: {reason}',
+            f'{task} #{pr["number"]} 新決策卡暫緩：{translations[reason]}')
+
     def adoption_env(self):
         return dict(FM_ENGINE_ROOT=str(self.root), FM_TARGET_ROOT=self.ctx['target'],
                     FM_STATE_DIR=str(self.state), FM_TASKS_DIR=self.ctx['tasks'],
@@ -249,6 +379,13 @@ class MechanicalLoop:
         from fm_concurrent import live_rounds
         if any(r.get('task') == task for r in live_rounds([dict(state=str(self.state), name=self.ctx['project'])])):
             return
+        replacement, hold = self.failed_card_evidence(task, pr)
+        if hold:
+            self.failed_card_hold(task, pr, hold)
+            return
+        if replacement and any(job.get('task') == task
+                and job.get('state') in ('running', 'consuming', 'uncertain')
+                for job in self.data.get('jobs', {}).values()): return
         verdict = self.verdict(task)
         head = pr['head']['sha']
         if verdict.get('verdict') == 'REJECT' and verdict.get('head') == head:
@@ -310,8 +447,18 @@ class MechanicalLoop:
         self.save()
         bound = {field: verdict.get(field) for field in ('head', 'verdict', 'signature', 'round', 'actor')}
         if verdict.get('head') != head: bound = None
-        fingerprint = key([pr['number'], head, pr['base']['sha'], checks,
-                           bound, details, slot['release']])
+        inputs = [pr['number'], head, pr['base']['sha'], checks,
+                  bound, details, slot['release']]
+        replacement, hold = self.failed_card_evidence(task, pr)
+        if hold:
+            self.failed_card_hold(task, pr, hold)
+            return
+        if replacement:
+            if any(job.get('task') == task and job.get('state') in ('running', 'consuming', 'uncertain')
+                   for job in self.data.get('jobs', {}).values()): return
+            # Preserve the exact seven-element ordinary input on upgrade.
+            inputs.append(replacement)
+        fingerprint = key(inputs)
         round_number = 1 + sum(r.get('type') == 'review_opened' and r.get('task') == task for r in self.rows())
         number = str(pr['number'])
         if self.data['advanced'].get(number, {}).get('fingerprint') == fingerprint:
@@ -489,10 +636,10 @@ class MechanicalLoop:
                 return
             if merge_blocker(self.state, self.ctx['project']): return
             prefix = 'D-' + owner + '-' + task.replace('-', '') + '-'
-            for folder in ('pending', 'decisions'):
-                for path in (self.state / folder).glob(prefix + '*.json'):
-                    record = read_json(path)
-                    if record.get('kind') == 'merge' and record.get('task') == task: return
+            replacement, hold = self.failed_card_evidence(task, pr)
+            if hold:
+                self.failed_card_hold(task, pr, hold)
+                return
             candidates = []
             for path in (self.state / 'decision-ids' / owner / task.replace('-', '')).glob('*.json'):
                 if not re.fullmatch(r'[1-9][0-9]*', path.stem) or read_json(path).get('kind') != 'merge': continue
@@ -516,14 +663,39 @@ class MechanicalLoop:
                     details.parent.mkdir(exist_ok=True)
                     save_json(details, content)
                 except ValueError as error:
+                    reason = 'external project: author the details' if self.ctx['external'] else str(error)
+                    reason_tw = '外部專案：請撰寫決策卡內容' if self.ctx['external'] else str(error)
                     self.attention('details', task, pr,
-                                   f'{task} ready: merge card details needed ({ident}): {error}',
-                                   f'{task} 已就緒：需要 firstmate 撰寫合併決策卡內容（{ident}）：{error}')
+                                   f'{task} ready: merge card details needed ({ident}): {reason}',
+                                   f'{task} 已就緒：需要 firstmate 撰寫合併決策卡內容（{ident}）：{reason_tw}')
+                    return
+            if replacement:
+                # Cooperating writers share this lock. Independently visible
+                # mutations during details preparation are checked once more;
+                # request/candidate and final match-head still own later races.
+                if self.base_tip() != gated_base:
+                    self.attention('base', task, pr, f'{task}: regate on the new base',
+                                   f'{task}：基底已更新，需要重新檢查關卡')
+                    return
+                if self.authoritative_head(task, pr) != head:
+                    self.attention('head', task, pr, f'{task}: authoritative head changed; regate',
+                                   f'{task}：遠端版本已變更，需要重新檢查關卡')
+                    return
+                if merge_blocker(self.state, self.ctx['project']): return
+                replacement, hold = self.failed_card_evidence(task, pr)
+                if hold or not replacement:
+                    self.failed_card_hold(task, pr, hold or 'unverified failed history')
                     return
             # fm-decide validates the content and current signed gate readiness
             # again; deriving details never substitutes for those checks.
-            self.command(self.script('fm-decide.sh', '--request', ident, '--task', task, '--project', owner,
-                '--kind', 'merge', '--pr', pr['number'], '--expected-head', head, '--details', details))
+            try:
+                self.command(self.script('fm-decide.sh', '--request', ident, '--task', task, '--project', owner,
+                    '--kind', 'merge', '--pr', pr['number'], '--expected-head', head, '--details', details))
+            except ERRORS:
+                if not (replacement and self.ctx['external']): raise
+                # The child error may contain authored text or private paths.
+                # Retain uncertain-job reconciliation, with a bounded wake.
+                raise ValueError(f'{task} #{pr["number"]}: replacement request refused; verify current evidence and details') from None
 
 
 def run_job(path):
