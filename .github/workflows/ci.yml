@@ -159,7 +159,7 @@ jobs:
             [ "$bad" = 0 ]
           }
           fm_cleanup() {
-            local result=$? cleanup_bad=0 remove_rc
+            local result=$? cleanup_bad=0 remove_rc inventory_rc
             trap - EXIT
             set +e
             if [ "$fm_owned" = 1 ]; then
@@ -176,7 +176,10 @@ jobs:
               fi
               fm_globals || cleanup_bad=1
               fm_compare rollback failure || cleanup_bad=1
-              timeout 10s cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-rollback.txt" || cleanup_bad=1
+              if timeout 10s sudo -n /bin/cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-rollback.txt" 2> "$fm_logs/profiles-rollback.stderr"; then inventory_rc=0; else inventory_rc=$?; cleanup_bad=1; fi
+              printf '%s\n' "$inventory_rc" > "$fm_logs/profiles-rollback.status"
+              cat "$fm_logs/profiles-rollback.txt" "$fm_logs/profiles-rollback.stderr"
+              [ -s "$fm_logs/profiles-rollback.txt" ] || cleanup_bad=1
               if grep -q 'firstmate_ci_.*bwrap' "$fm_logs/profiles-rollback.txt"; then cleanup_bad=1; fi
             fi
             if [ "$cleanup_bad" != 0 ]; then echo 'ASK:T-264 profile cleanup/rollback refused' >&2; result=1; fi
@@ -186,25 +189,36 @@ jobs:
           trap 'exit 130' INT
           trap 'exit 143' TERM
           fm_globals
-          timeout 10s cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-before.txt"
-          cat "$fm_logs/profiles-before.txt"
+          if timeout 10s sudo -n /bin/cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-before.txt" 2> "$fm_logs/profiles-before.stderr"; then inventory_rc=0; else inventory_rc=$?; fi
+          printf '%s\n' "$inventory_rc" > "$fm_logs/profiles-before.status"
+          cat "$fm_logs/profiles-before.txt" "$fm_logs/profiles-before.stderr"
+          [ "$inventory_rc" = 0 ] && [ -s "$fm_logs/profiles-before.txt" ]
           [ ! -e "$fm_profile" ] && [ ! -L "$fm_profile" ]
           if grep -qi bwrap "$fm_logs/profiles-before.txt"; then
             echo 'ASK:T-264 existing bwrap profile requires approved takeover' >&2; exit 1
           fi
           # Bounded read-only kernel attachment inventory; no host private-root enumeration.
-          timeout 10s python3 - <<'FM_ATTACHMENTS'
+          if timeout 10s sudo -n /usr/bin/python3 -I - > "$fm_logs/attachments.stdout" 2> "$fm_logs/attachments.stderr" <<'FM_ATTACHMENTS'
           from pathlib import Path
           from fnmatch import fnmatchcase
           root=Path('/sys/kernel/security/apparmor/policy/profiles')
-          entries=list(root.iterdir())
-          if len(entries)>4096: raise SystemExit('ASK:T-264 policy inventory exceeds bound')
-          for entry in entries:
+          count=0
+          for entry in root.iterdir():
+              count+=1
+              if count>4096: raise SystemExit('ASK:T-264 policy inventory exceeds bound')
               with (entry/'attach').open('rb') as stream: attachment=stream.read(4097)
               if len(attachment)>4096: raise SystemExit('ASK:T-264 attachment exceeds bound')
-              if fnmatchcase('/usr/bin/bwrap', attachment.strip().decode('utf-8')):
+              attachment=attachment.strip().decode('utf-8')
+              if not attachment or '\x00' in attachment: raise SystemExit('ASK:T-264 malformed attachment')
+              print(entry.name, repr(attachment))
+              if fnmatchcase('/usr/bin/bwrap', attachment):
                   raise SystemExit('ASK:T-264 conflicting bwrap attachment')
+          if count==0: raise SystemExit('ASK:T-264 empty policy inventory')
           FM_ATTACHMENTS
+          then inventory_rc=0; else inventory_rc=$?; fi
+          printf '%s\n' "$inventory_rc" > "$fm_logs/attachments.status"
+          cat "$fm_logs/attachments.stdout" "$fm_logs/attachments.stderr"
+          [ "$inventory_rc" = 0 ]
           fm_compare before failure
           cat > "$fm_logs/profile" <<'FM_PROFILE'
           abi <abi/4.0>,
@@ -486,7 +500,7 @@ jobs:
             [ "$bad" = 0 ]
           }
           fm_cleanup() {
-            local result=$? cleanup_bad=0 remove_rc
+            local result=$? cleanup_bad=0 remove_rc inventory_rc
             trap - EXIT
             set +e
             if [ "$fm_owned" = 1 ]; then
@@ -503,7 +517,10 @@ jobs:
               fi
               fm_globals || cleanup_bad=1
               fm_compare rollback failure || cleanup_bad=1
-              timeout 10s cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-rollback.txt" || cleanup_bad=1
+              if timeout 10s sudo -n /bin/cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-rollback.txt" 2> "$fm_logs/profiles-rollback.stderr"; then inventory_rc=0; else inventory_rc=$?; cleanup_bad=1; fi
+              printf '%s\n' "$inventory_rc" > "$fm_logs/profiles-rollback.status"
+              cat "$fm_logs/profiles-rollback.txt" "$fm_logs/profiles-rollback.stderr"
+              [ -s "$fm_logs/profiles-rollback.txt" ] || cleanup_bad=1
               if grep -q 'firstmate_ci_.*bwrap' "$fm_logs/profiles-rollback.txt"; then cleanup_bad=1; fi
             fi
             if [ "$cleanup_bad" != 0 ]; then echo 'ASK:T-264 profile cleanup/rollback refused' >&2; result=1; fi
@@ -513,25 +530,36 @@ jobs:
           trap 'exit 130' INT
           trap 'exit 143' TERM
           fm_globals
-          timeout 10s cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-before.txt"
-          cat "$fm_logs/profiles-before.txt"
+          if timeout 10s sudo -n /bin/cat /sys/kernel/security/apparmor/profiles > "$fm_logs/profiles-before.txt" 2> "$fm_logs/profiles-before.stderr"; then inventory_rc=0; else inventory_rc=$?; fi
+          printf '%s\n' "$inventory_rc" > "$fm_logs/profiles-before.status"
+          cat "$fm_logs/profiles-before.txt" "$fm_logs/profiles-before.stderr"
+          [ "$inventory_rc" = 0 ] && [ -s "$fm_logs/profiles-before.txt" ]
           [ ! -e "$fm_profile" ] && [ ! -L "$fm_profile" ]
           if grep -qi bwrap "$fm_logs/profiles-before.txt"; then
             echo 'ASK:T-264 existing bwrap profile requires approved takeover' >&2; exit 1
           fi
           # Bounded read-only kernel attachment inventory; no host private-root enumeration.
-          timeout 10s python3 - <<'FM_ATTACHMENTS'
+          if timeout 10s sudo -n /usr/bin/python3 -I - > "$fm_logs/attachments.stdout" 2> "$fm_logs/attachments.stderr" <<'FM_ATTACHMENTS'
           from pathlib import Path
           from fnmatch import fnmatchcase
           root=Path('/sys/kernel/security/apparmor/policy/profiles')
-          entries=list(root.iterdir())
-          if len(entries)>4096: raise SystemExit('ASK:T-264 policy inventory exceeds bound')
-          for entry in entries:
+          count=0
+          for entry in root.iterdir():
+              count+=1
+              if count>4096: raise SystemExit('ASK:T-264 policy inventory exceeds bound')
               with (entry/'attach').open('rb') as stream: attachment=stream.read(4097)
               if len(attachment)>4096: raise SystemExit('ASK:T-264 attachment exceeds bound')
-              if fnmatchcase('/usr/bin/bwrap', attachment.strip().decode('utf-8')):
+              attachment=attachment.strip().decode('utf-8')
+              if not attachment or '\x00' in attachment: raise SystemExit('ASK:T-264 malformed attachment')
+              print(entry.name, repr(attachment))
+              if fnmatchcase('/usr/bin/bwrap', attachment):
                   raise SystemExit('ASK:T-264 conflicting bwrap attachment')
+          if count==0: raise SystemExit('ASK:T-264 empty policy inventory')
           FM_ATTACHMENTS
+          then inventory_rc=0; else inventory_rc=$?; fi
+          printf '%s\n' "$inventory_rc" > "$fm_logs/attachments.status"
+          cat "$fm_logs/attachments.stdout" "$fm_logs/attachments.stderr"
+          [ "$inventory_rc" = 0 ]
           fm_compare before failure
           cat > "$fm_logs/profile" <<'FM_PROFILE'
           abi <abi/4.0>,
