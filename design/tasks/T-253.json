@@ -1,0 +1,229 @@
+{
+  "id": "T-253",
+  "title": "network calls are bounded and retried, a finished round marks its draft pull request ready, and a review pins its session owner at start",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-config.sh",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "tests/network-bounds.test.sh",
+    "bin/lib/fm_context_pack.py",
+    "tests/worker-draft-ready.test.sh",
+    "tests/review-session-guard.test.sh",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-253.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-07 the captain approved code checks for the rules firstmate had kept only in memory (verbatim: \"好 先B再C 其他照你的意思改\"). That day a worker's `git fetch` over ssh hung 74 minutes and a merge helper's fetch hung about 4 hours during a GitHub outage, blocking every later merge card; a pull request opened as a draft by a question round stayed a draft after later rounds finished the work, so no merge card could appear until the captain marked it ready by hand; and a review started with a trailing `&` lost its session owner when its parent shell exited (`fm-managed: no session found: every ancestor up to pid 1 is a launcher`) and produced no verdict.",
+    "Change 1, git network bounds (bin/fm-config.sh, top level right after `_fm_code_dir` at :91, so every script that sources it gets them). The ssh options `-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4` are appended to the ssh command git would already use, never replacing it: when GIT_SSH_COMMAND is set, it becomes that value plus the options (unless it already contains `ServerAliveInterval`); when GIT_SSH is set, nothing is changed (git runs that program as-is and it takes no option string); otherwise the base is `git config --get core.sshCommand` (global or the current repository) or `ssh`, and GIT_SSH_COMMAND is exported as that base plus the options. `GIT_HTTP_LOW_SPEED_LIMIT=1000` and `GIT_HTTP_LOW_SPEED_TIME=60` are exported only when unset. A stalled ssh or https transfer then ends within about 60-80 seconds instead of hanging. This covers, without editing them, every git fetch/push/ls-remote/clone in bin/fm-worker.sh (:272, :295, :421-424, :573, :618-629, :1108, :1127, :1301, :2235, :2255), bin/fm-project.sh sync (:148, :160), bin/fm-review.sh (:428-429, :491-492, local clones, unaffected), bin/fm-checkpoint.sh:140 (`git push`) and bin/fm-canary.sh (:478, :662 clone), all of which source fm-config.sh. Stated limit: the base is resolved once, when a script sources fm-config.sh, from the repository it runs in; a `core.sshCommand` set only inside another clone that a later `git -C` call works in (a per-clone deploy key) is overridden by the exported value. Firstmate's managed clones set no `core.sshCommand` today; a project that needs one sets GIT_SSH_COMMAND or a global `core.sshCommand` instead, and §12 says so.",
+    "Change 2, a bounded gh (bin/fm-config.sh `fm_github` at :1084-1090). Add `fm_with_timeout <seconds> <command...>`: a small perl runner (perl is present on macOS and the CI image; macOS has no coreutils `timeout`) that forks, puts the child in its own process group (`setpgrp`), execs the command there, and waits under `alarm`; when the alarm fires it sends TERM, then after 2 seconds KILL, to the whole child process group (so a shell stub's own `sleep` does not stay behind holding stdout open) and exits 124; otherwise it exits with the child's exit status (a child killed by a signal maps to 128+signal, and a command that cannot be executed returns 127, as bash does today). The runner installs handlers for TERM, INT and HUP: on any of them it sends the same signal to the child's process group, waits up to 2 seconds, sends KILL to the group, and exits 128+signal, so stopping a round (bin/fm-herdr.py:889, :897 `os.killpg`) never leaves a gh child or its descendants running. The command must be a real executable, never a shell function (gh always is; tests use executable stubs). `fm_github` runs gh through it with `FM_GH_TIMEOUT` seconds (default 120). A read call (`pr view`, `pr list`, `pr checks`, `run view`, `run list`, or `api` that is a read: no `-X`/`--method` other than GET and none of `-f`, `-F`, `--field`, `--raw-field`, `--input`, which make gh send a POST, unless `-X GET`/`--method GET` is also given) that returns 124 is retried up to 2 more times after waits taken from `FM_GH_RETRY_DELAYS` (default `5 15`; the new suites set `0 0`); each attempt's stdout goes to a temporary file and only the final attempt's stdout is printed, so a read that printed part of its output and then stalled is never printed twice; any other exit code is returned at once, unchanged (a not-found answer is not a timeout). A write call or a call that writes files (`pr create`, `pr edit`, `pr comment`, `pr ready`, `pr merge`, `run download`, `api` with a non-GET method or with field/input flags and no explicit GET) is never retried. The direct gh reads go through the same bounded read helper (`fm_gh_read <gh> <args...>`, defined beside fm_github, same timeout and retry): bin/fm-worker.sh:1716 (`api …/comments --paginate`), bin/fm-review.sh:597 (`$GH api …/protection/required_status_checks`) and bin/fm-review.sh:621 (`$GH api …/check-runs`).",
+    "Change 2b, the worker's context pack (bin/lib/fm_context_pack.py, run by bin/fm-worker.sh:1303-1307 in every round on an existing pull request). Its git call (`command`, :135), its gh calls (`github`, :142) and the failed-log read (`run view --job … --log-failed`, :182) pass `timeout=` with `FM_GH_TIMEOUT` seconds (default 120); a `subprocess.TimeoutExpired` is treated like an unavailable answer: `command` and `github` raise the same `ValueError('… evidence unavailable: timed out')` they raise today for a failed call, and the log read records a gap, so the pack is still written with that evidence missing. No retry in the pack.",
+    "Change 3, draft to ready (bin/fm-worker.sh). Right before the round is staged (`git -C \"$tree\" add -A` at :2038), record `round_had_work=1` when `worker_changed_files || [ \"$rebuilt\" = 1 ]` (initialised `round_had_work=0` beside `held_has_work=0` at :1928), because after the commit and push (:2235, :2255) the worktree is clean and `worker_changed_files` answers false, as :2368-2369 already notes. In the existing-pull-request branch, placed after the `emit --type commit_pushed` that follows the title upgrade (about :2333) and before that branch's closing `fi` (about :2334), outside the piece tests/lib/external_public_title.py cuts (:2313 to the `emit_status \"Pushed another round` at :2331), and reading `${asked:-0}` and `${round_had_work:-0}` so a cut piece under `set -u` never fails: when the pull request already existed before this round (`num` came from `$PR`, not from `pr create`), it is not an adopted pull request (`[ -z \"${adopt_pr:-}\" ]`, the same exclusion the title upgrade uses at :2316), and firstmate itself opened it as a draft: when the first question round opens its draft (:2289-2290, `pr create --draft`), the worker writes the marker file `$FM_STATE_DIR/drafts/<task>-<number>` after the number is read; the ready step runs only when that marker exists and removes it after a successful `pr ready` (a draft the captain or a person made by hand has no marker and stays a draft), this round asked no question (`asked=0`, :1687-1688) and `round_had_work=1`, the worker reads `fm_github pr view \"$num\" --json isDraft --jq .isDraft`; when that prints `true` it runs `fm_github pr ready \"$num\"` once and emits a crew status \"Pull request #N marked ready for review\" / \"PR #N 已標成 ready for review\". A failed read or a failed `pr ready` prints one warning to stderr and does not change the round's exit code (the work is already pushed). The first question round still opens its draft (:2289-2290) unchanged. Self and external projects both go through `fm_github`, so the external `--repo` is added there.",
+    "Change 4, the review session guard (bin/fm-review.sh only; the existing `session-owner` mode of bin/lib/fm_lifeline.py at :1155-1157, documented at :50 and design.md:3059-3068, is reused unchanged and still exits 70 on failure). Before the `--spec-preflight` branch at bin/fm-review.sh:89 (so both the spec preflight, which sources bin/lib/fm-spec-preflight.sh and runs its own `fm_identity reviewer` at :39, and the normal review before `fm_identity reviewer` at :106 are covered), the review always runs `python3 \"${FM_CODE_ROOT:-$REPO}/bin/lib/fm_lifeline.py\" session-owner` (the same root expression as bin/fm-review.sh:91): it returns FM_SESSION_PID when that is set and a pid, else FIRSTMATE_CI_SESSION, else the nearest non-launcher ancestor, and refuses (exit 70, a message on stderr) for a malformed FM_SESSION_PID or a walk that cannot find an owner. On success fm-review.sh exports FM_SESSION_PID with the printed pid, so every later managed launch in the review uses the pinned owner even after the starting shell exits (a value already set and valid is the same value, so nothing changes for it). On failure it prints `fm-review: no session owns this review: <the session-owner message>. Start it in the foreground of the session, or with the harness's background mode, or name the owner with FM_SESSION_PID.` and exits 75 before any identity, checkout or vendor work.",
+    "Not changed, stated. The autopilot's own calls already have bounded timeouts and stay as they are: bin/lib/fm_autopilot.py:149-161 (`timeout=120`), :311-319 (`timeout=120`), bin/lib/fm_binding.py:25-26 (`timeout=120`), bin/lib/fm_autopilot_loop.py:86-89 (`timeout=120`); they inherit Change 1's git variables through the environment of the bash helpers they run.  bin/lib/fm_project_checks.py:29-30 (the external check-runs path from bin/fm-review.sh:618) already has `timeout=45`. git callers that inherit Change 1 through the environment without edits: bin/lib/fm_stack.py:80, :157, :179 (via bin/lib/fm-restack.sh:8), bin/lib/fm_autopilot_loop.py:135 (via bin/fm-autopilot.sh:8), bin/lib/fm_binding.py:42 (fetch, already `timeout=120`) and bin/lib/fm_onboard.py:439 (clone, reached through bin/fm-project.sh:35, already bounded by its own timeout). Direct `gh` calls left unbounded in this task, listed for a follow-up: bin/fm-merge.sh:88 (`pr view`) and :151 (`pr merge`), bin/fm-cleanup.sh:100, bin/fm-decide.sh:312, bin/fm-reconcile.sh:373, bin/fm-project.sh:228, bin/lib/fm-stack.sh:20, and bin/fm.sh:930 (`api …/comments --paginate`, the operator command's own read); they run in short operator or captain-click commands, not in an unattended round, and moving them to fm_gh_read is a separate change. Board code is not touched.",
+    "Tests, new files. The cases marked new behaviour fail on the base commit and pass after; the cases marked regression pass on both. New tests/network-bounds.test.sh: (a) sourcing bin/fm-config.sh with GIT_SSH_COMMAND, GIT_HTTP_LOW_SPEED_LIMIT and GIT_HTTP_LOW_SPEED_TIME unset exports the three defaults; (b, regression) GIT_HTTP_LOW_SPEED_LIMIT and GIT_HTTP_LOW_SPEED_TIME already set are kept, and a GIT_SSH_COMMAND that already contains `ServerAliveInterval` is kept unchanged; (b3, new behaviour) GIT_SSH_COMMAND=foo becomes `foo -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4`; (b2, new behaviour) with `core.sshCommand` set in the test repository to `ssh -i /tmp/key` and GIT_SSH_COMMAND unset, the exported GIT_SSH_COMMAND starts with `ssh -i /tmp/key` and ends with the three options; with GIT_SSH set, GIT_SSH_COMMAND stays unset; (c) a fake `ssh` first on PATH that records its argv and exits 255 receives `-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4` from a `git ls-remote` to an ssh URL; (d) `out=\"$(fm_github pr view 9 --json isDraft)\"` (captured, as the call sites do) against an executable stub gh that records each run and then runs a plain `sleep 30`, with FM_GH_TIMEOUT=1 and FM_GH_RETRY_DELAYS='0 0', returns 124, the stub ran 3 times, the whole call took less than 30 seconds, and no `sleep 30` from the stub is still running afterwards; (e) `fm_github pr comment 9 --body x` against the same stub returns 124 after exactly 1 run; (s) a stub that prints `part` and then sleeps 30 seconds, with FM_GH_TIMEOUT=1 and FM_GH_RETRY_DELAYS='0 0', returns 124 in under 30 seconds after 3 runs and yields stdout `part` once at most (from the last attempt), never `partpartpart`; (t) `fm_github run download 1 -n x -D d` over the sleeping stub returns 124 after exactly 1 run; (u) bin/lib/fm_context_pack.py with FM_GH_TIMEOUT=1 and a gh stub that sleeps on `run view` writes the pack within 10 seconds and records the failed-log evidence as a gap; (r) `fm_github api repos/o/r/issues/1/comments -f body=x` over the sleeping stub returns 124 after exactly 1 run (a field makes it a write); (f, regression) a stub that exits 1 at once for `pr view` runs once and `fm_github` returns 1. New tests/worker-draft-ready.test.sh on tests/lib/worker.sh fixtures with a gh stub that answers like gh (`pr view --json isDraft --jq .isDraft` prints `true` or `false`; `pr ready N` prints `✓ Pull request #N is marked as \"ready for review\"`): (g) a round on --pr 9 that changes a file, with isDraft true and the marker `state/drafts/T-Z-9` present (as the question round writes it), calls `pr ready 9` once, removes the marker and exits 0; (g2, new behaviour) the first question round that opens its draft writes the marker; (g3, regression) isDraft true without the marker (a hand-made draft): no `pr ready` call; (h, regression) isDraft false: no `pr ready` call; (i, regression) a round that only asks (writes .fm-say.md): no `pr ready` call; (j) `pr ready` exiting 1 prints the warning and the round still exits 0. (k) `fm_gh_read` over the same sleeping stub for `api repos/o/r/commits/x/check-runs` returns 124 after 3 runs; (l) a `pr ready` round where `pr view` sleeps past FM_GH_TIMEOUT prints the warning and the round still exits 0; (p) sending TERM to a running `fm_with_timeout 30 <stub that runs sleep 30>` ends it with exit 143 within 5 seconds and leaves no stub `sleep 30` running; (q, new behaviour, since the cut block does not exist on base) an adopted draft gets no `pr ready` call: run as a cut of the new block through tests/lib/crew_blocks.py with `adopt_pr=9`, the marker present, `asked=0`, `round_had_work=1` and a stub fm_github answering `true` for isDraft, and assert `pr ready` is never called (adoption is external-only, bin/fm-worker.sh:439, so a self fixture cannot adopt). New tests/review-session-guard.test.sh: (m) fm-review.sh with FM_SESSION_PID=abc (session-owner refuses a malformed pid) exits 75, prints `no session owns this review`, and leaves no identity.json under state/runs; (o) the same malformed FM_SESSION_PID with `--spec-preflight` also exits 75 before any identity; (n) with FM_SESSION_PID unset and FIRSTMATE_CI_SESSION set to the pid of a `sleep 300` the test starts and kills at the end (a live owner, so the managed launch through bin/fm-herdr.py:782-786 starts), a mock reviewer adapter that writes $FM_SESSION_PID to a file sees that pid; the test's own exit kills the sleeper, which ends anything it owns.",
+    "Tests, regression (pass on base and after): tests/worker-notes.test.sh (draft opened by a question round, :85, :121), tests/external-execution.test.sh, tests/worker-external-catchup.test.sh, tests/external-review-launchers.test.sh, tests/review-checkout.test.sh, tests/review-evidence.test.sh, tests/lifeline.test.sh (unchanged; its session_owner and `session-owner` cases at :195-266 still pass), tests/ci-budget.test.sh:107, tests/config.test.sh, tests/external-public-title.test.sh (the cut piece :2313-:2331 still runs unchanged with its stub fm_github), tests/session-startup.test.sh, and every suite that stubs gh through FM_GH (their stubs return at once, so no timeout or retry changes their call counts).",
+    "Callers, all listed. fm_github: bin/fm-worker.sh (8 calls: :66, :448, :463, :540, :2302, :2317, :2322, :2359), bin/fm-review.sh (3 calls: :604, :684, :774), and `fm_comment_projection` (bin/fm-config.sh:1121-1126, a write) whose callers are bin/fm-review.sh:1311, bin/fm-worker.sh:1750 and bin/fm.sh:942 (fm.sh unchanged; the call now has the 120-second limit and no retry); defined in bin/fm-config.sh:1084. Direct gh reads: bin/fm-worker.sh:1716, bin/fm-review.sh:597 and :621, all moved to `fm_gh_read`; bin/fm.sh:930 is listed as unchanged in the Not changed line. git network: listed in Change 1. Session owner: `session-owner` mode callers (tests/lifeline.test.sh, tests/ci-budget.test.sh:107) keep their behaviour; bin/fm-review.sh becomes a new caller.",
+    "Migration. No stored record or schema changes. GIT_HTTP_* values already set are kept; an already set GIT_SSH_COMMAND gets the three ssh options appended unless it already contains `ServerAliveInterval`; GIT_SSH is left alone. An FM_SESSION_PID already set is resolved again by `session-owner` and gives the same pid when valid. FM_GH_TIMEOUT and FM_GH_RETRY_DELAYS are new and optional. A question-round draft opened before this change has no marker file, so it stays a draft; firstmate raises a captain card to mark such a draft ready, as it did for the draft on 2026-10-07.",
+    "Docs. design/design.md §5.4 The pull request protocol (:1177): a draft that firstmate opened for a question becomes ready when a later round completes the work; a hand-made draft stays a draft. §12 Failure and recovery (:3624): network calls are bounded (Change 1, Change 2, Change 2b), the ssh options are appended to the captain's own ssh command (with the per-clone `core.sshCommand` limit of Change 1), and only read calls retry on a timeout, printing only the last attempt. §11 Self-update, subsection Owners and wakes (T-151) at :3014, the session-owner paragraph at :3059-3068: a review resolves `session-owner` at start, pins it as FM_SESSION_PID, and maps a refusal to exit 75 with guidance. skills/firstmate/SKILL.md, the background-process paragraph at :101-115: keep the rule against a bare `&`, and add that a review pins its owner at start and that exit 75 from fm-review.sh means no session owns it, with the three ways to start it."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A stalled git or GitHub call ends within minutes instead of blocking a round or a merge for hours."
+        },
+        {
+          "kind": "fact",
+          "text": "A draft pull request that firstmate opened becomes ready when a later round completes the work."
+        },
+        {
+          "kind": "fact",
+          "text": "A review keeps its session owner after the shell that started it exits, or it stops at once with clear guidance."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "On 2026-10-07 a git fetch hung 74 minutes, and another one hung about 4 hours during a GitHub outage."
+        },
+        {
+          "kind": "fact",
+          "text": "A draft pull request stayed a draft after its work was done, so the captain marked it ready by hand."
+        },
+        {
+          "kind": "fact",
+          "text": "A review started in the background lost its session and produced no verdict."
+        }
+      ],
+      "scope_in": [
+        "bin/fm-config.sh: ssh options, https limits and a bounded gh",
+        "bin/lib/fm_context_pack.py: timeouts",
+        "bin/fm-worker.sh: draft to ready",
+        "bin/fm-review.sh: the session owner guard",
+        "tests, design and skills"
+      ],
+      "scope_out": [
+        "autopilot calls that already have timeouts",
+        "the board"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: fm-config appends ssh options and sets https limits, and gh and the context pack run under a timer. Cases a to f, k, p, r, s, t and u prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the worker marks a draft that firstmate opened ready after a round with work. Cases g, g2, g3, h, i, j, l and q prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the review pins the owner from session-owner at start, and an unknown owner stops with exit 75. Cases m, n and o prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "A slow but live transfer can still run longer than the limits, because only a stalled transfer ends early."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Round calls git or gh"
+        },
+        {
+          "state": "gone",
+          "label": "Stalled call waits for hours"
+        },
+        {
+          "state": "gone",
+          "label": "Draft stays a draft"
+        },
+        {
+          "state": "gone",
+          "label": "Background review loses its owner"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Round calls git or gh"
+        },
+        {
+          "state": "new",
+          "label": "Stalled call ends in minutes"
+        },
+        {
+          "state": "new",
+          "label": "Finished round marks the PR ready"
+        },
+        {
+          "state": "new",
+          "label": "Review pins its owner at start"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "卡住的 git 或 GitHub 呼叫在幾分鐘內結束，不會擋住回合或合併好幾小時。"
+        },
+        {
+          "kind": "fact",
+          "text": "firstmate 開的草稿 PR，在後續回合完成工作後改成 ready。"
+        },
+        {
+          "kind": "fact",
+          "text": "啟動 review 的 shell 結束後，review 仍保有 session，否則會立刻停下並說明原因。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "2026-10-07 有一個 git fetch 卡了 74 分鐘，另一個在 GitHub 斷線時卡了約 4 小時。"
+        },
+        {
+          "kind": "fact",
+          "text": "工作完成後草稿 PR 仍是草稿，船長只好手動標成 ready。"
+        },
+        {
+          "kind": "fact",
+          "text": "在背景啟動的 review 失去 session，沒有產出結論。"
+        }
+      ],
+      "scope_in": [
+        "bin/fm-config.sh：ssh 選項、https 限制和有時限的 gh",
+        "bin/lib/fm_context_pack.py：時限",
+        "bin/fm-worker.sh：草稿轉 ready",
+        "bin/fm-review.sh：session owner 檢查",
+        "測試、設計和 skills"
+      ],
+      "scope_out": [
+        "已有時限的 autopilot 呼叫",
+        "看板"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：fm-config 附加 ssh 選項並設 https 限制，gh 和 context pack 在計時下執行。案例 a 到 f、k、p、r、s、t、u 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：有工作的回合之後，worker 把 firstmate 開的草稿標成 ready。案例 g、g2、g3、h、i、j、l、q 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：review 啟動時用 session-owner 固定 owner，找不到 owner 時以 75 結束。案例 m、n、o 證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "緩慢但仍在傳輸的連線仍會超過時限，只有停住的傳輸會提早結束。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "回合呼叫 git 或 gh"
+        },
+        {
+          "state": "gone",
+          "label": "卡住的呼叫等好幾小時"
+        },
+        {
+          "state": "gone",
+          "label": "草稿一直是草稿"
+        },
+        {
+          "state": "gone",
+          "label": "背景 review 失去 owner"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "回合呼叫 git 或 gh"
+        },
+        {
+          "state": "new",
+          "label": "卡住的呼叫幾分鐘內結束"
+        },
+        {
+          "state": "new",
+          "label": "完成的回合把 PR 標成 ready"
+        },
+        {
+          "state": "new",
+          "label": "review 啟動時固定 owner"
+        }
+      ]
+    }
+  }
+}
