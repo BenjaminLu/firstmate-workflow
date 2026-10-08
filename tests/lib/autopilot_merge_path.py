@@ -220,7 +220,15 @@ class MergePath(unittest.TestCase):
         (engine / '.fixture-diff').write_text('diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x\n+y\n')
         (engine / 'prs.jsonl').write_text(json.dumps(dict(number=12,state='OPEN',headRefOid=HEAD,headRefName=PR['head']['ref'],title=PR['title']))+'\n')
         self.dispatch()
-        details = self.state / 'decision-details/D-alpha-T001-1.json'
+        # Reserve through the stock allocator after dispatch has occupied ID 2.
+        # merge_card must reuse this genuine reservation, not allocate another ID.
+        ident = self.pilot.command(self.pilot.script('fm-decide.sh', '--allocate',
+            '--task', 'T-001', '--project', 'alpha', '--kind', 'merge')).strip()
+        self.assertEqual('D-alpha-T001-3', ident)
+        reservation = self.state / 'decision-ids/alpha/T001/3.json'
+        self.assertEqual('merge', json.loads(reservation.read_text())['kind'])
+        pending_path = self.state / 'pending' / (ident + '.json')
+        details = self.state / 'decision-details' / (ident + '.json')
         details.parent.mkdir(exist_ok=True)
         authored = card()
         authored['en']['title'] = 'MERGE CARD — merge PR #12: The check passes.'
@@ -233,18 +241,27 @@ class MergePath(unittest.TestCase):
         self.pilot.data['jobs']['stock'] = dict(kind='gate',task='T-001',number=12,head=HEAD,state='running',path=str(receipt))
         self.pilot.consume_jobs()
         self.assertEqual('uncertain',self.pilot.data['jobs']['stock']['state'])
-        self.assertFalse((self.state / 'pending/D-alpha-T001-1.json').exists())
+        self.assertFalse(pending_path.exists())
+        self.assertEqual([], list((self.state / 'pending').glob('*.json')))
         self.assertIn('author intent',json.dumps(self.pilot.data))
+        self.assertEqual(ident, self.pilot.data['merge_request_failures']['12']['id'])
+        request = self.requests()[0]
+        self.assertEqual(ident, request[request.index('--request') + 1])
+        self.assertEqual(str(details), request[request.index('--details') + 1])
         self.assertNotIn('Private customer text',json.dumps(self.pilot.data))
         self.poll(); self.poll()
         self.assertEqual(1,len(self.requests()))
         for lang in ('en','zh-TW'): authored[lang]['intent'] = explain[lang]['intent']
         details.write_text(json.dumps(authored))
         self.poll(); self.gate_result(0)
-        pending = json.loads((self.state / 'pending/D-alpha-T001-1.json').read_text())
+        pending = json.loads(pending_path.read_text())
         self.assertEqual(explain['en']['change_points'],pending['details']['en']['change_points'])
         self.assertEqual(0,pending['check_answer'])
         self.assertEqual(2,len(self.requests()))
+        for request in self.requests():
+            self.assertEqual(ident, request[request.index('--request') + 1])
+            self.assertEqual(str(details), request[request.index('--details') + 1])
+        self.assertEqual([pending_path], list((self.state / 'pending').glob('*.json')))
         self.assertEqual(1,len(list((self.state / 'pending').glob('*.json'))))
         self.poll()
         self.assertEqual(2,len(self.requests()))

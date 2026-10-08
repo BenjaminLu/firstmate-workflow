@@ -1,5 +1,8 @@
 # shellcheck shell=bash
 # fm:sourced
+# Disable inherited notifications when loading fixture helpers. Tests that
+# exercise notifications explicitly enable Herdr with their isolated stub later.
+export HERDR_ENV=0
 # shellcheck source=tests/lib/config-modules.sh
 . "$ROOT/tests/lib/config-modules.sh"
 
@@ -72,7 +75,7 @@ if [ "$mode" = request ] && [ "$kind" = merge ] && [ -n "$details" ]; then
     else printf '{"id":"%s","scope":["src/**"],"acceptance":["The check passes."]}\n' "$task" > "$FM_TASKS_DIR/$task.json"; fi
   fi
 fi
-HERDR_ENV=0 exec bash "$root/bin/fm-decide-real.sh" "${args[@]}"
+exec bash "$root/bin/fm-decide-real.sh" "${args[@]}"
 SH
   chmod +x "$root/bin/fm-decide.sh"
 }
