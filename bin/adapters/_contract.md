@@ -56,7 +56,7 @@ reads `agent login`'s token through the keychain API, which nothing inside
 a round can answer for, so its round signs in with a Cursor API key the
 operator keeps once for the crew - fm's keychain item
 `firstmate-cursor-api-key`, or `~/.config/firstmate/cursor-api-key` at mode
-600 - handed in as `CURSOR_API_KEY`. A login kept in a file - codex's
+600 - handed in as `CURSOR_API_KEY`. Cursor also receives a private mode 0700 short per-round `CURSOR_DATA_DIR` under `/tmp/fmc.XXXXXX`, with its own `--write` grant only in sandbox `run` mode and cleanup on every exit, avoiding its 84-character fallback to denied `/tmp/.cursor`. A login kept in a file - codex's
 `auth.json`, gemini's `oauth_creds.json` - is never read in place, since
 each holds a refresh token: fm writes a copy with the refresh token emptied
 into the round's temp directory, and the adapter points its CLI there
