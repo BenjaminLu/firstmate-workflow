@@ -142,6 +142,7 @@ for (const locale of ['en', 'zh-TW']) {
     try {
       await page.clock.install({time:new Date('2026-10-08T01:00:00Z')});
       await page.goto(board.url+'/?lang='+locale);
+      await showFleet(page);
       const panel=page.locator('#taskDetail');
       await page.locator('.card[data-project="beta"][data-task="T-001"]').click();
       const section=panel.locator('[data-detail-section="detailExternalReview"]');
