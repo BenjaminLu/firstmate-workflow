@@ -1043,9 +1043,13 @@ scope. Gates and review measure the whole PR from its own base, so add a
 fail-first test in the first round if the human commits have none. Build on
 the human work and retain its conventions, title and body. External catch-up
 under `force_with_lease: true` can rewrite those commits on the same PR.
-A stacked PR waits for T-239; self-project adoption is unsupported. A changed
-base needs a new spec and A card. For `land: handoff`, return the finished PR
-to its team under the project's policy.
+Adopt a stacked PR's parent first and list its task in `depends_on`, with
+confirmed stacking policy. Self-project adoption is unsupported. A changed
+base needs a new spec and A card except for a verified restack transition
+after the parent merges. Restack counts as an adopted push; an operator must
+restack a retargeted child or one with no adopted push yet, using its pinned
+adoption, before catch-up. For `land: handoff`, return the finished PR to its
+team under the project's policy.
 
 External private data belongs in FM_HOME/projects/<name>, including specs,
 conventions, pins, evidence and recovery; no copies in engine state. Private
