@@ -658,7 +658,7 @@ for malformed in '{' null '[]' '{}' '{"id":true}' '{"id":"../D-9242"}'; do
   assert_eq 400 "$(door_post /decisions/check-door "$malformed")" 'malformed check envelope'
   assert_eq doorUnconfirmed "$(jq -r .code "$d/door-result")" 'malformed check envelope is JSON'
 done
-door_body='{"id":"D-9999242","reviewed_intents":[1,2],"check_answer":0}'
+door_body='{"id":"D-999242","reviewed_intents":[1,2],"check_answer":0}'
 assert_eq 404 "$(door_post /decisions/check-door "$door_body")" 'unknown check id'
 assert_eq decisionMissing "$(jq -r .code "$d/door-result")" 'unknown check id code'
 for route in /decisions/check-door /decisions; do
@@ -709,7 +709,7 @@ door_body='{"id":"D-9244","chosen":"A"}'
 assert_eq 200 "$(door_post /decisions "$door_body")" 'A with nonmerge effect needs no confirmation'
 assert_eq false "$(jq 'has("check_ok")' "$d/state/decisions/D-9244.json")" 'nonmerge answer has no door confirmation'
 jq '.id="D-9245" | .details.effect={A:"hold",B:"merge"} | .details.en.questions=[{kind:"fact",text:"The scope is correct."}]' "$d/door-template" > "$d/state/pending/D-9245.json"
-door_body='{"id":"D-9245","chosen":"B","answers":[{"ok":false,"text":"Change the scope."}]}'
+door_body='{"id":"D-9245","chosen":"B","answers":[{"index":0,"ok":false,"text":"Change the scope."}]}'
 assert_eq 200 "$(door_post /decisions "$door_body")" 'No changes a merge choice without confirmation'
 assert_eq change "$(jq -r .chosen "$d/state/decisions/D-9245.json")" 'No records change'
 assert_eq false "$(jq 'has("check_ok")' "$d/state/decisions/D-9245.json")" 'No answer has no confirmation fingerprint'

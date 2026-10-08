@@ -418,7 +418,7 @@ if [ "$MODE" = request ]; then
         echo 'fm-decide: change_points, door and check apply only to tracked merge cards; nothing was written' >&2; exit 65;
       }
     fi
-    ste='null'
+    ste='null'; ste_deferred=false
     if jq -e 'any(.en,."zh-TW"; has("intent") or has("why") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table") or has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
       [ -r "$HERE/lib/fm_ste.py" ] || {
         echo "fm-decide: missing $HERE/lib/fm_ste.py; nothing was written" >&2; exit 70;
@@ -431,8 +431,31 @@ if [ "$MODE" = request ]; then
         jq 'del(.en.change_points,.en.door,.en.check,."zh-TW".change_points,."zh-TW".door,."zh-TW".check)' "$DETAILS" > "$ste_legacy" || exit 65
         ste_details="$ste_legacy"
       fi
-      ste="$(python3 "$HERE/lib/fm_ste.py" check-details --kind "$KIND" "$ste_details" 2> "$ste_error")"
-      ste_rc=$?
+      # Missing intents on enriched specs need the authoritative authoring
+      # refusal (65). Validate titles now and defer the missing-intent
+      # shape until the spec is known; full validation still precedes writes.
+      if [ "$KIND" = merge ] && jq -e 'any(.en,."zh-TW"; has("intent")|not)' "$ste_details" >/dev/null; then
+        python3 - "$HERE/lib" "$ste_details" 2> "$ste_error" <<'PYTITLE'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from fm_ste import _text
+try:
+    details = json.load(open(sys.argv[2], encoding='utf-8'))
+    for lang, prefix in (('en', 'MERGE CARD — '), ('zh-TW', '【合併卡】')):
+        title = details.get(lang, {}).get('title')
+        _text(title, lang + '.title')
+        if not title.startswith(prefix):
+            raise ValueError(lang + '.title: a merge card title starts with "' + prefix + '"')
+except (ValueError, OSError) as error:
+    print('fm_ste: ' + str(error), file=sys.stderr)
+    sys.exit(64)
+PYTITLE
+        ste_rc=$?
+        if [ "$ste_rc" -eq 0 ]; then ste_deferred=true; fi
+      else
+        ste="$(python3 "$HERE/lib/fm_ste.py" check-details --kind "$KIND" "$ste_details" 2> "$ste_error")"
+        ste_rc=$?
+      fi
       [ -z "$ste_legacy" ] || rm -f "$ste_legacy"
       if [ "$ste_rc" -ne 0 ]; then
         if [ "$ste_rc" -eq 65 ]; then
@@ -500,6 +523,11 @@ PYWALK
           --root "$REPO" --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" > "$walk_details" || exit 65
         DETAILS="$walk_details"
       fi
+    fi
+    # Legacy missing-intent errors retain the original validator/status. An
+    # enriched spec has already issued its specific authoring refusal above.
+    if [ "$ste_deferred" = true ] && [ "$walk_enriched" != true ]; then
+      ste="$(python3 "$HERE/lib/fm_ste.py" check-details --kind "$KIND" "$DETAILS")" || exit $?
     fi
     # Recheck the authoritative fields after injection, before evidence reads.
     if [ "$walk_enriched" = true ]; then

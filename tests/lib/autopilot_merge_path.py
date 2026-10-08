@@ -115,11 +115,11 @@ class MergePath(unittest.TestCase):
         command = self.pilot.command
         def fail_request(argv, **kwargs):
             if '--request' in argv:
-                raise RuntimeError('PRIVATE_CHILD_CANARY_242: Private customer request context.')
+                raise RuntimeError('card refs: en.intent mismatch with spec; PRIVATE_CHILD_CANARY_242: Private customer request context.')
             return command(argv, **kwargs)
         with patch.object(self.pilot, 'command', side_effect=fail_request):
             self.poll()
-            with self.assertRaisesRegex(ValueError, 'D-alpha-T001-1.*author.*spec'):
+            with self.assertRaisesRegex(RuntimeError, 'D-alpha-T001-1.*author.*spec'):
                 self.gate_result(0)
             self.built()
             self.poll(); self.poll()
@@ -144,16 +144,58 @@ class MergePath(unittest.TestCase):
         self.assertEqual(len(list((self.state / 'pending').glob('*.json'))), 1)
         self.assertNotIn('12', self.pilot.data['merge_request_failures'])
 
+    def test_legacy_request_failure_preserves_exception_and_has_no_walk_retry(self):
+        self.dispatch()
+        command = self.pilot.command
+        error = RuntimeError('legacy readiness refused')
+        def fail_request(argv, **kwargs):
+            if '--request' in argv:
+                raise error
+            return command(argv, **kwargs)
+        with patch.object(self.pilot, 'command', side_effect=fail_request):
+            self.poll()
+            with self.assertRaises(RuntimeError) as caught:
+                self.gate_result(0)
+        self.assertIs(error, caught.exception)
+        self.assertNotIn('12', self.pilot.data.get('merge_request_failures', {}))
+        self.assertFalse(any(k.startswith('merge-request:') for k in self.pilot.data['retries']))
+        self.assertFalse((self.state / 'pending').exists())
+
+    def test_walk_retry_rechecks_changed_evidence_with_unchanged_details(self):
+        self.dispatch()
+        command = self.pilot.command
+        def fail_request(argv, **kwargs):
+            if '--request' in argv:
+                raise RuntimeError('card refs: en.intent mismatch with spec')
+            return command(argv, **kwargs)
+        with patch.object(self.pilot, 'command', side_effect=fail_request):
+            self.poll()
+            with self.assertRaises(RuntimeError):
+                self.gate_result(0)
+        details = self.built_path().read_bytes()
+        token = 'merge-request:12:' + HEAD
+        self.pilot.data['retries'][token]['due_seq'] = self.pilot.data['poll_seq'] + 100
+        # A new authorized advancement fingerprint represents changed CI/review
+        # evidence; the old details-only throttle must not suppress its request.
+        self.pilot.data['advanced']['12']['fingerprint'] = 'fresh-authorized-evidence'
+        self.gate_result(0)
+        self.assertEqual(details, self.built_path().read_bytes())
+        self.assertEqual(1, len(self.requests()))
+        self.assertEqual(1, len(list((self.state / 'pending').glob('*.json'))))
+        self.assertNotIn(token, self.pilot.data['retries'])
+
     def test_stock_request_refusal_corrected_input_recovers_same_reservation(self):
         # Reuse the actual stock shell fixture definitions, not its tests or a
         # replacement request implementation. Synthetic readiness is explicit.
         source = (fixture.ROOT / 'tests/decide.test.sh').read_text().split('\nd="$(fixture)"',1)[0]
         source = source.replace('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"',
                                 'ROOT=' + shlex.quote(str(fixture.ROOT)))
-        result = subprocess.run(['bash','-c',source+'\nfixture'],capture_output=True,text=True,check=True)
+        result = subprocess.run(['bash','-c',source+'\nengine="$(fixture)"\nprintf "language: en\\n" > "$engine/config.yaml"\nproject_fixture_config "$engine" || exit $?\nprintf "%s\\n" "$engine"'],capture_output=True,text=True,check=True)
         engine = Path(result.stdout.strip())
         self.addCleanup(shutil.rmtree,engine)
-        (engine / 'config.yaml').write_text('home: '+str(engine / 'home')+'\ndefault_project: alpha\nprojects:\n  alpha:\n    repo: .\n    github: owner/alpha\n    base: main\n')
+        home = Path((engine / '.fixture-fm-home').read_text().strip())
+        self.addCleanup(shutil.rmtree,home)
+        (engine / 'config.yaml').write_text('home: '+str(home)+'\ndefault_project: alpha\nprojects:\n  alpha:\n    repo: .\n    github: owner/alpha\n    base: main\n    required_check: ci\n')
         self.root = engine; self.state = engine / 'state'
         self.ctx.update(engine=str(engine),target=str(engine),state=str(self.state),tasks=str(engine / 'design/tasks'))
         self.pilot = A.Pilot(self.ctx)

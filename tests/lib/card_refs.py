@@ -259,8 +259,9 @@ class StockRequests(unittest.TestCase):
     def setUp(self):
         source = (ROOT / 'tests/decide.test.sh').read_text().split('\nd="$(fixture)"',1)[0]
         source = source.replace('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"','ROOT='+shlex.quote(str(ROOT)))
-        result = subprocess.run(['bash','-c',source+'\nfixture'],capture_output=True,text=True,check=True)
+        result = subprocess.run(['bash','-c',source+'\nengine="$(fixture)"\nprintf "language: en\\n" > "$engine/config.yaml"\nproject_fixture_config "$engine" || exit $?\nprintf "%s\\n" "$engine"'],capture_output=True,text=True,check=True)
         self.root = Path(result.stdout.strip()); self.addCleanup(shutil.rmtree,self.root)
+        self.addCleanup(shutil.rmtree,Path((self.root/'.fixture-fm-home').read_text().strip()))
         self.git('init','-q','-b','main','--object-format=sha1')
         self.git('config','user.name','Fixture'); self.git('config','user.email','fixture@example.test')
         from ste_cases import card, walk_card
@@ -461,12 +462,13 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
         self.assertFalse(self.pending().exists())
 
     def test_external_no_pin_uses_private_spec_and_target_clone_cwd(self):
-        home=self.root/'private-home'; workspace=home/'projects/beta'; target=workspace/'repo'
+        home=Path((self.root/'.fixture-fm-home').read_text().strip()); workspace=home/'projects/beta'; target=workspace/'repo'
         target.parent.mkdir(parents=True)
         subprocess.run(['git','clone','--quiet','--local',str(self.root),str(target)],check=True,capture_output=True)
         private=json.loads(json.dumps(self.enriched))
         private['acceptance']=['Private authored /private/customer acceptance.']
-        self.write('private-home/projects/beta/tasks/T-242.json',json.dumps(private))
+        (workspace/'tasks').mkdir(parents=True)
+        (workspace/'tasks/T-242.json').write_text(json.dumps(private))
         self.write('config.yaml','home: '+str(home)+'\ndefault_project: alpha\nprojects:\n  alpha:\n    repo: .\n    github: owner/engine\n    base: main\n    required_check: ci\n  beta:\n    github: owner/private\n    base: main\n    required_check: ci\n')
         # Record actual argv/cwd before executing the stock fixture gh reader.
         (self.root/'gh').rename(self.root/'gh-real')

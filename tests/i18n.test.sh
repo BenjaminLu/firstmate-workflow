@@ -101,7 +101,7 @@ while IFS=$'\t' read -r a b; do
 done < "$tbl"
 assert_eq '请在主卡片确认每条意图并回答确认题。' "$walk_cn" 'Simplified door guidance'
 
-for pair in 'doorOneWay|单向门' 'doorTwoWay|双向门' 'doorRollback|回复方式' 'showCode|显示程式码' 'intentReviewed|我已确认这条意图' 'specAcceptance|Spec 验收条目' 'codeMore|Pull request 还有 {n} 个修改' 'doorConfirmed|每条意图及答案都已确认。' 'decisionMissing|这个决策已不在待确认列表。' 'decisionAlreadyRecorded|这个决策已记录。'; do
+for pair in 'doorOneWay|单向门' 'doorTwoWay|双向门' 'doorRollback|回复方式' 'showCode|显示代码' 'intentReviewed|我已确认这条意图' 'specAcceptance|Spec 验收条目' 'codeMore|Pull request 还有 {n} 个修改' 'doorConfirmed|每条意图及答案都已确认。' 'decisionMissing|这个决策已不在待确认列表。' 'decisionAlreadyRecorded|这个决策已记录。'; do
   key="${pair%%|*}"; expected="${pair#*|}"; converted="$(jq -r --arg key "$key" '.[$key]' "$tw")"
   while IFS=$'\t' read -r a b; do
     case "$a" in '#'*|'') continue;; esac
