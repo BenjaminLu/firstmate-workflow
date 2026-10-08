@@ -3531,9 +3531,17 @@ real cmux socket could not be reached where this was written, and tmux on a
 real server. The stand-ins in `tests/herdr.test.sh` take only the flags that
 help lists and refuse any other.
 
-With Herdr, `herdr tab create --workspace <caller-workspace> --cwd <tree>
+With Herdr, `herdr tab create --workspace <target-workspace> --cwd <tree>
 --label <canonical-actor> --no-focus` uses the installed supported interface;
-creation IDs come from `result.tab` and `result.root_pane`. Never split the caller's
+creation IDs come from `result.tab` and `result.root_pane`. An external project's
+new crew tabs use the workspace labelled with the project name: reuse a matching
+workspace (including one made by hand), choosing the lowest workspace number if
+labels repeat, or create it with `--no-focus`. A project-private lock serializes
+this lookup and creation. Sync also ensures the workspace; round preparation
+leaves this to the window lookup. Lookup failure is logged and falls back to the
+caller workspace. The self project stays in the caller workspace, and a recorded
+pane keeps its recorded workspace on reuse. No workspace is closed, renamed or
+focused by fm; its initial shell belongs to the captain. Never split the caller's
 view. Record caller tab/pane and observed UI focus before and after creation;
 changed or unknown focus opens no window and takes no focus back from the user.
 The round receives its owned tab/pane/workspace context, not the caller's IDs.
