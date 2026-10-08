@@ -1970,6 +1970,7 @@ note_unsent_published() {
 # go with the rest of the scratch files. held is set only once the copy
 # is whole, so a failed cp leaves the original in the worktree instead.
 question_draft=0
+self_pr_question_kind=implementation
 first_round_question() {
   [ "$FM_EXTERNAL" = 0 ] || return 1
   [ "$question_draft" = 1 ] && [ "$round_two" = 0 ] && ! rebuild_publishes
@@ -1992,6 +1993,11 @@ if [ "$FM_EXTERNAL" = 0 ] && [ "$projection" = comments ] && [ "$round_two" = 0 
       cp "$say" "$tree/$question_path" || {
         echo "fm-worker: could not copy the question to $question_path" >&2; exit 70; }
     fi
+  fi
+  if grep -Eq "^SCOPE-BLOCKED:$TASK([[:space:]]|$)" "$say"; then
+    self_pr_question_kind=scope
+  elif grep -Eq "^ASK-PASS-CRITERIA:$TASK([[:space:]]|$)" "$say"; then
+    self_pr_question_kind=acceptance
   fi
   question_draft=1
 fi
@@ -2382,13 +2388,7 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
       > "$self_pr_files" || exit 65
     self_pr_question=()
     if first_round_question; then
-      if grep -Eq "^SCOPE-BLOCKED:$TASK([[:space:]]|$)" "$say"; then
-        self_pr_question=(--question scope)
-      elif grep -Eq "^ASK-PASS-CRITERIA:$TASK([[:space:]]|$)" "$say"; then
-        self_pr_question=(--question acceptance)
-      else
-        self_pr_question=(--question implementation)
-      fi
+      self_pr_question=(--question "$self_pr_question_kind")
     fi
     self_pr_rendered="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_self_pr.py" render \
       --task "$TASK" --evidence-project "$(fm_evidence_project)" --head "$self_pr_head" "${self_pr_binding[@]}" \

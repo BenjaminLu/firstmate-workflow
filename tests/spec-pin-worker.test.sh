@@ -123,6 +123,11 @@ for missing in contract design; do
       git -C "$repo" add config.yaml
       git -C "$repo" commit -qm 'legacy missing design'
       git -C "$repo" push -q origin main
+    else
+      printf 'vendor: mock\n' > "$repo/config.yaml"
+      git -C "$repo" add config.yaml
+      git -C "$repo" commit -qm 'legacy missing contract'
+      git -C "$repo" push -q origin main
     fi
     mkdir -p "$repo/state/pins/T-Z"
     touch "$repo/state/pins/T-Z/.lock"

@@ -50,9 +50,10 @@ cp -R "$ROOT/bin/lib" "$r/bin/"   # the lifeline a round's runner holds (T-151)
 cp "$ROOT/board/server.ts" "$r/board/"
 cp "$ROOT/skills/worker/SKILL.md" "$r/skills/worker/"
 cp "$ROOT/skills/reviewer/SKILL.md" "$r/skills/reviewer/"
-printf 'vendor: mock\n' > "$r/config.yaml"
+printf 'vendor: mock\nproject:\n  check: true\n' > "$r/config.yaml"
 printf '{"id":"T-1","title":"first","activity":{"en":"Build the first fixture","zh-TW":"實作第一個測試任務"},"scope":["src/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-1.json"
 printf '{"id":"T-2","title":"second","scope":["src/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-2.json"
+printf '## 6. Gates\nApproved fixture.\n## 8. Board\n' > "$r/design/design.md"
 seed_spec_preflight "$r" T-1
 seed_spec_preflight "$r" T-2
 
@@ -82,6 +83,9 @@ elif args[:2] == ['worktree', 'add']:
     pathlib.Path(args[-2]).mkdir(parents=True, exist_ok=True)
 elif args[0] == '-C' and 'status' in args:
     if (pathlib.Path(args[1]) / 'src/thing').exists(): print('?? src/thing')
+elif args[0] == 'ls-tree':
+    path = pathlib.Path(args[-1])
+    if path.is_file(): print(str(path))
 elif args[0] == 'show':
     # <rev>:<path>, answered from the working copy like the real branch would
     path = pathlib.Path(args[-1].split(':', 1)[-1])

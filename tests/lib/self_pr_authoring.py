@@ -419,10 +419,28 @@ else: print('[]')
         self.assertFalse((self.state/'pr-authoring/previews').exists())
 
     def test_existing_self_metadata_preserved_without_draft(self):
+        (self.repo/'config.yaml').write_text('vendor: mock\nproject:\n  check: true\ndefault_project: self\nprojects:\n  self:\n    repo: .\n    github: fixture/project\n    base: main\n    design: design/design.md\n    tasks: design/tasks\n    project:\n      check: true\n')
+        self.git('add', 'config.yaml'); self.git('commit', '-qm', 'registered self fixture')
+        self.git('push', '-q', 'origin', 'main'); self.author()
         result = self.worker(); self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         (self.state/'pr-authoring/T-259.json').unlink(); (self.home/'published.json').unlink()
         (self.repo/'bin/adapters/mock.sh').write_text('#!/usr/bin/env bash\n[ "$1" = run ] || exit 64\n'
                                                    'mkdir -p "$3/src"\necho second > "$3/src/second"\n')
+        # Stock binding fetches canonical GitHub refs; supply those exact refs
+        # through the disposable remote, retaining real fetch/head validation.
+        branch = self.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/t-259-*')
+        self.git('push', '-q', 'origin', branch+':refs/pull/42/head')
+        import shutil
+        real_git = shutil.which('git', path=self.env['PATH'])
+        tools = self.home/'tools'; tools.mkdir()
+        wrapper = tools/'git'
+        wrapper.write_text('#!'+sys.executable+'\n'+
+                          'import os, sys\nargs=sys.argv[1:]\n'+
+                          'args=[('+repr(str(self.home/'remote.git'))+
+                          ' if a == "https://github.com/fixture/project.git" else a) for a in args]\n'+
+                          'os.execv('+repr(real_git)+', ["git", *args])\n')
+        wrapper.chmod(0o755)
+        self.env['PATH'] = str(tools)+':'+self.env['PATH']
         result = self.worker('--pr', '42'); self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         calls = [json.loads(line) for line in (self.home/'ghcalls').read_text().splitlines()]
         self.assertEqual(sum(call[:2] == ['pr','create'] for call in calls), 1)
@@ -440,6 +458,21 @@ else: print('[]')
         metadata = self.publication()
         self.assertEqual(metadata['title'], 'T-259: Ask about '+self.draft['subject'].split(' ',1)[1])
         self.assertIn('acceptance clarification', metadata['body']); self.assertNotIn(private, metadata['body'])
+        self.assertNotIn('API_TOKEN', metadata['title']); self.assertIn('--draft', metadata['args'])
+        question = self.state/'worktrees/T-259/design/questions/T-259.md'
+        self.assertIn(private, question.read_text())
+
+    def test_scope_question_metadata_omits_worker_paths_but_keeps_question_lifecycle(self):
+        import shlex
+        private = '/private/worker-secret API_TOKEN=never-publish'
+        adapter = self.repo/'bin/adapters/mock.sh'
+        adapter.write_text('#!/usr/bin/env bash\n[ "$1" = run ] || exit 64\n'
+                           'printf "%s\\n" "SCOPE-BLOCKED:T-259" '+shlex.quote(private)+
+                           ' > "$3/.fm-say.md"\n')
+        result = self.worker(); self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        metadata = self.publication()
+        self.assertEqual(metadata['title'], 'T-259: Ask about '+self.draft['subject'].split(' ',1)[1])
+        self.assertIn('scope clarification', metadata['body']); self.assertNotIn(private, metadata['body'])
         self.assertNotIn('API_TOKEN', metadata['title']); self.assertIn('--draft', metadata['args'])
         question = self.state/'worktrees/T-259/design/questions/T-259.md'
         self.assertIn(private, question.read_text())

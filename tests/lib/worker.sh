@@ -72,7 +72,7 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   stack_base_fixture bin
   cp "$ROOT/skills/worker/SKILL.md" "$d/repo/skills/worker/"
-  printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
+  printf 'vendor: mock\nfallback:\n  - mock\nproject:\n  check: true\n' > config.yaml
   jq -n --arg task "$task" '{id:$task,title:"a mock task",scope:["src/**"],acceptance:["it exists"]}' \
     > "design/tasks/$task.json"
   printf '# design\n## 6. gates\nseven of them\n## 8. board\n' > design/design.md
