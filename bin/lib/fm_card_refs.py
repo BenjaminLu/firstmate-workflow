@@ -21,7 +21,7 @@ def read(argv, root):
 
 
 def repository(value):
-    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value):
+    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+', value):
         raise ValueError('repository discovery: valid owner/repository required')
     if any(part in ('.', '..') for part in value.split('/')):
         raise ValueError('repository discovery: invalid identity')
@@ -46,7 +46,7 @@ def blob_url(repo, head, file):
     return 'https://github.com/' + repository(repo) + '/blob/' + head + '/' + quote(repository_path(file), safe='/')
 
 
-def git_path(raw):
+def git_path(raw, *, prefixed=True):
     """Decode Git's byte-oriented C quoting, then require strict UTF-8."""
     if raw.startswith('"'):
         if not raw.endswith('"'):
@@ -71,7 +71,7 @@ def git_path(raw):
             else: raise ValueError('invalid diff escape')
         raw = data.decode('utf-8', errors='strict')
     if raw == '/dev/null': return None
-    if raw.startswith(('a/', 'b/')): raw = raw[2:]
+    if prefixed and raw.startswith(('a/', 'b/')): raw = raw[2:]
     return repository_path(raw)
 
 
@@ -81,7 +81,15 @@ def header_paths(line):
         match = re.fullmatch(r'("(?:[^"\\]|\\.)*") ("(?:[^"\\]|\\.)*"|b/.*)', text)
         if not match: raise ValueError('invalid diff header')
         return git_path(match[1]), git_path(match[2])
-    # Git leaves spaces unquoted; the b/ prefix separates the two paths.
+    # A rename can quote only the destination (for example a UTF-8 name).
+    mixed = re.fullmatch(r'(a/.*) ("b/(?:[^"\\]|\\.)*")', text)
+    if mixed: return git_path(mixed[1]), git_path(mixed[2])
+    # Git leaves spaces unquoted, including a literal ' b/' inside a path.
+    # Prefer the separator yielding the same path for ordinary modifications.
+    for match in re.finditer(' b/', text):
+        old, new = text[:match.start()], text[match.start() + 1:]
+        if old.startswith('a/') and old[2:] == new[2:]:
+            return git_path(old), git_path(new)
     parts = text.split(' b/', 1)
     if len(parts) != 2: raise ValueError('invalid diff header')
     return git_path(parts[0]), git_path('b/' + parts[1])
@@ -93,12 +101,18 @@ def parse_diff(diff, repo, pr):
     current = None
     hunk = None
 
+    def refresh_url():
+        path = current['new'] or current['old']
+        anchor = hashlib.sha256(path.encode('utf-8')).hexdigest()
+        current['url'] = f'https://github.com/{repo}/pull/{pr}/files#diff-{anchor}'
+
     def finish_hunk():
         nonlocal hunk
         if hunk is None: return
-        old, old_count, new, new_count, right, left = hunk
-        side = 'right' if new_count else 'left'
-        start, count, lines = (new, new_count, right) if new_count else (old, old_count, left)
+        refresh_url()
+        old, old_count, new, new_count, right, left, changed = hunk
+        side = 'left' if changed[1] and not changed[0] else 'right'
+        start, count, lines = (new, new_count, right) if side == 'right' else (old, old_count, left)
         item = dict(file=current['new'] or current['old'], start=start,
                     end=start + max(0, count - 1), snippet='\n'.join(lines[:12]))
         if side == 'left': item['side'] = 'left'
@@ -109,6 +123,7 @@ def parse_diff(diff, repo, pr):
     def finish_file():
         finish_hunk()
         if current is None: return
+        refresh_url()
         if not current['code']:
             kind = 'binary' if current['binary'] else 'rename' if current['old'] != current['new'] else None
             if kind is None: raise ValueError('diff has no supported hunks')
@@ -129,10 +144,14 @@ def parse_diff(diff, repo, pr):
                 finish_hunk()
                 match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
                 if not match: raise ValueError('invalid text hunk')
-                hunk = (int(match[1]), int(match[2] or 1), int(match[3]), int(match[4] or 1), [], [])
+                hunk = (int(match[1]), int(match[2] or 1), int(match[3]), int(match[4] or 1), [], [], [False, False])
             elif hunk is not None:
+                if line.startswith('+'): hunk[6][0] = True
+                if line.startswith('-'): hunk[6][1] = True
                 if line.startswith((' ', '+')): hunk[4].append(line[1:])
                 if line.startswith((' ', '-')): hunk[5].append(line[1:])
+            elif line.startswith('rename from '): current['old'] = git_path(line[12:], prefixed=False)
+            elif line.startswith('rename to '): current['new'] = git_path(line[10:], prefixed=False)
             elif line.startswith('--- '): current['old'] = git_path(line[4:].split('\t', 1)[0])
             elif line.startswith('+++ '): current['new'] = git_path(line[4:].split('\t', 1)[0])
             elif line.startswith(('Binary files ', 'GIT binary patch')): current['binary'] = True

@@ -1,12 +1,16 @@
 """Merge-path behavior using the existing autopilot and intent-card fixtures."""
 import copy
 import json
+import os
+import shutil
+import shlex
+import subprocess
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 import autopilot_loop as fixture
-from ste_cases import card
+from ste_cases import card, walk_card
 
 A, PR, HEAD, BASE, CHECKS = fixture.A, fixture.PR, fixture.HEAD, fixture.BASE, fixture.CHECKS
 
@@ -112,11 +116,85 @@ class MergePath(unittest.TestCase):
             return command(argv, **kwargs)
         with patch.object(self.pilot, 'command', side_effect=fail_request):
             self.poll()
-            with self.assertRaisesRegex(RuntimeError, 'request refused'):
+            with self.assertRaisesRegex(ValueError, 'D-alpha-T001-1.*author.*spec'):
                 self.gate_result(0)
             self.built()
             self.poll(); self.poll()
         self.assertEqual(sum(c[0] == 'gate' for c in self.calls), 1)
+        failure = self.pilot.data['merge_request_failures']['12']
+        self.assertEqual(failure['id'], 'D-alpha-T001-1')
+        self.assertNotIn('request refused', json.dumps(self.pilot.data))
+        corrected = self.state / 'decision-details/D-alpha-T001-1.json'
+        corrected.parent.mkdir(exist_ok=True)
+        corrected.write_text(json.dumps(card()))
+        self.poll(); self.gate_result(0)
+        self.assertEqual(len(self.requests()), 1)
+        self.assertEqual(len(list((self.state / 'pending').glob('*.json'))), 1)
+        self.assertNotIn('12', self.pilot.data['merge_request_failures'])
+
+    def test_stock_request_refusal_corrected_input_recovers_same_reservation(self):
+        # Reuse the actual stock shell fixture definitions, not its tests or a
+        # replacement request implementation. Synthetic readiness is explicit.
+        source = (fixture.ROOT / 'tests/decide.test.sh').read_text().split('\nd="$(fixture)"',1)[0]
+        source = source.replace('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"',
+                                'ROOT=' + shlex.quote(str(fixture.ROOT)))
+        result = subprocess.run(['bash','-c',source+'\nfixture'],capture_output=True,text=True,check=True)
+        engine = Path(result.stdout.strip())
+        self.addCleanup(shutil.rmtree,engine)
+        (engine / 'config.yaml').write_text('home: '+str(engine / 'home')+'\ndefault_project: alpha\nprojects:\n  alpha:\n    repo: .\n    github: owner/alpha\n    base: main\n')
+        self.root = engine; self.state = engine / 'state'
+        self.ctx.update(engine=str(engine),target=str(engine),state=str(self.state),tasks=str(engine / 'design/tasks'))
+        self.pilot = A.Pilot(self.ctx)
+        self.pilot.start_job = self.record_job
+        self.pilot.authoritative_head = lambda task,pr: pr['head']['sha']
+        self.pilot.verdict = lambda task: {}
+        self.pilot.busy = lambda task: False
+        self.branch_setup(); self.pilot.probe = self.probe
+        self.pilot.read_head_spec = lambda pr,task: dict(id=task)
+        self.pilot.emit = lambda *a,**kw: self.calls.append(('emit',a,kw))
+        def stock(argv, **kwargs):
+            if '--request' in argv or '--allocate' in argv:
+                self.calls.append(('command',argv))
+                actual = [str(engine / 'bin' / Path(argv[0]).name), *argv[1:]]
+                return A.Pilot.command(self.pilot,actual,env=dict(os.environ,FM_GH=str(engine / 'gh'),HERDR_ENV='0'),**kwargs)
+            return self.command(argv,**kwargs)
+        self.pilot.command = stock
+        explain = {lang:{k:v for k,v in loc.items() if k in ('intent','why','scope_in','scope_out','done','notes','before_nodes','after_nodes','change_points','door','check')} for lang,loc in walk_card().items()}
+        spec = dict(id='T-001',explain=explain,acceptance=['The check passes.'],check_answer=0,
+                    change_refs=[dict(files=['src/a.py'],tests=[dict(file='tests/a.py',name='missing')],acceptance=[0])])
+        (engine / '.fixture-source.json').write_text(json.dumps(spec))
+        (engine / '.fixture-diff').write_text('diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x\n+y\n')
+        (engine / 'prs.jsonl').write_text(json.dumps(dict(number=12,state='OPEN',headRefOid=HEAD,headRefName=PR['head']['ref'],title=PR['title']))+'\n')
+        self.dispatch()
+        details = self.state / 'decision-details/D-alpha-T001-1.json'
+        details.parent.mkdir(exist_ok=True)
+        authored = card()
+        authored['en']['title'] = 'MERGE CARD — merge PR #12: The check passes.'
+        authored['zh-TW']['title'] = '【合併卡】合併 PR #12：檢查通過。'
+        authored['en']['intent'][0]['text'] = 'Private customer text.'
+        details.write_text(json.dumps(authored))
+        self.poll()
+        receipt = self.state / 'request-gate.json'
+        receipt.with_suffix('.result.json').write_text(json.dumps(dict(kind='gate',task='T-001',pr=PR,base=BASE,round=1,code=0,output='')))
+        self.pilot.data['jobs']['stock'] = dict(kind='gate',task='T-001',number=12,head=HEAD,state='running',path=str(receipt))
+        self.pilot.consume_jobs()
+        self.assertEqual('uncertain',self.pilot.data['jobs']['stock']['state'])
+        self.assertFalse((self.state / 'pending/D-alpha-T001-1.json').exists())
+        self.assertIn('author intent',json.dumps(self.pilot.data))
+        self.assertNotIn('Private customer text',json.dumps(self.pilot.data))
+        self.poll(); self.poll()
+        self.assertEqual(1,len(self.requests()))
+        for lang in ('en','zh-TW'): authored[lang]['intent'] = explain[lang]['intent']
+        details.write_text(json.dumps(authored))
+        self.poll(); self.gate_result(0)
+        pending = json.loads((self.state / 'pending/D-alpha-T001-1.json').read_text())
+        self.assertEqual(explain['en']['change_points'],pending['details']['en']['change_points'])
+        self.assertEqual(0,pending['check_answer'])
+        self.assertEqual(2,len(self.requests()))
+        self.assertEqual(1,len(list((self.state / 'pending').glob('*.json'))))
+        self.poll()
+        self.assertEqual(2,len(self.requests()))
+        self.assertFalse((engine / 'merge-calls').exists())
 
     def test_highest_numeric_answered_dispatch_a_wins(self):
         self.dispatch(9)

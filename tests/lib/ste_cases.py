@@ -157,6 +157,18 @@ def observations(module):
     for kind in ('one-way', 'two-way'):
         emit('valid change points ' + kind, module.check_details(walk_card(kind))['ok'])
     mutations = [
+        ('missing door', lambda d: d['en'].pop('door')),
+        ('empty reason', lambda d: d['en']['door'].update(reason='')),
+        ('empty rollback', lambda d: d['en']['door'].update(rollback='')),
+        ('invalid kind', lambda d: d['en']['door'].update(kind='unknown')),
+        ('multiple how sentences', lambda d: d['en']['change_points'][0].update(how='The check passes. The card stays.')),
+        ('empty how', lambda d: d['en']['change_points'][0].update(how='')),
+        ('zero intent', lambda d: d['en']['change_points'][0].update(intent=0)),
+        ('noninteger intent', lambda d: d['en']['change_points'][0].update(intent=1.5)),
+        ('empty option', lambda d: d['en']['check']['options'].__setitem__(0,'')),
+        ('too many options', lambda d: d['en']['check'].update(options=['One.']*5)),
+        ('empty question', lambda d: d['en']['check'].update(q='')),
+        ('empty why', lambda d: d['en']['check'].update(why='')),
         ('bool intent', lambda d: d['en']['change_points'][0].update(intent=True)),
         ('out of range intent', lambda d: d['en']['change_points'][0].update(intent=2)),
         ('missing coverage', lambda d: d['en']['intent'].append(dict(kind='fact', text='Another fact.'))),

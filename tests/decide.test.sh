@@ -1170,4 +1170,8 @@ assert_ok "[ ! -e '$walk/state/pending/D-9243.json' ]" 'mismatch writes no card'
 rm -rf "$walk"
 python3 "$ROOT/tests/lib/external_adopt.py" "$ROOT" decide
 assert_eq 0 "$?" 'adopted PR decide follows pinned ownership and base'
+# T-242 stock producer cases share the owning refs fixture; legacy defaults stay unchanged.
+python3 "$ROOT/tests/lib/card_refs.py" "$ROOT" --producer
+assert_eq 0 "$?" 'stock enrichment sources, pins, refusals and private project boundaries'
+
 finish

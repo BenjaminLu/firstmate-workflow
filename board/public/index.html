@@ -1218,7 +1218,7 @@ function sectionItems(d, section, items, draw, wrap = html => html) {
 }
 const doorInputs = new Map(), doorVerified = new Map(), doorMessages = new Map(), doorRequests = new Map(), openChangeCode = new Set();
 function doorInput(id) { return doorInputs.get(id) || {reviewed:[], answer:null}; }
-function doorKey(d) { return JSON.stringify([d.id,d.expected_head,d.details?.en?.check,doorInput(d.id),lang]); }
+function doorKey(d) { return JSON.stringify([d.id,d.expected_head,d.details?.en?.intent,d.details?.en?.door,d.details?.en?.check,doorInput(d.id),lang]); }
 function mergeDoorNeeded(d, chosen) {
   if (d?.details?.en?.door?.kind !== 'one-way') return false;
   if (questionAnswers(d)?.some(a => a.ok === false)) return false;

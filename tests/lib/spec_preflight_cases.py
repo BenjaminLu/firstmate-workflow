@@ -42,7 +42,26 @@ class ChangePointSchema(unittest.TestCase):
                     change_refs=[dict(files=['src/a.py'], tests=[dict(file='tests/a.py', name='test_a')], acceptance=[0])],
                     check_answer=0)
         validate_change_refs(spec)
+        duplicate = deepcopy(spec)
+        for locale in ('en','zh-TW'):
+            duplicate['explain'][locale]['change_points'].append(dict(duplicate['explain'][locale]['change_points'][0]))
+        duplicate['change_refs'].append(deepcopy(duplicate['change_refs'][0]))
+        validate_change_refs(duplicate)
         for name, mutate in [
+            ('missing refs', lambda d: d.pop('change_refs')),
+            ('null refs', lambda d: d.update(change_refs=None)),
+            ('empty files', lambda d: d['change_refs'][0].update(files=[])),
+            ('empty tests', lambda d: d['change_refs'][0].update(tests=[])),
+            ('empty acceptance', lambda d: d['change_refs'][0].update(acceptance=[])),
+            ('negative acceptance', lambda d: d['change_refs'][0].update(acceptance=[-1])),
+            ('noninteger acceptance', lambda d: d['change_refs'][0].update(acceptance=[0.5])),
+            ('duplicate acceptance', lambda d: d['change_refs'][0].update(acceptance=[0,0])),
+            ('duplicate tests', lambda d: d['change_refs'][0]['tests'].append(dict(d['change_refs'][0]['tests'][0]))),
+            ('null answer', lambda d: d.update(check_answer=None)),
+            ('negative answer', lambda d: d.update(check_answer=-1)),
+            ('noninteger answer', lambda d: d.update(check_answer=0.5)),
+            ('missing about', lambda d: d['explain']['en']['check'].pop('about')),
+            ('why-only evidence', lambda d: (d['explain']['en']['check']['options'].__setitem__(0,'Feedback only.'),d['explain']['en']['check'].update(why='Feedback only.'))),
             ('wrong answer evidence', lambda d: d.update(check_answer=1)),
             ('bool answer', lambda d: d.update(check_answer=True)),
             ('out of range answer', lambda d: d.update(check_answer=2)),

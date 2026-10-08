@@ -688,14 +688,31 @@ class MechanicalLoop:
                     return
             # fm-decide validates the content and current signed gate readiness
             # again; deriving details never substitutes for those checks.
+            from fm_autopilot import key
+            variant = key(read_json(details))[:12]
+            request_token = f'merge-request:{pr["number"]}:{head}'
+            if not self.retry_due(request_token, variant=variant): return
             try:
                 self.command(self.script('fm-decide.sh', '--request', ident, '--task', task, '--project', owner,
                     '--kind', 'merge', '--pr', pr['number'], '--expected-head', head, '--details', details))
-            except ERRORS:
-                if not (replacement and self.ctx['external']): raise
-                # The child error may contain authored text or private paths.
-                # Retain uncertain-job reconciliation, with a bounded wake.
-                raise ValueError(f'{task} #{pr["number"]}: replacement request refused; verify current evidence and details') from None
+            except ERRORS as error:
+                # Child diagnostics may contain authored private prose or paths.
+                # Retain only identity and a fixed correction, never that output.
+                # Authored details are already an advancement input: correcting
+                # them permits a fresh gate/request with this reserved identity.
+                # Only fixed schema field names may enter the retained report.
+                field = re.search(r'(?:en|zh-TW)\.(intent|change_points|door|check)\s+(?:missing|mismatch)', str(error))
+                category = field[1] + ' missing or mismatched' if field else 'details or current evidence refused'
+                reason = f'{task} #{pr["number"]} ({ident}): merge request refused ({category}); author intent and walk fields from the spec and verify current evidence'
+                self.data.setdefault('merge_request_failures', {})[str(pr['number'])] = dict(
+                    task=task, id=ident, head=head, reason=reason)
+                self.branch_failure('merge-request', str(pr['number']), head, task, reason, variant=variant)
+                self.attention('merge-request-' + ident + '-' + variant, task, pr, reason,
+                    f'{task} #{pr["number"]}（{ident}）：合併決策卡請求被拒絕；請依 spec 修正意圖與導覽欄位，並確認目前證據')
+                raise ValueError(reason) from None
+            self.data['retries'].pop(request_token, None)
+            self.data.setdefault('merge_request_failures', {}).pop(str(pr['number']), None)
+            self.save()
 
 
 def run_job(path):

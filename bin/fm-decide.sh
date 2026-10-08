@@ -497,7 +497,7 @@ PYWALK
       walk_repo=''; walk_external=()
       [ -z "$RECORD" ] || walk_repo="$(fm_project_get "$RECORD" github "$REPO/config.yaml")" || exit 65
       [ "$FM_EXTERNAL" != 1 ] || walk_external=(--external)
-      python3 "$HERE/lib/fm_card_refs.py" --spec "$walk_spec" --root "$REPO" --repo "$walk_repo" \
+      python3 "$HERE/lib/fm_card_refs.py" --spec "$walk_spec" --root "${FM_TARGET_ROOT:-$REPO}" --repo "$walk_repo" \
         --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" ${walk_external[@]+"${walk_external[@]}"} > "$walk_refs" || exit 65
       jq --slurpfile refs "$walk_refs" '. + {refs:$refs[0]}' "$DETAILS" > "$walk_refs.details" || exit 65
       mv "$walk_refs.details" "$DETAILS"
