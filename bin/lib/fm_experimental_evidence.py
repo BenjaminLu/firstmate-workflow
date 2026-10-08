@@ -46,7 +46,7 @@ def canonical_json(value):
 def admit_operator():
     # Before manifest reads, pin/Git verification, state initialization or keys.
     if (os.environ.get('FM_ROLE') in ('worker', 'reviewer')
-            or os.environ.get('FM_IN_ROUND') == '1' or os.environ.get('HERDR_ENV') == '1'
+            or os.environ.get('FM_IN_ROUND') == '1'
             or os.environ.get('FM_RUN_DIR')):
         raise ValueError('experimental retention requires the outside-round operator')
 
@@ -556,8 +556,19 @@ def attach(store, records, unavailable, mode, checkout):
                     descriptor.pop('path')
                     if directory:
                         destination = directory / artifact['sha256']
-                        destination.write_bytes(data)
-                        destination.chmod(0o400)
+                        # Multiple descriptors/records may share immutable bytes.
+                        # Reuse only after a bounded no-follow integrity read;
+                        # never reopen a readonly copy for writing.
+                        try:
+                            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+                        except FileExistsError:
+                            existing = regular_bytes(directory, artifact['sha256'], MAX_ARTIFACT)
+                            if existing != data or digest(existing) != artifact['sha256']:
+                                raise ValueError('existing experimental attachment digest mismatch')
+                        else:
+                            with os.fdopen(fd, 'wb') as target:
+                                target.write(data)
+                            destination.chmod(0o400)
                         descriptor['readonly_path'] = str(destination)
                     else:
                         descriptor['access'] = 'inaccessible in diff mode'

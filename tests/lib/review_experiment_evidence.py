@@ -66,6 +66,12 @@ class Experiments(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
 
+    def crew_environments(self):
+        for marker in ({'FM_ROLE': 'worker'}, {'FM_ROLE': 'reviewer'},
+                       {'FM_IN_ROUND': '1'}, {'FM_RUN_DIR': '/private/round'}):
+            for host in ('', '1'):
+                yield dict(marker, HERDR_ENV=host)
+
     def git(self, *args):
         return subprocess.run(['git', '-C', str(self.repo), *args], check=True,
                               capture_output=True).stdout
@@ -753,7 +759,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         self.assertEqual(record['experiments'][0]['argv'][0], str(helper))
         for argv, _ in commands:
             self.assertFalse(set(('fetch','clone','push','ls-remote','login','model')) & set(argv))
-        for env in ({'FM_ROLE':'worker'}, {'FM_ROLE':'reviewer'}, {'FM_IN_ROUND':'1'}, {'HERDR_ENV':'1'}):
+        for env in self.crew_environments():
             with patch.dict(os.environ, env), patch.object(self.module.subprocess, 'run', side_effect=AssertionError('binding started')):
                 with self.assertRaises(ValueError):
                     self.retained()
@@ -769,18 +775,22 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
                    '--repo', str(self.repo), '--project', 'firstmate-workflow']
         python = [sys.executable, str(self.code/'bin/lib/fm_evidence.py'), *args,
                   '--state', str(self.root/'refused-state'), '--project', 'firstmate-workflow']
-        for env in ({'FM_ROLE':'worker'}, {'FM_ROLE':'reviewer'}, {'FM_IN_ROUND':'1'}, {'HERDR_ENV':'1'}):
+        for env in self.crew_environments():
             for command in (wrapper, python):
                 result = subprocess.run(command, env=dict(os.environ, **env), capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('outside-round operator', result.stderr)
                 self.assertFalse((self.root/'refused-state').exists())
                 self.assertFalse(self.store.key_path.exists())
-        result = subprocess.run(wrapper, capture_output=True, text=True)
+        result = subprocess.run(wrapper, env=dict(os.environ, HERDR_ENV='1'), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         retained = Store(self.store.state, 'firstmate-workflow', 'T-264').records()[0]
         self.assertEqual(retained['actor'], 'firstmate')
         self.assertNotIn('measured_result', retained)
+        result = subprocess.run(python, env=dict(os.environ, HERDR_ENV='1'), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        direct = Store(self.root/'refused-state', 'firstmate-workflow', 'T-264').records()[0]
+        self.assertEqual(direct['actor'], 'firstmate')
 
     def test_actual_prepare_hook_refuses_fallback_and_hatch_before_model(self):
         source = (ROOT/'bin/fm-review.sh').read_text()
@@ -832,7 +842,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
             if oversized:
                 (work/'diff.md').write_text('large inline patch\n'*70000)
             result = subprocess.run(['bash', '-c', 'fm_evidence_project() { echo self; };\n'+block+
-                'restore_context_evidence'], env=env, capture_output=True, text=True)
+                '\nrestore_context_evidence'], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             fresh = json.loads((work/'experiment-status.json').read_text())['index']
             self.assertTrue(Path(fresh).is_file())
@@ -900,12 +910,57 @@ assert 'fm_experimental_evidence' not in sys.modules
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((run/'evidence-binding.json').is_file())
 
+    def test_hosted_operator_and_shared_digest_copies(self):
+        self.frozen_contract()
+        with patch.dict(os.environ, HERDR_ENV='1'):
+            first = self.retained()
+            second_experiment = copy.deepcopy(self.manifest['experiments'][0])
+            second_experiment['id'] = 'shared-output'
+            self.manifest['experiments'].append(second_experiment)
+            second = self.retained()
+        records, unavailable = self.store.experiments(self.head, self.base, self.code)
+        self.assertEqual(records, [first, second])
+        self.assertFalse(unavailable)
+        text, index, count = self.module.attach(self.store, records, [], 'run', self.checkout())
+        self.assertEqual(count, 3)
+        directory = Path(index).parent
+        sha = first['experiments'][0]['artifacts'][0]['sha256']
+        self.assertEqual((directory/sha).read_bytes(), b'ASSERTION FAILED: unlocked reader\n')
+        self.assertEqual(text.count('"readonly_path": "'+str(directory/sha)+'"'), 3)
+        self.assertEqual((directory/sha).stat().st_mode & 0o777, 0o400)
+
+    def test_existing_attachment_digest_corruption_and_symlink_refuse(self):
+        self.frozen_contract()
+        record = self.retained()
+        sha = record['experiments'][0]['artifacts'][0]['sha256']
+        tree = self.checkout()
+        real_mkdtemp = self.module.tempfile.mkdtemp
+        for symlink in (False, True):
+            def prepopulated(*args, **kwargs):
+                directory = Path(real_mkdtemp(*args, **kwargs))
+                if symlink:
+                    (directory/sha).symlink_to(self.bundle/'log')
+                else:
+                    (directory/sha).write_bytes(b'corrupted existing digest')
+                    (directory/sha).chmod(0o400)
+                return str(directory)
+            with patch.object(self.module.tempfile, 'mkdtemp', side_effect=prepopulated):
+                with self.assertRaises((ValueError, OSError)):
+                    self.module.attach(self.store, [record], [], 'run', tree)
+
     def test_admission_before_any_io_or_subprocess(self):
-        for env in ({'FM_ROLE': 'worker'}, {'FM_ROLE': 'reviewer'}, {'FM_IN_ROUND': '1'},
-                    {'HERDR_ENV': '1'}, {'FM_RUN_DIR': '/private/round'}):
+        for env in self.crew_environments():
             with patch.dict(os.environ, env), patch('subprocess.run', side_effect=AssertionError('Git started')):
                 with self.assertRaises(ValueError):
                     self.module.admit_operator()
+                store = Store(self.root/'denied-state', 'self', 'T-264')
+                args = argparse.Namespace(file='/missing/manifest.json', head=self.head,
+                                          base=self.base, code='/missing/code', round=1)
+                with patch.object(self.module, 'regular_bytes', side_effect=AssertionError('file read started')):
+                    with self.assertRaises(ValueError):
+                        self.module.retain(store, args)
+                self.assertFalse(store.state.exists())
+                self.assertFalse(store.key_path.exists())
 
     def test_unsigned_allowlist_and_history_unchanged(self):
         store = Store(self.root/'state', 'self', 'T-264')

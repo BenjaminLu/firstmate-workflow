@@ -368,7 +368,7 @@ def main():
         # Inline admission before importing the optional module (including its
         # bytecode cache writes), any state initialization or binding command.
         if (os.environ.get('FM_ROLE') in ('worker', 'reviewer')
-                or os.environ.get('FM_IN_ROUND') == '1' or os.environ.get('HERDR_ENV') == '1'
+                or os.environ.get('FM_IN_ROUND') == '1'
                 or os.environ.get('FM_RUN_DIR')):
             raise ValueError('experimental retention requires the outside-round operator')
     store = Store(args.state, args.project, args.task, external=args.external)

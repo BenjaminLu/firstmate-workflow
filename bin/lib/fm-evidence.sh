@@ -5,7 +5,7 @@ set -euo pipefail
 for argument in "$@"; do
   if [ "$argument" = experiment-retain ]; then
     if [ "${FM_ROLE:-}" = worker ] || [ "${FM_ROLE:-}" = reviewer ] ||
-       [ "${FM_IN_ROUND:-}" = 1 ] || [ "${HERDR_ENV:-}" = 1 ] || [ -n "${FM_RUN_DIR:-}" ]; then
+       [ "${FM_IN_ROUND:-}" = 1 ] || [ -n "${FM_RUN_DIR:-}" ]; then
       echo 'fm-evidence: experimental retention requires the outside-round operator' >&2
       exit 65
     fi
