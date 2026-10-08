@@ -70,8 +70,10 @@ S
 }
 # Round one is identical across the rebuild cases. Keep one seed for each
 # hook configuration, then relocate copies; never share mutable Git state.
-rb_seed="$(rb_build_fixture)" || exit 1
-rb_hook_seed="$(RB_HOOKS=1 rb_build_fixture)" || exit 1
+if [ "${RB_FIXTURE_LIBRARY_ONLY:-0}" != 1 ]; then
+  rb_seed="$(rb_build_fixture)" || exit 1
+  rb_hook_seed="$(RB_HOOKS=1 rb_build_fixture)" || exit 1
+fi
 rb_fixture() {
   local d seed="$rb_seed"
   [ "${RB_HOOKS:-0}" != 1 ] || seed="$rb_hook_seed"
@@ -111,7 +113,21 @@ rb_branch() { git --git-dir="$1/remote.git" for-each-ref --format='%(refname:sho
 rb_head() { git --git-dir="$1/remote.git" rev-parse "$2" 2>/dev/null; }
 rb_move_main() {   # rb_move_main <dir> <script run in a fresh clone of main>
   rm -rf "$1/other"
-  git clone -q -b main "$1/remote.git" "$1/other" || return 1
+  local clone_error source_exists=false destination_exists=false source_main destination_main
+  clone_error="$(mktemp "$1/clone-error.XXXXXX")" || return 1
+  if ! git clone --no-local -q -b main "$1/remote.git" "$1/other" 2> "$clone_error"; then
+    [ ! -d "$1/remote.git" ] || source_exists=true
+    [ ! -d "$1/other" ] || destination_exists=true
+    source_main="$(git --git-dir="$1/remote.git" rev-parse --short=12 refs/heads/main 2>/dev/null)" || source_main=unavailable
+    destination_main="$(git -C "$1/other" rev-parse --short=12 refs/heads/main 2>/dev/null)" || destination_main=unavailable
+    printf 'rebuild fixture clone failed: source_exists=%s destination_exists=%s source_main=%s destination_main=%s\n' \
+      "$source_exists" "$destination_exists" "$source_main" "$destination_main" >&2
+    tail -c 4096 "$clone_error" >&2
+    rm -f "$clone_error"
+    return 1
+  fi
+  cat "$clone_error" >&2
+  rm -f "$clone_error"
   # shellcheck disable=SC1090
   ( cd "$1/other" && git config user.email a@b.c && git config user.name t \
       && . "$2" && git add -A && git commit -qm 'main moved' && git push -q origin main )
@@ -125,8 +141,10 @@ rb_round_two() {   # rb_round_two <dir> <step> [pr, '' for none]; sets rb_out an
     FM_T_DIR="$1" FM_T_BRANCH="$(rb_branch "$1")" FM_CAPTURE="$1/prompt.md" \
     bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"} ${pr:+--pr "$pr"} 2>&1)"; rb_rc=$?
 }
-printf 'printf "two\\n" > src/round-two\n' > "${TMPDIR:-/tmp}/fm-rb-add-$$.sh"
-rb_add="${TMPDIR:-/tmp}/fm-rb-add-$$.sh"
+if [ "${RB_FIXTURE_LIBRARY_ONLY:-0}" != 1 ]; then
+  printf 'printf "two\\n" > src/round-two\n' > "${TMPDIR:-/tmp}/fm-rb-add-$$.sh"
+  rb_add="${TMPDIR:-/tmp}/fm-rb-add-$$.sh"
+fi
 # What each case sets up has to have happened, or its other assertions
 # pass on code that never rebuilds anything: a refused push, an untouched
 # branch and a 71 all look the same with or without a rebuild in front.
