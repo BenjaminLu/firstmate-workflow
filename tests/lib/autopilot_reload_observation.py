@@ -3,6 +3,9 @@ import fcntl
 import json
 import os
 
+# Disable inherited Herdr routing before imports or fixtures can reach fm.
+os.environ['HERDR_ENV'] = '0'
+
 import fm_autopilot as A
 
 
