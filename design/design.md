@@ -530,6 +530,15 @@ still emits `merged` itself. The outcome is recorded in the decision record,
 not in the POST's response; a failed merge is recorded and never retried,
 exactly as before. Repeating the same response returns the stored record with
 whatever `merge` it holds by then.
+A failed answer remains final (T-269). A tracked task on a different authoritative
+open PR head may receive a new unanswered card after corrected cause and fresh
+review, CI and six gates. This requires owned modern failed A history, retained
+captain settlement and integrity-verified signed old readiness for the exact
+project/task/PR/repository/head. These are retained local provenance, not new
+cryptographic captain signatures. Unknown, legacy or conflicting evidence holds.
+No old answer or approval carries, and T-220 base carry does not revive failed A.
+Old cards, answers, reasons, bindings and events remain unchanged; only the
+captain's new board response can authorize the new card's merge.
 
 **A `running` merge whose outcome was never written is recovered by the
 board.** The board is the only writer of `merge`, so it is the one that
@@ -6035,6 +6044,16 @@ authored details or merge-slot release reconsiders the head. An authoritative
 head race is re-read on the next poll, without a wake or retry. Gate-step
 failures retry at poll offsets 0, 1 and 3, then wake once with the error;
 a changed fingerprint starts a fresh retry series and wake identity.
+For verified failed-card replacement (T-269) only, append scheduling evidence
+`failed-card-replacement-v1`, current authoritative head and sorted old
+card/head/settlement/event timestamp identities. Without qualifying history, the
+seven-element input remains byte-equivalent. A previously consumed qualifying
+fingerprint starts one normal protocol/gate job before publication; cached green
+results never request cards. Same-head failure, pending cards and unknown history
+hold, and active/uncertain jobs retain ownership or reconciliation. Unchanged
+polls and restarts neither regate nor duplicate the new pending card. Load this
+through normal stock self-update/reload drain, preserving live jobs; old snapshots
+retain their old hold. No record/pin migration, archive or manual reset is needed.
 PR events are decided by the event log alone: an event already in
 `events.jsonl` is never written again; a failed write retries at poll offsets
 0, 1 and 3, then wakes once. Terminal PRs are marked finished immediately;
@@ -6151,8 +6170,22 @@ head, reuses the lowest unused merge reservation, and requests a card from
 authored details when present. Otherwise, for the self project it builds checked
 merge details from the latest answered dispatch A card into
 `state/decision-details-built/`, outside the advancement fingerprint's inputs.
-Pending or answered cards remain authoritative;
-legacy numeric ids are never mistaken for a task's reservation. Another project
+Pending or answered cards remain authoritative, except that verified modern
+failed A history can permit a new unanswered card for a different head (T-269).
+Under the merge-turn lock, reread base, authoritative head, retained trusted
+failure history and project blockers. Delegate then-current readiness, selected
+review and required-check validation to unchanged stock request/candidate checks.
+Use the stock allocator; preserve every historical record and event. A reserved
+ID is stable across retries but stores no readiness signature: publication binds
+the then-current valid readiness, even when its signature changed for the same
+head. External authored details remain required; replacement diagnostics use
+bounded bilingual categories, never old reasons, evidence bodies or private paths.
+The lock coordinates cooperating loop/shared-turn callers only. A visible
+blocker holds; direct requests, board startup and GitHub mutations are outside
+that lock. Later races meet independent stock candidate checks and final merge
+match-head refusal, without a global exclusion guarantee.
+
+Legacy numeric ids are never mistaken for a task's reservation. Another project
 has its own lock, PR-number namespace, events, evidence and decision ids.
 
 A failed details build queues one wake naming `D-<project>-<task-key>-<n>`

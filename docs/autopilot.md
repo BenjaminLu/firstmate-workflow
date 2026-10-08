@@ -81,6 +81,31 @@ changed evidence gates again. An authoritative head race is re-read on the next
 poll without a wake or retry. Gate-step failures retry at poll offsets 0, 1 and 3,
 then wake once with the error. A changed fingerprint starts a fresh retry series
 with its own wake.
+For tracked `land: card` tasks, a failed answer remains final. Replacement
+requires an owned modern failed A record, its retained captain settlement event
+and integrity-verified historical signed readiness for the exact project, task,
+PR, repository and old head. An open authoritative head must differ from every
+such failed head. Unknown or conflicting history, same-head failures and other
+pending or final answers hold with bounded bilingual diagnostics.
+
+Only this verified case appends `failed-card-replacement-v1`, the current head
+and sorted old card/head/settlement identities to the seven ordinary fingerprint
+inputs. Ordinary consumed fingerprints stay unchanged. A qualifying previously
+consumed result schedules one normal protocol/gate pass; it never publishes from
+cached success or replays a completed job. Running and uncertain jobs retain
+ownership and reconciliation. Only fresh gate exit zero may request a new,
+unanswered stock card with then-current readiness. Old records and events remain
+unchanged; no old approval carries. Reserved IDs stay stable while valid readiness
+may change before publication. External projects still require authored details.
+
+The merge-turn lock serializes cooperating loop/shared-turn callers only. A
+visible project blocker prevents publication. Direct requests, board startup and
+GitHub do not share that lock; later mutations meet the unchanged stock candidate
+checks and final match-head refusal boundary. The reservation stores no readiness
+signature. T-220 carry is separate and cannot revive failed A. Old snapshots keep
+the old hold; use stock self-update/reload drain, preserving live jobs, to load the
+new code. No stored evidence/card/pin migration, archive or manual reset is needed.
+
 PR events are decided by the event log alone: an event already in
 `events.jsonl` is never written again; a failed write retries at poll offsets
 0, 1 and 3, then wakes once. Terminal PRs are marked finished immediately;
