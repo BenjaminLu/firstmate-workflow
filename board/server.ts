@@ -1893,6 +1893,8 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
 };
 // Raw diagnostics stay in data.reason; each board summary has authored text.
 const mergeFailureTw = (reason: string): string => {
+  if (reason.includes("cannot carry to the current head")) return "船長的答案無法沿用到目前版本；需要新的合併卡";
+  if (reason.includes("for readiness on the updated head")) return "等待更新後版本就緒逾時；需要新的合併卡";
   if (reason === "Merge helper unavailable") return "無法啟動合併程式";
   if (reason === "the merge helper stopped before recording an outcome") return "合併程式在記錄結果前已停止";
   if (reason.includes("missing verified candidate SHA")) return "缺少已驗證的候選版本 SHA";
@@ -1935,7 +1937,7 @@ const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
 // Start the helper for an answered merge card. Owned by the session (T-151),
 // with its output in a file: a board restarting under bun --watch neither
 // kills it nor leaves it writing into a closed pipe.
-const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false, expectedHead = "") => {
+const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false, expectedHead = "", boundSignature = "") => {
   writeGeneration++;
   const merging = join(stateDir(project), "merging");
   mkdirSync(merging, { recursive: true });
@@ -1945,7 +1947,7 @@ const startMerge = (id: string, project: string, pr: number, task: string | null
     const fd = openSync(log, "w");
     try {
       child = startOwned("fm-merge.sh", [join(ROOT, "bin/fm-merge.sh"),
-        "--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT, ...(expectedHead ? ["--expected-head", expectedHead] : [])],
+        "--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT, ...(expectedHead ? ["--expected-head", expectedHead] : []), ...(!untracked && boundSignature ? ["--bound-signature", boundSignature] : [])],
         fd, childEnv());
     } finally { closeSync(fd); }
   } catch { settle(id, "failed", "Merge helper unavailable"); return; }
@@ -2732,7 +2734,8 @@ const server = Bun.serve({
         } catch { /* the durable decision still exists; report the event failure */ }
 
         // the helper runs in the background; the answer does not wait for it
-        if (merging) startMerge(id, projectOf(p), p.pr, mergeTask, onProject, untracked, typeof p.expected_head === "string" ? p.expected_head : "");
+        if (merging) startMerge(id, projectOf(p), p.pr, mergeTask, onProject, untracked, typeof p.expected_head === "string" ? p.expected_head : "",
+          typeof p.binding?.signature === "string" && /^[0-9a-f]{64}$/.test(p.binding.signature) ? p.binding.signature : "");
         const pf = join(stateDir(cardProject), "pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
         const stored = readJson<Record<string, unknown>>(file) ?? decision;

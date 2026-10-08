@@ -116,7 +116,7 @@ if [ "$delete_branch" = true ]; then
 fi
 if [ -n "$branch" ] && [ "$delete_branch" = true ]; then git branch -D "$branch" >/dev/null 2>&1; fi
 rm -f "$ROOT/$TASK.log"
-FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --type closed \
+FM_ROOT="$REPO" "${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh" --actor firstmate --task "$TASK" --type closed \
   --en "worktree for $TASK removed" --tw "已移除 $TASK 的 worktree" >/dev/null 2>&1 </dev/null || true
 echo "fm-cleanup: removed $tgt_real"
 exit 0

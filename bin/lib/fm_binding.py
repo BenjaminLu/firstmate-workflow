@@ -323,10 +323,204 @@ def verify_current(root, repo, pr, head, base_tip):
         raise ValueError('local base moved; readiness is stale')
 
 
+def validate_adoption(root, repo, task, pr, *, sync=True, view=None):
+    """One authorization guard for ordinary candidates and both carry phases."""
+    import fm_adopt
+    adopt = fm_adopt.adoption(os.environ, task)
+    if adopt:
+        repo = repo or repository(root)
+        if str(adopt['pr']) != str(pr):
+            raise ValueError('PR does not match authorized adoption')
+        effective = fm_adopt.effective_base(
+            view if view is not None else remote_head(repo, pr), adopt, os.environ, task, repo)
+        if sync:
+            fm_adopt.sync_base(root, repo, effective)
+
+
+def candidate(root, repo, task, pr, head):
+    if remote_head(repo, pr)['headRefOid'] != head:
+        raise ValueError('authoritative PR head moved; candidate is stale')
+    validate_adoption(root, repo, task, pr)
+    from fm_evidence import Store
+    store = Store(os.environ['FM_STATE_DIR'], os.environ['FM_EVIDENCE_PROJECT'], task)
+    mapping = gate_list()
+    records = [r for r in store.records() if r['kind'] == 'readiness' and r['head'] == head and str(r.get('pr')) == str(pr) and r.get('repository') == repo]
+    if not records:
+        raise ValueError('no signed six-gate readiness for candidate')
+    record = records[-1]
+    if record.get('gates') not in ([g['name'] for g in mapping['gates']], [int(n) for n in mapping['legacy']]) or not record.get('checks'):
+        raise ValueError('candidate lacks all six gates and required checks')
+    if required_checks(root, repo, str(pr), head, task=task) != record['checks']:
+        raise ValueError('required check/status evidence changed; refresh gates')
+    selected, external = selected_review(store, root, repo, str(pr), head)
+    if review_identity(selected) != record['verdict_signature'] or (external and review_identity(external) != record.get('external_signature')):
+        raise ValueError('candidate review superseded')
+    if record.get('gate_base') != git(root, 'rev-parse', view_base(repo, str(pr)) + '^{commit}'):
+        raise ValueError('candidate gate base moved; refresh gates')
+    reviewed = record['review']
+    binding = reviewed.get('binding', {})
+    current_base = git(root, 'merge-base', view_base(repo, str(pr)), head)
+    current = source_binding(task, head, current_base, Path(__file__).parents[2])
+    for key in ('spec_sha256', 'contract_sha256', 'conventions_sha256', 'patch', 'files'):
+        if current[key] != binding.get(key):
+            raise ValueError('candidate source/contract changed: ' + key)
+    verify_current(root, repo, str(pr), head, record['gate_base'])
+    return record
+
+
+class CarryRefused(ValueError):
+    """The captain must answer a new card."""
+
+
+class CarryWaiting(ValueError):
+    """Unready or unreadable evidence; the merge deadline bounds retries."""
+
+
+def carry_precheck(root, repo, task, pr, h0, bound):
+    from fm_evidence import Store
+    store = Store(os.environ['FM_STATE_DIR'], os.environ['FM_EVIDENCE_PROJECT'], task)
+    try:
+        records = store.records()
+    except ValueError as error:
+        raise CarryRefused('evidence store failed verification: ' + str(error)) from error
+    r0 = next((r for r in records if r.get('kind') == 'readiness'
+               and r.get('signature') == bound and r.get('head') == h0
+               and str(r.get('pr')) == str(pr) and r.get('repository') == repo), None)
+    if r0 is None:
+        raise CarryRefused('card readiness record not found')
+    # Ordinary candidate keeps its historical state handling. Carry must only
+    # refuse an observed terminal state, never missing or malformed evidence.
+    view = github(repo, 'pr', 'view', str(pr), '--repo', repo,
+                  '--json', 'headRefOid,baseRefOid,baseRefName,headRefName,state')
+    if not isinstance(view, dict) or view.get('state') not in ('OPEN', 'CLOSED', 'MERGED'):
+        raise CarryWaiting('PR state is unreadable')
+    if view['state'] != 'OPEN':
+        raise CarryRefused('PR is not open')
+    sha(view.get('headRefOid'))
+    sha(view.get('baseRefOid'))
+    head = view['headRefOid']
+    policy = review_policy()
+    if policy in ('external', 'both') and head != h0:
+        raise CarryRefused('external review policy: a review identity is bound to its head, '
+                           'so an answer does not carry across a head change; a new card is needed')
+    # Local latest-verdict precedence must survive an unreadable external API.
+    if policy != 'external':
+        try:
+            verdicts = store.verdicts()
+        except ValueError as error:
+            raise CarryRefused('evidence store failed verification: ' + str(error)) from error
+        if not verdicts or verdicts[-1].get('verdict') != 'APPROVE' or not verdicts[-1].get('signature'):
+            raise CarryRefused('no current local approval')
+        if review_identity(verdicts[-1]) != r0['verdict_signature']:
+            raise CarryRefused('the review changed since the card')
+    try:
+        validate_adoption(root, repo, task, pr, sync=False, view=view)
+    except ValueError as error:
+        # Explicit authorization errors are lasting; transport is unreadable.
+        if ('authorized adoption' in str(error) or 'adopted PR base changed' in str(error)
+                or 'adopt requires' in str(error) or str(error).startswith('adopt.')
+                or str(error).startswith('parent merged;')
+                or str(error) == 'stacked adopted PR requires confirmed stacking policy'):
+            raise CarryRefused(str(error)) from error
+        raise
+    status = github(repo, 'pr', 'view', str(pr), '--repo', repo,
+                    '--json', 'mergeStateStatus').get('mergeStateStatus') or 'UNKNOWN'
+    if head == h0 and status == 'DIRTY':
+        raise CarryRefused('candidate is conflicted; the branch will not be updated (DIRTY); a new card is needed')
+    # Signed local receipts can invalidate an answer without touching the
+    # base. Fresh external collection computes a source binding, so it belongs
+    # exclusively to full carry after synchronization.
+    if policy in ('external', 'both'):
+        external_records = [r for r in records if r.get('kind') == 'external-verdict'
+                            and r.get('repository') == repo and str(r.get('pr')) == str(pr)]
+        if external_records and review_identity(external_records[-1]) != r0.get('external_signature'):
+            raise CarryRefused('the review changed since the card')
+    return store, r0, view, status
+
+
+def ancestry(root, older, newer):
+    result = subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', older, newer],
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+    if result.returncode not in (0, 1):
+        raise CarryWaiting('binding command failed: ' + result.stderr.decode(errors='replace')[:500])
+    return result.returncode == 0
+
+
+def carry(root, repo, task, pr, h0, bound, *, pre_sync=False):
+    """Revalidate every observation; a precheck is never merge authority."""
+    try:
+        store, r0, view, status = carry_precheck(root, repo, task, pr, h0, bound)
+        head = view['headRefOid']
+        if pre_sync:
+            return dict(precheck=True, head=head, carried_from=h0)
+        validate_adoption(root, repo, task, pr, view=view)
+        url = 'https://github.com/' + repo + '.git'
+        if fetch_ref(root, url, 'refs/pull/' + str(pr) + '/head') != head:
+            raise CarryWaiting('the PR head is moving')
+        missing = subprocess.run(['git', '-C', str(root), 'cat-file', '-e', h0 + '^{commit}'],
+                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+        if missing.returncode:
+            raise CarryRefused('the card head object is missing')
+        if not ancestry(root, h0, head):
+            raise CarryRefused('the PR head gained its own commits since the card; a new card is needed')
+        base = verified_base(view, repo, root)
+        tip = git(root, 'rev-parse', base + '^{commit}')
+        if git(root, 'rev-list', '--no-merges', head, '^' + h0, '^' + tip):
+            raise CarryRefused('the PR head gained its own commits since the card; a new card is needed')
+        current = source_binding(task, head, git(root, 'merge-base', tip, head), Path(__file__).parents[2])
+        for key in ('files', 'patch', 'spec_sha256', 'contract_sha256', 'conventions_sha256'):
+            if current[key] != r0['review']['binding'].get(key):
+                raise CarryRefused('the task change differs from the card: ' + key)
+        try:
+            required_checks(root, repo, pr, head, task=task)
+        except ValueError as error:
+            if 'required check/status failed' in str(error):
+                raise CarryRefused('a required check failed on ' + head[:7]) from error
+            raise
+        selected, external = selected_review(store, root, repo, pr, head)
+        if (review_identity(selected) != r0['verdict_signature']
+                or (review_identity(external) if external else None) != r0.get('external_signature')):
+            raise CarryRefused('the review changed since the card')
+        behind = False
+        if os.environ.get('FM_EXTERNAL') == '1':
+            live = fetch_ref(root, url, 'refs/heads/' + base)
+            if fetch_ref(root, url, 'refs/pull/' + str(pr) + '/head') != head:
+                raise CarryWaiting('the PR head is moving')
+            behind = not ancestry(root, live, head)
+        try:
+            record = candidate(root, repo, task, pr, head)
+        except ValueError as error:
+            reason = str(error)
+            if reason in ('forged or modified local evidence record', 'unsigned evidence cannot claim source-bound authority'):
+                raise CarryRefused('evidence store failed verification: ' + reason) from error
+            if reason == 'candidate review superseded' or reason == 'no current local approval':
+                raise CarryRefused('the review changed since the card' if reason == 'candidate review superseded' else reason) from error
+            if reason.startswith('candidate source/contract changed: '):
+                raise CarryRefused('the task change differs from the card: ' + reason.split(': ', 1)[1]) from error
+            if 'required check/status failed' in reason:
+                raise CarryRefused('a required check failed on ' + head[:7]) from error
+            if 'authorized adoption' in reason or 'adopted PR base changed' in reason:
+                raise CarryRefused(reason) from error
+            invalidated = reason in ('no signed six-gate readiness for candidate',
+                                     'candidate gate base moved; refresh gates',
+                                     'required check/status evidence changed; refresh gates')
+            if (head == h0 and invalidated and not behind
+                    and status in ('CLEAN', 'BLOCKED', 'UNSTABLE', 'HAS_HOOKS')):
+                raise CarryRefused(reason + '; the branch will not be updated (' + status + '); a new card is needed') from error
+            raise CarryWaiting(reason) from error
+        if record['verdict_signature'] != r0['verdict_signature']:
+            raise CarryRefused('the review changed since the card')
+        return dict(record, carried_from=h0)
+    except (CarryRefused, CarryWaiting):
+        raise
+    except Exception as error:
+        raise CarryWaiting(str(error)) from error
+
+
 def main():
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument('mode', choices=['base', 'local-gate-base', 'head', 'checks', 'ready', 'candidate', 'external-review', 'review-final'])
+    p.add_argument('mode', choices=['base', 'local-gate-base', 'head', 'checks', 'ready', 'candidate', 'carry', 'external-review', 'review-final'])
     p.add_argument('--project-base', default='main')
     p.add_argument('--task', required=True)
     p.add_argument('--pr', required=True)
@@ -334,18 +528,13 @@ def main():
     p.add_argument('--head', default='')
     p.add_argument('--base-name', default='')
     p.add_argument('--gate-report', default='')
+    p.add_argument('--bound-signature', default='')
+    p.add_argument('--pre-sync', action='store_true')
     args = p.parse_args()
-    mapping = gate_list() if args.mode in ('ready', 'candidate') else None
+    mapping = gate_list() if args.mode == 'ready' else None
     root = Path(os.environ['FM_TARGET_ROOT'])
-    import fm_adopt
-    if args.mode in ('base', 'local-gate-base', 'head', 'checks', 'ready', 'candidate'):
-        adopt = fm_adopt.adoption(os.environ, args.task)
-        if adopt:
-            if str(adopt['pr']) != args.pr:
-                raise ValueError('PR does not match authorized adoption')
-            repo = repository(root)
-            effective = fm_adopt.effective_base(remote_head(repo, args.pr), adopt, os.environ, args.task, repo)
-            fm_adopt.sync_base(root, repo, effective)
+    if args.mode in ('base', 'local-gate-base', 'head', 'checks', 'ready'):
+        validate_adoption(root, None, args.task, args.pr)
     if args.mode == 'local-gate-base':
         print(local_gate_base(root, args.pr, args.project_base)); return
     repo = repository(root)
@@ -355,36 +544,24 @@ def main():
         print(authoritative(root, args.branch, repo, args.pr)); return
     if args.mode == 'review-final':
         print(review_final(root, args.branch, repo, args.pr, args.head, args.base_name)); return
+    if args.mode == 'carry':
+        import sys
+        try:
+            print(json.dumps(carry(root, repo, args.task, args.pr, args.head,
+                                   args.bound_signature, pre_sync=args.pre_sync)))
+        except (CarryRefused, CarryWaiting) as error:
+            print('fm-binding: ' + str(error), file=sys.stderr)
+            raise SystemExit(1 if isinstance(error, CarryRefused) else 75)
+        return
     head = sha(args.head)
+    if args.mode == 'candidate':
+        print(json.dumps(candidate(root, repo, args.task, args.pr, head))); return
     if remote_head(repo, args.pr)['headRefOid'] != head:
         raise ValueError('authoritative PR head moved; candidate is stale')
     from fm_evidence import Store
     store = Store(os.environ['FM_STATE_DIR'], os.environ['FM_EVIDENCE_PROJECT'], args.task)
     if args.mode == 'external-review':
         print(json.dumps(external_review(store, root, repo, args.pr, head))); return
-    if args.mode == 'candidate':
-        records = [r for r in store.records() if r['kind'] == 'readiness' and r['head'] == head and str(r.get('pr')) == args.pr and r.get('repository') == repo]
-        if not records:
-            raise ValueError('no signed six-gate readiness for candidate')
-        record = records[-1]
-        if record.get('gates') not in ([g['name'] for g in mapping['gates']], [int(n) for n in mapping['legacy']]) or not record.get('checks'):
-            raise ValueError('candidate lacks all six gates and required checks')
-        if required_checks(root, repo, args.pr, head, task=args.task) != record['checks']:
-            raise ValueError('required check/status evidence changed; refresh gates')
-        selected, external = selected_review(store, root, repo, args.pr, head)
-        if review_identity(selected) != record['verdict_signature'] or (external and review_identity(external) != record.get('external_signature')):
-            raise ValueError('candidate review superseded')
-        if record.get('gate_base') != git(root, 'rev-parse', view_base(repo, args.pr) + '^{commit}'):
-            raise ValueError('candidate gate base moved; refresh gates')
-        reviewed = record['review']
-        binding = reviewed.get('binding', {})
-        current_base = git(root, 'merge-base', view_base(repo, args.pr), head)
-        current = source_binding(args.task, head, current_base, Path(__file__).parents[2])
-        for key in ('spec_sha256', 'contract_sha256', 'conventions_sha256', 'patch', 'files'):
-            if current[key] != binding.get(key):
-                raise ValueError('candidate source/contract changed: ' + key)
-        verify_current(root, repo, args.pr, head, record['gate_base'])
-        print(json.dumps(record)); return
     checks = required_checks(root, repo, args.pr, head, task=args.task)
     if args.mode == 'checks':
         print(json.dumps(checks)); return

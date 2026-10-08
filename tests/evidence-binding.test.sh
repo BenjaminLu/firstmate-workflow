@@ -33,5 +33,9 @@ PY
 assert_eq 0 "$?" "signed records reject tampering and external layout omits project duplication"
 python3 "$ROOT/tests/lib/evidence_binding.py" "$ROOT" "$t"
 assert_eq 0 "$?" "real bindings carry only unchanged patches and reject stale heads or red statuses"
+carry_tmp="$(safe_tmpdir)"
+python3 "$ROOT/tests/lib/evidence_carry.py" "$ROOT" "$carry_tmp"
+assert_eq 0 "$?" "signed carry validates provenance, unchanged change and fresh readiness"
+safe_rm_rf "$carry_tmp"
 safe_rm_rf "$t"
 finish
