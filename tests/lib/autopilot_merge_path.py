@@ -146,14 +146,15 @@ class MergePath(unittest.TestCase):
         self.assertEqual(built['en']['questions'], [dict(kind='fact', text='The change stays inside the pinned scope.')])
         self.assertEqual(built['zh-TW']['questions'], [dict(kind='fact', text='改動不超出固定的範圍。')])
 
-    def refused(self, reason):
+    def refused(self, reason, reason_tw=None):
         self.gate_result(0)
         self.assertFalse(self.built_path().exists())
         self.assertEqual(self.requests(), [])
         wake = next(iter(self.pilot.data['wakes'].values()))
         self.assertIn('T-001 ready: merge card details needed (D-alpha-T001-1)', wake['line'])
         self.assertIn(reason, wake['line'])
-        self.assertIn(reason, wake['summary']['zh-TW'])
+        self.assertIn(reason, wake['summary']['en'])
+        self.assertIn(reason if reason_tw is None else reason_tw, wake['summary']['zh-TW'])
 
     def test_bad_chinese_names_failing_sentence(self):
         details = card(); details['zh-TW']['intent'][0]['text'] = '檢查將會通過。'
@@ -187,7 +188,7 @@ class MergePath(unittest.TestCase):
     def test_external_project_needs_author(self):
         self.dispatch()
         self.ctx['external'] = True
-        self.refused('external project: author the details')
+        self.refused('external project: author the details', '外部專案：請撰寫決策卡內容')
 
     def test_authored_details_win_unchanged(self):
         self.dispatch()

@@ -892,13 +892,18 @@ class LoopTests(BranchFixture, unittest.TestCase):
         path = self.state / 'fresh-gate.json'
         path.with_suffix('.result.json').write_text(json.dumps(dict(kind='gate', task='T-001',
             pr=PR, code=0, base=BASE, round=2)))
-        self.pilot.data['jobs']['fresh'] = dict(kind='gate', task='T-001', number=12,
+        self.pilot.data.setdefault('jobs', {})['fresh'] = dict(kind='gate', task='T-001', number=12,
             head=HEAD, state='running', path=str(path))
         self.pilot.consume_jobs()
 
     def test_failed_card_fresh_gate_publishes_new_unanswered_card(self):
         self.failed_history()
+        pending = self.state / 'pending'; pending.mkdir()
+        dispatch = pending / 'D-alpha-T001-99.json'
+        dispatch.write_text(json.dumps(dict(task='T-001', purpose='dispatch')))
+        original_dispatch = dispatch.read_bytes()
         self.complete_gate_receipt()
+        self.assertEqual(dispatch.read_bytes(), original_dispatch)
         path = self.state / 'pending/D-alpha-T001-2.json'
         self.assertTrue(path.exists(), 'fresh successful gates must create a NEW H1 pending card')
         card = json.loads(path.read_text())
@@ -913,12 +918,10 @@ class LoopTests(BranchFixture, unittest.TestCase):
     def ordinary_fingerprint(self):
         return A.key([12, HEAD, BASE, self.pilot.settled_checks(PR, CHECKS, []), None,
             {p.name: json.loads(p.read_text()) for p in (self.state / 'decision-details').glob('D-alpha-T001-*.json')}, 0])
-
     def test_consumed_ordinary_upgrade_does_not_regate(self):
         self.pilot.data['advanced']['12'] = dict(head=HEAD, fingerprint=self.ordinary_fingerprint())
         self.pilot.advance(PR, CHECKS, []); self.pilot.advance(PR, CHECKS, [])
         self.assertEqual(self.gates(), [])
-
     def test_consumed_failed_upgrade_runs_one_normal_gate_before_publication(self):
         self.failed_history()
         self.pilot.data['advanced']['12'] = dict(head=HEAD, fingerprint=self.ordinary_fingerprint())
@@ -934,7 +937,6 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(len(self.gates()), 1)
         self.assertEqual(len(self.requests), 1)
         self.assert_history_preserved()
-
     def test_failed_history_pre_request_negative_matrix(self):
         self.failed_history()
         variants = [dict(expected_head=HEAD), dict(merge='running'), dict(merge='merged'),
@@ -942,10 +944,15 @@ class LoopTests(BranchFixture, unittest.TestCase):
             dict(merge=None), dict(merge='unknown'), dict(merge=None, merged=dict(ok=False)),
             dict(binding={}), dict(binding=dict(signature='forged')), dict(merge_settled=None),
             dict(id='D-beta-T001-1'), dict(identity='decision:wrong'), dict(project='beta'),
-            dict(task='T-002'), dict(pr=13), dict(expected_head=None)]
+            dict(task='T-002'), dict(pr=13), dict(expected_head=None),
+            dict(kind=None, purpose=None), dict(kind=None, purpose='merge'),
+            dict(kind=None, purpose='unknown'), dict(kind='merge', purpose='dispatch'),
+            dict(kind='', purpose='dispatch')]
         for change in variants:
             with self.subTest(change=change):
-                self.old_path.write_text(json.dumps(dict(self.old, **change)))
+                record = dict(self.old, **change)
+                if 'kind' in change and change['kind'] is None: record.pop('kind')
+                self.old_path.write_text(json.dumps(record))
                 self.old_bytes = self.old_path.read_bytes()
                 self.gate_result(0)
                 self.assertEqual(self.requests, [])
@@ -958,7 +965,6 @@ class LoopTests(BranchFixture, unittest.TestCase):
             self.event_bytes = self.events.read_bytes(); self.gate_result(0)
             self.assertEqual(self.requests, [])
             self.assert_history_preserved()
-
     def test_failed_history_missing_corrupt_readiness_and_conflicting_settlement_hold(self):
         self.failed_history()
         files = list(self.store.directory.glob('*.json'))
@@ -975,7 +981,6 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.event_bytes = self.events.read_bytes(); self.gate_result(0)
         self.assertEqual(self.requests, [])
         self.assert_history_preserved()
-
     def test_visible_cooperating_blocker_holds_replacement(self):
         self.failed_history()
         with patch('fm_concurrent.merge_blocker', return_value='pending merge D-alpha-T002-1'):
@@ -983,7 +988,6 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.requests, [])
         self.assertFalse((self.state / 'pending').exists())
         self.assert_history_preserved()
-
     def test_blocker_visible_at_second_reread_prevents_request(self):
         self.failed_history()
         with patch('fm_concurrent.merge_blocker', side_effect=['', 'pending merge D-alpha-T002-1']):
@@ -991,7 +995,6 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.assertEqual(self.requests, [])
         self.assertFalse((self.state / 'pending').exists())
         self.assert_history_preserved()
-
     def test_stock_candidate_refuses_after_precheck_mutations(self):
         self.failed_history()
         for category in ('head', 'base', 'checks', 'review', 'readiness'):

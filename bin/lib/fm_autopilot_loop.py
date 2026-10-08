@@ -77,7 +77,11 @@ class MechanicalLoop:
                         and record.get('project', self.ctx.get('default_project', owner)) == owner)
                     if not relevant: continue
                     if record.get('kind') == 'choice': continue
-                    if record.get('kind') != 'merge': return [], 'unverified identity'
+                    # Explicit dispatch intent also covers ordinary legacy cards
+                    # without kind; contradictory merge records remain a hold.
+                    if 'kind' not in record and record.get('purpose') == 'dispatch': continue
+                    if record.get('kind') != 'merge' or record.get('purpose') == 'dispatch':
+                        return [], 'unverified identity'
                     if folder == 'pending': return [], 'outstanding card'
                     ident = record.get('id')
                     if (not isinstance(ident, str) or path.stem != ident
