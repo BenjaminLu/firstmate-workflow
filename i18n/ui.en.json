@@ -271,5 +271,16 @@
   "detailCurrentHead": "Current head",
   "detailResolved": "Resolved",
   "detailUnresolved": "Unresolved",
-  "detailNoCitedLine": "No cited line"
+  "detailNoCitedLine": "No cited line",
+  "doorOneWay": "One-way door",
+  "doorTwoWay": "Two-way door",
+  "doorRollback": "Rollback",
+  "showCode": "Show code",
+  "intentReviewed": "I checked this intent",
+  "specAcceptance": "Spec acceptance",
+  "codeMore": "{n} more changes in the pull request",
+  "doorConfirmed": "Each intent and the answer are confirmed.",
+  "doorUnconfirmed": "Review each intent and answer the check in the main card.",
+  "decisionMissing": "The decision is no longer pending.",
+  "decisionAlreadyRecorded": "The decision is already recorded."
 }

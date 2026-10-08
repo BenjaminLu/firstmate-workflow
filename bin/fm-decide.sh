@@ -413,8 +413,60 @@ if [ "$MODE" = request ]; then
     ' "$DETAILS" >/dev/null 2>&1 || {
       echo 'fm-decide: details.effect names, for an option the card offers, one of merge (merge cards only), hold, park, drop, dispatch or send_back' >&2; exit 64;
     }
+    walk_spec=''; walk_details=''; walk_refs=''; walk_enriched=false
+    if [ "$KIND" != merge ]; then
+      jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null && {
+        echo 'fm-decide: change_points, door and check apply only to tracked merge cards; nothing was written' >&2; exit 65;
+      }
+    else
+      walk_spec="$(mktemp)" || exit 70
+      trap 'rm -f "$walk_spec" "${walk_details:-}" "${walk_refs:-}"' EXIT
+      walk_enriched="$(python3 - "$HERE/lib" "$TASK" "$EXPECTED_HEAD" "$REPO" "$DETAILS" "$walk_spec" <<'PYWALK'
+import json, os, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from fm_spec_pins import Pins
+try:
+    task, head, root, authored, output = sys.argv[2:]
+    env = dict(os.environ)
+    external = env.get('FM_EXTERNAL') == '1'
+    if not external:
+        env.update(FM_ENGINE_ROOT=root, FM_STATE_DIR=str(Path(root)/'state'),
+                   FM_TASKS_DIR=str(Path(root)/'design/tasks'), FM_DESIGN=str(Path(root)/'design/design.md'))
+    env.setdefault('FM_ENGINE_ROOT', str(Path(sys.argv[1]).parents[1]))
+    env.setdefault('FM_DESIGN', str(Path(env['FM_STATE_DIR']).parent/'design.md'))
+    pin = Pins(env, task).resolve(if_present=True)
+    if pin is not None: raw = pin['snapshots']['spec']['text']
+    elif external: raw = (Path(env['FM_TASKS_DIR'])/(task+'.json')).read_text()
+    else:
+        result = subprocess.run(['git','-C',root,'show',head+':design/tasks/'+task+'.json'],capture_output=True,text=True)
+        if result.returncode: raise ValueError('approved committed task spec required at expected head')
+        raw = result.stdout
+    spec = json.loads(raw)
+    if spec.get('id') != task: raise ValueError('task spec identity mismatch')
+    explain = spec.get('explain', {})
+    fields = ('change_points','door','check')
+    enriched = any(field in explain.get(lang,{}) for lang in ('en','zh-TW') for field in fields) or any(field in spec for field in ('change_refs','check_answer'))
+    details = json.loads(Path(authored).read_text())
+    if not enriched and any(field in details.get(lang,{}) for lang in ('en','zh-TW') for field in fields):
+        raise ValueError('details walk fields mismatch: spec has no change_points')
+    Path(output).write_text(raw)
+    print('true' if enriched else 'false')
+except (ValueError, OSError, ImportError, TypeError, KeyError) as error:
+    print('fm-decide: spec walk refused: '+str(error),file=sys.stderr)
+    sys.exit(65)
+PYWALK
+)" || exit 65
+      if [ "$walk_enriched" = true ]; then
+        [ -r "$HERE/lib/fm_card_refs.py" ] || { echo 'fm-decide: enrichment helper missing; nothing was written' >&2; exit 65; }
+        walk_details="$(mktemp)" || exit 70
+        python3 "$HERE/lib/fm_card_refs.py" --prepare --spec "$walk_spec" --details "$DETAILS" \
+          --root "$REPO" --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" > "$walk_details" || exit 65
+        DETAILS="$walk_details"
+      fi
+    fi
     ste='null'
-    if jq -e 'any(.en,."zh-TW"; has("intent") or has("why") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table"))' "$DETAILS" >/dev/null; then
+    if jq -e 'any(.en,."zh-TW"; has("intent") or has("why") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table") or has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
       [ -r "$HERE/lib/fm_ste.py" ] || {
         echo "fm-decide: missing $HERE/lib/fm_ste.py; nothing was written" >&2; exit 70;
       }
@@ -440,6 +492,16 @@ if [ "$MODE" = request ]; then
       [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
         echo 'fm-decide: verified candidate SHA required' >&2; exit 65; }
     fi
+    if [ "$walk_enriched" = true ]; then
+      walk_refs="$(mktemp)" || exit 70
+      walk_repo=''; walk_external=()
+      [ -z "$RECORD" ] || walk_repo="$(fm_project_get "$RECORD" github "$REPO/config.yaml")" || exit 65
+      [ "$FM_EXTERNAL" != 1 ] || walk_external=(--external)
+      python3 "$HERE/lib/fm_card_refs.py" --spec "$walk_spec" --root "$REPO" --repo "$walk_repo" \
+        --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" ${walk_external[@]+"${walk_external[@]}"} > "$walk_refs" || exit 65
+      jq --slurpfile refs "$walk_refs" '. + {refs:$refs[0]}' "$DETAILS" > "$walk_refs.details" || exit 65
+      mv "$walk_refs.details" "$DETAILS"
+    fi
     payload="$(jq -cn --arg expected_head "$EXPECTED_HEAD" --argjson binding "$binding" --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
       --slurpfile gate_list "$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json" \
       --arg purpose "$PURPOSE" --argjson ste "$ste" --arg project "$RECORD" --slurpfile details "$DETAILS" \
@@ -451,6 +513,9 @@ if [ "$MODE" = request ]; then
        + (if $ste==null then {} else {ste:$ste} end)
        + (if $project=="" then {} else {project:$project} end)
        + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
+    if [ "${walk_enriched:-false}" = true ] && jq -e 'has("check_answer")' "$walk_spec" >/dev/null; then
+      payload="$(jq --slurpfile spec "$walk_spec" '. + {check_answer:$spec[0].check_answer}' <<<"$payload")" || exit 65
+    fi
     (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || exit 65
     # after the pending file and before the event: the generator reads the file
     # it is drawing, and the event is what wakes anything watching

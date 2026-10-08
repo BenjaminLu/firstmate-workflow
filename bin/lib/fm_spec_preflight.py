@@ -153,13 +153,17 @@ def repository_path(value):
 
 def validate_change_refs(spec):
     """Validate locale-free walk fields and evidence visible before confirmation."""
-    import fm_ste
     explain = spec.get('explain', {})
-    enriched = any(field in explain.get(lang, {}) for lang in fm_ste.LOCALES for field in fm_ste.WALK_FIELDS)
+    # Legacy isolated installations do not need the optional STE module.
+    # Detect presence before importing; orphan top-level fields still refuse.
+    enriched = isinstance(explain, dict) and any(
+        isinstance(explain.get(lang), dict) and field in explain[lang]
+        for lang in ('en', 'zh-TW') for field in ('change_points', 'door', 'check'))
     if not enriched:
         if 'change_refs' in spec or 'check_answer' in spec:
             raise ValueError('change_refs/check_answer: orphan field')
         return
+    import fm_ste
     fm_ste._validate(explain)
     points = explain['en']['change_points']
     refs = spec.get('change_refs')

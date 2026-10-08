@@ -22,6 +22,7 @@ fixture() {
   # the doorbell --await registers and the board rings (T-151)
   cp -R "$ROOT/bin/lib" "$d/bin/"
   binding_service_fixture "$d"
+  merge_source_fixture "$d"
   cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
   jq -n '{en:{title:"Cache index",explanation:"Read once",before:"Repeated reads",after:"One read",outcome:"Choice recorded",options:{A:{description:"Cache",pros:"Fast",cons:"Memory"},B:{description:"Read",pros:"Simple",cons:"Slow"},C:{description:"Wait",pros:"Measure",cons:"Delay"}}},"zh-TW":{title:"快取索引",explanation:"讀取一次",before:"重複讀取",after:"讀取一次",outcome:"已記錄選擇",options:{A:{description:"快取",pros:"快速",cons:"記憶體"},B:{description:"讀取",pros:"簡單",cons:"較慢"},C:{description:"等待",pros:"測量",cons:"延後"}}}}' > "$d/details.json"
   # A merge request reads its pull request from GitHub (T-119), so every
@@ -36,6 +37,12 @@ here="$(cd "$(dirname "$0")" && pwd)"
 echo "$*" >> "$here/ghcalls"
 arg() { local w="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$w" ] && { printf '%s' "${2-}"; return; }; shift; done; }
 case "${1-}:${2-}" in
+  repo:view)
+    [ -f "$here/.fixture-diff" ] || exit 1
+    printf '{"nameWithOwner":"owner/engine","url":"https://github.com/owner/engine"}\n';;
+  pr:diff)
+    [ -f "$here/.fixture-diff" ] || exit 1
+    cat "$here/.fixture-diff";;
   pr:view)
     doc="$(jq -c --arg n "$3" 'select((.number|tostring)==$n)' "$here/prs.jsonl" 2>/dev/null | tail -1)"
     [ -n "$doc" ] || {
@@ -1135,6 +1142,32 @@ rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub"
 assert_fail "grep -qE '\\b(fswatch|watchexec|entr)\\b' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh')\"" \
   "it calls neither fswatch, watchexec nor entr"
 rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$dleg"
+# T-242: stock request enriches a matching card before pending publication.
+walk="$(fixture)"
+python3 - "$ROOT" "$walk" <<'PYW'
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]+'/tests/lib')
+from ste_cases import card,walk_card
+root=Path(sys.argv[2]); details=card()
+details['en']['title']='MERGE CARD — merge PR #1: The check passes.'
+details['zh-TW']['title']='【合併卡】合併 PR #1：檢查通過。'
+explain={lang:{key:value for key,value in loc.items() if key in ('intent','why','done','scope_in','scope_out','notes','before_nodes','after_nodes','change_points','door','check')} for lang,loc in walk_card().items()}
+spec=dict(id='T-242',explain=explain,acceptance=['The check passes.'],change_refs=[dict(files=['src/a.py'],tests=[dict(file='tests/a.py',name='test_a')],acceptance=[0])],check_answer=0)
+(root/'.fixture-source.json').write_text(json.dumps(spec))
+(root/'details.json').write_text(json.dumps(details))
+(root/'.fixture-diff').write_text('diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x\n+y\n')
+PYW
+pr_is "$walk" 1 t-242-change 'T-242: the check passes'
+FM_GH="$walk/gh" FM_ROOT="$walk" bash "$walk/bin/fm-decide.sh" --request D-9242 --task T-242 --kind merge --pr 1 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --details "$walk/details.json" > "$walk/result" 2> "$walk/error"
+assert_eq 0 "$?" 'matching spec intent enriches the stock merge request'
+assert_eq true "$(jq '.details.en.change_points[0].intent==1 and .details.en.door.kind=="one-way" and .details.en.check.about.intent==1 and .check_answer==0 and (.details|has("check_answer")|not) and .details.refs.points[0].code[0].file=="src/a.py"' "$walk/state/pending/D-9242.json")" 'stock card carries authoritative walk, refs and private answer'
+assert_eq 'https://github.com/owner/engine/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/design/tasks/T-242.json' "$(jq -r .details.refs.spec_url "$walk/state/pending/D-9242.json")" 'self spec URL uses canonical repository and head'
+jq '.en.intent[0].text="Different intent."' "$walk/details.json" > "$walk/bad.json"
+FM_GH="$walk/gh" FM_ROOT="$walk" bash "$walk/bin/fm-decide.sh" --request D-9243 --task T-242 --kind merge --pr 1 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --details "$walk/bad.json" > "$walk/result" 2> "$walk/error"
+assert_eq 65 "$?" 'mismatched authored intent refuses'
+assert_ok "[ ! -e '$walk/state/pending/D-9243.json' ]" 'mismatch writes no card'
+rm -rf "$walk"
 python3 "$ROOT/tests/lib/external_adopt.py" "$ROOT" decide
 assert_eq 0 "$?" 'adopted PR decide follows pinned ownership and base'
 finish
