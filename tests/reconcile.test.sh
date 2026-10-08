@@ -1113,4 +1113,16 @@ assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --effect --project >/dev
   "project cannot masquerade as an effect value"
 rm -rf "$d"
 
+# T-250: all task attribution uses the shared grammar, including SK ids.
+d="$(fixture)"
+G="$(rec "$d" prefixed <<'J'
+[{"number":250,"state":"MERGED","title":"Public change","headRefName":"feature/t-021-x"},
+ {"number":251,"state":"MERGED","title":"Skill change","headRefName":"sk-002-y"}]
+J
+)"
+out="$(FM_ROOT="$d" FM_GH="$G" "$d/bin/fm-reconcile.sh" --repo "$d" 2>&1)"
+assert_eq T-021 "$(jq -r 'select(.type=="merged" and .pr==250)|.task' "$d/state/events.jsonl")" "prefixed merge reconciles"
+assert_eq SK-002 "$(jq -r 'select(.type=="merged" and .pr==251)|.task' "$d/state/events.jsonl")" "skill merge reconciles"
+rm -rf "$d"
+
 finish

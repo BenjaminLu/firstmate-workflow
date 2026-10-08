@@ -126,6 +126,13 @@ class Stacking(unittest.TestCase):
             self.assertEqual(stack.select_base('owner/repo', 'main', ['T-1'], set(), True),
                              {'name': 't-1-parent', 'head': A, 'pr': 1})
 
+    def test_prefixed_dependency_uses_authoritative_head(self):
+        prs = [{'number': 1, 'headRefName': 'feature/t-1-parent', 'headRefOid': A,
+                'isCrossRepository': False}]
+        with patch.object(stack, 'github', return_value=prs):
+            self.assertEqual(stack.select_base('owner/repo', 'main', ['T-1'], set(), True),
+                             {'name': 'feature/t-1-parent', 'head': A, 'pr': 1})
+
     def test_merged_dependencies_use_project_base(self):
         self.assertEqual(stack.select_base('owner/repo', 'main', ['T-1'], {'T-1'}, False),
                          {'name': 'main'})
@@ -208,6 +215,43 @@ class Stacking(unittest.TestCase):
             self.assertIn(('push', '--force-with-lease=refs/heads/t-2-child:' + B,
                            'https://github.com/owner/repo.git', 'HEAD:refs/heads/t-2-child'), calls)
             self.assertIn(('update-ref', 'refs/heads/t-2-child', new, B), calls)
+            self.assertEqual(command.call_args.args[0][-2:], ['--base', 'main'])
+
+    def test_prefixed_restack_uses_parent_boundary_and_expected_lease(self):
+        child = {'state': 'OPEN', 'headRefName': 'feature/t-2-child', 'baseRefName': 'feature/t-1-parent',
+                 'headRefOid': B, 'baseRefOid': A}
+        parent = {'state': 'MERGED', 'headRefName': 'feature/t-1-parent', 'headRefOid': A,
+                  'baseRefName': 'main'}
+        new = 'c' * 40
+        base = 'd' * 40
+        def git_answer(root, *args):
+            if args == ('rev-parse', 'refs/heads/feature/t-2-child'): return B
+            if args == ('merge-base', A, B): return A
+            if args == ('rev-parse', 'HEAD'): return new
+            return ''
+        final = dict(child, headRefOid=new, baseRefName='main', baseRefOid=base)
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(stack, 'remote_head', side_effect=[child, child, final]), \
+             patch.object(stack, 'github', side_effect=[parent, {'protected': False}]), \
+             patch.object(stack, 'fetch_ref', side_effect=[base, A]) as fetch, \
+             patch.object(stack, 'git', side_effect=git_answer) as git, \
+             patch.object(stack.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as rebase, \
+             patch.object(stack, 'command') as command:
+            result = stack.restack('/repo', 'owner/repo', 2, 1, B,
+                {'force_with_lease': True, 'base': 'main', 'stacking': 'allowed', 'delete_branch': False}, tmp)
+            self.assertEqual(result['head'], new)
+            self.assertEqual([c.args for c in fetch.call_args_list], [
+                ('/repo', 'https://github.com/owner/repo.git', 'refs/heads/main'),
+                ('/repo', 'https://github.com/owner/repo.git', 'refs/pull/1/head')])
+            calls = [call.args[1:] for call in git.call_args_list]
+            tree = next(c.args[4] for c in git.call_args_list if c.args[1:3] == ('worktree', 'add'))
+            rebase.assert_called_once_with(['git', '-C', tree, '-c', 'core.hooksPath=/dev/null',
+                'rebase', '--onto', base, A], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+            self.assertEqual(list(Path(tmp).glob('restack-*')), [])
+            self.assertIn(('push', '--force-with-lease=refs/heads/feature/t-2-child:' + B,
+                           'https://github.com/owner/repo.git', 'HEAD:refs/heads/feature/t-2-child'), calls)
+            self.assertIn(('update-ref', 'refs/heads/feature/t-2-child', new, B), calls)
             self.assertEqual(command.call_args.args[0][-2:], ['--base', 'main'])
 
     def test_restack_preserves_dirty_managed_worktree(self):
@@ -345,6 +389,29 @@ class Stacking(unittest.TestCase):
             self.assertEqual(caught.exception.code, 69)
             self.assertIn('fm-stack: restack published; result output failed: output closed', stderr.getvalue())
 
+    def test_prefixed_restack_command_reads_task_lock(self):
+        import io
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict('os.environ', dict(FM_TARGET_ROOT=tmp, FM_STACK_REPOSITORY='owner/repo',
+                                          FM_STATE_DIR=tmp, FM_EXTERNAL='1')), \
+             patch('fm_conventions.read_policy', return_value=dict(base='main', stacking='allowed', force_with_lease=True)), \
+             patch('fm_binding.remote_head', return_value=dict(headRefName='feature/t-2-child')), \
+             patch.object(sys, 'argv', ['fm_stack.py', 'restack', '--pr', '2', '--parent', '1', '--expected-head', B]), \
+             patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr:
+            # Replace restack after module definitions, before its entrypoint runs.
+            source = Path(stack.__file__).read_text()
+            source = source.replace("if __name__ == '__main__':", "restack = lambda *args: {'head': 'published'}\nif __name__ == '__main__':")
+            original_print = print
+            def output(*args, **kwargs):
+                if kwargs.get('file') is sys.stderr: return original_print(*args, **kwargs)
+                raise OSError('output closed')
+            with patch('builtins.print', side_effect=output):
+                with self.assertRaises(SystemExit) as caught:
+                    exec(compile(source, stack.__file__, 'exec'), {'__name__': '__main__'})
+            self.assertEqual(caught.exception.code, 69)
+            self.assertIn('fm-stack: restack published; result output failed: output closed', stderr.getvalue())
+            self.assertTrue((Path(tmp) / 'runs/.worker-T-2.lock').exists())
+
     def test_last_dependent_release_obeys_policy(self):
         with patch.object(stack, 'deletable', return_value=False), patch.object(stack, 'git') as git:
             stack.release_parent('/repo', 'owner/repo', 't-1-parent', A,
@@ -364,6 +431,24 @@ class Stacking(unittest.TestCase):
             git.assert_any_call('/repo', 'push', '--force-with-lease=refs/heads/t-1-parent:' + A,
                                 'https://github.com/owner/repo.git', ':refs/heads/t-1-parent')
             git.assert_any_call('/repo', 'update-ref', '-d', 'refs/heads/t-1-parent', A)
+
+    def test_prefixed_parent_release_uses_parent_lease(self):
+        with patch.object(stack, 'deletable', return_value=True), \
+             patch.object(stack, 'github', return_value={'protected': False}), \
+             patch.object(stack, 'git', return_value='') as git:
+            stack.release_parent('/repo', 'owner/repo', 'feature/t-1-parent', A,
+                                 {'delete_branch': True, 'base': 'main'})
+            git.assert_any_call('/repo', 'push', '--force-with-lease=refs/heads/feature/t-1-parent:' + A,
+                                'https://github.com/owner/repo.git', ':refs/heads/feature/t-1-parent')
+            git.assert_any_call('/repo', 'update-ref', '-d', 'refs/heads/feature/t-1-parent', A)
+
+    def test_prefixed_release_still_refuses_non_task_and_base(self):
+        with patch.object(stack, 'deletable', return_value=True), patch.object(stack, 'git') as git:
+            for branch in ('feature', 'main', 'master', 'HEAD', 'feature/t-1-base', 'a/b/t-1-parent'):
+                with self.subTest(branch=branch), self.assertRaisesRegex(ValueError, 'protected/non-task'):
+                    stack.release_parent('/repo', 'owner/repo', branch, A,
+                                         {'delete_branch': True, 'base': 'feature/t-1-base'})
+            git.assert_not_called()
 
     def test_unknown_parent_protection_retains_branch(self):
         with patch.object(stack, 'deletable', return_value=True), \
