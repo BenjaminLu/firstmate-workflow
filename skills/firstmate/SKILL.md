@@ -1148,8 +1148,14 @@ or `both`; an external/both project's fm review is a local pre-check, not a
 substitute for the designated repository reviewers. `post` also accepts
 `summary`, `check`, `threads` and `comments`; T-140 owns the first three remote
 projections, which currently retain reports locally without posting raw private
-content. The engine registry gets routing metadata only. CONVENTIONS.md and
-project command configuration live privately under FM_HOME.
+content. The engine registry gets routing metadata only; external entries stay
+uncommitted local changes and never reach main. After onboarding, commit the
+updated `tests/fixtures/private-name-digests.txt` through a normal task PR. If
+onboarding reports a digest update failure, run
+`python3 bin/lib/fm_private_names.py update --repo <engine root>` and include the
+resulting digest file in that task PR. A git history rewrite is a separate
+captain-approved step after cleanup merges. CONVENTIONS.md and project command
+configuration live privately under FM_HOME.
 
 For a captain's chat correction, write the requested fields to a private JSON
 file and run `bin/fm-project.sh edit <name> --changes <file> --captain <name>

@@ -1,0 +1,207 @@
+{
+  "id": "T-251",
+  "title": "no committed firstmate file names an external organisation, repository or external project: the onboarding fixtures and old task specs use neutral identities, and the private-text guard checks every tracked text file on CI through committed SHA-256 digests of the forbidden names, never the names themselves",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "tests/conventions-watch.test.sh",
+    "tests/e2e/board-chips.spec.ts",
+    "tests/lib/onboarding/gh.py",
+    "tests/lib/onboarding/repository.json",
+    "tests/onboard-remote.test.sh",
+    "tests/onboarding.test.sh",
+    "tests/external-private-text.test.sh",
+    "tests/fixtures/private-name-digests.txt",
+    "bin/lib/fm_private_names.py",
+    "bin/lib/fm_onboard.py",
+    "design/tasks/T-055.json",
+    "design/tasks/T-138.json",
+    "design/tasks/T-139.json",
+    "design/tasks/T-140.json",
+    "design/tasks/T-141.json",
+    "design/tasks/T-142.json",
+    "design/tasks/T-143.json",
+    "design/tasks/T-166.json",
+    "design/tasks/T-216.json",
+    "design/tasks/T-217.json",
+    "design/tasks/T-218.json",
+    "design/tasks/T-221.json",
+    "design/tasks/T-222.json",
+    "design/tasks/T-223.json",
+    "design/tasks/T-224.json",
+    "design/tasks/T-226.json",
+    "design/tasks/T-231.json",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-251.json",
+    "tests/private-names.test.sh",
+    "tests/onboard-register.test.sh"
+  ],
+  "acceptance": [
+    "Why. The captain asked on 2026-10-07, verbatim: \"清掉公司repo\". The privacy rule (captain, 2026-10-06) says no committed firstmate file names an external repository, an external project or a private path. A sweep of origin/main found the real organisation and repository names in the onboarding fixtures and the names of an external project and its repository in old task specs, at: design/tasks/T-055.json:22; T-138.json:30; T-139.json:29,35,38; T-140.json:25; T-141.json:31; T-142.json:42; T-143.json:23; T-166.json:25,30,32,33; T-216.json:13,20; T-217.json:17,20,23; T-218.json:13; T-221.json:14,18; T-222.json:18; T-223.json:18,30; T-224.json:3,14,16,19; T-226.json:7,13; T-231.json:23,57,156 (all under design/tasks/; :57 and :156 write the external repository as two capitalised words); tests/conventions-watch.test.sh:31,34; tests/e2e/board-chips.spec.ts:10,14,28,31; tests/lib/onboarding/gh.py:13,18; tests/lib/onboarding/repository.json:1; tests/onboard-remote.test.sh:12,14,24,26,36,43,47,52,64,65,71,76,77,101; tests/onboarding.test.sh:33,44,65. The guard tests/external-private-text.test.sh missed them for two reasons: it greps only README.md, design/*.md, skills, docs, bin and board (PATHS, :16), and on CI the committed config.yaml registers no external project, so it has no names to look for. Occurrences of a managed project's short name inside an unrelated longer token (for example inside base64 image data in games/) are not hits.",
+    "Change 1, neutral fixture identities. Every hit in the listed test files is replaced by a neutral identity, used consistently inside each fixture set so the suites still pass with no behaviour change: the onboarding fixture set (tests/lib/onboarding/gh.py, tests/lib/onboarding/repository.json, tests/onboarding.test.sh, tests/onboard-remote.test.sh, tests/conventions-watch.test.sh) uses `example-org/example-repo` (owner `example-org`, repository `example-repo`, including the bare-clone host paths `host/example-org/example-repo.git`, the alias and elsewhere URLs and every `repos/<owner>/<repo>` endpoint string and its `full_name`), and tests/e2e/board-chips.spec.ts renames its long project fixture to `example-long-project` (its github `example/example-long-project` and its decision ids `D-example-long-project-T<n>-1`). No assertion changes meaning; only identities change.",
+    "Change 2, old task specs. In each listed design/tasks/*.json line, replace the external project name with the phrase `the pilot external project`, its repository with `the pilot external repository`, and the organisation/repository pair with `an external organisation's repository`; replace a private local path that only names the external project (for example a Desktop or FM_HOME path containing it) with `<external project path>`. Inside a decision id (`D-<project>-T<n>-<k>`) replace only the project part with `pilot` (for example `D-pilot-T002-1`); inside a `.git` URL or an `owner/repo` path use `example-org/example-repo`. Keep every other word, keep each file valid JSON with the same keys, and change no id, scope or depends_on. All but design/tasks/T-055.json are records of merged tasks; T-055 is an open task whose spec keeps its meaning with the neutral phrase; no code reads their prose (tests/ready.test.sh :24 reads only fixture copies it writes itself).",
+    "Change 3, digest list and helper. New bin/lib/fm_private_names.py: `names(engine_config, fm_home)` returns the forbidden names: for each external project in the registry (repo is not '.'), its registry name, its github `owner/repo`, its repository part, and its owner unless the owner equals the self project's github owner; plus the stem of each FM_HOME/owners/*.yaml file, except a stem equal to the self project's github owner (the same exclusion as the owner). FM_HOME is resolved as bin/lib/fm_project_paths.py:12 does: the FM_HOME environment variable, else the engine config.yaml `home:` key, else ~/.firstmate. Every owner comparison (the github owner and the owners-file stem against the self project's github owner) is case-insensitive. `digest(name)` = SHA-256 hex of the lowercased name. `write(path, digests)` writes a sorted, de-duplicated file with one hex digest per line and a one-line comment header that says the file holds digests only. CLI: `python3 bin/lib/fm_private_names.py update --repo <engine root>` merges the digests of the current names into tests/fixtures/private-name-digests.txt (never removes existing digests) and prints how many were added; it never prints a name. `update --name-stdin` also reads extra names, one per line, from standard input and merges their digests without echoing them (for names that are no longer registered). Coverage today, stated by firstmate from its local registry: the organisation and repository used in the onboarding fixtures is a registered external project on firstmate's machine and its organisation has an owners file, so `update` covers it; the pilot external project and its repository are registered too. When tests/fixtures/ or the digest file is missing in the engine it creates them (temporary test engines included); any write error is reported to stderr and returns non-zero without changing the file. The worker cannot read FM_HOME, so firstmate runs `update` on its machine before dispatch and records the resulting digest file in the round brief; the worker commits tests/fixtures/private-name-digests.txt exactly as given.",
+    "Change 4, the guard checks every tracked text file on CI. tests/external-private-text.test.sh keeps its existing registry checks and adds a digest check over the committed content of every tracked file: it reads the blobs of the HEAD tree (`git ls-tree -r HEAD` plus `git cat-file`), not working-tree bytes, so a local uncommitted registry entry in config.yaml never fails it; only blobs that decode as UTF-8 are scanned, excluding tests/fixtures/private-name-digests.txt itself: tokenize each line on the regex `[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?` (so an `owner/repo` pair is one token, and each part is also checked alone), lowercase each token and each part, and fail with `external name digest in <file>:<line>` (never printing the token) when its SHA-256 is in the digest file. Each pair of adjacent words on a line is also joined with `-` and checked (so a name written as two capitalised words matches its hyphenated digest). Each token is also normalised before matching: a trailing `.` and a trailing `.git` are stripped, and a decision-id token matching `D-(.+)-T[0-9]+-[0-9]+` is also checked through its project group. A token that only contains a forbidden name as an unrelated substring does not match. The fixture self-test adds cases for a two-word form of a hyphenated name, `<name>.` at a sentence end, `<owner>/<repo>.git`, `D-<project>-T002-1`, and an uncommitted working-tree edit of a tracked file that adds a name (passes, because only HEAD blobs are read). The local-path check stays on PATHS. The fixture self-test in that file adds cases: a digest file with the digest of an invented name makes a tracked file containing that name fail, the same name inside a longer token passes, an `owner/repo` pair matches through its pair digest and through each part, and the digest file itself is exempt.",
+    "Change 5, onboarding keeps the list current. bin/lib/fm_onboard.py `register()` (:356) calls `fm_private_names.update` for the engine repository after a new project is registered, so the digest file gains the new project's digests as a working-tree change; it is committed through a normal task pull request (digests are not names). The registry routing entry itself stays an uncommitted local change and never reaches main; §15.2 is corrected to say so. It prints `fm-onboard: private-name digests updated (N added); commit tests/fixtures/private-name-digests.txt through a task PR` to stderr. A failed digest update never fails onboarding: register() catches the error, prints `fm-onboard: private-name digests not updated: <reason>; run python3 bin/lib/fm_private_names.py update --repo <engine root>` to stderr, and continues, so the config.yaml, CONVENTIONS.md and ring steps (:459-461) still run.",
+    "Not changed, stated. The git history is not rewritten by this task; firstmate rewrites it as a separate captain-approved operation after this merges. games/ build artefacts are unchanged (no whole-token hit there). Self project names and the self github owner are never in the digest list. Stated risk: an unsalted SHA-256 of a public GitHub organisation or repository name can be confirmed by guessing; the digests make a leak detectable, they do not keep the names secret. A keyed hash would need a secret on CI, which this task does not add; the dispatch card states this for the captain.",
+    "Tests, new behaviour (each fails on the base commit and passes after). (a) tests/external-private-text.test.sh fixture cases of Change 4 (the digest check does not exist on base). (b) A new suite tests/private-names.test.sh: the helper's `names` on a fixture registry with one external project and an owners file returns the name, the pair, the repository, the owner and the owner stem, and excludes the self owner; `update` adds digests and never removes or prints names. (d) In tests/onboard-register.test.sh: `fm-project.sh add … --answers` on a temporary engine adds the new project's digests to that engine's digest file and prints the stderr message; with the digest path made unwritable, add still exits 0 and prints the not-updated message. (f) In tests/private-names.test.sh: `update --name-stdin` merges the digest of an extra name and its stdout and stderr never contain that name. (e) In tests/private-names.test.sh: a self owner and an owners-file stem that differ from it only by letter case are both excluded. (c) The repository check: on the task head the digest scan over every tracked file passes with the committed digest file (on base the fixtures and specs contain the names, so the same scan fails).",
+    "Tests, regression (pass on base and after). tests/onboarding.test.sh, tests/onboard-remote.test.sh, tests/conventions-watch.test.sh and tests/e2e/board-chips.spec.ts keep every assertion with the neutral identities; tests/onboard-register.test.sh (:35), tests/onboard-cli.test.sh (:21) and tests/onboard-remote.test.sh (:36) reach register() through `fm-project.sh add … --answers` in temporary engines; they keep passing because update creates the missing digest file there; no edit to them is needed beyond Change 1.",
+    "Callers, all listed. The fixture strings are read only inside their own suites: tests/lib/onboarding/gh.py is invoked by tests/onboarding.test.sh and tests/onboard-remote.test.sh as the fake gh; repository.json is loaded by gh.py, onboarding.test.sh `payload('repository')` and tests/conventions-watch.test.sh (:3,32), and named only in comments by tests/project.test.sh:207 and tests/conventions-publication.test.sh:65; bin/lib/fm_onboard.py:64 compares its full_name with the requested repository, so the new identity is the same in repository.json, gh.py and every `add` argument. `register()` is called from fm_onboard.py main (add/approve path); in-process by tests/conventions-watch.test.sh:74 (`O.main(['add', …, '--answers', …])`, FM_HOME set to a temporary directory at :37, so update writes only inside the temporary engine) and through the CLI by tests/onboard-register.test.sh:35, tests/onboard-cli.test.sh:21 and tests/onboard-remote.test.sh:36. Nothing else reads the old spec prose. The digest file is read only by tests/external-private-text.test.sh and written only by fm_private_names.py.",
+    "Migration. The first dispatch of this task needs the digest file content: firstmate runs `python3 bin/lib/fm_private_names.py update --repo <engine root>` on its machine, checks that the file has digests only, and records it in the round brief. Old checkouts keep working; nothing stored changes format.",
+    "Docs. design/design.md §15.2 in place (:5080-5085): the registry routing entry stays an uncommitted local change and never reaches main, and the guard scans the committed content of every tracked text file through committed digests; skills/firstmate/SKILL.md: after onboarding, commit the updated digest file through a task PR, and the history rewrite is a separate captain-approved step."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "No committed firstmate file names an external organisation, repository or project."
+        },
+        {
+          "kind": "fact",
+          "text": "The privacy guard catches a new leak on CI, without the names in the repository."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "Old onboarding fixtures and old task specs contain real external names."
+        },
+        {
+          "kind": "fact",
+          "text": "The guard reads names only from the local registry, so CI finds nothing."
+        }
+      ],
+      "scope_in": [
+        "onboarding fixtures and the board chip fixture",
+        "old task specs",
+        "the private-text guard, a digest file and a helper"
+      ],
+      "scope_out": [
+        "the git history rewrite",
+        "build files of the voyage game"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the fixtures use neutral identities, and the old specs use neutral phrases. The digest scan over every tracked file proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the guard hashes every token of every tracked text file and compares it with committed digests. New fixture cases prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Firstmate rewrites the git history in a separate step after this merges."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Guard reads local registry names"
+        },
+        {
+          "state": "gone",
+          "label": "Guard greps docs and code only"
+        },
+        {
+          "state": "gone",
+          "label": "CI has no names to check"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Guard reads local registry names"
+        },
+        {
+          "state": "new",
+          "label": "Guard hashes every tracked token"
+        },
+        {
+          "state": "new",
+          "label": "CI compares committed digests"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "firstmate 提交的檔案不寫外部組織、repo 或專案名稱。"
+        },
+        {
+          "kind": "fact",
+          "text": "隱私檢查在 CI 上也能抓到新的外洩，repo 裡不存名稱本身。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "舊的 onboarding fixture 和舊任務 spec 含有真實的外部名稱。"
+        },
+        {
+          "kind": "fact",
+          "text": "檢查只從本機登記表讀名稱，所以 CI 上什麼都找不到。"
+        }
+      ],
+      "scope_in": [
+        "onboarding fixture 和看板 chip fixture",
+        "舊任務 spec",
+        "隱私檢查、digest 檔和輔助程式"
+      ],
+      "scope_out": [
+        "改寫 git 歷史",
+        "航程遊戲的建置檔"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：fixture 改用中性名稱，舊 spec 改用中性說法。掃描所有追蹤檔案證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：檢查把每個追蹤檔的每個詞做雜湊，再和提交的 digest 比對。新的測試案例證明這點。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "合併後由 firstmate 另外改寫 git 歷史。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "檢查讀本機登記表名稱"
+        },
+        {
+          "state": "gone",
+          "label": "只掃文件和程式碼"
+        },
+        {
+          "state": "gone",
+          "label": "CI 上沒有名稱可比"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "檢查讀本機登記表名稱"
+        },
+        {
+          "state": "new",
+          "label": "雜湊每個追蹤的詞"
+        },
+        {
+          "state": "new",
+          "label": "CI 比對提交的 digest"
+        }
+      ]
+    }
+  }
+}
