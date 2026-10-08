@@ -86,6 +86,8 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 #crewSheet .roster .rows{max-height:none;overflow:visible}
 #crewSheet .roster li.rrow{height:auto;max-height:none;overflow:visible}
 #crewSheet .roster :is(.nm,.jb,.tk,.tt,.st,.rl,.pj,.rd,.rv,.rm,.rc,.rpr,.cwindow,.att,.rsort,.rcol){font-size:15px;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;min-width:0}
+/* A project chip stays one line (ship.css); its column is sized to hold it whole. */
+#crewSheet .roster .pj.pchip{justify-self:start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
 #logSheet .logwrap{padding:16px 20px;width:100%;box-sizing:border-box}
 #logSheet .log{max-height:none;overflow:visible}
 .pager{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;padding:12px 0;font-size:15px}
@@ -107,12 +109,20 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
   .lanes-wrap #taskDetail{position:relative;top:auto;max-height:none;overflow:visible}
   .task-detail .detail-toolbar{top:var(--task-detail-top,64px)}
   .detail-back{display:inline;margin-right:8px}
+  /* One compact row keeps the first decision card in the phone's first screen. */
+  #boardnav{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:6px 8px 0}
+  #tabs{flex:0 1 auto;min-width:0;padding:0;gap:4px}
+  #secbar{flex:1 1 auto;min-width:0;flex-wrap:nowrap;gap:4px;padding:0;font-size:13px}
+  #tabs button,#secbar button{min-height:36px;padding:4px 8px;font-size:13px}
+  #tabs .badge{margin-left:4px;padding:0 4px}
+  #secbar .aboard{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #latestEvent{flex:1 1 0;width:0}
 }
 
 @media(min-width:760px){
-  #crewSheet .roster :is(.rhead,li.rrow){grid-template-columns:8px minmax(0,1fr) minmax(0,.7fr) minmax(0,1fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,2.6fr)}
+  #crewSheet .roster :is(.rhead,li.rrow){grid-template-columns:8px minmax(0,1fr) minmax(0,.7fr) minmax(min-content,1fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,2.6fr)}
 }
 
 @media(min-width:1100px){
-  #crewSheet .roster :is(.rhead,li.rrow){grid-template-columns:8px minmax(0,1fr) minmax(0,.7fr) minmax(220px,1.6fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,2.6fr)}
+  #crewSheet .roster :is(.rhead,li.rrow){grid-template-columns:8px minmax(0,1fr) minmax(0,.7fr) minmax(min-content,1.6fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,2.6fr)}
 }

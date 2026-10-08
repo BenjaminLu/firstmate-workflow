@@ -183,7 +183,7 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
       const s=getComputedStyle(document.documentElement);
       return ['brass','warn','wait','ok','bad','accent','fg','fg2','fg3'].map(k=>s.getPropertyValue('--'+k).trim().toUpperCase());
     })).toEqual(['#7A5600','#8A4B00','#6B2FA0','#1E6B47','#B3261E','#1D4F91','#10233B','#5B6B7A','#5B6B7A']);
-    const result=await page.evaluate(()=>{
+    const sweep=(selector:string)=>page.evaluate((selector)=>{
       const rgba=(s:string):number[]=>{
         if(s.startsWith('#')) return [...s.slice(1).match(/../g)!.map(v=>parseInt(v,16)),1];
         const v=s.match(/[\d.]+/g)!.map(Number); return [v[0],v[1],v[2],v[3]??1];
@@ -191,7 +191,7 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
       const over=(a:number[],b:number[])=>[...a.slice(0,3).map((v,i)=>v*a[3]+b[i]*(1-a[3])),1];
       const lum=(c:number[])=>c.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((s,v,i)=>s+v*[.2126,.7152,.0722][i],0);
       const failures:string[]=[];let checked=0;
-      const roots=document.querySelectorAll('.top,#readOnly,.counts,#deckwrap,#shipregion,.logwrap');
+      const roots=document.querySelectorAll(selector);
       for(const root of roots) for(const el of [root,...root.querySelectorAll('*')]) {
         if(!(el instanceof HTMLElement) || !el.checkVisibility() || ![...el.childNodes].some(n=>n.nodeType===Node.TEXT_NODE && n.textContent?.trim())) continue;
         // Frames are separate documents; the voyage bar is outside these roots.
@@ -208,7 +208,13 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
         checked++;if(ratio<4.5) failures.push(`${el.tagName}.${el.className} ${el.textContent?.trim().slice(0,60)}: ${ratio.toFixed(2)}`);
       }
       return {checked,failures};
-    });
+    },selector);
+    // each sheet's region is swept while its sheet is open, so its text is measured, not skipped
+    const crewPass=await sweep('.top,#readOnly,.counts,#deckwrap,#shipregion');
+    await openLogSheet(page);
+    const logPass=await sweep('.logwrap');
+    expect(logPass.checked).toBeGreaterThan(0);
+    const result={checked:crewPass.checked+logPass.checked,failures:[...crewPass.failures,...logPass.failures]};
     expect(result.checked).toBeGreaterThan(60);
     expect(result.failures).toEqual([]);
   } finally {await stopBoard(b);}

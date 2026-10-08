@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard } from './lib/fixture';
-import { showFleet, openCrewSheet, openLogSheet } from './lib/board';
+import { EN, showFleet, openCrewSheet, openLogSheet } from './lib/board';
 
 test('tabs, sheets and Fleet detail preserve focus and responsive reading', async ({page}) => {
   const board = await startBoard(makeRoot(['working','review']));
@@ -21,10 +21,18 @@ test('tabs, sheets and Fleet detail preserve focus and responsive reading', asyn
     await expect(panel).toBeVisible();
     const list=(await page.locator('#lanes').boundingBox())!, detail=(await panel.boundingBox())!;
     expect(detail.x).toBeGreaterThanOrEqual(list.x+list.width);
+    // the pane's close control is named for what it does at each width, also when the width changes while it is open
+    const close=panel.locator('[data-close-task]');
+    await expect(close).toHaveAccessibleName(EN.detailClose);
+    await page.setViewportSize({width:390,height:844});
+    await expect(close).toHaveAccessibleName(EN.sheetBack);
+    await page.setViewportSize({width:1440,height:900});
+    await expect(close).toHaveAccessibleName(EN.detailClose);
     await page.keyboard.press('Escape');
     await expect(panel).toBeHidden(); await expect(card).toBeFocused();
     await card.click(); await openCrewSheet(page);
-    await expect(panel).toBeHidden();
+    // closed, not merely covered: the detail's own hidden state and the list's two-pane class are gone
+    await expect(panel).toHaveAttribute('hidden',''); await expect(page.locator('.lanes-wrap')).not.toHaveClass(/has-detail/);
     await expect(page.locator('#crewSheet')).toHaveAttribute('aria-modal','true');
     await expect(page.locator('#roster .rrow').first()).toBeVisible();
     expect((await page.locator('#crewSheet').boundingBox())!.width).toBeCloseTo(1440*.96,0);
@@ -37,7 +45,8 @@ test('tabs, sheets and Fleet detail preserve focus and responsive reading', asyn
     await card.scrollIntoViewIfNeeded();
     const scroll=await page.evaluate(()=>scrollY);
     await card.click(); await expect(page.locator('#lanes')).toBeHidden();
-    await panel.getByRole('button',{name:'Back'}).click(); await expect(card).toBeVisible();
+    await expect(close).toHaveAccessibleName(EN.sheetBack);
+    await panel.getByRole('button',{name:EN.sheetBack}).click(); await expect(card).toBeVisible();
     expect(await page.evaluate(()=>scrollY)).toBeCloseTo(scroll,0);
     await openCrewSheet(page);
     expect((await page.locator('#crewSheet').boundingBox())!.width).toBe(390);
@@ -116,12 +125,12 @@ test('sheets and tab changes close Fleet detail without stealing decision Escape
     await page.locator('#lanes .card').first().click();
     await expect(page.locator('#taskDetail')).toBeVisible();
     await page.locator('#tabDecisions').click();
-    await expect(page.locator('#taskDetail')).toBeHidden();
+    await expect(page.locator('#taskDetail')).toHaveAttribute('hidden',''); await expect(page.locator('.lanes-wrap')).not.toHaveClass(/has-detail/);
     await expect(decision).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(decision).toBeHidden(); await expect(button).toBeFocused();
     await showFleet(page); await page.locator('#lanes .card').first().click();
-    await openLogSheet(page); await expect(page.locator('#taskDetail')).toBeHidden();
+    await openLogSheet(page); await expect(page.locator('#taskDetail')).toHaveAttribute('hidden',''); await expect(page.locator('.lanes-wrap')).not.toHaveClass(/has-detail/);
     await page.locator('#logSheet [data-sheet-close]').click();
     await expect(page.locator('#logBtn')).toBeFocused();
     await page.locator('#voyage-toggle').click();

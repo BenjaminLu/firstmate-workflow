@@ -58,6 +58,8 @@ test('a refused merge names its decision and task, and clears once that task mer
     await expect(page.locator('#roster .rrow').first()).toBeVisible();
     await page.locator('#crewSheet [data-sheet-close]').click();
     await expect(page.locator('#orderFeedback')).not.toContainText(EN.mergeRefused);
+    // the empty deck is read on the Decisions page, where it would show
+    await expect(page.locator('#decisionsPanel')).toBeVisible();
     await expect(page.locator('#deckwrap')).toBeHidden();
   } finally {await stopBoard(b);}
 });

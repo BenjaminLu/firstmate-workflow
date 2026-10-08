@@ -1864,11 +1864,14 @@ event. Crew and log start closed and open as modal dialogs, with titled headers,
 close buttons and Escape dismissal; focus returns to the opener. Opening a
 sheet or switching tabs first closes Fleet detail. A sheet takes Escape before
 a decision details sheet, and prevents the voyage's double-Escape gesture.
-Roster rows and log lines do not open task details.
+Roster rows and log lines do not open task details. Below 760px the tabs and
+the summary bar share one compact row, so the first decision card stays in
+the phone's first screen; the latest event shortens to fit that row.
 
 Both sheets are 96vw wide, capped at 1480px; the log is 80vh tall. Below 760px
 they fill the width. The crew sheet uses 15px text and uncapped row heights,
-with readable names, tasks and columns; below 760px each member is a stacked
+with readable names, tasks and columns; a project chip stays on one line
+and its column is as wide as the chip; below 760px each member is a stacked
 block without horizontal scrolling. Opening crew sets `SHIP.rosterOn` true;
 legacy `board.roster=hidden` no longer hides its rows, and the board never
 writes that key. Sort and grouping preferences remain unchanged.
@@ -1893,8 +1896,10 @@ task detail panel (T-230); another card replaces it. Close or Esc returns focus
 to its card. Menu buttons, PR links and dragging do not open the panel. It is a
 sibling of `#lanes`, outside the patched tree, and stays open through state
 updates. At 760px and above, Fleet places the list on the left and `#taskDetail`
-on the right without an overlay. Below 760px detail replaces the list with a
-Back control that restores its scroll position. Escape closes detail only
+on the right without an overlay, and its close control keeps the name "Close
+task detail". Below 760px detail replaces the list, and the same control is a
+visible Back, named Back, that restores the list's scroll position; its name
+follows the width while detail is open. Escape closes detail only
 when no crew or log sheet is open. Ready and finished tasks, including history cards, use the same panel.
 
 The panel reads GET `/api/task?project=<name>&id=<T-or-SK-id>&lang=<locale>`.

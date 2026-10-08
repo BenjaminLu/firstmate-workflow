@@ -296,11 +296,13 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <span id="reloginSaid" aria-live="polite"></span></div>
 <div class="counts" id="counts"></div>
 <p id="watch" role="status" data-watch=""></p>
+<nav id="boardnav">
 <div id="tabs" role="tablist">
   <button id="tabDecisions" role="tab" aria-controls="decisionsPanel" aria-selected="true"><span></span><span class="badge" hidden></span></button>
   <button id="tabFleet" role="tab" aria-controls="fleetPanel" aria-selected="false"></button>
 </div>
 <div id="secbar"><button id="rosterBtn" aria-haspopup="dialog" aria-controls="crewSheet"></button><span class="aboard"></span><button id="logBtn" aria-haspopup="dialog" aria-controls="logSheet"></button><span id="latestEvent"></span></div>
+</nav>
 <section id="decisionsPanel" role="tabpanel" aria-labelledby="tabDecisions">
 <section id="deckwrap" style="padding:0 20px" hidden>
   <h2 style="margin:16px 0 10px;font:600 13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
@@ -1044,6 +1046,11 @@ let detailTrigger = null;
 let openTaskKey = null, detailState = null, detailData = null, detailRequest = 0;
 const expandedAcceptance = new Set();
 const detailPanel = document.getElementById('taskDetail');
+// From 760px up the pane keeps its close control; below, the same control is the visible Back.
+const phoneDetail = matchMedia('(max-width:759px)');
+const detailCloseName = () => t(phoneDetail.matches ? 'sheetBack' : 'detailClose');
+const detailToolbar = () => `<div class="detail-toolbar"><button data-close-task aria-label="${esc(detailCloseName())}"><span class="detail-back">${esc(t('sheetBack'))}</span><span aria-hidden="true">×</span></button></div>`;
+phoneDetail.addEventListener('change', () => detailPanel.querySelector('[data-close-task]')?.setAttribute('aria-label', detailCloseName()));
 const positionTaskDetail = () => detailPanel.style.setProperty('--task-detail-top', Math.max(0, Math.ceil(document.querySelector('.top').getBoundingClientRect().bottom)) + 'px');
 new ResizeObserver(positionTaskDetail).observe(document.querySelector('.top'));
 window.addEventListener('scroll', positionTaskDetail, { passive: true });
@@ -1061,7 +1068,7 @@ function closeTaskDetail() {
     card?.focus();
   }
   detailTrigger = null;
-  if (key && matchMedia('(max-width:759px)').matches) window.scrollTo(0, fleetScroll);
+  if (key && phoneDetail.matches) window.scrollTo(0, fleetScroll);
 }
 function openTaskDetail(key, trigger) {
   if (!openTaskKey) fleetScroll = window.scrollY;
@@ -1071,7 +1078,7 @@ function openTaskDetail(key, trigger) {
   positionTaskDetail();
   detailPanel.hidden = false;
   document.querySelector('.lanes-wrap').classList.add('has-detail');
-  detailPanel.innerHTML = `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('sheetBack'))}"><span class="detail-back">${esc(t('sheetBack'))}</span><span aria-hidden="true">×</span></button></div><p role="status">${esc(t('detailLoading'))}</p>`;
+  detailPanel.innerHTML = `${detailToolbar()}<p role="status">${esc(t('detailLoading'))}</p>`;
   detailPanel.querySelector('[data-close-task]').focus();
   refreshTaskDetail();
 }
@@ -1092,7 +1099,7 @@ async function refreshTaskDetail() {
     detailData = data; drawTaskDetail();
   } catch {
     if (request !== detailRequest || key !== openTaskKey) return;
-    detailPanel.innerHTML = `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('sheetBack'))}"><span class="detail-back">${esc(t('sheetBack'))}</span><span aria-hidden="true">×</span></button></div><p role="status">${esc(t('detailUnavailable'))}</p>`;
+    detailPanel.innerHTML = `${detailToolbar()}<p role="status">${esc(t('detailUnavailable'))}</p>`;
   }
 }
 function drawTaskDetail() {
@@ -1117,7 +1124,7 @@ function drawTaskDetail() {
   const headline = translatedTitle ? (colon < 0 ? translatedTitle : translatedTitle.slice(0,colon)) : task.headline;
   const detail = translatedTitle ? (colon < 0 ? '' : translatedTitle.slice(colon+1)) : task.detail;
   const wasClose = document.activeElement?.hasAttribute('data-close-task');
-  SHIP.patch(detailPanel, `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('sheetBack'))}"><span class="detail-back">${esc(t('sheetBack'))}</span><span aria-hidden="true">×</span></button></div>` +
+  SHIP.patch(detailPanel, `${detailToolbar()}` +
     `<header class="intent-header" style="padding:16px"><div class="detail-meta"><span class="badge s-${esc(task.stage)}">${esc(laneLabel(task.stage))}</span><b>${esc(task.id)}</b>${task.project ? chip(task.project) : ''}${task.pr ? prRef(task.pr,task.pr_url) : ''}` +
     (typeof steOk === 'boolean' ? `<span class="ste-pill">${esc(t(steOk ? 'detailStePass' : 'detailSteFail'))}</span>` : '') +
     `</div><h3 id="taskDetailTitle">${esc(headline)}</h3>${detail ? `<p>${esc(detail)}</p>` : ''}<p>${esc(t('detailCi'))}: ${esc(checks || t('detailNoReadiness'))}</p></header>` +
