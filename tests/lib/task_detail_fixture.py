@@ -6,8 +6,27 @@ from ste_cases import card
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'bin/lib'))
 from fm_evidence import Store
+
+def external_review(store, path='src/x.py'):
+    head = 'a'*40
+    store.append('external-verdict', 1, 'github', head, 'BEGIN EXTERNAL BODY',
+        ready=False, blockers=['Rev requested changes'],
+        states={name:dict(state=state, reviewed_head=head if covers else 'b'*40,
+                          covers=covers, review={'body':'SECRET-EXTERNAL-BODY'})
+                for name, state, covers in [('Rev','CHANGES_REQUESTED',True),
+                    ('Bot','APPROVED',False), ('Commenter','COMMENTED',True),
+                    ('Waiting','UNKNOWN',False)]},
+        findings=[dict(id=1, reviewer='Rev', path=path, line=9, reviewed_head=head,
+                       resolved=False, body='SECRET-EXTERNAL-BODY', url='https://private'),
+                  dict(id=2, reviewer='Bot', path=None, line=None, reviewed_head='b'*40,
+                       resolved=True, body='SECRET-EXTERNAL-BODY')])
+
 root, state, project = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 external = project != 'self'
+if len(sys.argv) > 4 and sys.argv[4] == '--external-review-only':
+    external_review(Store(state, project, 'T-001', external=True), sys.argv[5])
+    sys.exit(0)
+
 tasks = state.parent/'tasks' if external else root/'design/tasks'
 tasks.mkdir(parents=True, exist_ok=True)
 fields = ('intent','why','done','scope_in','scope_out','notes','before_nodes','after_nodes')
@@ -38,3 +57,8 @@ archive.mkdir(parents=True, exist_ok=True)
 
 # T-232: the same projection for a new name-list record on the pending task.
 Store(state,project,'T-001',external=external).append('readiness',1,'firstmate','a'*40,'',gate_base='c'*40,gates=['branch','rebase','scope','fail-first','ci','approval'],checks=[{'name':'ci','conclusion':'SUCCESS'}])
+
+# Both stores have a record: the self response must still suppress the section.
+store.append('external-verdict', 1, 'github', 'b'*40, 'BEGIN OLD EXTERNAL BODY',
+             ready=True, blockers=[], states={}, findings=[])
+external_review(store)
