@@ -1887,11 +1887,11 @@ percentages. The regions below are that layout.
 |---|---|
 | Header | brand, the engine badge, green-light state, the theme toggle and the language switch |
 | Sea header | merged / in flight / waiting on you / blocked / ready / backlog; waiting on you is the number of pending decisions |
-| Decision deck | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place; each card and strip starts with a coloured kind badge (T-227) |
+| Decisions tab | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place; each card and strip starts with a coloured kind badge (T-227) |
 | Voyage | the 2.5D stage (T-125) is the only ship view; crew, captain, handoffs and merge salvos live there |
-| Crew roster | separate field columns, shown by default and toggled from its own bar |
-| Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
-| Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl`, with a Load older control below the live list |
+| Summary bar | crew button with aboard count, and log button with the latest event; each opens a modal sheet |
+| Fleet tab | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
+| Log sheet | tri-lingual summaries from `events.jsonl`, with a Load older control and client pages of 12 lines |
 
 **Shell themes and stage (T-241).** `board.css`, loaded after the inline style,
 provides one token system. `board.js` sets `html[data-theme]` from `board.theme`
@@ -1934,7 +1934,39 @@ margins, is at most 160px tall so the first card starts within an 844px viewport
 The size control is hidden in full and hidden modes. Full mode always fills
 the screen and restores the panel size on exit; existing mode/hidden keys,
 drawer homes and Escape handling stay intact. Reduced motion disables the
-size transition. Cards and sheets are separate tasks T-245 and T-246.
+size transition. The captain cards retain their T-245 layout.
+
+**Tabs and sheets (T-246).** Below the pinned voyage, `#tabs` is a tablist
+with Decisions and Fleet at the same level. Decisions holds `#deckwrap` and
+`#capstage`; Fleet holds the full-width `.lanes-wrap`, including parked cards,
+the drop target and confirmation, and history. Decisions shows the pending
+count when positive. On load, any pending card selects Decisions; otherwise
+`board.tab` restores the viewer's choice, defaulting to Decisions. Storage
+failures leave session navigation working. The game keeps its region homes
+inside these panels when moving workflow regions into and out of its drawer.
+
+`#secbar` holds the crew button and aboard count plus the log button and latest
+event. Crew and log start closed and open as modal dialogs, with titled headers,
+close buttons and Escape dismissal; focus returns to the opener. Opening a
+sheet or switching tabs first closes Fleet detail. A sheet takes Escape before
+a decision details sheet, and prevents the voyage's double-Escape gesture.
+Roster rows and log lines do not open task details. Below 760px the tabs and
+the summary bar share one compact row, so the first decision card stays in
+the phone's first screen; the latest event shortens to fit that row.
+
+Both sheets are 96vw wide, capped at 1480px; the log is 80vh tall. Below 760px
+they fill the width. The crew sheet uses 15px text and uncapped row heights,
+with readable names, tasks and columns; a project chip stays on one line
+and its column is as wide as the chip; below 760px each member is a stacked
+block without horizontal scrolling. Opening crew sets `SHIP.rosterOn` true;
+legacy `board.roster=hidden` no longer hides its rows, and the board never
+writes that key. Sort and grouping preferences remain unchanged.
+
+History retains its closed default and its open state across renders. Its
+client pages show 12 cards, parked pages show 6, and log pages show 12 across
+the live and loaded older lists. Each pager has first, previous, next and a
+position label. Load older still appends events with the existing cursor API;
+paging changes display only.
 
 **Engine badge (V7).** The server reads `config.yaml` on every state request —
 the top-level `vendor`, and `reviewer.vendor` when that block exists — and the
@@ -1949,8 +1981,12 @@ no badge.
 task detail panel (T-230); another card replaces it. Close or Esc returns focus
 to its card. Menu buttons, PR links and dragging do not open the panel. It is a
 sibling of `#lanes`, outside the patched tree, and stays open through state
-updates. Below 760px it fills the width below the header with a sticky close
-control. Ready and finished tasks, including history cards, use the same panel.
+updates. At 760px and above, Fleet places the list on the left and `#taskDetail`
+on the right without an overlay, and its close control keeps the name "Close
+task detail". Below 760px detail replaces the list, and the same control is a
+visible Back, named Back, that restores the list's scroll position; its name
+follows the width while detail is open. Escape closes detail only
+when no crew or log sheet is open. Ready and finished tasks, including history cards, use the same panel.
 
 The panel reads GET `/api/task?project=<name>&id=<T-or-SK-id>&lang=<locale>`.
 An absent or empty project selects the default, including a nameless self
@@ -1959,7 +1995,12 @@ open like `/api/state`. It joins that project's spec, pending and answered
 cards (not withdrawn archives), planned unique `test/` and `tests/` paths from
 acceptance then scope, readiness and round metadata. Evidence comes only through
 `fm_evidence.py summary`, which verifies `Store.records()` before projecting
-metadata and the latest brief's first line. No report/verdict body, readiness
+metadata and the latest brief's first line. External tasks also receive the
+latest `external-verdict` summary as `external_review`: ready, bounded blockers,
+reviewer states, reviewed heads and covers flags, plus finding ids, reviewers,
+paths, lines, reviewed heads and resolved flags. Each finding marks whether it
+belongs to the record head. Nested allowlists omit review text and bodies;
+self tasks always return null. No report/verdict body, readiness
 `review`, session data or credentials enter the response. A failed evidence read
 leaves readiness/brief null and event-only rounds with null heads, plus a bounded
 error note. The evidence namespace is the project name, default name, or `self`.
@@ -1969,7 +2010,14 @@ The detail header shows lane, identity, project, PR, checks and the chosen
 source's stored STE status. It then uses `intentBody` in its existing order:
 intent, how, alignment, scope, notes; followed by Spec, Tests with readiness,
 and Progress with round actors/vendors/heads/verdicts, card choices and No-texts,
-and the brief headline. The newest dispatch/repin/merge card with details wins;
+and the brief headline. External review metadata adds a section with reviewer
+state badges, patch coverage, finding locations, current-head and resolution
+labels, without bodies. An external task has a project different from the
+state's default project; only its detail signature includes the current minute.
+An unchanged external panel refreshes at most once a minute on the next state
+event. Evidence writes alone do not change the state stamp or trigger an event.
+Self detail signatures and sections stay unchanged.
+The newest dispatch/repin/merge card with details wins;
 otherwise the spec explain supplies the explanation. Legacy sources without a
 report show no STE badge; absent explanations and records have explicit empty
 notes. The diagram appears only when its locale file exists. Acceptance lines
@@ -2315,9 +2363,10 @@ Chinese:
 **Roster.** Each row carries the crew name, role, project, vendor, model,
 CLI version, round and attempt, state and pull request, with the task id,
 title and authored activity. A bar appears only for bounded `{done,total}`
-progress; no percentage is shown. The roster has its own bar with the crew
-count against the server's deck limit and a toggle. Its visibility remains
-in `board.roster`; there are no AHOY or order demonstrations.
+progress; no percentage is shown. The summary bar shows the crew count against
+the server's deck limit and opens the crew sheet. It starts closed, ignores
+legacy `board.roster` visibility, and never writes that key; there are no AHOY
+or order demonstrations.
 
 ### The ship
 
@@ -2363,8 +2412,8 @@ and title. A card header stays one line high: the task id never wraps or
 shrinks, and the project chip is a one-line pill that truncates, or moves to
 its own line in a narrow card. Header buttons sort the sortable columns; CLI
 is a non-sortable header. A toggle groups rows by project. Both choices survive reload through
-`board.rosterSort` and `board.rosterGroup`. On phones the same labelled cells
-wrap across three lines. Task cards keep their separate name, role and round
+`board.rosterSort` and `board.rosterGroup`. Below 760px the same labelled cells
+stack in one readable block per member without horizontal scrolling. Task cards keep their separate name, role and round
 chips. There are no deck tags, detail cards, hover, tap or figure-drag controls.
 
 **What the round actually ran on, read from the run itself, never guessed
@@ -4195,7 +4244,7 @@ in `bin/fm-config.sh`:
 | vendor | its login, read by fm outside the round | handed in as | what of its own the round opens | temp | mach services |
 |---|---|---|---|---|---|
 | claude | a `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is; else the crew's own long-lived token (T-126), made once with `claude setup-token`: macOS keychain item `firstmate-claude-token`, account the operator's user; else, when `secret-tool` is on the operator's PATH, the libsecret item `firstmate-claude-token`/account the operator's user (T-126 round 2, Linux's rough equivalent of the keychain; its absence is skipped, not refused); else `~/.config/firstmate/claude-token`, refused unless its mode is the operator's alone (600). Only with none of those does it fall back to the operator's own interactive login as before T-126 - macOS keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json` - field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`; that fallback warns, in the round's log and on the board, that the round can die when that login refreshes | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
-| cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message; with `AGENT_CLI_CREDENTIAL_STORE=memory`, so cursor keeps the login in memory and never in the keychain (plan B, 2026-10-05) | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
+| cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message; with a private short per-round `CURSOR_DATA_DIR` (§13.2) and `AGENT_CLI_CREDENTIAL_STORE=memory`, so cursor keeps the login in memory and never in the keychain (plan B, 2026-10-05) | nothing of `~/.config/cursor` or `~/.config/firstmate`; `CURSOR_DATA_DIR/projects` read and written in its private short directory; other Cursor files remain under the round HOME | the round's own | none |
 | codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is only when `config.yaml`'s `billing:` chose api-key for codex; otherwise the round sheds it (T-121) | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
 | gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is only when `config.yaml`'s `billing:` chose api-key for gemini; otherwise the round sheds it (T-121) | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
 
@@ -4379,7 +4428,7 @@ The vendors' own flags, against the proposal's section 4
 |---|---|---|---|
 | claude | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --settings`: file rules on the worktree and the round's TMPDIR, deny rules, the shell allowed | the same | its own sandbox is off, so the settings carry no `allowedDomains` (under the escape hatch it is on, with them). On macOS it is a seatbelt, which cannot be applied inside another. On Linux its commands would reach the network through claude's own proxy, which has no way out of the round's namespace and names no host it refuses. The registries are enforced by the OS layer's proxy instead |
 | codex | `--sandbox workspace-write` with its network switch on, `approval_policy="never"`, the scrub list as `shell_environment_policy.exclude`, `mcp_servers={}`, a `CODEX_HOME` of the round's own holding a copy of the login less its refresh token, so no user profile | `--sandbox danger-full-access` (a seatbelt cannot nest); the rest the same | the network switch is on because codex has only on and off, and off would keep its commands from the proxy |
-| cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps` | `--trust --sandbox disabled -f` (a seatbelt cannot nest) | on macOS `-f` comes back, inside the OS sandbox only: with its own sandbox off, a print-mode round approves no shell command, and the canary on 2026-09-26 saw cursor-agent sign in, exit 0 and never run its probe. The OS sandbox confines what `-f` lets through, as it does claude's shell; under the escape hatch there is no OS sandbox, so its own is on and `-f` is not passed. On Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
+| cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps`; private short `CURSOR_DATA_DIR` (§13.2) | `--trust --sandbox disabled -f` (a seatbelt cannot nest) | on macOS `-f` comes back, inside the OS sandbox only: with its own sandbox off, a print-mode round approves no shell command, and the canary on 2026-09-26 saw cursor-agent sign in, exit 0 and never run its probe. The OS sandbox confines what `-f` lets through, as it does claude's shell; under the escape hatch there is no OS sandbox, so its own is on and `-f` is not passed. On Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
 | gemini | `--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none` | the same | no `--sandbox`: it is a container or a seatbelt, neither of which starts inside the OS sandbox. `yolo`, not `auto_edit`: headless, `auto_edit` refuses every shell command, and the OS sandbox is what confines them. No `--policy` file: which gemini versions take one is unverified, and an unknown flag would fail every gemini round |
 
 **A blocked host.** The proxy records every host it refused to the round's
@@ -4665,8 +4714,8 @@ round it makes.
 `XDG_CONFIG_HOME` is the one exception, left exactly as the caller had it
 (round 4 review): a vendor's own config directory is already a separate,
 existing contract, set per adapter, not by a generic XDG variable here -
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, gemini's own `HOME`. cursor-agent has no
-config-directory variable of its own at all (its login is `CURSOR_API_KEY`);
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, gemini's own `HOME`. cursor-agent keeps its login in `CURSOR_API_KEY` and its project data in the
+separate `CURSOR_DATA_DIR` described below;
 overriding `XDG_CONFIG_HOME` here too would move it off wherever the
 caller's environment already put it, which
 `tests/adapter-contract.test.sh`'s "cursor-agent is handed no
@@ -4677,6 +4726,33 @@ default when `XDG_CONFIG_HOME` is unset) already moves with it for anything
 that falls back to that default; `tests/sandbox.test.sh` asserts the round is
 handed the caller's own `XDG_CONFIG_HOME` unchanged, next to the `HOME`/
 `XDG_CACHE_HOME`/`XDG_DATA_HOME` assertions above it.
+
+Cursor's project data needs a short path (T-219). Its bundle tries
+`$CURSOR_DATA_DIR/projects` (default `$HOME/.cursor/projects`), then the
+base itself if that exceeds 84 characters, then hard-coded `/tmp/.cursor`
+if the base also exceeds 84. The round's long HOME triggers that last
+fallback, which the sandbox correctly denies. After policy setup, the
+unconfined Cursor adapter creates a private, operator-owned mode 0700
+`/tmp/fmc.XXXXXX` directory with explicit `/tmp`, never the long TMPDIR.
+It installs exit cleanup immediately, before resolving the physical path;
+if allocation fails or the resolved path plus `/projects` exceeds 84
+characters, it refuses with exit 70. It exports this fixed `CURSOR_DATA_DIR`,
+overwriting any inherited value. `FM_ADAPTER_ARGS` supplies argv, not an
+environment override. The model-list preflight remains before allocation.
+
+Only sandbox `run` mode receives `--write=<cursor data>`; `plain` receives
+the variable without a write grant. Every exit, including the existing
+INT/TERM/HUP-to-EXIT paths, removes Cursor's directory alongside the round
+temp and control directories. No two rounds share project state, and
+neither `/tmp` as a whole nor `/tmp/.cursor` becomes a write root.
+`XDG_CONFIG_HOME`, other vendors' directories and the crew keychain denial
+keep their existing contracts.
+
+Existing rounds and sessions/autopilots retain their immutable code snapshots
+and need no restart. A new session snapshot containing this fix gives newly
+dispatched rounds the short Cursor path and the Codex classification below;
+retained `FM_CODE_ROOT` snapshots are never rewritten. No stored record, pin
+format or configuration migration is required.
 
 **The shell a vendor runs commands through (T-147).** The first codex
 worker round (T-146, 2026-09-29) stopped at once and changed nothing, and
@@ -4892,6 +4968,18 @@ against the service), not whether the service takes it, which is left to
 the round's own outage signatures. codex's and cursor-agent's plain-text
 answers are read with the same kind of phrase list the adapters use
 (`_FM_SIG`), narrowed to what a status check itself says.
+
+Codex's recorded “You’ve hit your usage limit” diagnostic is quota exhaustion
+(T-219). Both the adapter signature and auth-probe quota list match
+`hit your usage limit`, avoiding the apostrophe so literal U+2019 and its
+JSON `\u2019` escape both match. Managed Codex reads only `error` and
+`turn.failed` diagnostics for this classification; model and tool payloads
+remain non-diagnostic. A refusal returns adapter exit 2, so the existing
+fallback chain advances to the next vendor. Legacy whole-transcript scanning
+also recognizes the phrase and otherwise keeps its existing behavior.
+The auth probe reports `quota-exhausted`; launch eligibility requires a fresh
+probe, never the recorded historical reset date. Doctor's quota summary and
+its `try again at` reset-time parsing remain separate follow-up work.
 
 On macOS, only the cursor-agent model-list check runs through `sandbox-exec`
 (or `FM_SANDBOX_TOOL`), using a minimal allow-default profile with the same
@@ -5276,7 +5364,14 @@ no-remote bootstrap is explicit, not a pretend clone of a nonexistent remote.
 ### 15.2 Registry and conventions
 
 The engine registry carries only approved routing metadata, not private project
-contracts, designs or specs. Resolve external base, checks and gate contract
+contracts, designs or specs. External routing entries stay uncommitted local
+changes and never reach main. Onboarding updates
+`tests/fixtures/private-name-digests.txt`; commit that digest file through a task
+PR. The privacy guard scans the committed content of every tracked UTF-8 text
+file against these committed SHA-256 digests, even on CI without a local
+external registry. Digests detect leaks but allow guessed names to be confirmed;
+they are not secrecy protection. A history rewrite is a separate captain-approved
+operation after the cleanup merges. Resolve external base, checks and gate contract
 from approved private project records. Self retains T-043's full contract:
 `setup`, `check`, `check_env`, `tests`, `test`, `docs`, and future fields. T-050
 ships shell and Python readers for both the top-level `project:` block and
@@ -5308,8 +5403,9 @@ The same confirmation writes an initial private design.md beside it (T-226): fir
 The public engine registry carries routing only; command configuration is
 `FM_HOME/projects/<name>/state/config.yaml`. Onboarding inserts the routing entry
 into the existing `projects:` block, allowing a trailing comment on its header
-and refusing a second block. The entry is a working-tree change to the tracked
-`config.yaml` that reaches main only through a captain-approved pull request.
+and refusing a second block. The entry stays an uncommitted local change to the
+tracked `config.yaml` and never reaches main; only the updated
+`tests/fixtures/private-name-digests.txt` is committed through a task pull request.
 Existing explicit-name and self routing remain supported.
 
 The conventions front matter uses data-only fields (strings quoted as JSON;
@@ -5364,9 +5460,16 @@ retains and debounces drift proposals and pushes a bilingual wake to the queue
 served by its owning watcher. It never
 edits confirmed policy automatically. Chat edits report an exact diff and retain
 it privately. Workers and reviewers receive CONVENTIONS.md, and an fm review
-for review: external or both is only a pre-check. The captain's merge double
-check continues to own authenticated review, current-head checks/statuses and
-six-gate evidence.
+for review: external or both is only a pre-check. On mapped external PRs with
+those review policies, the autopilot refreshes existing private external evidence
+when a named reviewer posts a new changes-requested/commented review or comment,
+and queues one wake per endpoint and review/comment id. Edits wake again; old
+seen rows are not backfilled, and pending old reviewer batches flush once.
+Bodies stay in the private store. The autopilot requests `request_reviewers`
+on first sight of each mapped external PR and every new head, in every post
+mode; omission falls back to recorded reviewers and an empty list disables it.
+The captain's merge double check continues to own authenticated review,
+current-head checks/statuses and six-gate evidence.
 
 
 ### 15.3 Private project state and cleanup
@@ -5426,11 +5529,17 @@ adoption authority for workers, autopilot, bindings and merge ownership.
 Before a pin exists, readers use the private draft. Gates and review cover the
 whole PR from its own base, including the human commits. The external catch-up
 rule still applies: rebuilding under `force_with_lease: true` rewrites human
-commits on the same PR. Refuse closed PRs, forks, stacked PRs (T-239), protected
-head branches, changed bases, branch/title ownership conflicts, duplicate
-adoptions and history that lost the approved head before the first adopted
-push. A retarget needs a new spec and A card. Unreadable adoption authority
-blocks the affected PR while other tasks continue.
+commits on the same PR. Adopt a stacked PR's parent first and list its task in
+`depends_on`; confirmed `stacking: allowed` is required and re-checked on every
+binding of a managed stack. A restack of an adopted child counts as an adopted
+push. A retargeted child, or a child with no adopted push yet, must be restacked
+by the operator with a pinned adoption before catch-up. Refuse closed PRs,
+forks, protected head branches, changed bases except the verified restack
+transition after the parent merges, branch/title ownership conflicts,
+duplicate adoptions and history that lost the approved head before the first
+adopted push. A retarget needs a new spec and A card except for that verified
+restack transition. Unreadable adoption authority blocks the affected PR
+while other tasks continue.
 
 T-049 pins append-only snapshots of approved spec, design, conventions and full
 gate contract with SHA-256, project/task, approval author/time/decision, source
@@ -5728,6 +5837,13 @@ are read at round time, not pinned or copied into CONVENTIONS. Onboarding writes
 format fields only from the captain's explicit answers. Firstmate git holds no
 owner default file or real owner name.
 
+T-254 adds optional `request_reviewers`: a JSON list of at most 15 unique GitHub
+logins (case-insensitive uniqueness, with `[bot]` suffix permitted). Omission
+uses the recorded `reviewers`; `[]` disables requests. Onboarding discards
+inferred values and takes this field only from captain answers or explicit
+conventions edits. The existing policy question presents the recorded reviewers
+as the request recommendation, preserving the three-question contract.
+
 Preflight requires a valid `public_title`. With `pr_title: conventional`, it
 also requires a conventional subject such as `fix(api): deduct the fee`, with
 an optional author-supplied `[KEY-123] ` ticket prefix. Firstmate never invents
@@ -5898,8 +6014,13 @@ adding process startup after publishing a lifecycle boundary while the caller
 still holds its task lock. The service subscribes before
 reading durable offsets and reads local inputs only at startup and on pushed
 notifications. Only GitHub is polled, with endpoint ETags, confirmed convention
-cadence and bounded network backoff. Per-reviewer quiet periods batch findings;
-no idle timer invokes a model.
+cadence and bounded network backoff. Per-reviewer quiet periods batch findings,
+except named external reviewers under review `external` or `both`: each review
+or comment id has its own endpoint-qualified batch. A single private evidence
+refresh per pull precedes those wakes, which expose only readiness, short head
+and finding count. Fixed command/json/fields/stale-head failure classes each
+wake once per head, independently of advancement errors, and findings still
+wake with unknown evidence. No idle timer invokes a model.
 
 Self-project mechanical branch updates require an open, non-draft PR observed
 as mergeable and behind; unknown mergeability never authorizes a self update.
@@ -5919,8 +6040,11 @@ expected-head lease checks. Every new
 worker or base-update head runs gates. Gate 6 decides whether an approval
 carries, whether changed pinned inputs require review, or whether a new worker
 change needs a verdict. A current-head REJECT wakes firstmate for a brief and
-never relaunches a worker. Returning
-reviewers can receive policy-permitted re-check requests. Readiness holds for
+never relaunches a worker. Self-project returning reviewers can receive
+policy-permitted re-check requests. External projects request the confirmed
+`request_reviewers` (default: recorded reviewers) on first sight and every new
+head in all post modes, excluding the PR author case-insensitively. Readiness
+holds for
 firstmate's recommendation and evidence (§6); landing remains the captain's
 card or the team's handoff, never an autopilot merge.
 
@@ -5937,7 +6061,10 @@ PR events are decided by the event log alone: an event already in
 0, 1 and 3, then wakes once. Terminal PRs are marked finished immediately;
 `event_pending` retains an unfinished event write until success or the third
 failure, including after the PR leaves the recent-closures list. Reviewer
-re-check requests are recorded per PR head in `rechecked` and completed when
+re-check requests are recorded per PR head in `rechecked`. External records
+carry `rule: external-request`; missing records, old-rule records and changed
+heads start requests for the confirmed list. Each login is requested separately,
+so one refusal does not block the rest. Requests are completed when
 GitHub returns 201 or lists the reviewer as already requested, or the reviewer
 has reviewed that head. A 422 refusal wakes once with GitHub's message without
 retry; other failures retry at offsets 0, 1 and 3, then wake once.

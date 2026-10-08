@@ -1,0 +1,245 @@
+{
+  "id": "T-239",
+  "title": "an external task can adopt a stacked pull request that a person opened by hand: when the PR's base is the head branch of another open PR whose task the spec depends on and the conventions allow stacking, the adoption is accepted, stack selection finds the adopted parent, restack and parent release accept adopted branches, a restack of an adopted child, before or after GitHub retargets it, counts as a firstmate push, and the base change a restack makes is accepted",
+  "milestone": "M2",
+  "depends_on": [
+    "T-237"
+  ],
+  "acceptance": [
+    "Why. The captain (2026-10-07): \"這個問題應該只要每個PR能配置自己的base是什麼分支就可以解決. #164的base是#163, 表示這是一個stacked PR, 用stacked PR管理\". T-237 (merged, c085613) adopts a single PR on its own base and refuses a stacked one: bin/lib/fm_adopt.py check refuses at :107-109 (`stacked PR: adoption of a stacked PR is T-239`). This task manages an adopted stack with the existing stacking support (T-143: bin/lib/fm_stack.py select_base :50-66, release_parent :68-87, restack :88-204, main :207-255; the stacking policy in CONVENTIONS). Today every stacking path matches tasks by branch name: select_base by the `^<dep>-` prefix (:61), restack's child rule (:94, main :239-241) and its lock name (:245), and release_parent's parent rule (:71-72). A human branch matches none of these. And T-237's base rule (fm_adopt.base_matches :88-90, called by bin/lib/fm_binding.py required_checks :177 and main :347, with sync_base of adopt.base at :348) refuses any base other than adopt.base, so a child whose parent merged could never bind again.",
+    "Change 1, bin/lib/fm_adopt.py. (a) check (:98) no longer refuses every stacked PR (:106-109): a PR whose baseRefName is the head branch of another open same-repository PR is accepted only when CONVENTIONS `stacking: allowed` (read_policy, bin/lib/fm_conventions.py) and that parent PR resolves to a task (scan, or the grammar as check already calls it) listed in the adopting spec's depends_on (authorized_spec, :28-47); otherwise it refuses `stacked on an unmanaged PR #N or stacking not allowed: adopt the parent first, list its task in depends_on, and confirm stacking`. (b) New `effective_base(view, adopt, env, task, repository)` replaces base_matches (:88-90; base_matches stays as a thin wrapper for its existing callers and tests). It is the one place every binding reader goes through, and it enforces three rules: (1) stacking policy, for a managed stack only: when the base it returns is the head branch of an open same-repository PR (one `gh pr list --state open --head <base> --json number,headRefName,isCrossRepository` read) whose task (scan or grammar) is in the spec's depends_on, CONVENTIONS must say `stacking: allowed`; an open PR from that base whose task is not in depends_on (for example a release-to-main PR opened after the A card) does not trigger this rule, so binding readers keep T-237 behaviour for a single adoption; else it raises `stacked adopted PR requires confirmed stacking policy`; this is where the stacking policy is re-enforced after adoption, because required_checks skips its own stacking refusal for adopted PRs (bin/lib/fm_binding.py:191 is guarded by `not adopt`); (2) it returns adopt.base when baseRefName equals it; (3) restack transition: it returns baseRefName only when exactly one MERGED same-repository PR has headRefName == adopt.base (one `gh pr list --state merged --head <adopt.base> --json number,headRefName,baseRefName,isCrossRepository` read), that PR resolves to a task in the spec's depends_on, its baseRefName equals the current baseRefName, AND the task's event log (FM_STATE_DIR/events.jsonl, read as the `pushed` mode reads it at :167-178) holds a commit_pushed with data.restacked true and data.adopt_pr == adopt.pr; without that event it raises `parent merged; run bin/lib/fm-restack.sh for this PR first`. Anything else raises the existing base-changed message. So the worker, the gates, the review, required_checks and the merge all refuse a child that GitHub retargeted but nobody restacked; restack's boundary rule (bin/lib/fm_stack.py:124) is the only path that drops the squash-merged parent's commits. (c) New `pinned_adoption(env, task)`: the adopt dict only when it comes from a pin (`Pins(env, task).resolve(if_present=True)` is not None), else None; a draft-only adoption never authorizes a restack (Changes 3, 5). (d) check runs the stacked-parent rule of (a) first, then effective_base, so under `stacking: hold` a new stacked adoption is refused with `stacked on an unmanaged PR` wording extended to `... or stacking not allowed`; effective_base's own policy message (rule 1) is what later binding readers raise. check uses effective_base; main() (:179-189) passes the repository it already resolves (:182).",
+    "Change 2, bin/lib/fm_binding.py. required_checks (:177) and main (:347-348) call `fm_adopt.effective_base(view, adopt, os.environ, task, repo)` instead of base_matches, and main syncs that effective base (`fm_adopt.sync_base(root, repo, effective)`), never the deleted parent branch. So after a restack the worker's `fm_binding base` (bin/fm-worker.sh:568) and `fm_binding head` (:651), the gates, the review and the merge bind to the new base, and before the restack they all refuse (Change 1(b)). The stacking policy for an adopted PR is enforced in effective_base, not in required_checks (:191-192 stays guarded by `not adopt`).",
+    "Change 3, bin/lib/fm_stack.py. (a) select_base (:50-66) gains `adopted=None` (keeps the positional calls in tests/stacking_cases.py:119-144): for the one pending dependency it first takes the open same-repository PR that `adopted` maps to that task, then the `^<dep>-` prefix (:61). main() (:221-232) passes the inverse of fm_adopt.scan(os.environ)[0]. (b) restack: the child rule (:94; main :239-241) also accepts a child PR that scan maps to a task whose adoption is pinned (fm_adopt.pinned_adoption; a draft-only adoption refuses `adoption not pinned; restack needs the captain's A`), and main names the lock `.worker-<TASK>.lock` (:245) from that task. The child-base rule (:107) also accepts, for an adopted child, a base already equal to the merged parent's baseRefName (GitHub retargeted it); the `gh pr edit --base` (:164) is then a no-op and the post-check (:169) holds. Missing local ref: for an adopted child only, when refs/heads/<branch> is absent in the target root (no worker round has run, because every binding reader refused the retargeted child), restack first fetches the child's commits with `fetch_ref(root, url, 'refs/pull/<pr>/head')` (bin/lib/fm_binding.py fetch_ref, as :121 fetches the parent) and requires the fetched commit to equal expected, then creates the ref with `git update-ref refs/heads/<branch> <expected> ''` (create-only, after the existing check that GitHub's head equals expected, :97-98), so merge-base (:124) and worktree add (:129) find the objects instead of raising RestackStaleLocal at :99-104; a present ref that differs still raises RestackStaleLocal, as today. So the operator can restack a child that never had a round. Two adopted-restack guards, both before any rebase or push: the merged parent's headRefName must equal the pinned adopt.base (else `parent #N is not the adopted base`), and when the task has no adopted push yet (fm_adopt.pushed false), adopt.head must be an ancestor of or equal to `--expected-head` (else `approved adoption head is no longer an ancestor`), the same rule T-237's check applies, so a restack never turns a human history rewrite into a firstmate push. restack() returns `task` and `adopt_pr` in its result for an adopted child. (c) release_parent(root, repository, branch, expected, policy, adopted_branch=False) (:68): with adopted_branch true it accepts a parent branch that is not `t-NNN-` (:71-72); delete_branch, protection and no-open-child rules stay. restack (:183) passes adopted_branch when scan maps the merged parent PR to a task with a pinned adoption; the existing calls in tests/stacking_cases.py:350-373 keep the default.",
+    "Change 4, a restack counts as an adopted push. bin/lib/fm-restack.sh resolves the child's task once with `fm_adopt.py task-of --pr` before `fm_stack restack` (:23). Then: on exit 0, and on exit 69 (RestackPublished: the push succeeded and a later step failed, bin/lib/fm_stack.py:191, :255), it emits the existing `commit_pushed` type for that task and PR through bin/fm-emit.sh (:116 lists the type) with `--actor firstmate` and data `{\"restacked\":true,\"adopt_pr\":<child PR>}`, so the published head is recorded. On exit 71 (RestackPushUnknown, :160) it emits nothing and prints `restack push outcome unknown; check the PR head, then repin adopt.head with a new spec and A card`, because a head of unknown origin must not count as firstmate's push. fm_adopt.pushed (:93-95) and the autopilot catch-up guard (bin/lib/fm_autopilot.py:497-499) count the emitted event, so a completed or published restack before the first worker round never locks the task out. Other readers of commit_pushed, stated: bin/fm-ready.sh:142 counts it as a move, so a restack before the first round lists the adopted task as in flight (firstmate has pushed to its PR, so that is the intended state), bin/lib/fm_autopilot.py:656 forces the next poll, and board/server.ts:340 moves the card to the working lane; roleOf (:321-326) shows actor firstmate as the worker role: the head changed, so review and gates run again, which is the intended view; none of these files changes. The emit includes --pr <child> and bilingual summaries: --en \"<task> #<pr>: adopted child restacked\" and --tw \"<task> #<pr> 已重設接手子 PR 的基底\". Use only task id and PR number, never external branch names or titles. A task-of error, including duplicate adoption, stops fm-restack.sh before fm_stack restack. Capture fm_stack restack exit without set -e aborting; emit for 0 and 69, then preserve the original exit (0, 69 or 71). A failed emit prints \"restack published but event retention failed; synchronize the head and repin adoption before retry\" and returns 71, never success. Tests/stacking-restack.test.sh covers preserved 69, normal 0, original 71 with no emit, and failed emit returning 71 with recovery guidance.",
+    "Change 5, bin/lib/fm_autopilot.py. (a) Restack trigger: :564-565 skips every adopted PR (T-237). It now lets an adopted PR through only when its adoption is pinned (fm_adopt.pinned_adoption), the task already has an adopted push (fm_adopt.pushed, the same guard as catch-up at :499), and the merged closed parent found by the existing loop (:566-570) resolves (pr_task) to a task in the adopted spec's depends_on; outcomes per case: the found parent resolves to a task in depends_on but the adoption is draft-only or has no adopted push -> no restack, one `adopt-restack-<pr>` wake asking the operator to run bin/lib/fm-restack.sh; the found parent resolves to no task or to a task outside depends_on (an adopted PR on a long-lived branch from which an unrelated PR merged) -> silently skipped, no restack and no wake; no merged parent -> nothing, as today. So the autopilot never force-pushes a human branch that firstmate has not pushed to under a pinned adoption. The trigger fires only while the child still targets the parent branch; a child that GitHub already retargeted is restacked by the operator (bin/lib/fm-restack.sh), and every binding reader refuses it until then (Change 1(b)). (b) Catch-up guard (:497-499): for an adopted PR, can_update also requires `fm_adopt.effective_base({\"baseRefName\": pr[\"base\"][\"ref\"]}, fm_adopt.adoption(env, task), env, task, self.ctx[\"repository\"])`, where env = self.adoption_env() to succeed (an error means no update and one `adopt-base-<pr>` wake through the existing queue). So a retargeted, unrestacked child is never caught up by GitHub's REBASE update (fm_autopilot_branches.py update_external_branch, :220-223), which would replay the merged parent's commits; after the restack, catch-up runs as for any adopted PR. Define both new wake summaries using only task and PR: adopt-restack en \"<task> #<pr>: run fm-restack.sh before catch-up\", zh-TW \"<task> #<pr> 追趕前請執行 fm-restack.sh\"; adopt-base en \"<task> #<pr>: adopted base needs verified restack\", zh-TW \"<task> #<pr> 接手基底需要經驗證的 restack\". No external branch or title may appear.",
+    "Callers. fm_stack.py: bin/lib/fm-stack.sh:26 (wrapper), bin/fm-worker.sh:570,582 (select), bin/lib/fm_concurrent.py:160 (select at dispatch), bin/lib/fm-restack.sh:23 (restack; Change 4), bin/lib/fm_autopilot.py:396 (runs fm-restack.sh), fm_stack.py:183 (release_parent), tests/lib/stacking_fixture.py:8 (import). fm_adopt.base_matches: bin/lib/fm_binding.py:177,347 (Change 2) and fm_adopt.check (Change 1). No other caller.",
+    "Tests (fail-first; fail-first runs only *.test.sh). tests/lib/external_adopt.py (run by tests/external-adopt.test.sh): test_adopt_stacked (:140-142), which expects `stacked PR: adoption of a stacked PR is T-239`, is replaced by cases: a stacked PR accepted under `stacking: allowed` with its parent task in depends_on; refused with `stacked on an unmanaged PR #N or stacking not allowed` under `stacking: hold`, with an unmanaged parent, and with the parent task missing from depends_on; effective_base returns the new base for the restack transition and raises the base-changed message for any other base change; effective_base refuses the transition base before a restacked commit_pushed and accepts it after; effective_base refuses a managed stacked adopted PR when CONVENTIONS no longer allow stacking; a single adopted PR on a long-lived base, after an unrelated open PR from that base appears, still passes `fm_binding base` and required_checks under `stacking: hold` (T-237 behaviour kept). tests/live-base-binding.test.sh: on an adopted child that GitHub retargeted, `fm_binding base`, `head`, `candidate` and required_checks refuse before the restacked event and, after it, bind to and sync the new base and never fetch the deleted parent branch. tests/stacking_cases.py with tests/lib/stacking_fixture.py (run by tests/stacking.test.sh:8-10): select_base finds an adopted dependency PR with a human branch; restack accepts an adopted child, locks its task and returns task and adopt_pr; restack accepts an adopted child GitHub already retargeted; release_parent deletes an adopted parent branch with adopted_branch true and refuses it by default. tests/stacking-restack.test.sh: bin/lib/fm-restack.sh on an adopted child with no local branch ref, in a target root that lacks the child's objects (no round has run), fetches refs/pull/<pr>/head, creates the ref at the expected head and restacks; a fetched head that differs from --expected-head refuses; a draft-only adopted child is refused; a `--parent` whose head is not the pinned adopt.base is refused; with no adopted push, an expected head that lost adopt.head is refused before any push; a restack whose merged parent is adopted releases the parent branch, and with an unadopted human parent branch the default refuses the release; after a restack emit, bin/fm-ready.sh lists the adopted task as in flight; bin/lib/fm-restack.sh on an adopted child emits commit_pushed with actor firstmate, restacked and adopt_pr on exit 0 and on exit 69, and emits nothing on exit 71 and prints the repin message. tests/lib/autopilot_cases.py (run by tests/autopilot.test.sh; restack assertions near :357,:369): a pinned adopted child with an adopted push, whose merged parent is its depends_on task, is restacked; a draft-only adopted child and a pinned one with no adopted push are not, and each gets one `adopt-restack-<pr>` wake; an adopted PR whose found merged parent resolves to no task or to a task outside depends_on gets no restack and no wake; an adopted PR on a long-lived branch is not; an adopted child retargeted without a restacked event gets no update request and one `adopt-base-<pr>` wake, and after the event the normal REBASE update request. New allowed stack, adopted restack/release and catch-up behavior cases are fail-first and red on base. Existing safety cases are regression guards and green on base: single long-lived-base adoption under hold, default human-parent release refusal, no restack for a long-lived branch or unrelated parent, and refusal of any unrelated base change. Label each assertion accordingly. In tests/lib/autopilot_cases.py update test_adoption_catchup_requires_adopted_push for the effective_base call. Stub fm_adopt.binding.github reads in a scoped patch, serving pr-view/base/open-head/merged-parent replies from the same fixture as self.calls; never call live gh. Preserve self.rows() event mocking and prove the retargeted child refuses before the restacked event and proceeds after it. The effective_base reader reads events.jsonl, not self.rows(): the autopilot fixture must also write each mocked restacked commit_pushed row with its matching project key to self.state/events.jsonl. Keep self.rows() mocking for the ordinary autopilot reader and prove both see the same event.",
+    "Migration. No adoption is in flight today (T-237 merged at c085613 and no external spec carries adopt yet). For single adoptions this task keeps T-237 behaviour: effective_base rule 1 fires only for a managed stack (parent task in depends_on), so a single adopted PR whose long-lived base later becomes the head of an unrelated open PR still binds under `stacking: hold` exactly as under T-237; check keeps T-237's refusal of a base that is the head of an unmanaged open PR (T-237 refused every stacked base at :106-109), now with the wording of Change 1(a). Tasks and stacks that are not adopted behave as today: each new branch is guarded by an adoption (scan or adoption()). No stored record or schema changes; the emitted event is the existing commit_pushed type with T-237's adopt_pr key plus `restacked`. Restack still needs `stacking: allowed` and `force_with_lease: true` (fm_stack.py:90, :234-235).",
+    "Docs, edited in place, generic wording only. design/design.md §15.5 (from :5271): the adoption paragraph (:5274-5284) replaces `stacked PRs (T-239)` in its refusal list with the stacked rule (parent adopted first and listed in depends_on, stacking policy re-checked on every binding, restack counts as an adopted push, a retargeted child or a child with no adopted push restacked by the operator with a pinned adoption), and `A retarget needs a new spec and A card` (:5283) gains the exception: except the restack transition after the parent merges. skills/firstmate/SKILL.md external section (from :986): `A stacked PR waits for T-239` (:1026) becomes: adopt a stacked PR's parent first and list its task in depends_on; `A changed base needs a new spec and A card` (:1026-1027) gains the same restack exception. The changed bases refusal at design.md:5281 also gains the same verified-restack exception.",
+    "Scope. bin/lib/fm_adopt.py, bin/lib/fm_binding.py, bin/lib/fm_stack.py, bin/lib/fm-restack.sh, bin/lib/fm_autopilot.py (the restack trigger and the adopted catch-up guard), tests/lib/external_adopt.py, tests/external-adopt.test.sh, tests/live-base-binding.test.sh, tests/stacking_cases.py, tests/lib/stacking_fixture.py, tests/stacking-restack.test.sh, tests/autopilot.test.sh, tests/lib/autopilot_cases.py, design/design.md, skills/firstmate/SKILL.md, design/tasks/T-239.json. Excluded: bin/lib/fm-stack.sh, bin/fm-worker.sh and bin/lib/fm_concurrent.py (calls unchanged), bin/fm-gate.sh, bin/fm-review.sh and bin/fm-merge.sh (bound through fm_binding, Change 2), vendor resolution code."
+  ],
+  "scope": [
+    "bin/lib/fm_adopt.py",
+    "bin/lib/fm_binding.py",
+    "bin/lib/fm_stack.py",
+    "bin/lib/fm-restack.sh",
+    "bin/lib/fm_autopilot.py",
+    "tests/lib/external_adopt.py",
+    "tests/external-adopt.test.sh",
+    "tests/live-base-binding.test.sh",
+    "tests/stacking_cases.py",
+    "tests/lib/stacking_fixture.py",
+    "tests/stacking-restack.test.sh",
+    "tests/autopilot.test.sh",
+    "tests/lib/autopilot_cases.py",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-239.json"
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "Firstmate adopts a stacked pull request when the conventions allow stacks and the task depends on the parent task."
+        },
+        {
+          "kind": "fact",
+          "text": "Stack selection, restack and parent release accept adopted branches."
+        },
+        {
+          "kind": "fact",
+          "text": "A restack of an adopted child counts as a firstmate push, before or after GitHub retargets it."
+        },
+        {
+          "kind": "fact",
+          "text": "After a restack, fm_binding accepts the new base of the child, and every gate binds to it."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "On 2026-10-07 you answered: each pull request keeps its own base, and a stacked pull request uses the stack support."
+        },
+        {
+          "kind": "fact",
+          "text": "T-237 refuses a stacked pull request, and the stack code finds tasks only by branch name."
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_adopt.py and bin/lib/fm_binding.py",
+        "bin/lib/fm_stack.py and bin/lib/fm-restack.sh",
+        "the autopilot restack trigger",
+        "stack tests, binding tests and the adoption suite",
+        "design section 15.5 and the firstmate skill"
+      ],
+      "scope_out": [
+        "fm-worker.sh and fm_concurrent.py",
+        "fm-gate.sh, fm-review.sh and fm-merge.sh",
+        "vendor code"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: fm_adopt.py check accepts an allowed stack and refuses the other cases. The adoption suite cases prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: fm_stack.py reads the adoption map in select, restack and release. The stack cases prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: fm-restack.sh emits commit_pushed after a restack of an adopted child. The restack suite proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: fm_adopt.effective_base accepts only the restack transition. The fm_binding and adoption cases prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Adopt the parent of a stacked pull request first, and list its task in depends_on."
+        },
+        {
+          "kind": "caution",
+          "text": "When GitHub retargets a child first, the operator runs fm-restack.sh before the next worker round."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Person stacks two pull requests"
+        },
+        {
+          "state": "gone",
+          "label": "T-237 refuses the child"
+        },
+        {
+          "state": "gone",
+          "label": "Stack code needs task branches"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Person stacks two pull requests"
+        },
+        {
+          "state": "new",
+          "label": "Adopt parent, then child"
+        },
+        {
+          "state": "new",
+          "label": "Restack reads the adoption"
+        },
+        {
+          "state": "new",
+          "label": "Restack counts as a push"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "慣例允許堆疊、任務依賴上層任務時，firstmate 接手堆疊 PR。"
+        },
+        {
+          "kind": "fact",
+          "text": "堆疊選擇、重設基底和上層釋放都接受接手的分支。"
+        },
+        {
+          "kind": "fact",
+          "text": "接手子 PR 的重設基底算一次 firstmate 推送，不論 GitHub 是否已改目標。"
+        },
+        {
+          "kind": "fact",
+          "text": "重設基底後，綁定接受子 PR 的新 base，所有關卡都綁它。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "你在 2026-10-07 回答：每個 PR 用自己的 base，堆疊的 PR 走堆疊支援。"
+        },
+        {
+          "kind": "fact",
+          "text": "T-237 拒絕堆疊 PR，堆疊程式只靠分支名找任務。"
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_adopt.py 和 bin/lib/fm_binding.py",
+        "bin/lib/fm_stack.py 和 bin/lib/fm-restack.sh",
+        "autopilot 的重設基底觸發",
+        "堆疊測試、綁定測試和接手測試",
+        "設計第 15.5 節和 firstmate skill"
+      ],
+      "scope_out": [
+        "fm-worker.sh 和 fm_concurrent.py",
+        "fm-gate.sh、fm-review.sh 和 fm-merge.sh",
+        "vendor 程式"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：fm_adopt.py check 接受允許的堆疊，拒絕其他情況。接手測試案例證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：fm_stack.py 在選擇、重設和釋放時讀接手對照。堆疊案例證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：接手子 PR 重設基底後，fm-restack.sh 發出 commit_pushed。重設測試證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：fm_adopt.effective_base 只接受重設基底的轉換。綁定和接手案例證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "堆疊 PR 的上層要先接手，並把它的任務列進 depends_on。"
+        },
+        {
+          "kind": "caution",
+          "text": "GitHub 先改了子 PR 目標時，下一輪前由操作者跑 fm-restack.sh。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "人疊了兩個 PR"
+        },
+        {
+          "state": "gone",
+          "label": "T-237 拒絕子 PR"
+        },
+        {
+          "state": "gone",
+          "label": "堆疊程式要任務分支"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "人疊了兩個 PR"
+        },
+        {
+          "state": "new",
+          "label": "先接上層再接子層"
+        },
+        {
+          "state": "new",
+          "label": "重設基底讀接手對照"
+        },
+        {
+          "state": "new",
+          "label": "重設基底算一次推送"
+        }
+      ]
+    }
+  }
+}

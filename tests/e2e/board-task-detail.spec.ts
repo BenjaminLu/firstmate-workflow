@@ -1,5 +1,6 @@
+import { showFleet } from './lib/board';
 import { expect } from '@playwright/test';
-import { test, makeRoot, startBoard, stopBoard, writeTasks, writeRegistry } from './lib/fixture';
+import { test, makeRoot, startBoard, stopBoard, writeTasks, writeRegistry, ROOT } from './lib/fixture';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -21,6 +22,7 @@ test('task panel shares intent sections, keyboard/focus, replacement and persist
   const root=fixture(), board=await startBoard(root);
   try {
     await page.goto(board.url+'/?lang=en');
+    await showFleet(page);
     const first=page.locator('.card[data-task="T-001"]'), second=page.locator('.card[data-task="T-002"]');
     const panel=page.locator('#taskDetail');
     await first.click();
@@ -67,6 +69,7 @@ test('card controls and dragging do not open the panel; 390px has no horizontal 
   const board=await startBoard(root);
   try {
     await page.goto(board.url+'/?lang=en');
+    await showFleet(page);
     const first=page.locator('.card[data-task="T-001"]'), panel=page.locator('#taskDetail');
     await first.locator('[data-menu]').click();
     await expect(panel).toBeHidden();
@@ -107,6 +110,7 @@ test('the main page keeps same-id project cards distinct and reads the newest au
   const board=await startBoard(root);
   try {
     await page.goto(board.url+'/?lang=en');
+    await showFleet(page);
     const panel=page.locator('#taskDetail');
     await page.locator('.card[data-project="alpha"][data-task="T-001"]').first().click();
     await expect(panel.locator('.intent-header')).toContainText('Plan');
@@ -118,3 +122,62 @@ test('the main page keeps same-id project cards distinct and reads the newest au
     await expect(panel).not.toContainText('The panel shows the plan.');
   } finally { await stopBoard(board); }
 });
+
+for (const locale of ['en', 'zh-TW']) {
+  test(`external review locations and minute refresh stay private (${locale})`, async ({page}) => {
+    const { writeProjects, projectState } = await import('./lib/fixture');
+    const { spawnSync } = await import('node:child_process');
+    const root = fixture();
+    writeProjects(root, [{name:'fixture',github:'example/self'},
+      {name:'beta',github:'example/beta',tasks:[{id:'T-001',title:'Beta: Review this patch.',depends_on:[],scope:[],acceptance:[]} as any]}]);
+    const store = projectState(root, 'beta');
+    const appendEvidence = (path: string) => {
+      // Shared Python fixture: tests/lib/task_detail_fixture.py
+      const result = spawnSync('python3', [join(ROOT,'tests/lib/task_detail_fixture.py'),
+        root, store, 'beta', '--external-review-only', path], {encoding:'utf8'});
+      expect(result.status, result.stderr).toBe(0);
+    };
+    appendEvidence('src/x.py');
+    const board = await startBoard(root);
+    try {
+      await page.clock.install({time:new Date('2026-10-08T01:00:00Z')});
+      await page.goto(board.url+'/?lang='+locale);
+      await showFleet(page);
+      const panel=page.locator('#taskDetail');
+      await page.locator('.card[data-project="beta"][data-task="T-001"]').click();
+      const section=panel.locator('[data-detail-section="detailExternalReview"]');
+      await expect(section.locator('h4')).toHaveText(locale==='en' ? 'External review' : '外部審查');
+      for (const state of ['CHANGES_REQUESTED','APPROVED','COMMENTED','UNKNOWN'])
+        await expect(section.locator('.badge', {hasText:state})).toBeVisible();
+      for (const label of locale==='en'
+        ? ['Covers this patch','Older patch','Current head','Unresolved','Resolved','No cited line']
+        : ['涵蓋此修補','較舊修補','目前版本','未解決','已解決','未引用行號'])
+        await expect(section).toContainText(label);
+      await expect(section).toContainText('src/x.py:9');
+      await expect(panel).not.toContainText('SECRET-EXTERNAL-BODY');
+      let requests=0;
+      page.on('request',r=>{if(new URL(r.url()).pathname==='/api/task') requests++;});
+      const event = (label: string) => appendFileSync(join(root,'state/events.jsonl'), JSON.stringify({
+        type:'greenlit',actor:'captain',ts:new Date().toISOString(),summary:{en:label,'zh-TW':label}})+'\n');
+      appendEvidence('src/changed.py');
+      event('before-minute');
+      await expect.poll(()=>page.locator('#log').textContent()).toContain('before-minute');
+      expect(requests).toBe(0);
+      await page.clock.fastForward(60_000);
+      event('after-minute');
+      await expect(section).toContainText('src/changed.py:9');
+      expect(requests).toBe(1);
+      event('same-minute');
+      await expect.poll(()=>page.locator('#log').textContent()).toContain('same-minute');
+      expect(requests).toBe(1);
+      await page.locator('.card[data-project="fixture"][data-task="T-001"]').click();
+      await expect(panel.locator(':scope > section > h4')).toHaveText(locale==='en'
+        ? ['Spec','Tests','Progress'] : ['規格','測試','進度']);
+      requests=0;
+      await page.clock.fastForward(60_000);
+      event('self-minute');
+      await expect.poll(()=>page.locator('#log').textContent()).toContain('self-minute');
+      expect(requests).toBe(0);
+    } finally { await stopBoard(board); }
+  });
+}

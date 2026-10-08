@@ -66,6 +66,246 @@
           "line": "cp \"$ROOT/skills/worker/SKILL.md\" skills/worker/",
           "count": 1,
           "reason": "Fixture skill destination is now explicitly rooted in $d/repo for the bounded writer analyzer; same fixture destination and no assertion change."
+        },
+        {
+          "line": "git clone -q -b main \"$1/remote.git\" \"$1/other\" || return 1",
+          "count": 1,
+          "reason": "T261 transport-safe clone"
+        },
+        {
+          "line": "rb_replay_conflict \"$dX2\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "&& git push -q origin HEAD ) || echo \"fm-test: could not set up X4\" >&2",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dX4\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dX5\"; oldX5=\"$(rb_head \"$dX5\" \"$bX5\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_move_main \"$dA\" \"$dA/main.sh\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_move_main \"$dA2\" \"$dA2/main.sh\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dB\"; oldB=\"$(rb_head \"$dB\" \"$bB\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_conflicting_main \"$dC\"; mainC=\"$(rb_head \"$dC\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_conflicting_main \"$dD\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dE\"; oldE=\"$(rb_head \"$dE\" \"$bE\")\"; mainE=\"$(rb_head \"$dE\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dG2\"; oldG2=\"$(rb_head \"$dG2\" \"$bG2\")\"; mainG2=\"$(rb_head \"$dG2\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dG3\"; oldG3=\"$(rb_head \"$dG3\" \"$bG3\")\"; pushedG3=\"$(rb_pushed \"$dG3\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dG4\"; mainG4=\"$(rb_head \"$dG4\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_conflicting_main \"$dI\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_conflicting_main \"$dK\"; mainK=\"$(rb_head \"$dK\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_conflicting_main \"$dK2\"; mainK2=\"$(rb_head \"$dK2\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dL\"; oldL=\"$(rb_head \"$dL\" \"$bL\")\"; mainL=\"$(rb_head \"$dL\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_conflicting_main \"$dM\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_move_main \"$dN\" \"$dN/main.sh\"; mainN=\"$(rb_head \"$dN\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dP1\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dP2\"; oldP2=\"$(rb_head \"$dP2\" \"$bP2\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dP3\"; oldP3=\"$(rb_head \"$dP3\" \"$bP3\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dP5\"; oldP5=\"$(rb_head \"$dP5\" \"$bP5\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dP6\"; oldP6=\"$(rb_head \"$dP6\" \"$bP6\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dQ1\"; oldQ1=\"$(rb_head \"$dQ1\" \"$bQ1\")\"; mainQ1=\"$(rb_head \"$dQ1\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dQ2\"; mainQ2=\"$(rb_head \"$dQ2\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dQ3\"; oldQ3=\"$(rb_head \"$dQ3\" \"$bQ3\")\"; mainQ3=\"$(rb_head \"$dQ3\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dQ4\"; oldQ4=\"$(rb_head \"$dQ4\" \"$bQ4\")\"; mainQ4=\"$(rb_head \"$dQ4\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_move_main \"$1\" \"$1/main.sh\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_ascii_conflict \"$dR1\"; mainR1=\"$(rb_head \"$dR1\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_ascii_conflict \"$dR2\"; oldR2=\"$(rb_head \"$dR2\" \"$bR2\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dS\"; oldS=\"$(rb_head \"$dS\" \"$bS\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dT\"; oldT=\"$(rb_head \"$dT\" \"$bT\")\"; mainT=\"$(rb_head \"$dT\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dU1\"; oldU1=\"$(rb_head \"$dU1\" \"$bU1\")\"; mainU1=\"$(rb_head \"$dU1\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_conflicting_main \"$dU2\"; mainU2=\"$(rb_head \"$dU2\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_move_main \"$dW1b\" \"$dW1b/main.sh\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_move_main \"$dW2\" \"$dW2/main.sh\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dV0\"; oldV0=\"$(rb_head \"$dV0\" \"$bV0\")\"; mainV0=\"$(rb_head \"$dV0\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dV1\"; oldV1=\"$(rb_head \"$dV1\" \"$bV1\")\"; mainV1=\"$(rb_head \"$dV1\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dV2\"; oldV2=\"$(rb_head \"$dV2\" \"$bV2\")\"; mainV2=\"$(rb_head \"$dV2\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dV3\"; oldV3=\"$(rb_head \"$dV3\" \"$bV3\")\"; mainV3=\"$(rb_head \"$dV3\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dV5\"; oldV5=\"$(rb_head \"$dV5\" \"$bV5\")\"; mainV5=\"$(rb_head \"$dV5\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dV5b\"; mainV5b=\"$(rb_head \"$dV5b\" main)\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dV5c\"; oldV5c=\"$(rb_head \"$dV5c\" \"$bV5c\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_conflicting_main \"$dV4\"; pushedV4=\"$(rb_pushed \"$dV4\")\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_replay_conflict \"$dV6\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
+        },
+        {
+          "line": "rb_move_main \"$dV6\" \"$dV6/main.sh\"",
+          "count": 1,
+          "reason": "T261 setup-failure guard"
         }
       ]
     },

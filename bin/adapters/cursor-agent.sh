@@ -107,6 +107,30 @@ if [ -n "${FM_MODEL:-}" ]; then
   }
 fi
 fm_adapter_policy
+# Cursor falls back to /tmp/.cursor when its data base exceeds 84 characters;
+# the round HOME is longer than that. Give each round private project state,
+# never shared with another round, and grant only this short directory.
+cursor_data="$(mktemp -d /tmp/fmc.XXXXXX)" || {
+  echo "cursor-agent: cannot make a short data directory for cursor; refusing the round" >&2
+  exit 70
+}
+# Install cleanup before canonicalization or any later refusal; the existing
+# INT/TERM/HUP traps turn signals into this same EXIT path.
+# shellcheck disable=SC2064  # allocation paths are fixed now
+trap "rm -rf '$FM_ROUND_TMP' '$FM_ROUND_CTL' '$cursor_data'" EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+cursor_resolved="$(cd "$cursor_data" && pwd -P)" || {
+  echo "cursor-agent: cannot make a short data directory for cursor; refusing the round" >&2
+  exit 70
+}
+if [ "${#cursor_resolved}" -gt 75 ]; then  # /projects adds nine, at most 84 total
+  echo "cursor-agent: cannot make a short data directory for cursor; refusing the round" >&2
+  exit 70
+fi
+cursor_data="$cursor_resolved"
+export CURSOR_DATA_DIR="$cursor_data"
 # On macOS cursor's own sandbox cannot start inside sandbox-exec, and with
 # it off a print-mode round approves no shell command at all: the canary on
 # 2026-09-26 saw cursor-agent sign in, exit 0 and never run its probe.
@@ -121,6 +145,9 @@ model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
   < <(fm_adapter_model_args --model)
 read -r -a native <<<"$(cursor_native)"
 fm_adapter_confine cursor-agent "$tree" "${native[@]}"
+if [ "${FM_LAUNCH[1]}" = run ]; then
+  FM_LAUNCH=("${FM_LAUNCH[@]:0:${#FM_LAUNCH[@]}-1}" --write="$cursor_data" --)
+fi
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
   ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" --output-format json \
     ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"

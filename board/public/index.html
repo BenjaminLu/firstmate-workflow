@@ -296,16 +296,21 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <span id="reloginSaid" aria-live="polite"></span></div>
 <div class="counts" id="counts"></div>
 <p id="watch" role="status" data-watch=""></p>
-<!-- Decisions lead the page; the vessel and readable crew remain directly below. -->
+<nav id="boardnav">
+<div id="tabs" role="tablist">
+  <button id="tabDecisions" role="tab" aria-controls="decisionsPanel" aria-selected="true"><span></span><span class="badge" hidden></span></button>
+  <button id="tabFleet" role="tab" aria-controls="fleetPanel" aria-selected="false"></button>
+</div>
+<div id="secbar"><button id="rosterBtn" aria-haspopup="dialog" aria-controls="crewSheet"></button><span class="aboard"></span><button id="logBtn" aria-haspopup="dialog" aria-controls="logSheet"></button><span id="latestEvent"></span></div>
+</nav>
+<section id="decisionsPanel" role="tabpanel" aria-labelledby="tabDecisions">
 <section id="deckwrap" style="padding:0 20px" hidden>
   <h2 style="margin:16px 0 10px;font:600 13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
     <span id="awaiting"></span> <span id="pcount"></span></h2>
   <div class="deckrow"><div class="capstage" id="capstage" hidden></div><div id="deck"></div></div>
 </section>
-<section id="shipregion" style="padding:0 20px">
-  <div class="rosterbar"><span class="aboard"></span><button class="toggle" id="rosterBtn" aria-controls="roster" aria-pressed="true"></button></div>
-  <div class="roster" id="roster"></div>
 </section>
+<section id="fleetPanel" role="tabpanel" aria-labelledby="tabFleet" hidden>
 <section class="lanes-wrap">
   <h2 id="h-fleet"></h2>
   <div class="lanes" id="lanes"></div>
@@ -320,12 +325,20 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <p id="taskFeedback" role="status" aria-live="polite"></p>
   <details id="history"><summary></summary><div class="history-cards"></div></details>
 </section>
+</section>
+<dialog id="crewSheet" class="board-sheet" role="dialog" aria-modal="true" aria-labelledby="crewSheetTitle">
+  <header><h2 id="crewSheetTitle"></h2><button data-sheet-close></button></header>
+  <section id="shipregion"><div class="roster" id="roster"></div></section>
+</dialog>
+<dialog id="logSheet" class="board-sheet" role="dialog" aria-modal="true" aria-labelledby="logSheetTitle">
+  <header><h2 id="logSheetTitle"></h2><button data-sheet-close></button></header>
 <section class="logwrap">
   <h2 id="h-log"></h2>
   <div class="log"><ul id="log"></ul><ul id="logOlder"></ul></div>
   <button id="logLoadOlder" type="button"></button>
   <span id="logLoadStatus" role="status"></span>
 </section>
+</dialog>
 <script src="ship.js"></script>
 <script src="diagram.js"></script>
 <script src="watch.js"></script>
@@ -412,6 +425,7 @@ function renderOlderLog() {
   button.hidden = logEnded || !latest?.recent?.length;
   button.disabled = logLoading;
   document.getElementById('logLoadStatus').textContent = logFailed ? t("logLoadFailed") : '';
+  pageRegion('log', document.querySelector('.logwrap'), '#log li, #logOlder li', 12);
 }
 document.getElementById('logLoadOlder').onclick = async () => {
   if (logLoading || logEnded) return;
@@ -581,6 +595,12 @@ function chrome() {
 }
 
 function render(s) {
+  // Native details toggles are delivered later. Read live disclosure before
+  // any patch can overwrite a just-opened (or just-closed) strip with stale
+  // state, regardless of whether this render came from a sheet or a refresh.
+  document.querySelectorAll('#deck details.dstrip').forEach(el => {
+    if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
+  });
   const focus = document.activeElement;
   const focusSheet = focus?.closest?.('.decision-sheet')?.dataset.id;
   const focusKey = focus?.dataset?.id;
@@ -882,7 +902,6 @@ function render(s) {
   syncDecisionBars();
   for (const r of refused.values()) r.announced = true;
   deck.querySelectorAll('details.dstrip').forEach(el => el.ontoggle = () => {
-    if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
     if (el.open) DIAGRAM.mount(el, lang).catch(() => {});
   });
   deck.querySelectorAll('[data-open]').forEach(a => a.onclick = e => {
@@ -925,17 +944,13 @@ function render(s) {
   DIAGRAM.mount(deck, lang).catch(() => {});
 
   const crew = SHIP.crewOf(s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
+  SHIP.rosterOn = true;
   SHIP.roster(document.getElementById("roster"), crew, t);
-  document.querySelector('.rosterbar .aboard').textContent = `${t('aboard')} ${crew.length}/${s.deckLimit}`;
-  const rosterBtn = document.getElementById('rosterBtn');
-  rosterBtn.textContent = t('rosterBtn');
-  rosterBtn.setAttribute('aria-pressed', String(SHIP.rosterOn));
-  rosterBtn.onclick = () => {
-    SHIP.rosterOn = !SHIP.rosterOn;
-    try { localStorage.setItem('board.roster', SHIP.rosterOn ? '' : 'hidden'); } catch (_) {}
-    rosterBtn.setAttribute('aria-pressed', String(SHIP.rosterOn));
-    document.getElementById('roster').hidden = !SHIP.rosterOn;
-  };
+  document.querySelector('#secbar .aboard').textContent = `${t('aboard')} ${crew.length}/${s.deckLimit}`;
+  document.getElementById('rosterBtn').textContent = t('rosterBtn');
+  syncBoardNavigation(s);
+  pageRegion('history', history, '.history-cards .card', 12);
+  pageRegion('parked', parkedGroup, '.parked-cards .card', 6);
   pose(); feedbackText();
   if (focusKey) {
     const focusRoot = focusSheet ? document.getElementById(`sheet-${focusSheet}`) : deck;
@@ -951,36 +966,124 @@ function render(s) {
   window.VOYAGE?.update(s, t, lang);
 }
 
+// Client-only navigation and paging preserve the existing region nodes and game homes.
+let activeTab = 'decisions', tabInitialized = false, fleetScroll = 0;
+const pages = new Map();
+function selectTab(tab, remember = true) {
+  const hadDetail = !!openTaskKey;
+  if (hadDetail) closeTaskDetail();
+  activeTab = tab === 'fleet' ? 'fleet' : 'decisions';
+  for (const [name, id] of [['decisions','Decisions'], ['fleet','Fleet']]) {
+    const selected = name === activeTab;
+    document.getElementById(name + 'Panel').hidden = !selected;
+    const button = document.getElementById('tab' + id);
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
+  if (hadDetail && remember) document.querySelector('#tabs [aria-selected="true"]').focus({preventScroll:true});
+  if (remember) try { localStorage.setItem('board.tab', activeTab); } catch {}
+}
+for (const [name, id] of [['decisions','Decisions'], ['fleet','Fleet']]) {
+  document.getElementById('tab' + id).onclick = () => selectTab(name);
+}
+document.getElementById('tabs').onkeydown = event => {
+  if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+  event.preventDefault();
+  selectTab(event.key === 'Home' ? 'decisions' : event.key === 'End' ? 'fleet' : activeTab === 'fleet' ? 'decisions' : 'fleet');
+  document.querySelector('#tabs [aria-selected="true"]').focus();
+};
+function syncBoardNavigation(s) {
+  if (!tabInitialized) {
+    let saved;
+    try { saved = localStorage.getItem('board.tab'); } catch {}
+    selectTab(s.counts.waiting > 0 ? 'decisions' : saved, false);
+    tabInitialized = true;
+  }
+  document.querySelector('#tabDecisions > span').textContent = t('tabDecisions');
+  const badge = document.querySelector('#tabDecisions .badge');
+  badge.hidden = !(s.counts.waiting > 0); badge.textContent = String(s.counts.waiting || 0);
+  document.getElementById('tabFleet').textContent = t('tabFleet');
+  document.getElementById('logBtn').textContent = t('secLog');
+  const event = s.recent?.[0];
+  document.getElementById('latestEvent').innerHTML = event ? said(words(event.summary?.[lang === 'en' ? 'en' : 'zh-TW'] || event.summary?.en || event.type), event) : esc(t('nothingYet'));
+  for (const [id, key] of [['crewSheetTitle','sheetCrew'], ['logSheetTitle','sheetLog']]) document.getElementById(id).textContent = t(key);
+  document.querySelectorAll('[data-sheet-close]').forEach(button => button.textContent = t('sheetClose'));
+}
+for (const [id, openerId] of [['crewSheet','rosterBtn'], ['logSheet','logBtn']]) {
+  const sheet = document.getElementById(id), opener = document.getElementById(openerId);
+  opener.onclick = () => {
+    if (openTaskKey) closeTaskDetail();
+    document.querySelectorAll('.board-sheet[open]').forEach(other => other.close());
+    if (id === 'crewSheet') { SHIP.rosterOn = true; document.getElementById('roster').hidden = false; }
+    sheet.showModal(); sheet.querySelector('[data-sheet-close]').focus();
+  };
+  sheet.querySelector('[data-sheet-close]').onclick = () => sheet.close();
+  sheet.addEventListener('close', () => opener.focus({preventScroll:true}));
+  sheet.addEventListener('cancel', event => { event.preventDefault(); sheet.close(); });
+}
+function pageRegion(name, host, selector, size) {
+  const items = [...host.querySelectorAll(selector)], total = Math.max(1, Math.ceil(items.length / size));
+  const page = Math.min(pages.get(name) || 0, total - 1); pages.set(name, page);
+  items.forEach((item, i) => item.hidden = i < page * size || i >= (page + 1) * size);
+  let pager = document.getElementById(name + 'Pager');
+  if (!pager) {
+    pager = document.createElement('nav'); pager.id = name + 'Pager'; pager.className = 'pager';
+    pager.innerHTML = '<button data-page="first"></button><button data-page="prev"></button><span aria-live="polite"></span><button data-page="next"></button>';
+    host.append(pager);
+    pager.onclick = event => {
+      const action = event.target.closest('[data-page]')?.dataset.page;
+      if (!action) return;
+      const current = pages.get(name) || 0;
+      pages.set(name, action === 'first' ? 0 : action === 'prev' ? Math.max(0, current - 1) : current + 1);
+      pageRegion(name, host, selector, size);
+    };
+  }
+  for (const [action, key] of [['first','pagerFirst'], ['prev','pagerPrev'], ['next','pagerNext']]) {
+    const button = pager.querySelector(`[data-page="${action}"]`);
+    button.textContent = t(key); button.disabled = action === 'next' ? page === total - 1 : page === 0;
+  }
+  pager.querySelector('span').textContent = t('pagerPosition').replace('{page}', page + 1).replace('{total}', total);
+}
+
 // Task detail lives outside the patched lane tree. Only these state fields
 // invalidate its read; disclosure keys survive both state and locale changes.
 let detailTrigger = null;
 let openTaskKey = null, detailState = null, detailData = null, detailRequest = 0;
 const expandedAcceptance = new Set();
 const detailPanel = document.getElementById('taskDetail');
+// From 760px up the pane keeps its close control; below, the same control is the visible Back.
+const phoneDetail = matchMedia('(max-width:759px)');
+const detailCloseName = () => t(phoneDetail.matches ? 'sheetBack' : 'detailClose');
+const detailToolbar = () => `<div class="detail-toolbar"><button data-close-task aria-label="${esc(detailCloseName())}"><span class="detail-back">${esc(t('sheetBack'))}</span><span aria-hidden="true">×</span></button></div>`;
+phoneDetail.addEventListener('change', () => detailPanel.querySelector('[data-close-task]')?.setAttribute('aria-label', detailCloseName()));
 const positionTaskDetail = () => detailPanel.style.setProperty('--task-detail-top', Math.max(0, Math.ceil(document.querySelector('.top').getBoundingClientRect().bottom)) + 'px');
 new ResizeObserver(positionTaskDetail).observe(document.querySelector('.top'));
 window.addEventListener('scroll', positionTaskDetail, { passive: true });
 window.addEventListener('resize', positionTaskDetail);
-const detailSignature = task => JSON.stringify(task ? [task.stage, task.pr, task.last_review, task.crew, task.badges] : null);
+const detailSignature = task => JSON.stringify(task ? [task.stage, task.pr, task.last_review, task.crew, task.badges, ...(task.project && task.project !== latest.default_project ? [Math.floor(Date.now()/60000)] : [])] : null);
 const detailCard = key => document.querySelector(`.card[data-key="${CSS.escape(key)}"]`);
 function closeTaskDetail() {
   const key = openTaskKey;
   openTaskKey = null; detailData = null; detailState = null; detailRequest++;
   detailPanel.hidden = true;
+  document.querySelector('.lanes-wrap').classList.remove('has-detail');
   if (key) {
     const selector = detailTrigger?.hasAttribute('data-history') ? '[data-history]' : ':not([data-history])';
     const card = detailTrigger?.isConnected ? detailTrigger : document.querySelector(`.card[data-key="${CSS.escape(key)}"]${selector}`) || detailCard(key);
     card?.focus();
   }
   detailTrigger = null;
+  if (key && phoneDetail.matches) window.scrollTo(0, fleetScroll);
 }
 function openTaskDetail(key, trigger) {
+  if (!openTaskKey) fleetScroll = window.scrollY;
   detailTrigger = trigger || detailCard(key);
   if (openTaskKey === key) { detailPanel.querySelector('[data-close-task]')?.focus(); return; }
   openTaskKey = key; detailData = null; detailState = null;
   positionTaskDetail();
   detailPanel.hidden = false;
-  detailPanel.innerHTML = `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('detailClose'))}">×</button></div><p role="status">${esc(t('detailLoading'))}</p>`;
+  document.querySelector('.lanes-wrap').classList.add('has-detail');
+  detailPanel.innerHTML = `${detailToolbar()}<p role="status">${esc(t('detailLoading'))}</p>`;
   detailPanel.querySelector('[data-close-task]').focus();
   refreshTaskDetail();
 }
@@ -1001,12 +1104,12 @@ async function refreshTaskDetail() {
     detailData = data; drawTaskDetail();
   } catch {
     if (request !== detailRequest || key !== openTaskKey) return;
-    detailPanel.innerHTML = `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('detailClose'))}">×</button></div><p role="status">${esc(t('detailUnavailable'))}</p>`;
+    detailPanel.innerHTML = `${detailToolbar()}<p role="status">${esc(t('detailUnavailable'))}</p>`;
   }
 }
 function drawTaskDetail() {
   if (!openTaskKey || !detailData) return;
-  const { task, cards, tests, readiness, rounds, brief, notes } = detailData;
+  const { task, cards, tests, readiness, external_review, rounds, brief, notes } = detailData;
   const source = [...cards].reverse().find(card => card.details &&
     (['dispatch','repin','merge'].includes(card.kind) || ['dispatch','repin','merge'].includes(cardKind(card))));
   const authored = source ? { ...source } : task.explain ? {
@@ -1021,12 +1124,15 @@ function drawTaskDetail() {
     const keys = {'not dispatched yet':'detailNotDispatched','no PR yet':'detailNoPr','no readiness record yet':'detailNoReadiness'};
     return keys[value] ? t(keys[value]) : value.startsWith('evidence unreadable:') ? t('detailEvidenceUnreadable') + value.slice('evidence unreadable:'.length) : value;
   };
+  const externalSection = external_review ? `<section data-detail-section="detailExternalReview"><h4>${esc(t("detailExternalReview"))}</h4><ul>` +
+    Object.entries(external_review.states).map(([reviewer, state]) => `<li>${esc(reviewer)} <span class="badge">${esc(state.state)}</span> · ${esc(state.covers ? t("detailCoversPatch") : t("detailOlderPatch"))}</li>`).join('') +
+    '</ul><ul>' + external_review.findings.map(finding => `<li>${esc(finding.reviewer)} · <code>${esc(finding.path && finding.line != null ? finding.path + ':' + finding.line : t("detailNoCitedLine"))}</code>${finding.current ? ' · ' + esc(t("detailCurrentHead")) : ''} · ${esc(finding.resolved ? t("detailResolved") : t("detailUnresolved"))}</li>`).join('') + '</ul></section>' : '';
   const translatedTitle = lang !== 'en' && task.title_tw ? words(task.title_tw) : null;
   const colon = translatedTitle?.indexOf(':') ?? -1;
   const headline = translatedTitle ? (colon < 0 ? translatedTitle : translatedTitle.slice(0,colon)) : task.headline;
   const detail = translatedTitle ? (colon < 0 ? '' : translatedTitle.slice(colon+1)) : task.detail;
   const wasClose = document.activeElement?.hasAttribute('data-close-task');
-  SHIP.patch(detailPanel, `<div class="detail-toolbar"><button data-close-task aria-label="${esc(t('detailClose'))}">×</button></div>` +
+  SHIP.patch(detailPanel, `${detailToolbar()}` +
     `<header class="intent-header" style="padding:16px"><div class="detail-meta"><span class="badge s-${esc(task.stage)}">${esc(laneLabel(task.stage))}</span><b>${esc(task.id)}</b>${task.project ? chip(task.project) : ''}${task.pr ? prRef(task.pr,task.pr_url) : ''}` +
     (typeof steOk === 'boolean' ? `<span class="ste-pill">${esc(t(steOk ? 'detailStePass' : 'detailSteFail'))}</span>` : '') +
     `</div><h3 id="taskDetailTitle">${esc(headline)}</h3>${detail ? `<p>${esc(detail)}</p>` : ''}<p>${esc(t('detailCi'))}: ${esc(checks || t('detailNoReadiness'))}</p></header>` +
@@ -1037,6 +1143,7 @@ function drawTaskDetail() {
     }).join('') + '</ol>') +
     section('detailTests', (tests.length ? `<ul>${tests.map(test => `<li><code>${esc(test.path)}</code> · ${esc(t(test.source === 'acceptance' ? 'detailSourceAcceptance' : 'detailSourceScope'))}</li>`).join('')}</ul>` : `<p>${esc(t('detailNoTests'))}</p>`) +
     `<div><h5>${esc(t('detailReadiness'))}</h5>${readiness ? `<p>${esc(t('detailHead'))}: <code>${esc(readiness.head)}</code></p><p>${esc(t('detailGateBase'))}: <code>${esc(readiness.gate_base || '—')}</code></p><p>${esc(t('detailGates'))}: ${esc((readiness.gates_unmapped ? (readiness.gates || []).join(', ') + ' (' + t('gateListUnavailable') + ')' : (readiness.gates || []).map(g => g.n + ' ' + t('gate_' + g.name)).join(' · ')))}</p><p>${esc(t('detailCi'))}: ${esc(checks || '—')}</p>` : `<p>${esc(t('detailNoReadiness'))}</p>`}</div>`) +
+    externalSection +
     section('detailProgress', (rounds.length ? `<div class="rounds-scroll"><table><thead><tr>${['detailRound','detailWorker','detailReviewer','detailVendor','detailHead','detailWorkerHead','detailVerdict'].map(key => `<th>${esc(t(key))}</th>`).join('')}</tr></thead><tbody>${rounds.map(round => `<tr>${[round.round,round.worker,round.reviewer,[round.worker_vendor,round.reviewer_vendor].filter(Boolean).join(' / '),round.head,round.worker_head,round.verdict].map(value => `<td>${esc(value ?? '—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : `<p>${esc(t('detailNotDispatched'))}</p>`) +
     `<h5>${esc(t('detailCards'))}</h5>` + (cards.length ? `<ul>${cards.map(card => `<li><b>${esc(card.id)}</b> · ${esc(card.chosen || t('detailPending'))} ${esc(card.ts || '')}` + (card.answers || []).map(answer => `<p>${esc(t(answer.ok ? 'answerYes' : 'answerNo'))}${answer.ok === false ? ': ' + esc(answer.text || '') : ''}</p>`).join('') + '</li>').join('')}</ul>` : `<p>${esc(t('detailNoCards'))}</p>`) +
     (brief ? `<h5>${esc(t('detailBrief'))}</h5><p>${esc(brief)}</p>` : '') + list(notes.map(note))));
@@ -1055,7 +1162,7 @@ detailPanel.addEventListener('click', event => {
   if (reveal) { revealedSections.add(reveal.dataset.reveal); drawTaskDetail(); }
 });
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && openTaskKey && !menuOpen && !confirming) { event.preventDefault(); closeTaskDetail(); }
+  if (event.key === 'Escape' && !document.querySelector('.board-sheet[open]') && openTaskKey && !menuOpen && !confirming) { event.preventDefault(); closeTaskDetail(); }
 });
 
 const validAnswerText = text => typeof text === 'string' && !!text.trim() && [...text].length <= 1000
@@ -1181,7 +1288,7 @@ function syncDecisionBars() {
   document.querySelectorAll('#deck .decision-bar').forEach(bar => decisionBarObserver.observe(bar));
 }
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || openTaskKey || menuOpen || confirming) return;
+  if (event.key !== 'Escape' || document.querySelector('.board-sheet[open]') || activeTab !== 'decisions' || openTaskKey || menuOpen || confirming) return;
   const focusedSheet = document.activeElement?.closest('.decision-sheet');
   const sheet = focusedSheet?.checkVisibility() ? focusedSheet
     : [...document.querySelectorAll('.decision-sheet:not([hidden])')].find(sheet => sheet.checkVisibility());

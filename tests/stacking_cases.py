@@ -133,6 +133,81 @@ class Stacking(unittest.TestCase):
             self.assertEqual(stack.select_base('owner/repo', 'main', ['T-1'], set(), True),
                              {'name': 'feature/t-1-parent', 'head': A, 'pr': 1})
 
+    def test_adopted_dependency_and_parent_release(self):
+        # FAIL-FIRST: adoption takes precedence over task branch grammar.
+        prs = [dict(number=1, headRefName='human-parent', headRefOid=A, isCrossRepository=False),
+               dict(number=3, headRefName='t-1-old', headRefOid=B, isCrossRepository=False)]
+        with patch.object(stack, 'github', return_value=prs):
+            self.assertEqual(stack.select_base('owner/repo', 'main', ['T-1'], set(), True,
+                             adopted={'T-1': 1}), dict(name='human-parent', head=A, pr=1))
+        policy = dict(delete_branch=True, base='main')
+        with patch.object(stack, 'deletable', return_value=True), \
+             patch.object(stack, 'github', return_value=dict(protected=False)), \
+             patch.object(stack, 'git', return_value='') as git:
+            # REGRESSION: arbitrary human branches cannot be released.
+            with self.assertRaisesRegex(ValueError, 'non-task parent'):
+                stack.release_parent('/repo', 'owner/repo', 'human-parent', A, policy)
+            # FAIL-FIRST: pinned adoption permits expected-head parent release.
+            stack.release_parent('/repo', 'owner/repo', 'human-parent', A, policy, adopted_branch=True)
+            self.assertTrue(any('push' in c.args for c in git.call_args_list))
+
+    def test_unadopted_human_parent_release_refused(self):
+        # REGRESSION: human branch deletion without adoption is refused on base.
+        with patch.object(stack, 'deletable', return_value=True), patch.object(stack, 'git') as git:
+            with self.assertRaisesRegex(ValueError, 'non-task parent'):
+                stack.release_parent('/repo', 'owner/repo', 'human-parent', A,
+                                     dict(delete_branch=True, base='main'))
+            git.assert_not_called()
+
+    def test_adopted_restack_identity_authorization(self):
+        # FAIL-FIRST against round-one head: metadata projection must retain safety fields.
+        cases = [({'isCrossRepository': True}, 'fork'),
+                 ({'isCrossRepository': 'missing'}, 'fork'),
+                 ({'headRefName': 't-999-other', 'title': 'T-002: child'}, 'another task'),
+                 ({'headRefName': 't-002-child', 'title': 'T-999: other'}, 'another task'),
+                 ({'title': None}, 'identity'), ({'state': 'CLOSED'}, 'open')]
+        for identity, reason in cases:
+            with self.subTest(identity=identity), restack_fixture(adopted=True, identity=identity) as (run, git, edit, tmp):
+                with self.assertRaisesRegex(ValueError, reason): run()
+                self.assertFalse(any(call.args[1] in ('push', 'worktree', 'update-ref') for call in git.call_args_list))
+                edit.assert_not_called()
+        for identity in ({}, {'headRefName': 'feature/t-002-child', 'title': 'T-002: child'}):
+            with restack_fixture(adopted=True, identity=identity) as (run, git, edit, tmp):
+                self.assertEqual(run()['adopt_pr'], 2)
+        for identity in ({'title': 'T-999: changed'}, {'isCrossRepository': True}):
+            with restack_fixture(adopted=True, changed_identity=identity) as (run, git, edit, tmp):
+                with self.assertRaises(ValueError): run()
+                self.assertFalse(any(call.args[1] == 'push' for call in git.call_args_list))
+                edit.assert_not_called()
+
+    def test_adopted_restack_guards_and_retarget(self):
+        for retargeted in (False, True):
+            # FAIL-FIRST: human branch restacks and identifies adopted ownership.
+            with restack_fixture(adopted=True, retargeted=retargeted) as (run, git, edit, tmp):
+                result = run()
+                self.assertEqual((result['task'], result['adopt_pr']), ('T-002', 2))
+                self.assertEqual(result['base'], 'main')
+                self.assertEqual(edit.call_count, 0 if retargeted else 1)
+        for options, reason in ((dict(pinned=False), 'adoption not pinned'),
+                                (dict(wrong_parent=True), 'is not the adopted base'),
+                                (dict(lost_head=True), 'approved adoption head is no longer an ancestor')):
+            with restack_fixture(adopted=True, **options) as (run, git, edit, tmp):
+                with self.assertRaisesRegex(ValueError, reason): run()
+                self.assertFalse(any('push' in c.args or 'worktree' in c.args for c in git.call_args_list))
+        # FAIL-FIRST: no previous round means no local child ref or objects.
+        with restack_fixture(adopted=True, local=ValueError('absent')) as (run, git, edit, tmp):
+            self.assertEqual(run()['adopt_pr'], 2)
+            self.assertIn(('/repo', 'update-ref', 'refs/heads/human-child', B, ''),
+                          [c.args for c in git.call_args_list])
+        with restack_fixture(adopted=True, local=ValueError('absent'), fetched=A) as (run, git, edit, tmp):
+            with self.assertRaisesRegex(ValueError, 'fetched child head differs'): run()
+            self.assertFalse(any('push' in c.args or 'update-ref' in c.args for c in git.call_args_list))
+        for adopted_parent in (False, True):
+            with restack_fixture(adopted=True, parent_adopted=adopted_parent) as (run, git, edit, tmp), \
+                 patch.object(stack, 'release_parent') as release:
+                run()
+                self.assertEqual(release.call_args.kwargs['adopted_branch'], adopted_parent)
+
     def test_merged_dependencies_use_project_base(self):
         self.assertEqual(stack.select_base('owner/repo', 'main', ['T-1'], {'T-1'}, False),
                          {'name': 'main'})

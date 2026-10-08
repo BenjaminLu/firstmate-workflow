@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 sys.dont_write_bytecode = True
 import fm_origin
+import fm_private_names
 from fm_conventions import read_policy, validate
 from fm_project_paths import external_home
 
@@ -337,7 +338,7 @@ def questions(e, p):
              evidence={'repository':e['repository'], 'source':e['source'], 'remote':e.get('remote',''), 'private':e.get('repository_info',{}).get('private','unknown')},
              recommendation='Keep external records private in FM_HOME; create no remote without explicit authorization.'),
         dict(id='policy', question='Confirm or correct the inferred checks, branch prefix, CI triggers, merge, review and posting policy below.',
-             evidence=p, recommendation='land: card; confirm required checks/statuses, unknown protection, available merge methods and branch deletion; stacking held, no force push, no auto-merge.')]
+             evidence={**p, 'request_reviewers': p.get('reviewers', [])}, recommendation='land: card; confirm request_reviewers (the recorded reviewers by default; [] disables requests), required checks/statuses, unknown protection, available merge methods and branch deletion; stacking held, no force push, no auto-merge.')]
 
 
 def render(p):
@@ -425,15 +426,15 @@ def approve(home, e, p, answers):
         raise ValueError('captain project contract with check required')
     contract_text = contract_yaml(contract)
     p = dict(p)
-    # Format choices require explicit answers; inspected/proposed data is not consent.
-    for field in ('pr_title', 'pr_sections', 'pr_language', 'branch_prefix', 'ci_branch_patterns', 'ci_pull_request'):
+    # Format and request choices require explicit answers; inspected/proposed data is not consent.
+    for field in ('pr_title', 'pr_sections', 'pr_language', 'branch_prefix', 'ci_branch_patterns', 'ci_pull_request', 'request_reviewers'):
         p.pop(field, None)
     p.setdefault('analysers', [])
     allowed = {'repository','visibility','base','land','review','post','merge_method','delete_branch',
                'available_merge_methods','required_checks','reviewers','analysers','stacking','force_with_lease','watch_seconds',
                'debounce_seconds','reinspect_seconds','posting_languages','confirmed',
                'policy_confirmed','bootstrap_authorized','product','captain','intent',
-               'pr_title','pr_sections','pr_language','branch_prefix','ci_branch_patterns','ci_pull_request'}
+               'pr_title','pr_sections','pr_language','branch_prefix','ci_branch_patterns','ci_pull_request','request_reviewers'}
     for key, value in answers.items():
         if key in allowed: p[key] = value
     if e['source'] == 'github' and (p['repository'] != e['repository'] or p['base'] != e['base']):
@@ -469,7 +470,7 @@ def edit(home, changes, captain, intent):
     if set(changes) & {'repository','base','confirmed','confirmed_at','captain','intent','policy_confirmed'}:
         raise ValueError('binding/confirmation changes require fresh onboarding')
     p.setdefault('analysers', [])
-    if not set(changes) <= set(p) | {'pr_title', 'pr_sections', 'pr_language', 'branch_prefix', 'ci_branch_patterns', 'ci_pull_request'}: raise ValueError('unknown conventions field')
+    if not set(changes) <= set(p) | {'pr_title', 'pr_sections', 'pr_language', 'branch_prefix', 'ci_branch_patterns', 'ci_pull_request','request_reviewers'}: raise ValueError('unknown conventions field')
     p.update(changes); p.update(captain=captain,intent=intent,confirmed_at=now())
     validate_merge_methods(p)
     new=render(p)
@@ -512,7 +513,7 @@ def register(engine, name, p):
              if re.match(r'projects:\s*(#.*)?$',line.rstrip('\r\n'))]
     if len(headers) > 1:
         raise ValueError('config.yaml has more than one projects: block; merge them by hand before onboarding')
-    # The public registry receives routing only. Existing names must match;
+    # The local, uncommitted registry receives routing only. Existing names must match;
     # onboarding never overwrites another project or private nested contract.
     if any(re.match(r'^  '+re.escape(name)+r':[ \t]*(#.*)?$',line.rstrip('\r\n')) for line in lines):
         for field,value in [('github',p['repository']),('base',p['base'])]:
@@ -536,6 +537,14 @@ def register(engine, name, p):
     else:
         text+='\nprojects:\n'+entry
     atomic(path,text)
+    try:
+        added = fm_private_names.update(engine)
+        print(f'fm-onboard: private-name digests updated ({added} added); '
+              'commit tests/fixtures/private-name-digests.txt through a task PR', file=sys.stderr)
+    except (OSError, ValueError) as error:
+        reason = os.strerror(error.errno) if isinstance(error, OSError) and error.errno else type(error).__name__
+        print(f'fm-onboard: private-name digests not updated: {reason}; '
+              f'run python3 bin/lib/fm_private_names.py update --repo {engine}', file=sys.stderr)
 
 
 def main(argv=None):

@@ -25,7 +25,7 @@ import time
 
 sys.dont_write_bytecode = True
 import fm_lifeline as life
-from fm_conventions import read_policy
+from fm_conventions import read_policy, request_reviewers
 from fm_watch import Locked, read_json, save_json, notify
 from fm_autopilot_loop import MechanicalLoop
 from fm_autopilot_branches import BranchUpdates, ERRORS
@@ -328,7 +328,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
         for name in list(names):
             kind = 'recheck-' + name.lower()
             token = f'{kind}:{number}:{head}'
-            if self.policy['post'] == 'local':
+            if self.policy['post'] == 'local' and not self.ctx['external']:
                 self.queue(key(['recheck', pr['number'], head, name]), task,
                            'Reviewer re-check needed: ' + name, '需要審查者重新檢查：' + name)
                 names.remove(name)
@@ -440,6 +440,36 @@ class Pilot(BranchUpdates, MechanicalLoop):
                    f'{task} #{number} restack outcome unknown (timed out or interrupted); reconcile before review',
                    f'{task} #{number} 重新堆疊結果不明（逾時或中斷）；審查前請先核對')
 
+    def external_evidence(self, task, pr):
+        """Refresh the existing private store; retain only bounded wake metadata."""
+        failure = None
+        try:
+            output = self.command(self.script('fm-external.sh', 'collect', '--task', task,
+                '--pr', str(pr['number']), '--branch', pr['head']['ref']))
+        except Exception:
+            failure = 'command'
+        if failure is None:
+            try:
+                record = json.loads(output)
+                if not isinstance(record, dict):
+                    failure = 'json'
+            except (ValueError, TypeError):
+                failure = 'json'
+        if failure is None:
+            if (not isinstance(record.get('head'), str)
+                    or not re.fullmatch(r'[0-9a-fA-F]{40}', record['head'])
+                    or type(record.get('ready')) is not bool
+                    or not isinstance(record.get('findings'), list)):
+                failure = 'fields'
+            elif record['head'] != pr['head']['sha']:
+                failure = 'stale-head'
+        if failure:
+            self.attention('external-evidence-' + failure, task, pr,
+                           'external evidence refresh failed: ' + failure,
+                           '外部證據更新失敗：' + failure)
+            return None
+        return dict(ready=record['ready'], head=record['head'], count=len(record['findings']))
+
     def pull(self, pr, reviews, comments, runs, statuses):
         if pr['state'] != 'open' or self.policy_error or pr['head']['ref'] == self.ctx['base']:
             return
@@ -448,7 +478,13 @@ class Pilot(BranchUpdates, MechanicalLoop):
         task = self.task(pr)
         if not task: return
         old = self.data['pulls'].get(number)
-        if old and old.get('head') and old['head'] != head:
+        if self.ctx['external']:
+            record = self.data['rechecked'].get(number, {})
+            if record.get('head') != head or record.get('rule') != 'external-request':
+                author = (pr.get('user') or {}).get('login', '').lower()
+                names = [name for name in request_reviewers(self.policy) if name.lower() != author]
+                self.data['rechecked'][number] = dict(head=head, names=names, rule='external-request')
+        elif old and old.get('head') and old['head'] != head:
             names = []
             for name in self.policy.get('reviewers', []):
                 prior = [r for r in reviews if r.get('user', {}).get('login', '').lower() == name.lower()]
@@ -477,6 +513,9 @@ class Pilot(BranchUpdates, MechanicalLoop):
             if failed:
                 self.queue(key([number, head, kind, name, row['id']]), task,
                            f'CI failed: {task} #{number} {name} {head}', f'CI 失敗：{task} #{number} {name}')
+        external_reviews = self.ctx['external'] and self.policy['review'] in ('external', 'both')
+        named_reviewers = {name.lower() for name in self.policy.get('reviewers', [])}
+        refreshed, evidence = False, None
         for kind, rows in (('review', reviews), ('finding', comments)):
             for row in rows:
                 if kind == 'review' and row.get('state') not in ('CHANGES_REQUESTED','COMMENTED'):
@@ -489,14 +528,36 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 self.data['seen'][token] = True
                 reviewer = row.get('user', {}).get('login', 'unknown')
                 batchkey = number + ':' + reviewer
+                line = f"{task} #{number} {reviewer}: {row.get('state') or kind} {row.get('html_url') or row.get('id')}"
+                if external_reviews and reviewer.lower() in named_reviewers:
+                    if not refreshed:
+                        evidence = self.external_evidence(task, pr)
+                        refreshed = True
+                    source = 'review' if kind == 'review' else row.get('_source') or 'comment'
+                    batchkey += ':' + source + ':' + str(row.get('id'))
+                    status = ('ready' if evidence['ready'] else 'blocked') if evidence else 'unknown'
+                    count = f", {evidence['count']} finding(s)" if evidence else ''
+                    label = row.get('state') if kind == 'review' else source
+                    line = (f"{task} #{number} {reviewer} {label} {row.get('id')}: external evidence "
+                            f"{status} at {head[:7]}{count}; read fm_external findings for the task")
                 batch = self.data['batches'].setdefault(batchkey, dict(task=task, lines=[]))
-                batch['lines'].append(f"{task} #{number} {reviewer}: {row.get('state') or kind} {row.get('html_url') or row.get('id')}")
+                batch['lines'].append(line)
                 batch['due'] = self.clock() + self.policy['debounce_seconds']
         # External repositories may never report BEHIND without protection.
         if self.ctx['external']:
             import fm_adopt
             adopted = self.adoptions()[0].get(pr['number']) == task
             can_update = not adopted or fm_adopt.pushed(self.rows(), task, pr['number'])
+            if adopted:
+                env = self.adoption_env()
+                try:
+                    fm_adopt.effective_base({'baseRefName': pr['base']['ref']},
+                                            fm_adopt.adoption(env, task), env, task, self.ctx['repository'])
+                except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+                    can_update = False
+                    self.queue(f'adopt-base-{number}', task,
+                               f'{task} #{number}: adopted base needs verified restack',
+                               f'{task} #{number} 接手基底需要經驗證的 restack')
             if can_update and pr.get('mergeable') is not False and not pr.get('draft'):
                 token = f'update:{number}:{head}'
                 if self.retry_due(token):
@@ -562,11 +623,23 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     raise ValueError('incomplete or stale check/status response')
                 self.pull(pr, reviews, comments, runs['check_runs'], statuses['statuses'])
                 adopted = self.ctx['external'] and pr['number'] in self.adoptions()[0]
-                if not adopted and pr['base']['ref'] != self.ctx['base'] and self.task(pr):
+                if pr['base']['ref'] != self.ctx['base'] and (self.pr_task(pr) if adopted else self.task(pr)):
                     from urllib.parse import quote
                     parents = self.pages('pulls?state=closed&head=' + quote(self.ctx['repository'].split('/')[0] + ':' + pr['base']['ref'], safe=''))
                     for parent in parents:
                         if parent['head']['ref'] == pr['base']['ref'] and parent.get('merged_at'):
+                            if adopted:
+                                import fm_adopt
+                                task = self.pr_task(pr)
+                                env = self.adoption_env()
+                                dependencies = (fm_adopt.authorized_spec(env, task) or {}).get('depends_on', [])
+                                if self.pr_task(parent) not in dependencies:
+                                    break
+                                if not fm_adopt.pinned_adoption(env, task) or not fm_adopt.pushed(self.rows(), task, number):
+                                    self.queue(f'adopt-restack-{number}', task,
+                                               f'{task} #{number}: run fm-restack.sh before catch-up',
+                                               f'{task} #{number} 追趕前請執行 fm-restack.sh')
+                                    break
                             self.restack(pr, parent)
                             break
             self.network_success()

@@ -30,7 +30,7 @@ class Onboarding(unittest.TestCase):
         self.calls = []
         def gh(endpoint):
             self.calls.append(endpoint)
-            if endpoint == 'repos/consenlabs/tokenlon-mm-agent': return payload('repository')
+            if endpoint == 'repos/example-org/example-repo': return payload('repository')
             if '/protection' in endpoint: raise ValueError('HTTP 404')
             if '/pulls?' in endpoint: return payload('pulls')
             if endpoint.endswith('/reviews?per_page=100'): return payload('reviews')
@@ -41,7 +41,7 @@ class Onboarding(unittest.TestCase):
             if '/contents/' in endpoint: return {'encoding':'base64','content':base64.b64encode(b'# Repository policy\n').decode()}
             if '/comments?' in endpoint: return [{'body':'Please review / 請審查','user':{'login':'maintainer','type':'User'}}]
             raise AssertionError(endpoint)
-        self.e = inspect_remote('consenlabs/tokenlon-mm-agent', gh)
+        self.e = inspect_remote('example-org/example-repo', gh)
         self.p = infer(self.e)
     def answers(self):
         return dict(captain='captain', intent='Adopt for agent work', product='Maintain agent',
@@ -63,11 +63,11 @@ class Onboarding(unittest.TestCase):
                 if path in files:
                     return dict(encoding='base64', content=base64.b64encode(files[path].encode()).decode())
                 raise ValueError('404')
-            if endpoint == 'repos/consenlabs/tokenlon-mm-agent': return payload('repository')
+            if endpoint == 'repos/example-org/example-repo': return payload('repository')
             if '/pulls?' in endpoint:
                 return [dict(number=i+1, head=dict(ref=b)) for i,b in enumerate(['feature/a','feature/b','fix/c'])]
             return {}
-        e = inspect_remote('consenlabs/tokenlon-mm-agent', gh)
+        e = inspect_remote('example-org/example-repo', gh)
         for path in files:
             self.assertEqual(e['ci_files'][path]['text'], files[path])
         p = infer(e)
@@ -154,7 +154,7 @@ class Onboarding(unittest.TestCase):
         self.assertIn('zh',self.p['conversation_languages'])
         self.assertEqual(len(questions(self.e, self.p)), 3)
         self.assertTrue(all(q['evidence'] and q['recommendation'] for q in questions(self.e,self.p)))
-        self.assertTrue(all(x.startswith('repos/consenlabs/tokenlon-mm-agent') for x in self.calls))
+        self.assertTrue(all(x.startswith('repos/example-org/example-repo') for x in self.calls))
         self.assertEqual(self.e['pulls'][0]['detail']['merged_by']['login'], 'maintainer')
     def test_missing_permission_fields_require_explicit_policy(self):
         e=copy.deepcopy(self.e)

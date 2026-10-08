@@ -1,3 +1,4 @@
+import { openCrewSheet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -13,6 +14,7 @@ const { board, open } = useBoard();
 for (const lang of ["en", "zh-TW", "zh-CN"]) {
   test(`the board reads in ${lang}`, async ({ page }) => {
     await open(page, lang);
+    await openCrewSheet(page);
 
     await expect(page.locator("#scene, #captain")).toHaveCount(0);
     await expect(page.locator(".roster li.rrow")).toHaveCount(CREW.length + 1);
@@ -45,11 +47,12 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
       // the stylesheet upper-cases these, so compare the words not the case
       expect(labels[i].toLowerCase()).toBe(w.toLowerCase());
     }
-    const aboard = await page.locator(".rosterbar .aboard").innerText();
+    const aboard = await page.locator("#secbar .aboard").innerText();
     expect(aboard).toContain(want("aboard"));
     expect(aboard).toContain(`${CREW.length + 1}/24`);
 
     // and the language is the one that was asked for
+    await openCrewSheet(page);
     expect(await page.locator(".roster h3 span").first().innerText()).toBe(want("roster"));
     // and the conversion actually changed something, or "derived" would be
     // satisfied by a table that does nothing
@@ -65,9 +68,11 @@ test("either mechanism picks the language on its own", async ({ page }) => {
   for (const how of ["query", "stored"] as const) {
     await open(page, "en", how);
     expect(await page.evaluate(() => document.documentElement.lang)).toBe("en");
+    await openCrewSheet(page);
     expect(await page.locator(".roster h3 span").first().innerText()).toBe(EN.roster);
     await open(page, "zh-TW", how);
     expect(await page.evaluate(() => document.documentElement.lang)).toBe("zh-TW");
+    await openCrewSheet(page);
     expect(await page.locator(".roster h3 span").first().innerText()).toBe(TW.roster);
   }
 });

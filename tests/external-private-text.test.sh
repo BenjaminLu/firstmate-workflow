@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# bin/lib/fm_private_names.py
 # Public prose and committed control files must not disclose external projects.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,6 +12,10 @@ import sys
 import tempfile
 
 ROOT = Path(sys.argv[1])
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / 'bin/lib'))
+from fm_private_names import scan
+
 PATHS = ['README.md', ':(glob)design/*.md', 'skills', 'docs', 'bin', 'board']
 
 
@@ -71,7 +76,7 @@ def check(repo, fixture=False):
     for file in files:
         if file.is_file() and hashlib.sha256(file.read_bytes()).digest() in private_hashes:
             problems.append('external control bytes are tracked')
-    return problems
+    return problems + scan(repo)
 
 
 with tempfile.TemporaryDirectory(prefix='external-private-text-') as temporary:
@@ -117,6 +122,42 @@ projects:
     assert git(repo, 'rm', '-f', str(copy.relative_to(repo))).returncode == 0
     assert check(repo, fixture=True) == []
 
+# Exercise committed blobs outside the old PATHS, including dirty worktrees.
+with tempfile.TemporaryDirectory(prefix='private-digest-') as temporary:
+    repo = Path(temporary)
+    assert git(repo, 'init', '-q').returncode == 0
+    target = repo / 'tests/fixtures/private-name-digests.txt'
+    target.parent.mkdir(parents=True)
+    sample = repo / 'arbitrary.txt'
+    def commit():
+        assert git(repo, 'add', '.').returncode == 0
+        result = git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
+                     '-c', 'core.hooksPath=/dev/null', 'commit', '--allow-empty', '-qm', 'fixture')
+        assert result.returncode == 0, result.stderr
+    def case(name, content, hit):
+        target.write_text('# Digests only.\n' + hashlib.sha256(name.lower().encode()).hexdigest() + '\n')
+        sample.write_text(content + '\n')
+        commit()
+        found = scan(repo)
+        assert found == (['external name digest in arbitrary.txt:1'] if hit else []), (content, found)
+    case('invented-secret', 'invented-secret', True)
+    case('invented-secret', 'prefixinvented-secretsuffix', False)
+    case('invented-secret', 'Invented Secret', True)
+    case('invented-secret', 'invented-secret.', True)
+    case('invented-secret', 'D-invented-secret-T002-1', True)
+    for name in ('imaginary-owner/imaginary-repo', 'imaginary-owner', 'imaginary-repo'):
+        case(name, 'imaginary-owner/imaginary-repo', True)
+        case(name, 'imaginary-owner/imaginary-repo.git.', True)
+    case('invented-secret', 'Generic text', False)
+    sample.write_text('invented-secret\n')
+    assert scan(repo) == [], 'uncommitted tracked bytes are not scanned'
+    # Even the digest of the digest-file header must not match its exempt blob.
+    case('digests', 'Generic text', False)
+    (repo / 'binary.bin').write_bytes(b'\xffdigests')
+    commit()
+    assert scan(repo) == [], 'non-UTF-8 blobs are skipped'
+
+assert git(ROOT, 'cat-file', '-e', 'HEAD:tests/fixtures/private-name-digests.txt').returncode == 0, 'committed private-name digests missing'
 problems = check(ROOT)
 assert not problems, '; '.join(sorted(set(problems)))
 print('External private text and control-file checks passed.')

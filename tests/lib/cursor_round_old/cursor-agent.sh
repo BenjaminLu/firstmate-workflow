@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# cursor-agent adapter. Hands the prompt to cursor-agent and maps its outcome onto the
+# contract in _contract.md. It must never touch git or gh: the scripts above
+# do all of that, which is what lets a CLI with no repository access still be
+# a worker.
+#
+# The invocation is the non-interactive one on purpose. An adapter that opens
+# a REPL hangs a dispatch until something kills it, and looks like a model
+# thinking rather than a script waiting for a human who is not there.
+#
+#   cursor-agent.sh run <prompt> <worktree> <log>
+#   cursor-agent.sh dimensions  -> which policy dimensions cursor-agent's own flags enforce here
+set -uo pipefail
+_fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+[ -r "$_fm_alib" ] || { echo "cursor-agent: missing $_fm_alib" >&2; exit 70; }
+# shellcheck source=bin/adapters/_lib.sh
+. "$_fm_alib"
+
+# What cursor-agent's own flags enforce of the round's policy (T-105). It
+# used to run with -f, which lets every command through, and no sandbox.
+# Now --trust answers the workspace-trust prompt for the worktree the
+# scripts made, and --sandbox enabled runs its commands in cursor's own
+# sandbox, which confines their writes to the workspace. The network, the
+# sockets and the refused operations are the OS sandbox's, whose proxy is
+# what names a refused host; if cursor's own sandbox cuts the network off
+# before the proxy sees a request, that refusal names no host, which the
+# canary shows per version. MCP servers are never approved (no
+# --approve-mcps). The repository's .cursor/ and .mcp.json are still read
+# by cursor, and reading in general is not confined, so those two are the
+# OS sandbox's. On macOS cursor's sandbox is a seatbelt, which cannot start
+# inside sandbox-exec: there it is off, -f comes back so that print mode
+# runs any command at all, and the outer one confines the commands instead.
+#
+# Its login (T-117): `agent login` keeps its token where cursor-agent reads
+# it through the keychain API, which no round reaches, and a stand-in for
+# security(1) on the round's PATH was never asked for it (the canary,
+# 2026-09-26). So the round signs in with a Cursor API key the operator
+# keeps for the crew - fm's keychain item firstmate-cursor-api-key, or
+# ~/.config/firstmate/cursor-api-key - which fm-sandbox.sh reads outside the
+# round and hands in as CURSOR_API_KEY. A CURSOR_API_KEY already set is
+# used as is.
+#
+# Nothing of cursor-agent's is shed the way the other vendors' billing
+# variables are (T-121): CURSOR_API_KEY is not a second credential that can
+# outrank a subscription login here, it is the only login this design ever
+# hands a cursor-agent round, so there is no ambient variable to strip
+# before it runs.
+#
+# No `fm:review-run` line: a run-mode review needs the reviewer's writes
+# confined to a checkout by the CLI itself, which T-066 asked of claude
+# alone. So cursor-agent reviews in diff mode only, and fm_adapter_context
+# refuses a run-mode round before the CLI starts.
+cursor_native() {
+  if [ "${FM_OUTER_OS:-}" = darwin ]; then
+    echo "env ulimit"
+  else
+    echo "write env ulimit"
+  fi
+}
+if [ "${1-}" = "dimensions" ]; then
+  fm_adapter_policy; read -r -a native <<<"$(cursor_native)"
+  fm_adapter_dimensions "${native[@]}"; exit 0
+fi
+
+[ "${1-}" = "run" ] || { echo "usage: cursor-agent.sh run <prompt> <worktree> <log>" >&2; exit 64; }
+prompt="${2-}"; tree="${3-}"; log="${4-}"
+[ -f "$prompt" ] || { echo "cursor-agent: no prompt at $prompt" >&2; exit 64; }
+[ -d "$tree" ]   || { echo "cursor-agent: no worktree at $tree" >&2; exit 64; }
+fm_adapter_context "$0"
+# Plan B (2026-10-05): keep the crew keychain deny and keep Cursor's login
+# in memory. This undocumented switch accepts file, memory or default;
+# default uses the macOS keychain, and file would persist credentials.
+# It also prevents the unconfined model check reading the operator's agent
+# login: without CURSOR_API_KEY already in this environment it exits 1 and
+# listcheck stays silent. The round's own model-refusal check decides then.
+export AGENT_CLI_CREDENTIAL_STORE=memory
+
+command -v cursor-agent >/dev/null 2>&1 || {
+  # stderr, not the log: the log is what the VENDOR said, and a caller that
+  # asks "did anything run?" must not be answered by the adapter's own
+  # notice that nothing could
+  echo "cursor-agent: cursor-agent is not installed - vendor unavailable" >&2; exit 2; }
+
+# FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
+# arguments the operator configured, and they have to split into words.
+off="$(fm_adapter_mark "$log")"
+# an operator argument after these would win, and undo the policy
+case " ${FM_ADAPTER_ARGS:-} " in
+  *" -f "*|*--force*|*--sandbox*|*--approve-mcps*|*--yolo*)
+    echo "cursor-agent: FM_ADAPTER_ARGS changes permissions; refusing the round" >&2; exit 64 ;;
+  # config.yaml's model is the one place a model is chosen (T-127)
+  *--model*)
+    echo "cursor-agent: FM_ADAPTER_ARGS names a model; config.yaml is the one place a model is chosen; refusing the round" >&2; exit 64 ;;
+esac
+# cursor-agent can list its own models (T-127); checked before the round
+# starts, so a name it does not recognise never spends an attempt. Silent
+# when the list itself could not be asked (no login yet) - the CLI's own
+# answer at round time, read by fm_adapter_model_refusal below, stays the
+# final word either way. This call touches no worktree and needs no policy
+# confinement of its own; it is the same lightweight preflight
+# `command -v cursor-agent` above already is.
+if [ -n "${FM_MODEL:-}" ]; then
+  lc_msg="$(fm_adapter_model_listcheck cursor-agent "$FM_MODEL" cursor-agent --list-models)" && {
+    echo "$lc_msg; refusing the round" >&2
+    [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'cursor-agent\t%s\t%s\n' "$FM_MODEL" "$lc_msg" >> "$FM_MODEL_REFUSED"
+    exit 64
+  }
+fi
+fm_adapter_policy
+# On macOS cursor's own sandbox cannot start inside sandbox-exec, and with
+# it off a print-mode round approves no shell command at all: the canary on
+# 2026-09-26 saw cursor-agent sign in, exit 0 and never run its probe.
+# There the OS sandbox is what confines every command, as it is for
+# claude's Bash, so -f lets them through to it. Anywhere else - bwrap, or
+# the hatch with no outer sandbox - cursor's own sandbox runs the commands
+# and -f is never passed.
+perms=(--trust --sandbox enabled)
+[ "${FM_OUTER_OS:-}" != darwin ] || perms=(--trust --sandbox disabled -f)
+# config.yaml's model, applied with cursor-agent's own flag (T-127)
+model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
+  < <(fm_adapter_model_args --model)
+read -r -a native <<<"$(cursor_native)"
+fm_adapter_confine cursor-agent "$tree" "${native[@]}"
+if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
+  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" --output-format json \
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
+  fm_adapter_pipeline_status "${PIPESTATUS[@]}"
+else
+  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" --output-format json \
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+fi
+rc=$?
+msg="$(fm_adapter_model_refusal cursor-agent "${FM_MODEL:-}" "$log" "$off" "$rc")" && {
+  echo "$msg; refusing the round" >&2
+  [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'cursor-agent\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
+  exit 64
+}
+fm_adapter_verdict "$rc" "$log" "$off"
+exit $?

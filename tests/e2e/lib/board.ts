@@ -67,7 +67,8 @@ const open = async (page: Page, lang: string, how: "query" | "stored" = "query",
     await page.evaluate((l) => localStorage.setItem("board.lang", l), lang);
     await page.goto(url);                 // no query parameter this time
   }
-  await expect(page.locator("#roster .rrow").first()).toBeVisible();
+  await expect(page.locator("#rosterBtn")).not.toHaveText("");
+  await expect(page.locator("#roster .rrow").first()).toBeAttached();
 };
   return { board, open };
 }
@@ -76,3 +77,23 @@ export const emit = (root:string, type:string, pr:number) => {
   const r = spawnSync('bash',[join(root,'bin/fm-emit.sh'),'--actor','github','--type',type,'--task',`T-${pr}`,'--pr',String(pr),'--en','fixture outcome','--tw','測試結果'], {env:{...process.env,FM_ROOT:root}});
   expect(r.status).toBe(0);
 };
+
+// Navigate through the same controls as the captain; sheets never stack.
+export async function showFleet(page: Page) {
+  await expect(page.locator("#tabFleet")).not.toHaveText("");
+  const sheet = page.locator('.board-sheet[open]');
+  if (await sheet.count()) await sheet.locator('[data-sheet-close]').click();
+  await page.locator('#tabFleet').click();
+}
+export async function openCrewSheet(page: Page) {
+  await expect(page.locator("#rosterBtn")).not.toHaveText("");
+  const log = page.locator('#logSheet[open]');
+  if (await log.count()) await log.locator('[data-sheet-close]').click();
+  if (!await page.locator('#crewSheet').isVisible()) await page.locator('#rosterBtn').click();
+}
+export async function openLogSheet(page: Page) {
+  await expect(page.locator("#logBtn")).not.toHaveText("");
+  const crew = page.locator('#crewSheet[open]');
+  if (await crew.count()) await crew.locator('[data-sheet-close]').click();
+  if (!await page.locator('#logSheet').isVisible()) await page.locator('#logBtn').click();
+}

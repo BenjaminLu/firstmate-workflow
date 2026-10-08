@@ -1029,6 +1029,12 @@ Existing SPEC-OK receipts stay valid; a pinned plain title still publishes under
 a later conventional setting with a warning, and invalid or absent public text
 keeps the generic fallback.
 
+Confirm `request_reviewers` alongside the PR format fields during onboarding.
+Use the recorded reviewers as the recommendation; an explicit empty list turns
+requests off. The autopilot requests those names on first sight of each mapped
+external PR and every new head, excluding the PR author, in every post mode.
+Do not infer consent from an inspection's proposed list.
+
 Confirm `pr_title`, `pr_sections` and `pr_language` through the captain's explicit
 onboarding answers or conventions edits. Per field, CONVENTIONS wins over the
 private `FM_HOME/owners/<owner>.yaml` default, then the engine's `plain`, `[]`,
@@ -1062,9 +1068,13 @@ scope. Gates and review measure the whole PR from its own base, so add a
 fail-first test in the first round if the human commits have none. Build on
 the human work and retain its conventions, title and body. External catch-up
 under `force_with_lease: true` can rewrite those commits on the same PR.
-A stacked PR waits for T-239; self-project adoption is unsupported. A changed
-base needs a new spec and A card. For `land: handoff`, return the finished PR
-to its team under the project's policy.
+Adopt a stacked PR's parent first and list its task in `depends_on`, with
+confirmed stacking policy. Self-project adoption is unsupported. A changed
+base needs a new spec and A card except for a verified restack transition
+after the parent merges. Restack counts as an adopted push; an operator must
+restack a retargeted child or one with no adopted push yet, using its pinned
+adoption, before catch-up. For `land: handoff`, return the finished PR to its
+team under the project's policy.
 
 External private data belongs in FM_HOME/projects/<name>, including specs,
 conventions, pins, evidence and recovery; no copies in engine state. Private
@@ -1167,8 +1177,14 @@ or `both`; an external/both project's fm review is a local pre-check, not a
 substitute for the designated repository reviewers. `post` also accepts
 `summary`, `check`, `threads` and `comments`; T-140 owns the first three remote
 projections, which currently retain reports locally without posting raw private
-content. The engine registry gets routing metadata only. CONVENTIONS.md and
-project command configuration live privately under FM_HOME.
+content. The engine registry gets routing metadata only; external entries stay
+uncommitted local changes and never reach main. After onboarding, commit the
+updated `tests/fixtures/private-name-digests.txt` through a normal task PR. If
+onboarding reports a digest update failure, run
+`python3 bin/lib/fm_private_names.py update --repo <engine root>` and include the
+resulting digest file in that task PR. A git history rewrite is a separate
+captain-approved step after cleanup merges. CONVENTIONS.md and project command
+configuration live privately under FM_HOME.
 
 For a captain's chat correction, write the requested fields to a private JSON
 file and run `bin/fm-project.sh edit <name> --changes <file> --captain <name>
@@ -1218,6 +1234,14 @@ review and gates for that SHA. A stale local ref is held for synchronization,
 not treated as current because local gates were green. Required review policy
 comes from the project's confirmed conventions; native external reviews require
 every named reviewer's latest approval for the verified commit/patch, with no unresolved review threads.
+
+When an external reviewer wake arrives, read the private evidence with the shell
+function `fm_external collect --format prompt`, using the task, PR and project
+context. This is the shell function; `bin/fm-external.sh` has no `--format` flag.
+Brief the next round with each finding and its file:line. If a finding changes
+agreed behaviour, amend the spec and obtain the approved repin before dispatch.
+Report which findings were addressed. The wake and board contain metadata only;
+read the private findings before deciding the next round's scope.
 
 `fm-autopilot.sh` passes that SHA to `fm-decide.sh --expected-head <sha>`. A manually
 raised tracked merge card needs the same flag and a signed readiness record.

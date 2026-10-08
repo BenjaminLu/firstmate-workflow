@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Request } from '@playwright/test';
@@ -235,6 +236,7 @@ for (const width of [1280,650,390]) test('voyage shortcuts preserve board focus 
   try {
     await page.goto(b.url+'/?lang=en');
     await page.setViewportSize({width,height:844});
+    await showFleet(page);
     const menu=page.locator('.cmenu:not(:disabled)').first();
     await menu.focus();
     const cancelled=await menu.evaluate(el=>!el.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
@@ -283,7 +285,9 @@ test('voyage follows the responsive decision order without reloading its stage',
       await page.setViewportSize({width,height:844});
       await expect.poll(async()=> (await panel.boundingBox())!.y < (await card.boundingBox())!.y).toBe(true);
       expect((await card.boundingBox())!.y).toBeLessThan(844);
+      await showFleet(page);
       expect((await panel.boundingBox())!.y).toBeLessThan((await page.locator('.lanes-wrap').boundingBox())!.y);
+      await page.locator('#tabDecisions').click();
     }
     await page.keyboard.press('f');
     await expect(page.locator('#voyage-drawer #deckwrap')).toHaveCount(1);
@@ -306,6 +310,7 @@ test('a missing Live build leaves the working board without a game panel', async
     page.on('pageerror',e=>errors.push(e.message));
     await page.goto(b.url+'/?lang=en');
     await expect(page.locator('.dcard').first()).toBeVisible();
+    await showFleet(page);
     await page.locator('.cmenu:not(:disabled)').first().click();
     await page.locator('[role="menu"] [data-act="drop"]').click();
     await expect(page.locator('#dropConfirm')).toBeVisible();
@@ -338,6 +343,7 @@ for (const action of ['decision','task']) test(`board ${action} writes remain av
       await page.locator('.dcard .opt[data-c="B"]').first().click();
       selector='.dcard .confirm';
     } else {
+      await showFleet(page);
       await page.locator('.cmenu:not(:disabled)').first().click();
       await page.locator('[role="menu"] [data-act="drop"]').click();
       selector='#dropConfirm [data-confirm="drop"]';
