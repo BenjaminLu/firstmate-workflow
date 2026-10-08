@@ -77,6 +77,8 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - name: install dependencies
         run: bun install --frozen-lockfile
+      - name: install bubblewrap
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
       - name: "bin/ci.sh --stage bash --shard ${{ matrix.shard }}/6"
         env:
           FM_BASH_TIMINGS: ${{ needs.bash-timings.outputs.timings }}
@@ -216,6 +218,8 @@ jobs:
       # the dependencies alone, in each tree: the suites it runs are bash
       # suites, which need no browser. A shard with no changed suite of its
       # own sets up nothing and succeeds at once.
+      - name: install bubblewrap
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
       - name: "bin/fm-failfirst.sh --shard=${{ matrix.shard }}/6"
         env:
           FM_FF_TIMINGS: ${{ needs.fail-first-timings.outputs.timings }}
