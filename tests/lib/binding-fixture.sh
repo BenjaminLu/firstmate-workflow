@@ -16,7 +16,7 @@ if __name__ == "__main__":
     import argparse, json, os, re, subprocess, sys, runpy
     from pathlib import Path
     # Keep modes outside this fixture's overrides on the production parser.
-    if len(sys.argv) > 1 and sys.argv[1] not in ('head', 'base', 'checks', 'ready', 'candidate', 'review-final'):
+    if len(sys.argv) > 1 and sys.argv[1] not in ('head', 'base', 'checks', 'ready', 'candidate', 'carry', 'review-final'):
         runpy.run_path(str(Path(__file__).with_name('fm_binding_real.py')), run_name='__main__')
         raise SystemExit(0)
     p=argparse.ArgumentParser()
@@ -24,11 +24,28 @@ if __name__ == "__main__":
     p.add_argument('--gate-report',default='')
     p.add_argument('--head', default=''); p.add_argument('--branch', default='')
     p.add_argument('--base-name', default='')
+    p.add_argument('--bound-signature', default=''); p.add_argument('--pre-sync', action='store_true')
     a=p.parse_args()
     root=Path(os.environ['FM_TARGET_ROOT'])
     base_file=root/'.fixture-pr-base'
     base=base_file.read_text().strip() if base_file.exists() else os.environ.get('FM_BASE', 'main')
-    if a.mode in ('head', 'review-final'):
+    if a.mode == 'carry':
+        with (root/'.fixture-carry-calls').open('a') as log:
+            log.write('pre-sync\n' if a.pre_sync else 'full\n')
+        notify=root/'.fixture-carry-notify'
+        if not a.pre_sync and notify.exists():
+            with open(notify.read_text().strip(),'w') as bell: bell.write('waiting\n')
+        prefix='.fixture-precheck' if a.pre_sync else '.fixture-carry'
+        for suffix,status in (('-refuse',1),('-wait',75)):
+            path=root/(prefix+suffix)
+            if path.exists():
+                print(path.read_text().strip(),file=sys.stderr);raise SystemExit(status)
+        if a.pre_sync:
+            print(json.dumps(dict(precheck=True,head=a.head)));raise SystemExit(0)
+        path=root/'.fixture-carry'
+        if path.exists(): print(path.read_text());raise SystemExit(0)
+        print('no carry',file=sys.stderr);raise SystemExit(1)
+    elif a.mode in ('head', 'review-final'):
         r=subprocess.run(['git','-C',os.environ['FM_TARGET_ROOT'],'rev-parse',a.branch],capture_output=True,text=True)
         head=r.stdout.strip()
         if a.mode == 'review-final':

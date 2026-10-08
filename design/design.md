@@ -259,7 +259,9 @@ from every record, including records written before T-230, in
 repeat answers), and `session/wake.jsonl`. Only `/api/task` exposes this authored
 history among board outputs. `fm-decide.sh --await` prints the record unchanged,
 including those fields, in firstmate's own terminal.
-Receiving a response is not itself approval; inspect the chosen option and context.
+Receiving a response is not itself approval; inspect the chosen option and context. A merge record whose answer
+carries keeps the card’s original `expected_head` and `binding`; the merged
+event names both the original and merged heads.
 
 ```jsonc
 {"id":"D-007","task":"T-004","kind":"choice","chosen":"B","note":"leave the schema alone","ts":"..."}
@@ -5980,6 +5982,51 @@ holds for
 firstmate's recommendation and evidence (§6); landing remains the captain's
 card or the team's handoff, never an autopilot merge.
 
+**A merge answer survives a main-only move (T-220).** An eligible signed tracked
+card carries across merges of the project base when the signed review identity,
+stable patch-id, file list and spec/contract/conventions hashes are unchanged,
+only base merges have been added, and fresh signed six-gate readiness with green
+required checks names the new authoritative head. External or both review policy
+refuses a changed head because its review identity is head-bound. Untracked,
+unsigned and invalid-signature cards retain their existing routes. A stacked PR
+refuses carry immediately before synchronization; the answer covers only the
+project base. A running carry keeps the project's merge turn and decision record
+`running`, and firstmate raises no second card. The board forwards the card's
+verified-shape readiness signature; it preserves the card's head and binding.
+
+`fm-merge` waits up to `FM_MERGE_CARRY_SECONDS` (3600 seconds), retrying every
+`FM_MERGE_CARRY_POLL` (30 seconds). It never updates the PR branch, reruns CI or
+runs gates; the autopilot owns those. Independent pre-sync validation checks
+signed Store integrity, bound readiness, OPEN state, review identity/policy,
+adoption authorization and known same-head DIRTY conflicts before any base write.
+Every full try repeats those checks. After a successful precheck it synchronizes
+the local base: self projects fetch a private ref without reading or writing
+FETCH_HEAD, then use a fast-forward-only merge for their checked-out base or a
+compare-and-swap update-ref when it is not checked out; external projects fetch
+the explicit origin base ref and call `fm_external_base`. Unpublished commits,
+files in the way, another worktree's checked-out base, missing refs and unreadable
+fetches wait, with the reason named at the deadline. This replaces firstmate's
+manual base synchronization while the carry is running. Before its first carry
+try the helper freezes its entire `bin/` tree and re-execs with that copied
+`FM_CODE_ROOT`; binding, adoption, emission and final cleanup all use this one
+immutable code root while every storage/project/git root remains real. One EXIT
+cleanup owns its snapshot and private refs, preserves status and retains unknown
+resources safely.
+
+Forged or missing bound evidence, a superseding REJECT or different review,
+changed patch/files/inputs, own non-merge commits, failed required checks, closed
+PRs and known same-head conflicts refuse immediately with the reason. Transient
+reads, moving heads, pending/unknown/stale checks and unavailable external reviews
+wait, even on CLEAN. Readiness invalidation on an unchanged caught-up
+CLEAN/BLOCKED/UNSTABLE/HAS_HOOKS head refuses because no branch update will arrive;
+BEHIND/UNKNOWN waits, and external ancestry-behind also waits even on CLEAN.
+Conflicts appearing only after the update remain bounded by the deadline. Success
+merges the readiness record's exact head with `--match-head-commit`; its bilingual
+merged event includes `carried_from` and `head`. Refusal or timeout settles the
+decision `failed` with its reason and needs refreshed evidence and a new card;
+firstmate never retries a failed answer automatically.
+
+
 Branch updates are re-decided from GitHub state, without a write-ahead action
 record. Gate advancement is also re-decided from its observed fingerprint:
 `advanced` stores each PR's head and fingerprint only after the gate job starts.
@@ -6077,7 +6124,8 @@ removes it from the restack path. Other records clear on a new head. Cleanup
 cannot hide a published or unknown push: its failure is attached to the error,
 or returned as `tree_cleanup` after success.
 
-Synchronize the local base without overwriting unpublished work, then obtain
+Synchronize the local base without overwriting unpublished work (a running
+T-220 carry performs this synchronization itself), then obtain
 fresh current-head CI, six gates and authoritative review/patch binding before
 requesting a merge card. The helper retains the parent while any open PR uses
 it, or downstream evidence is unknown. Once the last dependent retargets,

@@ -119,6 +119,21 @@ assert_contains "$(cat "$d/state/merge-calls")" "--pr 16" "merge called the merg
 assert_contains "$(cat "$d/state/merge-calls")" "--task T-A" "and the task"
 assert_fail "test -f '$d/state/pending/D-1.json'" "the pending decision is cleared"
 
+# T-220: only verified-shape signed tracked cards forward a binding signature.
+for sig in cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc fixture null; do
+  case "$sig" in null) binding=null; ident=D-8203 ;; fixture) binding='{"signature":"fixture"}'; ident=D-8202 ;; *) binding="$(jq -cn --arg s "$sig" '{signature:$s}')"; ident=D-8201 ;; esac
+  jq -cn --arg id "$ident" --argjson binding "$binding" '{id:$id,task:"T-A",kind:"merge",pr:16,expected_head:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",binding:$binding}' > "$d/state/pending/$ident.json"
+  post "$(jq -cn --arg id "$ident" '{id:$id,chosen:"A"}')" >/dev/null
+  assert_eq merged "$(settled "$ident")" 'signature fixture settles'
+  calls="$(tail -1 "$d/state/merge-calls")"
+  if [ "$sig" = fixture ] || [ "$sig" = null ]; then
+    assert_lacks "$calls" --bound-signature 'invalid or absent signature keeps old argv'
+  else
+    assert_contains "$calls" "--bound-signature $sig" 'signed tracked card forwards exact signature'
+    assert_eq "$sig" "$(jq -r .binding.signature "$d/state/decisions/$ident.json")" 'decision keeps original binding'
+  fi
+done
+
 # firstmate, blocked on that decision, is released by it
 got="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --await D-1 --timeout 5)"
 assert_eq "A" "$(jq -r .chosen <<<"$got")" "fm-decide returns what the board wrote"
@@ -156,7 +171,10 @@ assert_eq "$literal" "$(jq -r .text <<<"$got")" 'watch preserves literal respons
 state_text="$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '.responses[]|select(.id=="D-3")|.text')"
 assert_eq "$literal" "$state_text" 'state roundtrip preserves literal response'
 assert_fail "grep -q 'pr 18' '$d/state/merge-calls'" 'custom never authorizes merge'
-assert_eq '3' "$(jq -s 'map(select(.type=="decision_made"))|length' "$d/state/events.jsonl")" 'one event per decision, none from await or duplicate'
+assert_eq '6' "$(jq -s 'map(select(.type=="decision_made"))|length' "$d/state/events.jsonl")" 'one event per decision, none from await or duplicate'
+for ident in D-1 D-2 D-3 D-8201 D-8202 D-8203; do
+  assert_eq '1' "$(jq -s --arg id "$ident" 'map(select(.type=="decision_made" and .data.decision==$id))|length' "$d/state/events.jsonl")" "exactly one event for $ident, none from await or duplicate"
+done
 assert_contains "$(post '{"id":"D-3","chosen":"A"}')" 'already recorded differently' 'conflicting repeat is truthful'
 assert_contains "$(post '{"id":"D-404","chosen":"A"}')" 'no pending decision' 'unknown decision cannot be invented'
 
