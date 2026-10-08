@@ -48,7 +48,7 @@ def parse_fields(lines):
     return policy
 
 
-def pr_format(policy, conventions_path):
+def owner_defaults(policy, conventions_path):
     """Resolve current private owner defaults per field, only in project layout."""
     defaults = {}
     path = Path(conventions_path).resolve()
@@ -71,16 +71,44 @@ def pr_format(policy, conventions_path):
                 defaults = parse_fields(owner_path.read_text().splitlines())
             except OSError as error:
                 raise ValueError('unreadable owner PR format: ' + str(error)) from error
-            if set(defaults) - set(PR_DEFAULTS):
+            if set(defaults) - (set(PR_DEFAULTS) | {'branch_prefix'}):
                 raise ValueError('unknown owner PR format field')
             validate_pr_format(defaults)
+            validate_branch_format(defaults)
+    return defaults
+
+
+def pr_format(policy, conventions_path):
+    defaults = owner_defaults(policy, conventions_path)
     validate_pr_format(policy)
     return {field: policy.get(field, defaults.get(field, value))
             for field, value in PR_DEFAULTS.items()}
 
 
+def branch_format(policy, conventions_path):
+    defaults = owner_defaults(policy, conventions_path)
+    validate_branch_format(policy)
+    return dict(prefix=policy.get('branch_prefix', defaults.get('branch_prefix', '')),
+                patterns=policy.get('ci_branch_patterns'),
+                pull_request=policy.get('ci_pull_request', False))
+
+
+def validate_branch_format(policy):
+    if 'branch_prefix' in policy and (not isinstance(policy['branch_prefix'], str)
+            or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,30}/', policy['branch_prefix'])):
+        raise ValueError('invalid conventions branch_prefix')
+    if 'ci_branch_patterns' in policy:
+        patterns = policy['ci_branch_patterns']
+        if (not isinstance(patterns, list) or not 1 <= len(patterns) <= 30
+                or any(not isinstance(x, str) or not x.strip() for x in patterns)):
+            raise ValueError('invalid conventions ci_branch_patterns')
+    if 'ci_pull_request' in policy and type(policy['ci_pull_request']) is not bool:
+        raise ValueError('invalid conventions ci_pull_request')
+
+
 def validate(policy, repository=None, base=None):
     validate_pr_format(policy)
+    validate_branch_format(policy)
     for key, choices in ENUMS.items():
         if policy.get(key) not in choices:
             raise ValueError('invalid or missing conventions ' + key)
@@ -136,6 +164,8 @@ def main():
         p = read_policy(args.path, args.repository, args.base)
         if args.field == 'pr_format':
             value = pr_format(p, args.path)
+        elif args.field == 'branch_format':
+            value = branch_format(p, args.path)
         else:
             value = p[args.field] if args.field else p
         print(value if isinstance(value, str) else json.dumps(value))

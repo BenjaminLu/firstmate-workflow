@@ -48,6 +48,98 @@ class Onboarding(unittest.TestCase):
                     confirmed=True, required_checks=['continuous-integration/drone/pr'],
                     policy_confirmed=True, contract={'setup':'npm ci','check':'npm test'},
                     land='card', review='external', post='local')
+    def test_ci_inspection_proposals_and_confirmation(self):
+        files = {
+            '.drone.yml': 'trigger:\n  ref:\n    - refs/heads/feature/*\n    - refs/tags/*\n  event:\n    - pull_request\n',
+            '.drone.jsonnet': "local utils = import 'utils.jsonnet'; {trigger: utils.default_trigger}",
+            'utils.jsonnet': "{default_trigger: {ref: ['refs/heads/feature/*', 'refs/heads/release/*']}}",
+            '.github/workflows/ci.yaml': 'on:\n  push:\n    branches: [feature/*, main]\n    tags: [v*]\n  pull_request:\njobs: {}\n',
+        }
+        def gh(endpoint):
+            if '/contents/' in endpoint:
+                path = endpoint.split('/contents/')[1].split('?')[0]
+                if path == '.github/workflows':
+                    return [dict(name='ci.yaml', path=path+'/ci.yaml', type='file')]
+                if path in files:
+                    return dict(encoding='base64', content=base64.b64encode(files[path].encode()).decode())
+                raise ValueError('404')
+            if endpoint == 'repos/consenlabs/tokenlon-mm-agent': return payload('repository')
+            if '/pulls?' in endpoint:
+                return [dict(number=i+1, head=dict(ref=b)) for i,b in enumerate(['feature/a','feature/b','fix/c'])]
+            return {}
+        e = inspect_remote('consenlabs/tokenlon-mm-agent', gh)
+        for path in files:
+            self.assertEqual(e['ci_files'][path]['text'], files[path])
+        p = infer(e)
+        self.assertEqual(p['ci_branch_patterns'], ['refs/heads/feature/*', 'refs/heads/release/*', 'feature/*', 'main'])
+        self.assertTrue(p['ci_pull_request'])
+        self.assertEqual(p['branch_prefix'], 'feature/')
+        self.assertIn('utils.jsonnet', p['branch_evidence']['ci_branch_patterns'])
+        self.assertEqual(p['branch_evidence']['branch_prefix'], [1,2])
+        self.assertEqual(questions(e,p)[2]['evidence']['branch_prefix'], 'feature/')
+        with tempfile.TemporaryDirectory() as t:
+            home = Path(t)
+            answers = dict(self.answers(), delete_branch=False)
+            accepted = approve(home,e,p,answers)
+            fields = dict(branch_prefix='release/', ci_branch_patterns=['release/*'], ci_pull_request=False)
+            for field in fields: self.assertNotIn(field, accepted)
+            accepted = approve(home,e,p,dict(answers, **fields))
+            for field,value in fields.items(): self.assertEqual(accepted[field], value)
+            edit(home, dict(branch_prefix='feature/', ci_pull_request=True), 'captain', 'Confirm CI')
+            self.assertEqual(read_policy(home/'CONVENTIONS.md')['branch_prefix'], 'feature/')
+
+    def test_ci_multiline_jsonnet_and_trigger_scope(self):
+        e = copy.deepcopy(self.e)
+        e['ci_files'] = {
+            'utils.jsonnet': dict(status='known', text="{ default_trigger: {\n  branch: [\n    'feature/*',\n    'release/*',\n  ],\n  event: ['push', 'pull_request'],\n}}"),
+            '.github/workflows/tags.yml': dict(status='known', text='on:\n  push:\n    tags: [v*]\njobs: {}\n'),
+        }
+        p = infer(e)
+        self.assertEqual(p['ci_branch_patterns'], ['feature/*','release/*'])
+        self.assertTrue(p['ci_pull_request'])
+        e['ci_files'] = {'.drone.yml': dict(status='known', text="trigger:\n  ref: ['refs/heads/feature/[ab]*']\n  branch: ['release/[12]*']\n")}
+        self.assertEqual(infer(e)['ci_branch_patterns'], ['refs/heads/feature/[ab]*', 'release/[12]*'])
+        e['ci_files'] = {'.drone.yml': dict(status='known', text='trigger:\n  event: [push]\nsteps:\n  - name: test\n    when:\n      event: [pull_request]\n')}
+        self.assertFalse(infer(e)['ci_pull_request'])
+
+    def test_ci_inspection_is_bounded_and_does_not_recurse(self):
+        calls = []
+        def gh(endpoint):
+            calls.append(endpoint)
+            if endpoint == 'repos/fixture/app':
+                return dict(full_name='fixture/app', default_branch='main')
+            if '/contents/.github/workflows?' in endpoint:
+                return [dict(name=f'ci{i}.yml', path=f'.github/workflows/ci{i}.yml', type='file') for i in range(25)]
+            if '/contents/' in endpoint:
+                path = endpoint.split('/contents/')[1].split('?')[0]
+                text = 'trigger: {}'
+                if path == '.drone.jsonnet':
+                    text = '\n'.join("local x%d = import 'ci%d.jsonnet';" % (i,i) for i in range(8))
+                    text += "\nlocal bad = import '../outside.jsonnet';"
+                elif path.endswith('.jsonnet'):
+                    text = "local nested = import 'nested.jsonnet'; {}"
+                return dict(encoding='base64', content=base64.b64encode(text.encode()).decode())
+            if '/pulls?' in endpoint: return []
+            return {}
+        e = inspect_remote('fixture/app', gh)
+        self.assertEqual(sum(p.startswith('.github/workflows/') for p in e['ci_files']), 20)
+        self.assertEqual(sum(p.endswith('.jsonnet') for p in e['ci_files']), 6)
+        self.assertFalse(any('outside.jsonnet' in c or 'nested.jsonnet' in c for c in calls))
+
+    def test_ci_unknown_directory_and_old_evidence(self):
+        self.assertEqual(self.e['ci_files']['.github/workflows']['status'], 'unknown')
+        e = copy.deepcopy(self.e)
+        e.pop('ci_files', None)
+        e['pulls'] = [dict(number=i+1,head=dict(ref=b)) for i,b in enumerate(['feature/a','feature/b','fix/c'])]
+        p = infer(e)
+        self.assertEqual(p['branch_prefix'], 'feature/')
+        self.assertNotIn('ci_branch_patterns', p)
+        self.assertNotIn('ci_pull_request', p)
+        e['ci_files'] = {'.drone.yml': dict(status='known', text='trigger:\n  branch: [release/*]\n')}
+        self.assertNotIn('branch_prefix', infer(e))
+        e['ci_files'] = {'.github/workflows/ci.yml': dict(status='known', text='on: [push, pull_request]\n')}
+        self.assertTrue(infer(e)['ci_pull_request'])
+
     def test_inspection_and_three_questions(self):
         self.assertEqual(self.e['protection']['status'], 'unknown')
         self.assertEqual(self.p['merge_method'], 'squash')

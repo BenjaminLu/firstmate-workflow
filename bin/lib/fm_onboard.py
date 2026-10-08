@@ -3,6 +3,8 @@ import argparse
 import base64
 from datetime import datetime, timezone
 import difflib
+import fnmatch
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -78,6 +80,43 @@ def inspect_remote(repository, call=api):
             if isinstance(value, dict) and value.get('encoding') == 'base64':
                 record['text'] = base64.b64decode(value['content']).decode('utf-8', errors='replace')
         evidence['files'][path] = record
+    # Bounded, data-only CI inspection. Never evaluate YAML or jsonnet.
+    evidence['ci_files'] = {}
+    def ci_file(path):
+        record = observed(call, prefix + '/contents/' + path + '?ref=' + quote(base, safe=''))
+        if record['status'] == 'known':
+            value = record['value']
+            if isinstance(value, dict) and value.get('encoding') == 'base64':
+                try:
+                    record['text'] = base64.b64decode(value['content']).decode('utf-8', errors='replace')
+                except (ValueError, KeyError, TypeError):
+                    record = dict(status='unknown', reason='invalid file contents')
+            else:
+                record = dict(status='unknown', reason='expected file contents')
+        evidence['ci_files'][path] = record
+        return record
+    ci_file('.drone.yml')
+    drone = ci_file('.drone.jsonnet')
+    imports = re.findall(r"\bimport\s+['\"]([A-Za-z0-9_.-]+\.jsonnet)['\"]", drone.get('text', ''))
+    for path in list(dict.fromkeys(imports))[:5]:
+        ci_file(path)
+    workflows = observed(call, prefix + '/contents/.github/workflows?ref=' + quote(base, safe=''))
+    if workflows['status'] == 'known' and not isinstance(workflows['value'], list):
+        workflows = dict(status='unknown', reason='expected workflow directory listing')
+    evidence['ci_files']['.github/workflows'] = workflows
+    for entry in workflows.get('value', []):
+        # Only direct files from this directory, never an arbitrary API path.
+        if not isinstance(entry, dict) or entry.get('type') != 'file':
+            continue
+        name = entry.get('name', '')
+        if not isinstance(name, str) or not re.fullmatch(r'[^/]+\.ya?ml', name):
+            continue
+        path = '.github/workflows/' + name
+        if entry.get('path') != path:
+            continue
+        if sum(p.startswith('.github/workflows/') for p in evidence['ci_files']) >= 20:
+            break
+        ci_file(path)
     pulls = observed(call, prefix + '/pulls?state=all&sort=updated&direction=desc&per_page=30')
     evidence['history'] = pulls['status']
     if pulls['status'] == 'unknown':
@@ -116,6 +155,117 @@ def inspect_local(path):
                 remote=git(path,'remote','get-url','origin'), commits=git(path,'log','-30','--format=%s').splitlines(),
                 pulls=[], history='unknown', protection={'status':'unknown','reason':'local onboarding'},
                 files={}, languages={'status':'unknown'}, inspected_at=now())
+
+
+def ci_fields(text, key):
+    """Read a textual field's inline value or indented block, without evaluation."""
+    pattern = r"(?:^|[,{])([ \t]*)['\"]?" + re.escape(key) + r"['\"]?\s*:([^\n]*)"
+    for match in re.finditer(pattern, text, re.M):
+        value = re.sub(r'(^|\s+)#.*$', '', match[2]).strip()
+        if value:
+            # Bound flow arrays/objects across lines, ignoring delimiters inside
+            # quoted strings. This only locates text; it evaluates no CI code.
+            if value[0] in '[{':
+                flow = value + text[match.end():]
+                depth = 0
+                for token in re.finditer(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[\[\]{}]", flow):
+                    char = token[0]
+                    if char in ('[', '{'):
+                        depth += 1
+                    elif char in (']', '}'):
+                        depth -= 1
+                        if depth == 0:
+                            value = flow[:token.end()]
+                            break
+            yield value
+            continue
+        indent = len(match[1])
+        lines = []
+        for line in text[match.end():].splitlines():
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            depth = len(line) - len(line.lstrip())
+            if depth < indent or depth == indent and not line.lstrip().startswith('- '):
+                break
+            lines.append(line)
+        yield '\n'.join(lines)
+
+
+def ci_list(value):
+    # Inline YAML/jsonnet arrays and YAML dash items; mapping keys are not items.
+    for group in re.findall(r'''\[((?:'[^']*'|"[^"]*"|[^\]])*)\]''', value):
+        for parts in re.findall(r"""'([^']*)'|"([^"]*)"|([^,\s]+)""", group):
+            token = next((part for part in parts if part), '')
+            if token:
+                yield token
+    for match in re.finditer(r"^\s*-\s+([^\n#]+)", value, re.M):
+        token = match[1].strip().strip("'\"")
+        if token:
+            yield token
+
+
+def infer_branches(e):
+    patterns = []
+    sources = []
+    known = []
+    pr_sources = []
+    for path, record in e.get('ci_files', {}).items():
+        if record.get('status') != 'known' or 'text' not in record:
+            continue
+        known.append(path)
+        text = record['text']
+        found = []
+        for parts in re.findall(r"""'([^']*)'|"([^"]*)"|(refs/heads/[^\s,\]}]+)""", text):
+            token = next((part for part in parts if part), '')
+            if token.startswith('refs/heads/'):
+                found.append(token)
+        for key in ('branch', 'branches'):
+            for value in ci_fields(text, key):
+                found.extend(ci_list(value))
+        found = [p for p in found if not p.startswith('refs/tags/')]
+        if found:
+            sources.append(path)
+        for pattern in found:
+            if pattern not in patterns:
+                patterns.append(pattern)
+        if path.startswith('.github/workflows/'):
+            runs_pr = any(re.search(r"(?:^|[,{\s])['\"]?pull_request['\"]?\s*:", value)
+                          or 'pull_request' in ci_list(value) or value.strip("'\"") == 'pull_request'
+                          for value in ci_fields(text, 'on'))
+        else:
+            # Drone event lists may be in the one-level imported trigger object.
+            triggers = list(ci_fields(text, 'trigger')) + list(ci_fields(text, 'default_trigger'))
+            # Imported helpers can use a project-specific trigger field name.
+            if path.endswith('.jsonnet'):
+                trigger_keys = re.findall(r'\b([A-Za-z_][A-Za-z0-9_]*trigger)\s*:', text)
+                for key in dict.fromkeys(trigger_keys):
+                    if key != 'default_trigger':
+                        triggers.extend(ci_fields(text, key))
+            runs_pr = any('pull_request' in ci_list(value)
+                          for trigger in triggers for value in ci_fields(trigger, 'event'))
+        if runs_pr:
+            pr_sources.append(path)
+    proposal = {}
+    evidence = {}
+    if patterns:
+        proposal['ci_branch_patterns'] = patterns
+        evidence['ci_branch_patterns'] = sources
+    if known:
+        proposal['ci_pull_request'] = bool(pr_sources)
+        evidence['ci_pull_request'] = pr_sources or known
+    heads = []
+    for pr in e.get('pulls', [])[:30]:
+        branch = (pr.get('head') or {}).get('ref', '')
+        match = re.match(r'^([^/]+/)', branch)
+        if match and (not patterns or any(fnmatch.fnmatchcase(branch, p.removeprefix('refs/heads/')) for p in patterns)):
+            heads.append((match[1], pr['number']))
+    if heads:
+        prefix = Counter(p for p, _ in heads).most_common(1)[0][0]
+        proposal['branch_prefix'] = prefix
+        evidence['branch_prefix'] = [n for p, n in heads if p == prefix]
+    if evidence:
+        proposal['branch_evidence'] = evidence
+    return proposal
 
 
 def infer(e):
@@ -162,7 +312,7 @@ def infer(e):
             required = []  # GitHub explicitly says no status-check requirement.
         elif isinstance(checks, dict) and ('contexts' in checks or 'checks' in checks):
             required = sorted(set(checks.get('contexts',[]) + [x['context'] for x in checks.get('checks',[])]))
-    return dict(repository=e['repository'], base=e.get('base') or 'unknown', land='card',
+    return dict(**infer_branches(e), repository=e['repository'], base=e.get('base') or 'unknown', land='card',
                 review='external' if reviewers else 'fm', post='local', merge_method=methods[0] if isinstance(methods,list) and methods else 'unknown',
                 available_merge_methods=methods, delete_branch=info.get('delete_branch_on_merge','unknown'),
                 required_checks=required, observed_statuses=sorted(statuses), reviewers=sorted(reviewers),
@@ -186,7 +336,7 @@ def questions(e, p):
         dict(id='location', question='Confirm the repository owner, location and visibility (and any initial-commit authorization).',
              evidence={'repository':e['repository'], 'source':e['source'], 'remote':e.get('remote',''), 'private':e.get('repository_info',{}).get('private','unknown')},
              recommendation='Keep external records private in FM_HOME; create no remote without explicit authorization.'),
-        dict(id='policy', question='Confirm or correct the inferred checks, merge, review and posting policy below.',
+        dict(id='policy', question='Confirm or correct the inferred checks, branch prefix, CI triggers, merge, review and posting policy below.',
              evidence=p, recommendation='land: card; confirm required checks/statuses, unknown protection, available merge methods and branch deletion; stacking held, no force push, no auto-merge.')]
 
 
@@ -276,14 +426,14 @@ def approve(home, e, p, answers):
     contract_text = contract_yaml(contract)
     p = dict(p)
     # Format choices require explicit answers; inspected/proposed data is not consent.
-    for field in ('pr_title', 'pr_sections', 'pr_language'):
+    for field in ('pr_title', 'pr_sections', 'pr_language', 'branch_prefix', 'ci_branch_patterns', 'ci_pull_request'):
         p.pop(field, None)
     p.setdefault('analysers', [])
     allowed = {'repository','visibility','base','land','review','post','merge_method','delete_branch',
                'available_merge_methods','required_checks','reviewers','analysers','stacking','force_with_lease','watch_seconds',
                'debounce_seconds','reinspect_seconds','posting_languages','confirmed',
                'policy_confirmed','bootstrap_authorized','product','captain','intent',
-               'pr_title','pr_sections','pr_language'}
+               'pr_title','pr_sections','pr_language','branch_prefix','ci_branch_patterns','ci_pull_request'}
     for key, value in answers.items():
         if key in allowed: p[key] = value
     if e['source'] == 'github' and (p['repository'] != e['repository'] or p['base'] != e['base']):
@@ -319,7 +469,7 @@ def edit(home, changes, captain, intent):
     if set(changes) & {'repository','base','confirmed','confirmed_at','captain','intent','policy_confirmed'}:
         raise ValueError('binding/confirmation changes require fresh onboarding')
     p.setdefault('analysers', [])
-    if not set(changes) <= set(p) | {'pr_title', 'pr_sections', 'pr_language'}: raise ValueError('unknown conventions field')
+    if not set(changes) <= set(p) | {'pr_title', 'pr_sections', 'pr_language', 'branch_prefix', 'ci_branch_patterns', 'ci_pull_request'}: raise ValueError('unknown conventions field')
     p.update(changes); p.update(captain=captain,intent=intent,confirmed_at=now())
     validate_merge_methods(p)
     new=render(p)
