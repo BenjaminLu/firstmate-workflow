@@ -28,10 +28,10 @@ class ScheduledConventions(unittest.TestCase):
         self.private=Path(self.tmp.name)/'private'
         self.homes={name:self.private/'projects'/name for name in ('one','two')}
         config='default_project: self\nprojects:\n  self:\n    repo: .\n    github: owner/engine\n    base: main\n    required_check: ci\n'
-        self.e=dict(repository='consenlabs/tokenlon-mm-agent',base='master',source='github',pulls=[],commits=[],
+        self.e=dict(repository='example-org/example-repo',base='master',source='github',pulls=[],commits=[],
                     repository_info=json.loads((root/'tests/lib/onboarding/repository.json').read_text()),protection={'status':'unknown'})
         for name,home in self.homes.items():
-            config+=f'  {name}:\n    github: consenlabs/tokenlon-mm-agent\n    base: master\n    required_check: ci\n'
+            config+=f'  {name}:\n    github: example-org/example-repo\n    base: master\n    required_check: ci\n'
             approve(home,self.e,infer(self.e),dict(confirmed=True,policy_confirmed=True,captain='captain',intent='test',product='app',required_checks=['ci'],contract={'check':'true'},reinspect_seconds=100 if name=='one' else 200))
         (self.engine/'config.yaml').write_text(config)
         self.env=patch.dict(os.environ,{**{k:v for k,v in os.environ.items() if not k.startswith(('FM_','HERDR_'))},'FM_HOME':str(self.private),'FM_PROJECT':'self'},clear=True)

@@ -5245,7 +5245,14 @@ no-remote bootstrap is explicit, not a pretend clone of a nonexistent remote.
 ### 15.2 Registry and conventions
 
 The engine registry carries only approved routing metadata, not private project
-contracts, designs or specs. Resolve external base, checks and gate contract
+contracts, designs or specs. External routing entries stay uncommitted local
+changes and never reach main. Onboarding updates
+`tests/fixtures/private-name-digests.txt`; commit that digest file through a task
+PR. The privacy guard scans the committed content of every tracked UTF-8 text
+file against these committed SHA-256 digests, even on CI without a local
+external registry. Digests detect leaks but allow guessed names to be confirmed;
+they are not secrecy protection. A history rewrite is a separate captain-approved
+operation after the cleanup merges. Resolve external base, checks and gate contract
 from approved private project records. Self retains T-043's full contract:
 `setup`, `check`, `check_env`, `tests`, `test`, `docs`, and future fields. T-050
 ships shell and Python readers for both the top-level `project:` block and
@@ -5277,8 +5284,9 @@ The same confirmation writes an initial private design.md beside it (T-226): fir
 The public engine registry carries routing only; command configuration is
 `FM_HOME/projects/<name>/state/config.yaml`. Onboarding inserts the routing entry
 into the existing `projects:` block, allowing a trailing comment on its header
-and refusing a second block. The entry is a working-tree change to the tracked
-`config.yaml` that reaches main only through a captain-approved pull request.
+and refusing a second block. The entry stays an uncommitted local change to the
+tracked `config.yaml` and never reaches main; only the updated
+`tests/fixtures/private-name-digests.txt` is committed through a task pull request.
 Existing explicit-name and self routing remain supported.
 
 The conventions front matter uses data-only fields (strings quoted as JSON;

@@ -10,12 +10,12 @@ import sys
 root = Path(__file__).parent
 assert sys.argv[1] == 'api', sys.argv
 endpoint = sys.argv[2]
-assert endpoint.startswith('repos/consenlabs/tokenlon-mm-agent'), endpoint
+assert endpoint.startswith('repos/example-org/example-repo'), endpoint
 with open(os.environ['ONBOARD_GH_LOG'], 'a') as log:
     log.write(endpoint + '\n')
 def payload(name):
     return json.loads((root / (name + '.json')).read_text())
-if endpoint == 'repos/consenlabs/tokenlon-mm-agent':
+if endpoint == 'repos/example-org/example-repo':
     result = payload('repository')
     if os.environ.get('ONBOARD_DRIFT'): result['delete_branch_on_merge'] = True
 elif '/protection' in endpoint or '/contents/' in endpoint:
