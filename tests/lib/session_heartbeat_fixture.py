@@ -111,7 +111,7 @@ class HeartbeatFixture(contextlib.ExitStack):
                     child.kill()
                     child.wait(timeout=2)
 
-    def assert_completed(self, case):
+    def verify_completed(self, case):
         case.assertEqual(1, self.output.getvalue().count('finished exit='))
         case.assertEqual(1, self.output.releases)
         case.assertEqual(1, self.ready_count)

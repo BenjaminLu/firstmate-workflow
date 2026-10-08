@@ -1042,7 +1042,7 @@ class Session(SessionFixture):
         self.assertIn('still running', text)
         self.assertEqual(0, rc)
         self.assertRegex(text, r'finished exit=0 after \d+s')
-        fixture.assert_completed(self)
+        fixture.verify_completed(self)
 
     def decision_files(self):
         state = self.repo / 'state'
