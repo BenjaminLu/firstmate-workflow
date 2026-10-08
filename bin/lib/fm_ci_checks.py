@@ -10,7 +10,7 @@ def variable_boundary():
 
     pattern = re.compile(rb'\$[A-Za-z_][A-Za-z0-9_]*[\x80-\xff]')
     failed = False
-    for root in (Path('bin'), Path('tests')):
+    for root in (Path('bin'), Path('tests'), Path('.githooks')):
         for path in sorted(root.rglob('*')):
             if not path.is_file():
                 continue
@@ -22,6 +22,94 @@ def variable_boundary():
                     print(f'{path}:{number}: brace the variable before non-ASCII text')
                     failed = True
     sys.exit(1 if failed else 0)
+
+def shell_files(root):
+    """Yield shell sources in the three lint roots, excluding binary/lint data."""
+    import re
+
+    for directory in ('bin', 'tests', '.githooks'):
+        for path in sorted((root / directory).rglob('*')):
+            if not path.is_file():
+                continue
+            data = path.read_bytes()
+            if b'\0' in data or re.search(rb'^# fm:lint-source', data, re.M):
+                continue
+            first = data.split(b'\n', 1)[0]
+            if path.suffix == '.sh' or re.match(
+                    rb'^#!\s*(?:\S*/)?(?:bash|sh)(?:\s|$)', first) or re.match(
+                    rb'^#!\s*\S*/env\s+(?:-S\s+)?(?:bash|sh)(?:\s|$)', first):
+                yield path
+
+
+def portability(check, message):
+    from pathlib import Path
+    import re
+
+    root = Path(sys.argv[2])
+    failed = False
+    for path in shell_files(root):
+        previous = ''
+        for number, line in enumerate(path.read_bytes().decode(
+                'utf-8', errors='surrogateescape').split('\n'), 1):
+            allowed = re.fullmatch(r'# fm:allow-portability: (?=.*\S).*', previous)
+            if not allowed and not line.lstrip().startswith('#') and check(line):
+                print(f'{path.relative_to(root)}:{number}: {message}')
+                failed = True
+            previous = line
+    sys.exit(1 if failed else 0)
+
+
+def patsub_amp():
+    import re
+
+    # Keep the established diagram-suite expression, now applied recursively.
+    pattern = re.compile(r'\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?/[/#%]?[^}/]*/[^}]*&')
+    portability(pattern.search,
+                'a literal & in a pattern replacement differs between bash 3.2 and 5.2')
+
+
+def has_brace_json(line):
+    """Read each quoted substitution on this line, respecting quoted parentheses."""
+    import re
+
+    for opening in re.finditer(r'"\$\(', line):
+        index = opening.end()
+        depth = 1
+        quote = None
+        word = []
+        while index < len(line) and depth:
+            char = line[index]
+            if quote == "'":
+                if char == "'":
+                    quote = None
+            elif char == '\\' and index + 1 < len(line):
+                if quote == '"':
+                    word.extend(line[index:index + 2])
+                index += 1
+            elif quote == '"':
+                if char == '"':
+                    text = ''.join(word)
+                    if '\\"' in text and re.search(r'\{[^}]*,[^}]*\}', text):
+                        return True
+                    quote = None
+                else:
+                    word.append(char)
+            elif char in "\"'":
+                quote = char
+                word = []
+            elif char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            index += 1
+    return False
+
+
+def brace_json():
+    portability(has_brace_json,
+                'escaped JSON with a comma inside "$(...)" is brace-expanded by bash 3.2; '
+                'build it with jq or outside the substitution')
+
 
 def compile_modules():
     """Compile every library module, keeping all bytecode in CI's scratch tree."""
@@ -189,4 +277,4 @@ def coverage():
 if __name__ == "__main__":
     {"variable-boundary": variable_boundary, "compile": compile_modules,
      "private-fetch": private_fetch, "design-layout": design_layout,
-     "coverage": coverage}[sys.argv[1]]()
+     "coverage": coverage, "patsub-amp": patsub_amp, "brace-json": brace_json}[sys.argv[1]]()
