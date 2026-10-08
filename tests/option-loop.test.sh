@@ -56,7 +56,7 @@ fm-evidence 3
 fm-external 8
 fm-failfirst 3
 fm-gate 6
-fm-merge 5
+fm-merge 6
 fm-project 4
 fm-protocol 5
 fm-ready 4
@@ -155,7 +155,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "122" "$total" "all 122 pinned flag cases, including the nine fm option cases, were exercised"
+assert_eq "123" "$total" "all 123 pinned flag cases, including the nine fm option cases, were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.
