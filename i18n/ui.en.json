@@ -250,5 +250,8 @@
   "detailNoCards": "No decision cards yet.",
   "detailBrief": "Latest brief",
   "gateNotRunnable": "Not runnable: {reason}",
-  "ciOnlyEvidence": "Fail-first did not run. The project's required CI checks are the only remaining test evidence for this change. Confirm they are green before choosing A."
+  "ciOnlyEvidence": "Fail-first did not run. The project's required CI checks are the only remaining test evidence for this change. Confirm they are green before choosing A.",
+  "whyYouSeeThis": "Why you see this",
+  "decisionDetails": "Decision details",
+  "decisionClose": "Close details"
 }
