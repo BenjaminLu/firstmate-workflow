@@ -477,6 +477,7 @@ const refused = new Map();
 // strips the captain has opened in place; the first card is always open
 const expanded = new Set();
 const revealedSections = new Set();
+const openDecisionSheets = new Set(), openWhys = new Set();
 let latest, feedback = null, orderUntil = 0, orderTimer;
 // T-122: whether this tab holds the captain's credential, as /api/session
 // says, and false from the moment a write is refused for the lack of it.
@@ -581,6 +582,7 @@ function chrome() {
 
 function render(s) {
   const focus = document.activeElement;
+  const focusSheet = focus?.closest?.('.decision-sheet')?.dataset.id;
   const focusKey = focus?.dataset?.id;
   const focusChoice = focus?.dataset?.c;
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
@@ -752,6 +754,7 @@ function render(s) {
   // first, so answering one never moves another
   const pend = [...(s.pending || [])];
   const pendingIds = new Set(pend.map(d => d.id));
+  for (const set of [openDecisionSheets, openWhys]) for (const id of set) if (!pendingIds.has(id)) set.delete(id);
   for (const id of answered) if (!pendingIds.has(id)) answered.delete(id);
   for (const key of revealedSections) if (!pendingIds.has(JSON.parse(key)[0])) revealedSections.delete(key);
   for (const id of [...picks.keys()]) if (!pendingIds.has(id)) picks.delete(id);
@@ -834,22 +837,22 @@ function render(s) {
       // says so: it may have been raised under the wrong task
       (d.task_final ? `<p class="final-note" role="note">${esc(t('finalNote').replace('{task}', d.task || '').replace('{stage}', laneLabel(d.task_final)))}</p>` : '') +
       links(d) +
-      `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'), d)}</p>` +
+      (content?.intent ? '' : `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'), d)}</p>`) +
       (content?.intent ? '' : DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>` : '')) +
-      (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome), d)}</p>` : '') +
+
       (d.kind === "merge" && d.gates
         ? `<ul class="gates">${GATES().map(({n,name})=>{const g=t("gate_"+name), warning=gates[name]==="not_runnable", ok=gatePassed(gates,name);return `<li class="${warning?"w":ok?"y":"n"}"><i>${warning?"&#9888;":ok?"&#10003;":"&#8211;"}</i>${n}. ${esc(g)}${warning?` · ${esc(t('gateNotRunnable').replace('{reason}', () => d.not_runnable?.[name] || ''))}`:''}</li>`;}).join("")}</ul>`
         : "") +
       (d.kind === "merge" && GATES().some(({name}) => gates?.[name] === "not_runnable")
         ? `<p class="ci-only-evidence" role="note">${esc(t('ciOnlyEvidence'))}</p>` : '') +
       (content?.intent ? `</section>${intentBody(d, content, locked)}` :
-      `<div class="acts">${options}
+      `<div class="decision-bar">${decisionDetailsButton(d)}<div class="acts">${options}
          <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
          <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>
          <span class="validation" id="validation-${esc(d.id)}"></span>
          ${refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : ''}
          <button class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(t(sent.has(d.id) ? 'sending' : 'confirmOrder'))}</button>
-       </div>`) + '</div>';
+       </div></div>${decisionSheet(d, content, locked)}`) + '</div>';
   };
   // The first pending decision is open in full beside the captain's portrait;
   // every other one is a one-line strip that opens in place, with the same
@@ -864,6 +867,19 @@ function render(s) {
       (pick ? ` <i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') +
       `</summary>${full(d)}</details>`;
   }).join(""));
+  deck.querySelectorAll('[data-decision-details]').forEach(button => button.onclick = () => {
+    openDecisionSheets.add(button.dataset.id); render(latest);
+    document.getElementById(`sheet-${button.dataset.id}`)?.querySelector('[data-decision-close]')?.focus();
+  });
+  deck.querySelectorAll('[data-decision-close]').forEach(button => button.onclick = () => closeDecisionSheet(button.dataset.id));
+  deck.querySelectorAll('[data-why]').forEach(el => {
+    el.querySelector('summary').onclick = event => {
+      event.preventDefault();
+      if (openWhys.has(el.dataset.why)) openWhys.delete(el.dataset.why); else openWhys.add(el.dataset.why);
+      el.open = openWhys.has(el.dataset.why);
+    };
+  });
+  syncDecisionBars();
   for (const r of refused.values()) r.announced = true;
   deck.querySelectorAll('details.dstrip').forEach(el => el.ontoggle = () => {
     if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
@@ -922,8 +938,9 @@ function render(s) {
   };
   pose(); feedbackText();
   if (focusKey) {
-    const replacement = [...deck.querySelectorAll('[data-id]')].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && (focusChoice ? el.dataset.c === focusChoice : !el.dataset.c) && el.dataset.question === focus.dataset.question && el.dataset.ok === focus.dataset.ok);
-    replacement?.focus({preventScroll:true});
+    const focusRoot = focusSheet ? document.getElementById(`sheet-${focusSheet}`) : deck;
+    const replacement = [...(focusRoot?.querySelectorAll('[data-id]') || [])].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && (focusChoice ? el.dataset.c === focusChoice : !el.dataset.c) && el.dataset.question === focus.dataset.question && el.dataset.ok === focus.dataset.ok);
+    (replacement || (focusSheet && document.getElementById(`sheet-${focusSheet}`)?.querySelector('[data-decision-close]')))?.focus({preventScroll:true});
     if (replacement && selection) replacement.setSelectionRange(...selection);
   }
 
@@ -1080,30 +1097,37 @@ function sectionItems(d, section, items, draw, wrap = html => html) {
 }
 function intentBody(d, content, locked, detailOnly = false) {
   const pick = picks.get(d.id);
+  const sentence = (field, index, text) => detailOnly ? steSentence(d, field, index, text) : said(words(text), d);
   const list = html => `<ul>${html}</ul>`;
   const hasItems = field => Array.isArray(content[field]) && content[field].length > 0;
   const sentences = (field, numbered = false) => sectionItems(d, field, content[field] || [], (item, index) =>
-    `<li>${numbered ? `<b>${esc(t('intentHeading'))} ${index + 1}</b> · ` : ''}${steSentence(d, field, index, item.text)}</li>`, list);
-  const controls = index => {
-    const a = answers.get(d.id)?.[index];
-    return `<div class="question-controls">${['yes','no'].map(value => `<button type="button" data-id="${esc(d.id)}" data-question="${index}" data-ok="${value}" aria-pressed="${a?.ok === (value === 'yes')}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t(value === 'yes' ? 'answerYes' : 'answerNo'))}</button>`).join('')}` +
-      `<label ${a?.ok === false ? '' : 'hidden'}>${esc(t('answerText'))}<textarea data-id="${esc(d.id)}" data-question="${index}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(a?.text || '')}</textarea></label></div>`;
-  };
+    `<li>${numbered ? `<b>${esc(t('intentHeading'))} ${index + 1}</b> · ` : ''}${sentence(field, index, item.text)}</li>`, list);
   const intent = `<section><h4>${esc(t('intentHeading'))}</h4>${sentences('intent', true)}` +
-    (hasItems('why') ? `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${steSentence(d,'why',index,item.text)}</span>`)}</div>` : '') + '</section>';
+    (detailOnly && hasItems('why') ? `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${sentence('why',index,item.text)}</span>`)}</div>` : '') + '</section>';
   const how = `<section class="intent-how"><h4>${esc(t('howHeading'))}</h4>` +
     (d.diagram === false ? '' : DIAGRAM.embed(d.diagram_name || d.id)) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div></section>`;
-  const alignment = hasItems('done') ? `<section><h4>${esc(t('alignmentHeading'))}</h4>${sentences('done')}</section>` : '';
+  const visibleIntents = revealedSections.has(JSON.stringify([d.id, 'intent'])) ? (content.intent || []) : (content.intent || []).slice(0,6);
+  const visibleDone = revealedSections.has(JSON.stringify([d.id, 'done'])) ? (content.done || []) : (content.done || []).slice(0,6);
+  const parent = item => {
+    const match = item.text.match(/^(?:Intent|\u610f\u5716)\s+(\d+)[:\uff1a]/);
+    const n = match ? Number(match[1]) : 0;
+    return n > 0 && n <= visibleIntents.length ? n : 0;
+  };
+  const doneRow = (item, nested = false) => `<li class="alignment-row">${nested ? '<span aria-hidden="true">✓ </span>' : ''}${said(words(item.text),d)}</li>`;
+  const alignment = hasItems('done') ? (detailOnly
+    ? `<section><h4>${esc(t('alignmentHeading'))}</h4>${sentences('done')}</section>`
+    : `<div class="plain-alignment"><ul aria-label="${esc(t('alignmentHeading'))}">${visibleDone.filter(item => !parent(item)).map(item => doneRow(item)).join('')}</ul>` +
+      sectionItems(d, 'done', content.done || [], () => '') + '</div>') : '';
   const scopeItems = ['scope_in','scope_out'].flatMap(field => (content[field] || []).map(text => ({field, text})));
   const scopeKey = JSON.stringify([d.id, 'scope']);
   const shownScope = revealedSections.has(scopeKey) ? scopeItems : scopeItems.slice(0,6);
   const scope = scopeItems.length ? `<section><h4>${esc(t('scopeHeading'))}</h4><div class="intent-scope">` +
-    ['scope_in','scope_out'].filter(hasItems).map(field => `<div><h5>${esc(t(field === 'scope_in' ? 'scopeIn' : 'scopeOut'))}</h5><ul>${shownScope.filter(item => item.field === field).map(item => `<li>${said(words(item.text),d)}</li>`).join('')}</ul></div>`).join('') +
+    ['scope_in','scope_out'].filter(hasItems).map(field => `<div class="${detailOnly ? '' : field}"><h5>${esc(t(field === 'scope_in' ? 'scopeIn' : 'scopeOut'))}</h5><ul>${shownScope.filter(item => item.field === field).map(item => `<li>${said(words(item.text),d)}</li>`).join('')}</ul></div>`).join('') +
     `</div>${shownScope.length < scopeItems.length ? `<button type="button" class="show-more" data-reveal="${esc(scopeKey)}">${esc(t('showMore').replace('{n}',scopeItems.length - shownScope.length))}</button>` : ''}</section>` : '';
   const notes = hasItems('notes') ? `<section><h4>${esc(t('notesHeading'))}</h4>` +
-    sectionItems(d, 'notes', content.notes || [], (note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${steSentence(d,'notes',index,note.text)}</p></aside>`) + '</section>' : '';
+    sectionItems(d, 'notes', content.notes || [], (note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${sentence('notes',index,note.text)}</p></aside>`) + '</section>' : '';
   if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`;
-  const options = `<section class="acts intent-options"><h4>${esc(t('optionsHeading'))}</h4>` +
+  const options = `<section class="acts intent-options">` +
     ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content.options?.[k];
       const eff = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
@@ -1112,13 +1136,57 @@ function intentBody(d, content, locked, detailOnly = false) {
     }).join('') +
     `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t('customChoice'))}</button>` +
     `<label ${pick === 'custom' ? '' : 'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label></section>`;
-  const questions = hasItems('questions') ? `<section class="confirm-questions"><h4>${esc(t('confirmQuestions'))}</h4>` +
-    sectionItems(d, 'questions', content.questions || [], (q,index) => `<div class="confirm-question"><p>${steSentence(d,'questions',index,q.text)}</p>${controls(index)}</div>`) + '</section>' : '';
   const footer = `<footer class="acts intent-footer"><span class="validation" id="validation-${esc(d.id)}"></span>` +
     (refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : '') +
     `<button class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(sent.has(d.id) ? t('sending') : t('confirmOrder'))}</button></footer>`;
-  return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>${options}${questions}${footer}`;
+  const pairedIntent = `<section><h4>${esc(t('intentHeading'))}</h4>` +
+    sectionItems(d, 'intent', content.intent || [], (item,index) => `<li class="intent-row"><b>${esc(t('intentHeading'))} ${index+1}</b> · ${said(words(item.text),d)}` +
+      (visibleDone.some(item => parent(item) === index+1) ? `<ul aria-label="${esc(t('alignmentHeading'))}">${visibleDone.filter(item => parent(item) === index+1).map(item => doneRow(item,true)).join('')}</ul>` : '') + '</li>', list) +
+    alignment + '</section>';
+  const why = `<details class="why-disclosure" data-why="${esc(d.id)}"${openWhys.has(d.id) ? ' open' : ''}><summary>${esc(t("whyYouSeeThis"))}</summary>` +
+    `<p class="explanation">${said(words(content.explanation || ''),d)}</p>` +
+    (hasItems('why') ? `<div class="intent-why">${sentences('why')}</div>` : '') +
+    (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome),d)}</p>` : '') + '</details>';
+  return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
 }
+function decisionDetailsButton(d) {
+  return `<button type="button" data-decision-details data-id="${esc(d.id)}" aria-controls="sheet-${esc(d.id)}" aria-expanded="${openDecisionSheets.has(d.id)}">${esc(t("decisionDetails"))}</button>`;
+}
+function closeDecisionSheet(id) {
+  openDecisionSheets.delete(id); render(latest);
+  document.getElementById(`card-${id}`)?.querySelector('[data-decision-details]')?.focus({preventScroll:true});
+}
+function decisionSheet(d, content, locked) {
+  const hasItems = field => Array.isArray(content?.[field]) && content[field].length > 0;
+  const questions = hasItems('questions') ? `<section class="confirm-questions"><h4>${esc(t('confirmQuestions'))}</h4>` +
+    sectionItems(d, 'questions', content.questions, (q,index) => {
+      const a = answers.get(d.id)?.[index];
+      return `<div class="confirm-question"><p>${said(words(q.text),d)}</p><div class="question-controls">` +
+        ['yes','no'].map(value => `<button type="button" data-id="${esc(d.id)}" data-question="${index}" data-ok="${value}" aria-pressed="${a?.ok === (value === 'yes')}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t(value === 'yes' ? 'answerYes' : 'answerNo'))}</button>`).join('') +
+        `<label ${a?.ok === false ? '' : 'hidden'}>${esc(t('answerText'))}<textarea data-id="${esc(d.id)}" data-question="${index}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(a?.text || '')}</textarea></label></div></div>`;
+    }) + '</section>' : '';
+  return `<div class="decision-sheet" role="dialog" aria-label="${esc(t("decisionDetails"))}" id="sheet-${esc(d.id)}" data-id="${esc(d.id)}" ${openDecisionSheets.has(d.id) ? '' : 'hidden'}>` +
+    `<button type="button" data-decision-close data-id="${esc(d.id)}">${esc(t("decisionClose"))}</button><h4>${esc(t('optionsHeading'))}</h4>` +
+    Object.entries(content?.options || {}).map(([key,o]) => `<section><b>${esc(key)} · ${said(words(o.description),d)}</b><p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros),d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons),d)}</p></section>`).join('') + questions + '</div>';
+}
+const decisionBarObserver = new ResizeObserver(entries => {
+  for (const {target} of entries) {
+    const card = target.closest('.dcard'), height = `${target.getBoundingClientRect().height}px`;
+    card.style.setProperty('--decision-bar-height', height);
+    if (card.parentElement.id === 'deck') card.style.paddingBottom = height;
+  }
+});
+function syncDecisionBars() {
+  decisionBarObserver.disconnect();
+  document.querySelectorAll('#deck .decision-bar').forEach(bar => decisionBarObserver.observe(bar));
+}
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || openTaskKey || menuOpen || confirming) return;
+  const focusedSheet = document.activeElement?.closest('.decision-sheet');
+  const sheet = focusedSheet?.checkVisibility() ? focusedSheet
+    : [...document.querySelectorAll('.decision-sheet:not([hidden])')].find(sheet => sheet.checkVisibility());
+  if (sheet) { event.preventDefault(); event.stopImmediatePropagation(); closeDecisionSheet(sheet.dataset.id); }
+}, true);
 function questionAnswers(d) {
   return d?.details?.en?.questions?.map((_, index) => {
     const a = answers.get(d.id)?.[index];

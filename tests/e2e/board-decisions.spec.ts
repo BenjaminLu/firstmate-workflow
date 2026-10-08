@@ -117,7 +117,9 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
         const want = lang === 'en' ? d.en : lang === 'zh-TW' ? d['zh-TW'] : cn;
         const card = page.locator(`#card-${id}`);
         for (const field of ['title','explanation'] as const) await expect(card).toContainText(want[field]);
+        await card.locator('[data-decision-details]').click();
         for (const opt of Object.values(want.options)) for (const value of Object.values(opt)) await expect(card).toContainText(value);
+        await card.locator('[data-decision-close]').click();
         const frame = card.frameLocator('iframe');
         await expect(frame.locator('body')).toContainText(want.before);
         await expect(frame.locator('body')).toContainText(want.after);
