@@ -91,6 +91,9 @@ run bash bin/fm-ready.sh judged --task T-101 --decision D-1000 --repo "$r" >/dev
 mkdir -p "$r/state/decisions"
 printf '{"id":"D-1000","task":"T-101","kind":"choice","chosen":"A"}\n' > "$r/state/decisions/D-1000.json"
 
+bash -c '. "$1/bin/fm-config.sh"; fm_storage_init "$2" || exit 65;
+  python3 "$1/tests/lib/self_pr_authoring.py" "$1" --seed T-101 self' _ "$ROOT" "$r"
+
 # --- turn one: dispatch, worktree, commit, push, pull request -----------
 out1="$(run bin/fm-dispatch.sh --repo "$r" 2>&1)"
 assert_contains "$out1" "T-101" "the explicit dispatcher starts the ready task"

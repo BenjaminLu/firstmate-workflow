@@ -152,12 +152,25 @@ class Entrypoints(EntrypointsFixture):
         self.assertIn('already has a live worker',reply.stderr)
 
     def test_real_reviewer_entrypoint_identity_and_final_provenance(self):
+        event_path=self.repo/'state/events.jsonl'
+        before=event_path.read_bytes()
+        self.assertTrue(before.endswith(b'\n'))
+        setup=[json.loads(line) for line in before.splitlines()]
+        approvals=[e for e in setup if e['type']=='greenlit']
+        self.assertEqual(1,len(approvals))
+        self.assertEqual('captain',approvals[0]['actor'])
+        self.assertEqual('T-035',approvals[0]['task'])
+        self.assertEqual(dict(type='greenlit',actor='captain',task='T-035',
+                              project='firstmate-workflow',ts='2026-10-03T00:00:00Z'),approvals[0])
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work','--name','Quinn'],
                            FM_TEST_VERDICT='REJECT')
         self.assertEqual(0,answer.returncode,answer.stderr)
         result=json.loads(self.results()[0].read_text()); actor=result['actor']
         self.assertRegex(actor,r'^reviewer-quinn-t035-r[0-9]+[a-z]*$')
-        events=[json.loads(s) for s in (self.repo/'state/events.jsonl').read_text().splitlines()]
+        after=event_path.read_bytes()
+        self.assertEqual(before,after[:len(before)])
+        self.assertEqual(setup,[json.loads(line) for line in after[:len(before)].splitlines()])
+        events=[json.loads(line) for line in after[len(before):].splitlines()]
         self.assertEqual({actor},{e['actor'] for e in events})
         self.assertEqual(1,len([e for e in events if e['type']=='agent_finished']))
         rejected=[e for e in events if e['type']=='review_failed']

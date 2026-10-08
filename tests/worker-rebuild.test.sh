@@ -239,7 +239,7 @@ S
 rb_round_two "$dI" "$dI/resolve.sh"
 rb_rebuilt "$dI" "I"
 assert_eq "75" "$rb_rc" "a rebuilt round that changes the task's own file is refused"
-assert_contains "$rb_out" "not as $oldI had it in: design/tasks/T-Z.json" "and names the file"
+assert_contains "$rb_out" "not as pin v$(jq -r .version "$dI/repo/state/pins/T-Z/1.json") has it in: design/tasks/T-Z.json" "and names the file"
 assert_eq "$oldI" "$(rb_head "$dI" "$bI")" "and pushes nothing"
 
 # K: the round after one that did not commit its rebuild - a marker left

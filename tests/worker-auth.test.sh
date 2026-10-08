@@ -13,6 +13,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # keychain are the suite's: the probe resolves the round's login from them.
 d6="$(fixture)"; r6="$d6/repo"; GH6="$(ghstub "$d6")"
 printf 'vendor: claude\nfallback:\n  - mock\n' > "$r6/config.yaml"
+seed_self_pr_authoring "$r6" T-Z
 auth_home="$d6/home"; mkdir -p "$auth_home/.config/firstmate"
 printf 'crew-token\n' > "$auth_home/.config/firstmate/claude-token"; chmod 600 "$auth_home/.config/firstmate/claude-token"
 auth_env=(HOME="$auth_home" FM_KEYCHAIN_TOOL="$d6/no-security" FM_SECRET_TOOL="$d6/no-secret-tool")
@@ -40,6 +41,7 @@ assert_contains "$(cat "$d6/err")" "claude:" "and says so on stderr too, before 
 # Historical refusals are records, never cached auth decisions (T-188).
 d10="$(fixture)"; r10="$d10/repo"; GH10="$(ghstub "$d10")"
 printf 'vendor: cursor-agent\n' > "$r10/config.yaml"
+seed_self_pr_authoring "$r10" T-Z
 mkdir -p "$d10/home/.config/firstmate" "$d10/fakebin"
 printf 'fixture-cursor-key\n' > "$d10/home/.config/firstmate/cursor-api-key"
 chmod 600 "$d10/home/.config/firstmate/cursor-api-key"
@@ -58,6 +60,7 @@ auth_probe_sandbox_tool "$d10/sandbox-tool" "$d10"
 chmod +x "$d10/fakebin/cursor-agent"
 printf '%s\n' '{"type":"vendor_unavailable","task":"T-Z","data":{"vendor":"cursor-agent","status":"unauthenticated"},"summary":{"en":"cursor-agent: unauthenticated: historical refusal","zh-TW":"cursor-agent：unauthenticated：歷史拒絕"}}' > "$d10/historical-event"
 cat "$d10/historical-event" > "$r10/state/events.jsonl"
+seed_self_pr_authoring "$r10" T-Z
 ( cd "$r10" && env HOME="$d10/home" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$d10/sandbox-tool" \
     FM_KEYCHAIN_TOOL="$d10/no-security" FM_SECRET_TOOL="$d10/no-secret-tool" \
     PATH="$d10/fakebin:$PATH" FM_ROOT="$r10" FM_GH="$GH10" \
@@ -75,6 +78,7 @@ rm -rf "$d10"
 # CLI and discovering the failure inside the sandbox.
 d7="$(fixture)"; r7="$d7/repo"; GH7="$(ghstub "$d7")"
 printf 'vendor: claude\n' > "$r7/config.yaml"
+seed_self_pr_authoring "$r7" T-Z
 ( cd "$r7" && env "${auth_env[@]}" PATH="$d6/fakebin:$PATH" FM_ROOT="$r7" FM_GH="$GH7" \
     bin/fm-worker.sh --task T-Z >"$d7/out" 2>"$d7/err" )
 assert_eq "2" "$?" "a chain with nothing authenticated exits 2, same as every vendor unavailable"
@@ -91,6 +95,7 @@ assert_contains "$(cat "$d7/err")" "claude:" "naming the vendor and the probe's 
 # no real CLI or sandbox is involved.
 d8="$(fixture)"; r8="$d8/repo"; GH8="$(ghstub "$d8")"
 printf 'vendor: gemini\nfallback:\n  - mock\n' > "$r8/config.yaml"
+seed_self_pr_authoring "$r8" T-Z
 printf '#!/usr/bin/env bash\ntouch %q\nexec "$(dirname "$0")/mock.sh" "$@"\n' "$d8/gemini-ran" > "$r8/bin/adapters/gemini.sh"
 chmod +x "$r8/bin/adapters/gemini.sh"
 mkdir -p "$d8/fakebin" "$d8/home/.gemini"
@@ -117,6 +122,7 @@ rm -rf "$d8"
 # moves on.
 d9="$(fixture)"; r9="$d9/repo"; GH9="$(ghstub "$d9")"
 printf 'vendor: claude\nfallback:\n  - mock\n' > "$r9/config.yaml"
+seed_self_pr_authoring "$r9" T-Z
 mkdir -p "$d9/fakebin"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n[ "$1" = --version ] && { echo "claude 2.1.0"; exit 0; }\nexec sleep 30\n' \
   "$d9/claude-calls" > "$d9/fakebin/claude"

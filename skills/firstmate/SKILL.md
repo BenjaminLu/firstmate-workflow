@@ -26,6 +26,25 @@ finish all PRs and elapsed time are neither captain merge approval nor
 permission to widen scope. Continue independent authorized tasks while a
 decision waits.
 
+Before new self PR dispatch, author schema-1 `state/pr-authoring/<task>.json`
+against exact approved snapshot/source bytes. Use a meaningful concise allowed
+verb/object subject, authored size, problem/expected_result/proposed approach,
+unique zero-based acceptance-index intent_notes, recorded door/rollback or honest
+omissions, and a retained dispatch reference when recorded. Sources map each
+spec/design/contract/conventions to sha256 and explicit absent boolean. Drafts
+never require a publication pin digest. Use the data-only fm_self_pr.py validate
+interface; the trusted outer launcher alone seals after stock pin resolution.
+Legacy pins need no repin for prose. The captain-approved missing required
+contract/design exception is explicitly unsealed legacy, never approval or scope
+authority; no generic fallback rescues stale/corrupt/missing authoring.
+Review exact private preview before any optional existing-PR repair. Such repair
+needs a concrete per-PR captain decision on repository/PR/head/old title/body
+hashes/proposed preview and remote CAS via the existing GitHub interface. Never
+blanket-edit human, adopted or existing metadata. External templates remain
+upstream. Creation-time pending prose is not current readiness; authoritative CI,
+gates and review still control acceptance.
+
+
 ## Captain language
 
 At startup, read `config.yaml` through `. bin/fm-config.sh; fm_language config.yaml`.
