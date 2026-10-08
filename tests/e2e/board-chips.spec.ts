@@ -8,11 +8,11 @@ for (const viewport of [{width:1200,height:900}, {width:390,height:844}]) {
   test(`multi-project chips and task IDs stay one line at ${viewport.width}px`, async ({page}) => {
     test.setTimeout(90_000);
     const root = makeRoot([], false);
-    const projects = ['firstmate-workflow', 'maker-founder-long-name'];
+    const projects = ['firstmate-workflow', 'example-long-project'];
     const tasks = [221,222,223,224,225,226].map(n => ({id:`T-${n}`, title:`Chip layout ${n}`, depends_on:[]}));
     writeProjects(root, [
       {name:projects[0], github:'example/firstmate-workflow'},
-      {name:projects[1], github:'example/maker-founder-long-name', tasks},
+      {name:projects[1], github:'example/example-long-project', tasks},
     ]);
     writeTasks(root, tasks);
     for (const project of projects) {
@@ -26,10 +26,10 @@ for (const viewport of [{width:1200,height:900}, {width:390,height:844}]) {
     }
     const state = projectState(root, projects[1]);
     for (const n of [224,225]) {
-      const id = `D-maker-founder-long-name-T${n}-1`;
+      const id = `D-example-long-project-T${n}-1`;
       writeFileSync(join(state, `pending/${id}.json`), JSON.stringify({id, project:projects[1], task:`T-${n}`, kind:'choice', details}));
     }
-    const merging = 'D-maker-founder-long-name-T226-1';
+    const merging = 'D-example-long-project-T226-1';
     writeFileSync(join(state, `decisions/${merging}.json`), JSON.stringify({
       id:merging, project:projects[1], task:'T-226', pr:226, kind:'merge', chosen:'A',
       ts:'2026-10-05T09:00:00Z', identity:`decision:${merging}`, merge:'running',
