@@ -32,7 +32,15 @@ Local event writers append first and ring owned FIFOs under
 wake writers notify both channels, while raw events notify only autopilot. The service reads
 complete lines on startup and on notifications. GitHub alone is polled, using
 per-endpoint ETags, convention cadence and bounded exponential network backoff.
-Reviews and review comments close a separate quiet-period batch per PR/reviewer.
+Reviews and comments close a separate quiet-period batch per PR/reviewer.
+For mapped external tasks with review `external` or `both`, each named reviewer's
+new review or comment instead closes its own batch by endpoint and row id.
+The pilot refreshes the existing private `external-verdict` evidence once per
+pull before queuing these wakes. Wakes carry readiness, head and finding count,
+never bodies, paths or URLs; firstmate reads the private findings for the task.
+Refresh failures queue a fixed bilingual failure class and still wake with
+unknown evidence. Seen tokens stay unchanged: old rows are not replayed or
+backfilled, and pending old-key batches flush once beside the new batches.
 Idle polling does not run a model. A base-only head change starts a review through the visible Herdr launcher
 only when the latest verdict is APPROVE and gate 6 cannot carry it because it
 is unsigned legacy evidence or its spec, contract or conventions hash changed.
@@ -47,10 +55,14 @@ Before advancing, the service privately fetches a changed head and fast-forwards
 an ancestor local task ref when no round or job is active and its tracked
 worktree is clean. Active work holds silently; an idle dirty worktree wakes once
 after three held polls. Unpublished divergent work is retained for judgment.
-Restacking delegates to the existing policy and lease checks. Returning
-reviewers receive re-check requests when publication policy permits it; local
-mode retains a request for firstmate. Ready tasks hold and queue a bilingual request for firstmate to re-read the
-spec against main and author the recommendation, evidence and readiness card.
+Restacking delegates to the existing policy and lease checks. Self-project
+returning reviewers receive re-check requests when publication policy permits
+it; local mode retains a request for firstmate. External projects request their
+captain-confirmed `request_reviewers` on first sight of a mapped PR and every
+new head, in every post mode. Omission uses recorded `reviewers`; `[]` disables
+requests. The PR author is excluded case-insensitively, and names already
+requested or reviewed at the head are skipped. Ready tasks hold and queue a
+bilingual request for firstmate to re-read the spec against main and author the recommendation, evidence and readiness card.
 The card retains proceed, rescope, park and drop effects; it authorizes no merge. Landing remains the captain's card or the team's handoff under the
 project conventions. Autopilot neither runs gates nor claims an approval, current
 CI, six-gate readiness or permission to merge.
@@ -99,7 +111,10 @@ PR events are decided by the event log alone: an event already in
 0, 1 and 3, then wakes once. Terminal PRs are marked finished immediately;
 `event_pending` retains an unfinished event write until success or the third
 failure, including after the PR leaves the recent-closures list. Reviewer
-re-check requests are recorded per PR head in `rechecked` and completed when
+re-check requests are recorded per PR head in `rechecked`. External records
+carry `rule: external-request`; an older record without that marker is replaced
+and requested once after upgrade. Each name is requested separately so a refused
+login cannot block the rest. Requests are completed when
 GitHub returns 201 or lists the reviewer as already requested, or the reviewer
 has reviewed that head. A 422 refusal wakes once with GitHub's message without
 retry; other failures retry at offsets 0, 1 and 3, then wake once.
