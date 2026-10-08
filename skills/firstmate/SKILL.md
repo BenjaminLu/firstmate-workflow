@@ -982,6 +982,15 @@ than assuming response `ok` proves merge/event success. `running` is not
 settled: keep waiting or re-read the record, and never report a merge from it;
 `merge_unknown` means GitHub could not be read and the project stays held.
 `failed` is final and is never retried.
+After correcting the cause, a different authoritative head with fresh review,
+CI and all six gates may receive a NEW unanswered owned merge card (T-269).
+Autopilot verifies modern failed A history, retained captain settlement and its
+signed old readiness; unsupported history and same-head failures stay held.
+Never erase the failed card, re-answer its A, carry approval or treat an already
+consumed green job as current authorization. The replacement needs a new captain
+board response. Stock reload drains live jobs and revalidates eligible consumed
+heads through normal gates; ordinary fingerprints do not change. T-220 base carry
+remains separate and never resurrects failed A.
 Custom instructions still require scope/readiness coordination and do not imply
 merge approval. Awaiting a response must preserve its distinct chosen/text data.
 

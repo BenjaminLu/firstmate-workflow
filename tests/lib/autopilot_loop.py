@@ -781,6 +781,367 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.pilot.prune_branches('12')
         self.assertEqual(self.pilot.data['advanced'], {})
 
+    # T-269 fixtures retain real signed historical authority; only remote/source
+    # reads are synthetic. Stock candidate validation remains the request boundary.
+    def failed_history(self, external=False):
+        from fm_evidence import Store
+        subprocess.run(['git', 'init', '-q', str(self.root)], check=True, capture_output=True)
+        if external:
+            self.ctx['external'] = True
+            private_home = tempfile.TemporaryDirectory(); self.addCleanup(private_home.cleanup)
+            self.state = Path(private_home.name) / 'projects/alpha/state'
+            self.state.mkdir(parents=True)
+            self.ctx['state'] = str(self.state)
+            old_pilot = self.pilot
+            self.pilot = A.Pilot(self.ctx)
+            for name in ('api', 'authoritative_head', 'command', 'start_job', 'probe',
+                         'read_head_spec', 'emit', 'verdict', 'busy'):
+                setattr(self.pilot, name, getattr(old_pilot, name))
+        self.old_id = 'D-alpha-T001-1'
+        self.sentinel = '/private/SECRET-T269-never-project-this'
+        self.store = Store(str(self.state), 'alpha', 'T-001', external=external)
+        self.old_ready = self.store.append('readiness', 1, 'firstmate', 'd' * 40,
+            self.sentinel, pr=12, repository='owner/alpha', gates=[1, 2, 3, 4, 5, 6])
+        self.old = dict(id=self.old_id, identity='decision:' + self.old_id,
+            project='alpha', task='T-001', pr=12, kind='merge', chosen='A',
+            merge='failed', merge_reason=self.sentinel, expected_head='d' * 40,
+            merge_settled='2026-01-01T00:00:00Z', binding=self.old_ready)
+        self.old_path = self.state / 'decisions' / (self.old_id + '.json')
+        self.old_path.parent.mkdir(); self.old_path.write_text(json.dumps(self.old))
+        self.event = dict(type='decision_made', actor='captain', project='alpha', task='T-001',
+            ts='2026-01-01T00:00:01Z', data=dict(decision=self.old_id, chosen='A',
+            merge='failed', outcome='failed', expected_head='d' * 40, reason=self.sentinel))
+        self.events = self.state / 'events.jsonl'
+        initial = dict(self.event, ts='2026-01-01T00:00:00Z',
+            data=dict(decision=self.old_id, chosen='A', effect='merge', outcome='running'))
+        self.events.write_text(json.dumps(initial) + '\n' + json.dumps(self.event) + '\n')
+        reservation = self.state / 'decision-ids/alpha/T001'; reservation.mkdir(parents=True)
+        (reservation / '1.json').write_text('{"kind":"merge"}')
+        self.source = dict(spec_sha256='spec', contract_sha256='contract',
+                           conventions_sha256='conventions', patch='patch', files=['owned'])
+        self.review = self.store.append('verdict', 2, 'reviewer', HEAD, 'APPROVE:T-001',
+            verdict='APPROVE', provenance=dict(level='legacy'), binding=self.source, base=BASE)
+        self.selected_signature = self.review['signature']
+        self.current_ready()
+        self.requests = []
+        original = self.pilot.command
+        def stock(argv, **kwargs):
+            if '--allocate' in argv:
+                self.calls.append(('command', argv))
+                numbers = [int(p.stem) for p in reservation.glob('*.json')]
+                n = max(numbers, default=0) + 1
+                (reservation / (str(n) + '.json')).write_text('{"kind":"merge"}')
+                return 'D-alpha-T001-' + str(n)
+            if '--request' not in argv: return original(argv, **kwargs)
+            self.requests.append(argv)
+            self.candidate_mutation()
+            import contextlib, io, fm_binding as binding
+            env = dict(FM_STATE_DIR=str(self.state), FM_EVIDENCE_PROJECT='alpha',
+                       FM_EXTERNAL='1' if external else '0', FM_TARGET_ROOT=str(self.root))
+            args = ['fm_binding', 'candidate', '--task', 'T-001', '--pr', '12', '--head', HEAD]
+            output = io.StringIO()
+            # Exercise unchanged stock candidate against actual signed Store.
+            with patch.dict(os.environ, env), patch.object(sys, 'argv', args), \
+                 patch('fm_adopt.adoption', return_value=None), \
+                 patch.object(binding, 'repository', return_value='owner/alpha'), \
+                 patch.object(binding, 'remote_head', return_value=self.remote), \
+                 patch.object(binding, 'required_checks', return_value=self.current_checks), \
+                 patch.object(binding, 'selected_review', return_value=(self.review, None)), \
+                 patch.object(binding, 'source_binding', return_value=self.source), \
+                 patch.object(binding, 'view_base', return_value='main'), \
+                 patch.object(binding, 'verified_base', return_value='main'), \
+                 patch.object(binding, 'git', side_effect=lambda root, *a: self.current_base), \
+                 contextlib.redirect_stdout(output):
+                binding.main()
+            selected = json.loads(output.getvalue())
+            ident = argv[argv.index('--request') + 1]
+            details = json.loads(Path(argv[argv.index('--details') + 1]).read_text())
+            if not details: raise ValueError('invalid details')
+            folder = self.state / 'pending'; folder.mkdir(exist_ok=True)
+            (folder / (ident + '.json')).write_text(json.dumps(dict(id=ident, kind='merge',
+                task='T-001', project='alpha', pr=12, expected_head=HEAD, binding=selected)))
+            return ''
+        self.pilot.command = stock
+        self.candidate_mutation = lambda: None
+        self.remote = dict(headRefOid=HEAD, baseRefOid=BASE, state='OPEN')
+        self.current_checks = ['ci-success']; self.current_base = BASE
+        self.replacement_details()
+        self.old_bytes = self.old_path.read_bytes(); self.event_bytes = self.events.read_bytes()
+        self.counter_bytes = (reservation / '1.json').read_bytes()
+
+    def current_ready(self):
+        from fm_binding import gate_list
+        self.ready = self.store.append('readiness', 2, 'firstmate', HEAD, '',
+            pr=12, repository='owner/alpha', gates=[g['name'] for g in gate_list()['gates']],
+            checks=['ci-success'], verdict_signature=self.selected_signature, review=self.review, gate_base=BASE)
+
+    def replacement_details(self):
+        folder = self.state / 'decision-details'; folder.mkdir(exist_ok=True)
+        locale = dict(title='Authored', explanation=self.sentinel, before='Held', after='Ready',
+            outcome='Captain decides', options={c: dict(description='Choose', pros='Clear', cons='Wait')
+                                                for c in 'ABC'})
+        (folder / 'D-alpha-T001-2.json').write_text(json.dumps({'en': locale, 'zh-TW': locale}))
+
+    def assert_history_preserved(self):
+        self.assertEqual(self.old_path.read_bytes(), self.old_bytes)
+        self.assertEqual(self.events.read_bytes(), self.event_bytes)
+        self.assertEqual((self.state / 'decision-ids/alpha/T001/1.json').read_bytes(), self.counter_bytes)
+        self.assertFalse(any('merge' in c[1] for c in self.calls if c[0] == 'command' and c[1][0] == 'gh'))
+
+    def complete_gate_receipt(self):
+        path = self.state / 'fresh-gate.json'
+        path.with_suffix('.result.json').write_text(json.dumps(dict(kind='gate', task='T-001',
+            pr=PR, code=0, base=BASE, round=2)))
+        self.pilot.data['jobs']['fresh'] = dict(kind='gate', task='T-001', number=12,
+            head=HEAD, state='running', path=str(path))
+        self.pilot.consume_jobs()
+
+    def test_failed_card_fresh_gate_publishes_new_unanswered_card(self):
+        self.failed_history()
+        self.complete_gate_receipt()
+        path = self.state / 'pending/D-alpha-T001-2.json'
+        self.assertTrue(path.exists(), 'fresh successful gates must create a NEW H1 pending card')
+        card = json.loads(path.read_text())
+        self.assertNotIn('chosen', card)
+        self.assertEqual(card['expected_head'], HEAD)
+        self.assertEqual(card['binding']['signature'], self.ready['signature'])
+        self.assertEqual(self.requests[0][self.requests[0].index('--expected-head') + 1], HEAD)
+        self.pilot.consume_jobs(); self.gate_result(0)
+        self.assertEqual(len(self.requests), 1)
+        self.assert_history_preserved()
+
+    def ordinary_fingerprint(self):
+        return A.key([12, HEAD, BASE, self.pilot.settled_checks(PR, CHECKS, []), None,
+            {p.name: json.loads(p.read_text()) for p in (self.state / 'decision-details').glob('D-alpha-T001-*.json')}, 0])
+
+    def test_consumed_ordinary_upgrade_does_not_regate(self):
+        self.pilot.data['advanced']['12'] = dict(head=HEAD, fingerprint=self.ordinary_fingerprint())
+        self.pilot.advance(PR, CHECKS, []); self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(self.gates(), [])
+
+    def test_consumed_failed_upgrade_runs_one_normal_gate_before_publication(self):
+        self.failed_history()
+        self.pilot.data['advanced']['12'] = dict(head=HEAD, fingerprint=self.ordinary_fingerprint())
+        self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(len(self.gates()), 1, 'trusted failure changes consumed scheduling evidence')
+        self.assertFalse((self.state / 'pending').exists())
+        self.pilot.save(); restored = A.Pilot(self.ctx); self.pilot.data = restored.data
+        self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(len(self.gates()), 1)
+        self.complete_gate_receipt()
+        self.assertTrue((self.state / 'pending/D-alpha-T001-2.json').exists())
+        self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(len(self.gates()), 1)
+        self.assertEqual(len(self.requests), 1)
+        self.assert_history_preserved()
+
+    def test_failed_history_pre_request_negative_matrix(self):
+        self.failed_history()
+        variants = [dict(expected_head=HEAD), dict(merge='running'), dict(merge='merged'),
+            dict(chosen='B'), dict(chosen='C'), dict(chosen='custom'), dict(chosen=None),
+            dict(merge=None), dict(merge='unknown'), dict(merge=None, merged=dict(ok=False)),
+            dict(binding={}), dict(binding=dict(signature='forged')), dict(merge_settled=None),
+            dict(id='D-beta-T001-1'), dict(identity='decision:wrong'), dict(project='beta'),
+            dict(task='T-002'), dict(pr=13), dict(expected_head=None)]
+        for change in variants:
+            with self.subTest(change=change):
+                self.old_path.write_text(json.dumps(dict(self.old, **change)))
+                self.old_bytes = self.old_path.read_bytes()
+                self.gate_result(0)
+                self.assertEqual(self.requests, [])
+                self.assertFalse((self.state / 'pending').exists())
+                self.assert_history_preserved()
+        self.old_path.write_text(json.dumps(self.old)); self.old_bytes = self.old_path.read_bytes()
+        for data in (None, dict(self.event, actor='worker'),
+                     dict(self.event, data=dict(self.event['data'], expected_head=HEAD))):
+            self.events.write_text('' if data is None else json.dumps(data) + '\n')
+            self.event_bytes = self.events.read_bytes(); self.gate_result(0)
+            self.assertEqual(self.requests, [])
+            self.assert_history_preserved()
+
+    def test_failed_history_missing_corrupt_readiness_and_conflicting_settlement_hold(self):
+        self.failed_history()
+        files = list(self.store.directory.glob('*.json'))
+        old_file = next(p for p in files if json.loads(p.read_text())['head'] != HEAD)
+        original = old_file.read_bytes()
+        for content in (None, original.replace(b'owner/alpha', b'owner/other')):
+            if content is None: old_file.unlink()
+            else: old_file.write_bytes(content)
+            self.gate_result(0); self.assertEqual(self.requests, [])
+            self.assert_history_preserved()
+        old_file.write_bytes(original)
+        self.events.write_text(self.event_bytes.decode() + json.dumps(dict(self.event,
+            data=dict(self.event['data'], outcome='merged'))) + '\n')
+        self.event_bytes = self.events.read_bytes(); self.gate_result(0)
+        self.assertEqual(self.requests, [])
+        self.assert_history_preserved()
+
+    def test_visible_cooperating_blocker_holds_replacement(self):
+        self.failed_history()
+        with patch('fm_concurrent.merge_blocker', return_value='pending merge D-alpha-T002-1'):
+            self.gate_result(0)
+        self.assertEqual(self.requests, [])
+        self.assertFalse((self.state / 'pending').exists())
+        self.assert_history_preserved()
+
+    def test_blocker_visible_at_second_reread_prevents_request(self):
+        self.failed_history()
+        with patch('fm_concurrent.merge_blocker', side_effect=['', 'pending merge D-alpha-T002-1']):
+            self.gate_result(0)
+        self.assertEqual(self.requests, [])
+        self.assertFalse((self.state / 'pending').exists())
+        self.assert_history_preserved()
+
+    def test_stock_candidate_refuses_after_precheck_mutations(self):
+        self.failed_history()
+        for category in ('head', 'base', 'checks', 'review', 'readiness'):
+            with self.subTest(category=category):
+                def mutate():
+                    if category == 'head': self.remote['headRefOid'] = 'e' * 40
+                    if category == 'base': self.current_base = 'e' * 40
+                    if category == 'checks': self.current_checks = ['ci-red']
+                    if category == 'review': self.review = dict(self.review, signature='superseded')
+                    if category == 'readiness':
+                        for p in self.store.directory.glob('*.json'):
+                            if json.loads(p.read_text())['head'] == HEAD: p.unlink()
+                self.candidate_mutation = mutate
+                self.complete_gate_receipt()
+                self.assertEqual(self.pilot.data['jobs']['fresh']['state'], 'uncertain')
+                self.assertFalse((self.state / 'pending').exists())
+                self.assert_history_preserved()
+                self.remote['headRefOid'] = HEAD; self.current_base = BASE
+                self.current_checks = ['ci-success']; self.review['signature'] = self.selected_signature
+        self.assertEqual(len(self.requests), 5)
+
+    def test_external_private_failures_and_reservation_use_bounded_bilingual_wakes(self):
+        self.failed_history(external=True)
+        details = self.state / 'decision-details/D-alpha-T001-2.json'; details.unlink()
+        self.gate_result(0)
+        self.assertEqual(self.requests, [])
+        self.assertTrue((self.state / 'decision-ids/alpha/T001/2.json').exists())
+        self.current_ready(); self.replacement_details()
+        self.gate_result(0)
+        self.assertTrue((self.state / 'pending/D-alpha-T001-2.json').exists()); card = json.loads((self.state / 'pending/D-alpha-T001-2.json').read_text())
+        self.assertEqual(card['binding']['signature'], self.ready['signature'])
+        self.assertEqual(len(list((self.state / 'decision-ids/alpha/T001').glob('*.json'))), 2)
+        (self.state / 'pending/D-alpha-T001-2.json').unlink()
+        self.old_path.write_text(json.dumps(dict(self.old, binding={})))
+        self.old_bytes = self.old_path.read_bytes(); self.gate_result(0)
+        for wake in self.pilot.data['wakes'].values():
+            self.assertEqual(set(wake['summary']), {'en', 'zh-TW'})
+            self.assertNotIn(self.sentinel, json.dumps(wake))
+        self.assertFalse((self.root / 'state/evidence').exists())
+        self.assertTrue((self.state / 'evidence/T-001').exists())
+        retained = self.store.records()
+        self.assertIn(self.old_ready, retained)
+        self.assertIn(self.sentinel, self.old_ready['text'])
+        self.assertIn(self.sentinel, (self.state / 'decision-details/D-alpha-T001-2.json').read_text())
+        self.assert_history_preserved()
+        for p in (self.root / 'state').rglob('*'):
+            if p.is_file(): self.assertNotIn(self.sentinel.encode(), p.read_bytes())
+
+    def test_reserved_replacement_invalid_updated_evidence_refuses_then_reuses_id(self):
+        self.failed_history(external=True)
+        details = self.state / 'decision-details/D-alpha-T001-2.json'; details.unlink()
+        self.gate_result(0)
+        self.current_ready()
+        latest = next(p for p in self.store.directory.glob('*.json')
+                      if json.loads(p.read_text())['signature'] == self.ready['signature'])
+        latest.write_text(latest.read_text().replace('ci-success', 'ci-pending'))
+        self.replacement_details()
+        self.gate_result(0)  # Corrupt Store also invalidates historical trust.
+        self.assertEqual(self.requests, [])
+        self.assertFalse((self.state / 'pending').exists())
+        latest.unlink(); self.current_ready()
+        self.gate_result(0)
+        self.assertTrue((self.state / 'pending/D-alpha-T001-2.json').exists()); card = json.loads((self.state / 'pending/D-alpha-T001-2.json').read_text())
+        self.assertEqual(card['binding']['signature'], self.ready['signature'])
+        self.assertEqual(len(list((self.state / 'decision-ids/alpha/T001').glob('*.json'))), 2)
+        self.assert_history_preserved()
+
+    def test_current_valid_signed_red_or_pending_checks_are_stock_refusals(self):
+        self.failed_history()
+        for checks in (['ci-red'], ['ci-pending'], ['ci-stale']):
+            self.current_checks = checks
+            self.complete_gate_receipt()
+            self.assertEqual(self.pilot.data['jobs']['fresh']['state'], 'uncertain')
+            self.assertFalse((self.state / 'pending').exists())
+            self.assert_history_preserved()
+        self.assertEqual(len(self.requests), 3)
+
+    def test_replacement_active_and_uncertain_jobs_remain_dependencies(self):
+        self.failed_history()
+        for state in ('running', 'consuming', 'uncertain'):
+            self.pilot.data['jobs'] = {'owned': dict(task='T-001', state=state, path='')}
+            self.pilot.advance(PR, CHECKS, [])
+            self.assertEqual(self.gates(), [])
+            self.assertEqual(self.pilot.data['jobs']['owned']['state'], state)
+        with patch('fm_concurrent.live_rounds', return_value=[dict(task='T-001')]):
+            self.pilot.data['jobs'] = {}; self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(self.gates(), [])
+        self.assert_history_preserved()
+
+    def test_failed_history_foreign_and_conflicting_owned_record_never_authorizes(self):
+        self.failed_history()
+        other = self.state / 'decisions/D-beta-T001-1.json'
+        self.old_path.rename(other)
+        other.write_text(json.dumps(dict(self.old, id=other.stem, project='beta',
+                                        identity='decision:' + other.stem)))
+        # Foreign history alone cannot append replacement scheduling evidence.
+        self.pilot.data['advanced']['12'] = dict(head=HEAD, fingerprint=self.ordinary_fingerprint())
+        self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(self.gates(), [])
+        other.unlink(); self.old_path.write_bytes(self.old_bytes)
+        pending = self.state / 'pending'; pending.mkdir()
+        (pending / 'D-alpha-T001-3.json').write_text(json.dumps(dict(self.old,
+            id='D-alpha-T001-3', chosen=None, merge=None)))
+        self.gate_result(0)
+        self.assertEqual(self.requests, [])
+        self.assert_history_preserved()
+
+    def test_external_replacement_request_errors_do_not_project_private_text(self):
+        self.failed_history(external=True)
+        def private_error(): raise RuntimeError(self.sentinel)
+        self.candidate_mutation = private_error
+        self.complete_gate_receipt()
+        self.assertEqual(self.pilot.data['jobs']['fresh']['state'], 'uncertain')
+        self.assertFalse((self.state / 'pending').exists())
+        for wake in self.pilot.data['wakes'].values():
+            self.assertEqual(set(wake['summary']), {'en', 'zh-TW'})
+            self.assertNotIn(self.sentinel, json.dumps(wake))
+        self.assert_history_preserved()
+
+    def test_second_failed_head_holds_until_another_distinct_head_gets_fresh_gates(self):
+        self.failed_history(); self.complete_gate_receipt()
+        path = self.state / 'pending/D-alpha-T001-2.json'
+        self.assertTrue(path.exists()); card = json.loads(path.read_text()); path.unlink()
+        second_id = card['id']
+        second = dict(card, identity='decision:' + second_id, chosen='A', merge='failed',
+                      merge_settled='2026-01-02T00:00:00Z')
+        (self.state / 'decisions' / (second_id + '.json')).write_text(json.dumps(second))
+        event = dict(self.event, ts='2026-01-02T00:00:01Z', data=dict(self.event['data'],
+                     decision=second_id, expected_head=HEAD))
+        self.events.write_text(self.event_bytes.decode() + json.dumps(event) + '\n')
+        self.event_bytes = self.events.read_bytes()
+        for _ in range(3): self.pilot.advance(PR, CHECKS, [])
+        self.assertEqual(self.gates(), [])
+        next_pr = copy.deepcopy(PR); next_pr['head']['sha'] = 'e' * 40
+        with patch.object(sys.modules[__name__], 'HEAD', 'e' * 40), \
+             patch.object(sys.modules[__name__], 'PR', next_pr):
+            self.review = self.store.append('verdict', 3, 'reviewer', HEAD, 'APPROVE:T-001',
+                verdict='APPROVE', provenance=dict(level='legacy'), binding=self.source, base=BASE)
+            self.selected_signature = self.review['signature']; self.current_ready()
+            self.remote['headRefOid'] = HEAD
+            folder = self.state / 'decision-details'
+            (folder / 'D-alpha-T001-3.json').write_bytes((folder / 'D-alpha-T001-2.json').read_bytes())
+            self.pilot.advance(next_pr, [dict(CHECKS[0], head_sha=HEAD)], [])
+            self.assertEqual(len(self.gates()), 1)
+            self.complete_gate_receipt()
+        self.assertTrue((self.state / 'pending/D-alpha-T001-3.json').exists())
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(json.loads((self.state / 'decisions' / (second_id + '.json')).read_text()), second)
+        self.assert_history_preserved()
+
     def assert_landed_silent(self):
         self.details()
         before = copy.deepcopy(self.pilot.data)
