@@ -1,3 +1,4 @@
+import { openCrewSheet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -53,8 +54,13 @@ test('a refused merge names its decision and task, and clears once that task mer
     await expect(feedback).not.toContainText(EN.mergeRefused, {timeout:15_000});
     // and a reload does not bring it back
     await page.reload();
+    await openCrewSheet(page);
     await expect(page.locator('#roster .rrow').first()).toBeVisible();
+    await page.locator('#crewSheet [data-sheet-close]').click();
     await expect(page.locator('#orderFeedback')).not.toContainText(EN.mergeRefused);
+    // the empty deck is read on the Decisions page, where it would show
+    await expect(page.locator('#tabDecisions')).toHaveAttribute('aria-selected','true');
+    await expect(page.locator('#decisionsPanel')).toHaveJSProperty('hidden',false);
     await expect(page.locator('#deckwrap')).toBeHidden();
   } finally {await stopBoard(b);}
 });

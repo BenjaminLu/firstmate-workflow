@@ -1,3 +1,4 @@
+import { openLogSheet } from './lib/board';
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeRegistry } from './lib/fixture';
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -14,6 +15,7 @@ test('older log pages link PRs, end, recover, and track the live anchor', async 
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);
+    await openLogSheet(page);
     const button = page.getByRole('button', {name:'Load older', exact:true});
     await expect(page.locator('#log li')).toHaveCount(40);
     await button.click();

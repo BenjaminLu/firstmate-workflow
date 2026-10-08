@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -30,6 +31,7 @@ test('the captain parks, unparks and drops a card by menu and by drag, and confi
   const parkedCard = (id:string) => page.locator(`#parked [data-task="${id}"]`);
   try {
     await page.goto(`${b.url}/?lang=en`);
+    await showFleet(page);
     await expect(lane('ready','T-A')).toHaveCount(1);
     await expect(lane('backlog','T-B')).toHaveCount(1);
     // T-118: a card in flight offers both actions, by either path, but the
