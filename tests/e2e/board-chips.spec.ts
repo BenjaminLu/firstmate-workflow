@@ -1,3 +1,4 @@
+import { showFleet, openCrewSheet } from './lib/board';
 import { expect } from '@playwright/test';
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -41,6 +42,7 @@ for (const viewport of [{width:1200,height:900}, {width:390,height:844}]) {
     try {
       await page.setViewportSize(viewport);
       await page.goto(`${board.url}/?lang=en`);
+      await showFleet(page);
       for (const [lane, task] of [['ready','T-221'], ['review','T-222'], ['merged','T-223']]) {
         await expect(page.locator(`[data-lane="${lane}"] [data-task="${task}"] .hd .pchip`)).toHaveCount(2);
       }
@@ -48,24 +50,33 @@ for (const viewport of [{width:1200,height:900}, {width:390,height:844}]) {
       await expect(page.locator('[data-lane="ready"] .cmenu').first()).toBeVisible();
       await page.locator('#history > summary').click();
       await expect(page.locator('#history .hd .pchip').first()).toBeVisible();
+      const collectChips = async () => await page.locator('.pchip:visible').evaluateAll(els => els.map(el => ({
+        text:el.textContent, roster:el.matches('.pj.pchip'),
+        height:el.getBoundingClientRect().height, font:parseFloat(getComputedStyle(el).fontSize),
+      })));
+      const chips = await collectChips();
       // Exercise the inline chip callers too, including the drop confirmation.
       const ready = page.locator(`[data-lane="ready"] [data-project="${projects[1]}"][data-task="T-221"]`);
       await ready.locator('.cmenu').click();
       await ready.locator('[data-act="drop"]').click();
       for (const selector of ['#dropConfirm .pchip', '#roster .pj.pchip', '#deck .meta .pchip', '.dstrip > summary .pchip', '#merging .pchip']) {
+        if (selector.startsWith('#roster')) await openCrewSheet(page);
+        else {
+          if (await page.locator('#crewSheet').isVisible()) await page.locator('#crewSheet [data-sheet-close]').click();
+          if (selector.startsWith('#deck') || selector.startsWith('.dstrip')) await page.locator('#tabDecisions').click();
+        }
         await expect(page.locator(selector).first()).toBeVisible();
+        if (selector.startsWith('#roster')) chips.push(...await collectChips());
       }
 
-      const chips = await page.locator('.pchip:visible').evaluateAll(els => els.map(el => ({
-        text:el.textContent, roster:el.matches('.pj.pchip'),
-        height:el.getBoundingClientRect().height, font:parseFloat(getComputedStyle(el).fontSize),
-      })));
+      chips.push(...await collectChips());
       expect(chips.length).toBeGreaterThan(0);
       for (const chip of chips) {
         // Phone roster cells deliberately include a block project label.
         if (viewport.width === 390 && chip.roster) continue;
         expect(chip.height, `one-line chip: ${chip.text}`).toBeLessThanOrEqual(chip.font * 1.6 + 4);
       }
+      await showFleet(page);
       const ids = await page.locator('.card .id:visible').evaluateAll(els => els.map(el => ({
         text:el.textContent, height:el.getBoundingClientRect().height,
         font:parseFloat(getComputedStyle(el).fontSize), scroll:el.scrollWidth, client:el.clientWidth,

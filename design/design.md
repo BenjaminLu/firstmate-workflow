@@ -1819,11 +1819,11 @@ percentages. The regions below are that layout.
 |---|---|
 | Header | brand, the engine badge, green-light state, the theme toggle and the language switch |
 | Sea header | merged / in flight / waiting on you / blocked / ready / backlog; waiting on you is the number of pending decisions |
-| Decision deck | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place; each card and strip starts with a coloured kind badge (T-227) |
+| Decisions tab | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place; each card and strip starts with a coloured kind badge (T-227) |
 | Voyage | the 2.5D stage (T-125) is the only ship view; crew, captain, handoffs and merge salvos live there |
-| Crew roster | separate field columns, shown by default and toggled from its own bar |
-| Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
-| Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl`, with a Load older control below the live list |
+| Summary bar | crew button with aboard count, and log button with the latest event; each opens a modal sheet |
+| Fleet tab | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
+| Log sheet | tri-lingual summaries from `events.jsonl`, with a Load older control and client pages of 12 lines |
 
 **Shell themes and stage (T-241).** `board.css`, loaded after the inline style,
 provides one token system. `board.js` sets `html[data-theme]` from `board.theme`
@@ -1866,7 +1866,39 @@ margins, is at most 160px tall so the first card starts within an 844px viewport
 The size control is hidden in full and hidden modes. Full mode always fills
 the screen and restores the panel size on exit; existing mode/hidden keys,
 drawer homes and Escape handling stay intact. Reduced motion disables the
-size transition. Cards and sheets are separate tasks T-245 and T-246.
+size transition. The captain cards retain their T-245 layout.
+
+**Tabs and sheets (T-246).** Below the pinned voyage, `#tabs` is a tablist
+with Decisions and Fleet at the same level. Decisions holds `#deckwrap` and
+`#capstage`; Fleet holds the full-width `.lanes-wrap`, including parked cards,
+the drop target and confirmation, and history. Decisions shows the pending
+count when positive. On load, any pending card selects Decisions; otherwise
+`board.tab` restores the viewer's choice, defaulting to Decisions. Storage
+failures leave session navigation working. The game keeps its region homes
+inside these panels when moving workflow regions into and out of its drawer.
+
+`#secbar` holds the crew button and aboard count plus the log button and latest
+event. Crew and log start closed and open as modal dialogs, with titled headers,
+close buttons and Escape dismissal; focus returns to the opener. Opening a
+sheet or switching tabs first closes Fleet detail. A sheet takes Escape before
+a decision details sheet, and prevents the voyage's double-Escape gesture.
+Roster rows and log lines do not open task details. Below 760px the tabs and
+the summary bar share one compact row, so the first decision card stays in
+the phone's first screen; the latest event shortens to fit that row.
+
+Both sheets are 96vw wide, capped at 1480px; the log is 80vh tall. Below 760px
+they fill the width. The crew sheet uses 15px text and uncapped row heights,
+with readable names, tasks and columns; a project chip stays on one line
+and its column is as wide as the chip; below 760px each member is a stacked
+block without horizontal scrolling. Opening crew sets `SHIP.rosterOn` true;
+legacy `board.roster=hidden` no longer hides its rows, and the board never
+writes that key. Sort and grouping preferences remain unchanged.
+
+History retains its closed default and its open state across renders. Its
+client pages show 12 cards, parked pages show 6, and log pages show 12 across
+the live and loaded older lists. Each pager has first, previous, next and a
+position label. Load older still appends events with the existing cursor API;
+paging changes display only.
 
 **Engine badge (V7).** The server reads `config.yaml` on every state request —
 the top-level `vendor`, and `reviewer.vendor` when that block exists — and the
@@ -1881,8 +1913,12 @@ no badge.
 task detail panel (T-230); another card replaces it. Close or Esc returns focus
 to its card. Menu buttons, PR links and dragging do not open the panel. It is a
 sibling of `#lanes`, outside the patched tree, and stays open through state
-updates. Below 760px it fills the width below the header with a sticky close
-control. Ready and finished tasks, including history cards, use the same panel.
+updates. At 760px and above, Fleet places the list on the left and `#taskDetail`
+on the right without an overlay, and its close control keeps the name "Close
+task detail". Below 760px detail replaces the list, and the same control is a
+visible Back, named Back, that restores the list's scroll position; its name
+follows the width while detail is open. Escape closes detail only
+when no crew or log sheet is open. Ready and finished tasks, including history cards, use the same panel.
 
 The panel reads GET `/api/task?project=<name>&id=<T-or-SK-id>&lang=<locale>`.
 An absent or empty project selects the default, including a nameless self
@@ -2247,9 +2283,10 @@ Chinese:
 **Roster.** Each row carries the crew name, role, project, vendor, model,
 CLI version, round and attempt, state and pull request, with the task id,
 title and authored activity. A bar appears only for bounded `{done,total}`
-progress; no percentage is shown. The roster has its own bar with the crew
-count against the server's deck limit and a toggle. Its visibility remains
-in `board.roster`; there are no AHOY or order demonstrations.
+progress; no percentage is shown. The summary bar shows the crew count against
+the server's deck limit and opens the crew sheet. It starts closed, ignores
+legacy `board.roster` visibility, and never writes that key; there are no AHOY
+or order demonstrations.
 
 ### The ship
 
@@ -2295,8 +2332,8 @@ and title. A card header stays one line high: the task id never wraps or
 shrinks, and the project chip is a one-line pill that truncates, or moves to
 its own line in a narrow card. Header buttons sort the sortable columns; CLI
 is a non-sortable header. A toggle groups rows by project. Both choices survive reload through
-`board.rosterSort` and `board.rosterGroup`. On phones the same labelled cells
-wrap across three lines. Task cards keep their separate name, role and round
+`board.rosterSort` and `board.rosterGroup`. Below 760px the same labelled cells
+stack in one readable block per member without horizontal scrolling. Task cards keep their separate name, role and round
 chips. There are no deck tags, detail cards, hover, tap or figure-drag controls.
 
 **What the round actually ran on, read from the run itself, never guessed

@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -96,6 +97,7 @@ test('every pull request number links to its pull request on the registered repo
     });
     expect(stray).toEqual([]);
 
+    await showFleet(page);
     // reachable by keyboard
     const seven = card('ready','T-A').locator('.hd a');
     // reached by the keyboard itself: it sits between the card's id and its

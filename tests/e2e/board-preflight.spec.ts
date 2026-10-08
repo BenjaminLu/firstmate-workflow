@@ -1,3 +1,4 @@
+import { openCrewSheet } from './lib/board';
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeTasks, writeProjects } from './lib/fixture';
 import { emitFixture } from './lib/board';
@@ -36,6 +37,7 @@ test('preflight crew remains labelled through warnings, never creates tasks or c
     expect(s.tasks.find(t=>t.id==='T-191').stage).toBe('working');
     for(const [lang,label] of [['en','spec preflight'],['zh-TW','預檢'],['zh-CN','预检']]) {
       await page.goto(`${b.url}/?lang=${lang}`);
+      await openCrewSheet(page);
       await expect(page.locator(`[data-crew-chip="${actor}"] .cd`)).toHaveText(label);
       await expect(page.locator(`[data-roster="${actor}"] .rd`)).toHaveText(label);
     }

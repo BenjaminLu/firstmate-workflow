@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeTasks, writeRegistry } from './lib/fixture';
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -21,6 +22,7 @@ test('task panel shares intent sections, keyboard/focus, replacement and persist
   const root=fixture(), board=await startBoard(root);
   try {
     await page.goto(board.url+'/?lang=en');
+    await showFleet(page);
     const first=page.locator('.card[data-task="T-001"]'), second=page.locator('.card[data-task="T-002"]');
     const panel=page.locator('#taskDetail');
     await first.click();
@@ -67,6 +69,7 @@ test('card controls and dragging do not open the panel; 390px has no horizontal 
   const board=await startBoard(root);
   try {
     await page.goto(board.url+'/?lang=en');
+    await showFleet(page);
     const first=page.locator('.card[data-task="T-001"]'), panel=page.locator('#taskDetail');
     await first.locator('[data-menu]').click();
     await expect(panel).toBeHidden();
@@ -107,6 +110,7 @@ test('the main page keeps same-id project cards distinct and reads the newest au
   const board=await startBoard(root);
   try {
     await page.goto(board.url+'/?lang=en');
+    await showFleet(page);
     const panel=page.locator('#taskDetail');
     await page.locator('.card[data-project="alpha"][data-task="T-001"]').first().click();
     await expect(panel.locator('.intent-header')).toContainText('Plan');
