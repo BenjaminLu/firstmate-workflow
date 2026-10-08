@@ -3,6 +3,7 @@
 Historical proof: invoke this complete harness with --historical; mutation proof:
 --presence-mutation. Both must fail test_nullable_choice_eligibility at its named
 behavioral assertion. Neither mode changes the checkout or stored history.
+Add --full-suite to either mode to run all feature cases under that overlay.
 """
 import os
 os.environ['HERDR_ENV'] = '0'
@@ -217,7 +218,7 @@ class NullableHistory(unittest.TestCase):
         before = self.coexist()
         own = dict(head='old', dirty=False); new = dict(head='new', dirty=False)
         reload = dict(request={'to': new}, failed_ids=[])
-        self.pilot.data['jobs']['live'] = dict(task='T-001', state='running', kind='gate', number=12, head=HEAD)
+        self.pilot.data.setdefault('jobs', {})['live'] = dict(task='T-001', state='running', kind='gate', number=12, head=HEAD)
         with presence_predicates():
             self.assertEqual(self.eligible()[1], 'unverified identity')
             self.assertFalse(fixture.A.reload_due(self.pilot, own, reload))
@@ -285,6 +286,9 @@ if __name__ == '__main__':
     mode = next((arg for arg in sys.argv if arg in ('--historical', '--presence-mutation')), None)
     if mode:
         sys.argv.remove(mode)
+        full_suite = '--full-suite' in sys.argv
+        if full_suite:
+            sys.argv.remove('--full-suite')
         source = None
         if mode == '--historical':
             commit = '3c5a213e462744f1612dd61023bc7504810ff5d0'
@@ -294,6 +298,7 @@ if __name__ == '__main__':
             assert digest == '38b56bd875ade03abe452fc30c624b7eddcb1fafa45c82e60e3669f73f713f7f'
             print('Historical production source', commit, digest)
         with presence_predicates(source):
-            unittest.main(argv=[sys.argv[0], 'NullableHistory.test_nullable_choice_eligibility'])
+            unittest.main(argv=[sys.argv[0]] if full_suite else
+                          [sys.argv[0], 'NullableHistory.test_nullable_choice_eligibility'])
     else:
         unittest.main()
