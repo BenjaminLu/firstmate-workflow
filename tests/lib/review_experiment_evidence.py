@@ -861,6 +861,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         self.assertTrue((work/'evidence-path.txt').is_file())
 
     def test_no_experiment_refresh_preserves_original_prompt_and_archive(self):
+        from fm_binding import change
         import fm_review_context as context
         self.frozen_contract()
         tree = self.checkout()
@@ -868,7 +869,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         work.mkdir()
         for name in context.PARTS:
             (work/(name+'.md')).write_text('complete standing criteria\n' if name == 'history' else '')
-        (work/'pins.json').write_text(json.dumps(dict(head=self.head, base=self.base, patch='', files=[])))
+        (work/'pins.json').write_text(json.dumps(change(self.repo, self.head, self.base)))
         source = (ROOT/'bin/fm-review.sh').read_text()
         block = source[source.index('restore_context_evidence() {'):source.index('\nif ! context_checkout_matches;')]
         env = dict(os.environ, work=str(work), REVIEW_MODE='run', CHECKOUT=str(tree),
