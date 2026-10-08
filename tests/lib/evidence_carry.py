@@ -228,7 +228,7 @@ with patch.dict(os.environ,FM_EXTERNAL='1',FM_STATE_DIR=str(private/'state'),
         # Synchronization unblocks full collection; changed remote reviews are
         # re-read even though the independent precheck still passes.
         git('update-ref','refs/heads/main',base2)
-        carry(1,'will not be updated')
+        carry(75,'candidate gate base moved; refresh gates')
         reviews=json.loads((temporary/'reviews.json').read_text())
         reviews[0]['id']=2;(temporary/'reviews.json').write_text(json.dumps(reviews))
         carry(0,pre=True);carry(1,'review changed')
