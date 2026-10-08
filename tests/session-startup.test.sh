@@ -121,6 +121,8 @@ class Session(SessionFixture):
         d = Path(tempfile.mkdtemp()); self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
         (d/'bin').mkdir(); (d/'state').mkdir()
         shutil.copy(root/'bin/fm-emit.sh', d/'bin/fm-emit.sh')
+        (d/'bin/lib').mkdir()
+        shutil.copy(root/'bin/lib/fm-task-grammar.sh', d/'bin/lib/fm-task-grammar.sh')
         shutil.copy(root/'bin/fm-herdr.py', d/'bin/fm-herdr.py')
         self.assertEqual(0, m.main(['emit-status','--root',str(d),'--actor','session-h',
             '--task','T-S','--role','worker','--en','pane heartbeat','--tw','窗格心跳']))

@@ -343,12 +343,10 @@ awk -F'\t' '$1 != "" { printf "  %-8s %-18s %s%s\n", $1, $2, ($3 == "" ? "" : "#
   ($4 == "" ? "" : ($3 == "" ? "" : " ") "(" $4 ")") }' <<< "$state"
 
 # --- 2. the pull requests GitHub is holding -------------------------------
-# A branch is named after its task, and the branch is the only place that id
-# survives when the event which should have carried one did not. The same
-# convention bin/fm-autopilot.sh reads; the two are not shared because the
-# only place to put a shared copy is bin/fm-config.sh, outside this scope.
-task_of() { printf '%s' "$1" | sed -n 's/^\([tT]-\{0,1\}[0-9]\{3\}\).*/\1/p' | tr 'a-z' 'A-Z' \
-            | sed 's/^T\([0-9]\)/T-\1/'; }
+# Use the same task attribution as merge, adoption and the board.
+# shellcheck source=bin/lib/fm-task-grammar.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/fm-task-grammar.sh"
+task_of() { fm_task_of_branch "$1" || true; }
 
 # "-" rather than "", so that "no such event at all" and "an event carrying no
 # task" are two different answers instead of the same empty string. They need

@@ -58,7 +58,9 @@ def select_base(repository, base, dependencies, merged, allowed):
                  '--limit', '1000', '--json', 'number,headRefName,headRefOid,isCrossRepository')
     if not isinstance(prs, list) or len(prs) >= 1000:
         raise ValueError('open PR list is incomplete or invalid')
-    matches = [pr for pr in prs if re.match(r'^' + re.escape(dep) + r'(?:-|$)', pr['headRefName'].lower())]
+    matches = [pr for pr in prs if re.match(
+        r'^' + re.escape(dep) + r'(?:-|$)',
+        re.sub(r'^[A-Za-z0-9._-]+/', '', pr['headRefName'].lower(), count=1))]
     if len(matches) != 1 or matches[0].get('isCrossRepository') is not False:
         raise ValueError('dependency has no unique same-repository open PR')
     pr = matches[0]
@@ -68,7 +70,7 @@ def select_base(repository, base, dependencies, merged, allowed):
 def release_parent(root, repository, branch, expected, policy):
     if not policy.get('delete_branch') or not deletable(repository, branch):
         return
-    if branch in ('main', 'master', policy['base']) or not re.match(r'^(?:t|sk)-\d+(?:-|$)', branch, re.I):
+    if branch in ('main', 'master', policy['base']) or not re.match(r'^(?:[A-Za-z0-9._-]+/)?(?:t|sk)-\d+(?:-|$)', branch, re.I):
         raise ValueError('refusing protected/non-task parent deletion')
     from urllib.parse import quote
     info = github(repository, 'api', 'repos/' + repository + '/branches/' + quote(branch, safe=''))
@@ -91,7 +93,7 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
     sha(expected)
     child = remote_head(repository, pr)
     branch = child['headRefName']
-    if branch in ('main', 'master', 'HEAD', policy['base']) or not re.match(r'^(?:t|sk)-\d+(?:-|$)', branch, re.I):
+    if branch in ('main', 'master', 'HEAD', policy['base']) or not re.match(r'^(?:[A-Za-z0-9._-]+/)?(?:t|sk)-\d+(?:-|$)', branch, re.I):
         raise ValueError('protected or non-task branch cannot be restacked')
     git(root, 'check-ref-format', 'refs/heads/' + branch)
     if child['headRefOid'] != expected:
@@ -236,7 +238,7 @@ def main():
         if not args.pr or not args.parent or not args.expected_head:
             raise ValueError('restack requires --pr --parent --expected-head')
         child = remote_head(repo, args.pr)
-        match = re.match(r'^((?:t|sk)-[0-9]+)(?:-|$)', child['headRefName'], re.I)
+        match = re.match(r'^(?:[A-Za-z0-9._-]+/)?((?:t|sk)-[0-9]+)(?:-|$)', child['headRefName'], re.I)
         if not match:
             raise ValueError('restack requires a task branch')
         state = Path(os.environ['FM_STATE_DIR'])
