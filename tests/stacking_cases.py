@@ -159,6 +159,27 @@ class Stacking(unittest.TestCase):
                                      dict(delete_branch=True, base='main'))
             git.assert_not_called()
 
+    def test_adopted_restack_identity_authorization(self):
+        # FAIL-FIRST against round-one head: metadata projection must retain safety fields.
+        cases = [({'isCrossRepository': True}, 'fork'),
+                 ({'isCrossRepository': 'missing'}, 'fork'),
+                 ({'headRefName': 't-999-other', 'title': 'T-002: child'}, 'another task'),
+                 ({'headRefName': 't-002-child', 'title': 'T-999: other'}, 'another task'),
+                 ({'title': None}, 'identity'), ({'state': 'CLOSED'}, 'open')]
+        for identity, reason in cases:
+            with self.subTest(identity=identity), restack_fixture(adopted=True, identity=identity) as (run, git, edit, tmp):
+                with self.assertRaisesRegex(ValueError, reason): run()
+                self.assertFalse(any(call.args[1] in ('push', 'worktree', 'update-ref') for call in git.call_args_list))
+                edit.assert_not_called()
+        for identity in ({}, {'headRefName': 'feature/t-002-child', 'title': 'T-002: child'}):
+            with restack_fixture(adopted=True, identity=identity) as (run, git, edit, tmp):
+                self.assertEqual(run()['adopt_pr'], 2)
+        for identity in ({'title': 'T-999: changed'}, {'isCrossRepository': True}):
+            with restack_fixture(adopted=True, changed_identity=identity) as (run, git, edit, tmp):
+                with self.assertRaises(ValueError): run()
+                self.assertFalse(any(call.args[1] == 'push' for call in git.call_args_list))
+                edit.assert_not_called()
+
     def test_adopted_restack_guards_and_retarget(self):
         for retargeted in (False, True):
             # FAIL-FIRST: human branch restacks and identifies adopted ownership.

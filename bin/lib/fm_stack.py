@@ -102,13 +102,24 @@ def adopted_child(pr):
     return task, adopt
 
 
+def child_view(repository, pr, task, adopt):
+    if not adopt:
+        return remote_head(repository, pr)
+    view = github(repository, 'pr', 'view', str(pr), '--repo', repository,
+                  '--json', 'headRefOid,baseRefOid,baseRefName,headRefName,state,isCrossRepository,title')
+    fm_adopt.safety(view, adopt, task, os.environ)
+    sha(view.get('headRefOid'))
+    sha(view.get('baseRefOid'))
+    return view
+
+
 def restack(root, repository, pr, parent, expected, policy, scratch):
     if policy.get('force_with_lease') is not True or policy.get('stacking') != 'allowed':
         raise ValueError('restack requires confirmed stacking and force-with-lease policy')
     sha(expected)
-    child = remote_head(repository, pr)
-    branch = child['headRefName']
     task, adopt = adopted_child(pr)
+    child = child_view(repository, pr, task, adopt)
+    branch = child['headRefName']
     if branch in ('main', 'master', 'HEAD', policy['base']) or (not adopt and not re.match(r'^(?:[A-Za-z0-9._-]+/)?(?:t|sk)-\d+(?:-|$)', branch, re.I)):
         raise ValueError('protected or non-task branch cannot be restacked')
     git(root, 'check-ref-format', 'refs/heads/' + branch)
@@ -127,7 +138,11 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
     if local != expected:
         raise RestackStaleLocal('local task ref is not the expected head; synchronize before restacking')
     parent_view = github(repository, 'pr', 'view', str(parent), '--repo', repository,
-                         '--json', 'state,headRefName,headRefOid,baseRefName')
+                         '--json', 'state,headRefName,headRefOid,baseRefName,isCrossRepository,title')
+    if adopt and (parent_view.get('isCrossRepository') is not False or
+                  fm_adopt.task_of(dict(parent_view, number=parent), os.environ) not in
+                  (fm_adopt.authorized_spec(os.environ, task) or {}).get('depends_on', [])):
+        raise ValueError('adopted parent must be a same-repository dependency')
     if adopt and parent_view['headRefName'] != adopt['base']:
         raise ValueError(f'parent #{parent} is not the adopted base')
     if adopt and not fm_adopt.pushed(fm_adopt.event_rows(os.environ), task, pr):
@@ -170,7 +185,7 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
                             'command failed')
                 raise RestackConflict('rebase conflict restacking onto ' + target + ': ' + line)
             head = sha(git(tree, 'rev-parse', 'HEAD'))
-            current = remote_head(repository, pr)
+            current = child_view(repository, pr, task, adopt)
             if current != child:
                 raise RestackMoved('child moved during restack; nothing published')
             # A managed task worktree may stay, but never discard dirty work.

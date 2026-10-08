@@ -70,7 +70,7 @@ for STACK_EXIT in 0 69 71; do
   export STACK_EXIT
   rm -f "$EMIT_ARGS"
   out="$(GH_REPO=fixture/project FM_ROOT="$d" bash "$d/bin/lib/fm-restack.sh" --repo "$d" --pr 2 --parent 1 --expected-head bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 2>&1)"; code=$?
-  assert_eq "$STACK_EXIT" "$code" "FAIL-FIRST: wrapper preserves restack exit $STACK_EXIT"
+  assert_eq "$STACK_EXIT" "$code" "REGRESSION: wrapper preserves restack exit $STACK_EXIT"
   if [ "$STACK_EXIT" = 71 ]; then
     assert_fail "test -e '$EMIT_ARGS'" 'unknown push emits no adopted event'
     assert_contains "$out" 'repin adopt.head with a new spec and A card' 'unknown push recovery guidance'
@@ -91,10 +91,10 @@ for STACK_EXIT in 0 69; do
 done
 rm -f "$STACK_CALLED"
 out="$(ADOPT_ERROR=1 GH_REPO=fixture/project FM_ROOT="$d" bash "$d/bin/lib/fm-restack.sh" --repo "$d" --pr 2 --parent 1 --expected-head bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 2>&1)"; code=$?
-assert_ne 0 "$code" 'FAIL-FIRST: duplicate ownership stops wrapper'
-assert_fail "test -e '$STACK_CALLED'" 'task-of failure precedes restack'
+assert_ne 0 "$code" 'REGRESSION: duplicate ownership stops wrapper'
+assert_fail "test -e '$STACK_CALLED'" 'FAIL-FIRST: task-of failure precedes restack'
 # Feature-owned Python restack cases share tests/lib/stacking_fixture.py.
-for case_name in test_adopted_restack_guards_and_retarget test_adopted_dependency_and_parent_release; do
+for case_name in test_adopted_restack_identity_authorization test_adopted_restack_guards_and_retarget test_adopted_dependency_and_parent_release; do
   PYTHONPATH="$ROOT/bin/lib" python3 "$ROOT/tests/stacking_cases.py" "Stacking.$case_name"
   assert_eq 0 "$?" "$case_name"
 done

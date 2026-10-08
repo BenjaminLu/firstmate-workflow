@@ -13,14 +13,17 @@ A, B, C, D = (letter * 40 for letter in 'abcd')
 @contextmanager
 def restack_fixture(*, local=B, remote_error=None, git_errors=None, retarget_error=None,
                     rebase_stderr=None, moved=False, adopted=False, retargeted=False, pinned=True,
-                    fetched=B, wrong_parent=False, lost_head=False, parent_adopted=False):
+                    fetched=B, wrong_parent=False, lost_head=False, parent_adopted=False, identity=None, changed_identity=None):
     child = dict(state='OPEN', headRefName='t-2-child', baseRefName='t-1-parent',
-                 headRefOid=B, baseRefOid=A)
-    parent = dict(state='MERGED', headRefName='t-1-parent', headRefOid=A, baseRefName='main')
+                 headRefOid=B, baseRefOid=A, title='Human change', isCrossRepository=False)
+    parent = dict(state='MERGED', headRefName='t-1-parent', headRefOid=A, baseRefName='main', isCrossRepository=False)
     if adopted:
         child['headRefName'] = 'human-child'
         parent['headRefName'] = 'human-parent'
         child['baseRefName'] = 'main' if retargeted else 'human-parent'
+    child.update(identity or {})
+    if identity and identity.get('isCrossRepository') == 'missing':
+        child.pop('isCrossRepository')
     final = dict(child, headRefOid=C, baseRefName='main', baseRefOid=D)
     def git_answer(root, *args):
         for prefix, error in (git_errors or {}).items():
@@ -33,7 +36,9 @@ def restack_fixture(*, local=B, remote_error=None, git_errors=None, retarget_err
         if args == ('merge-base', A, B): return A
         if args == ('rev-parse', 'HEAD'): return C
         return ''
+    real_run = subprocess.run
     def rebase(argv, **kwargs):
+        if argv[0] == 'bash': return real_run(argv, **kwargs)
         assert argv[:2] == ['git', '-C']
         assert argv[3:] == ['-c', 'core.hooksPath=/dev/null', 'rebase', '--onto', D, A]
         assert kwargs == dict(stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
@@ -48,7 +53,18 @@ def restack_fixture(*, local=B, remote_error=None, git_errors=None, retarget_err
         context.enter_context(patch.object(fm_adopt, 'event_rows', create=True, return_value=[]))
         context.enter_context(patch.object(stack, 'remote_head', side_effect=[
             child, dict(child, headRefOid=C) if moved else child, remote_error or final]))
-        context.enter_context(patch.object(stack, 'github', side_effect=[parent, {'protected': False}]))
+        views = iter([child, dict(child, **(changed_identity or {})), final])
+        def github_answer(repository, *args):
+            if args[:3] == ('pr', 'view', '2'):
+                fields = args[args.index('--json') + 1].split(',')
+                view = next(views)
+                return {key: view[key] for key in fields if key in view}
+            if args[0] == 'pr': return parent
+            return {'protected': False}
+        context.enter_context(patch.object(stack, 'github', side_effect=github_answer))
+        context.enter_context(patch.dict(os.environ, FM_EXTERNAL='1'))
+        context.enter_context(patch.object(fm_adopt, 'authorized_spec', return_value={'depends_on': ['T-001']}))
+        context.enter_context(patch.object(fm_adopt, 'task_of', return_value='T-001'))
         context.enter_context(patch.object(stack, 'fetch_ref', side_effect=([fetched] if adopted and isinstance(local, Exception) else []) + [D, A]))
         git = context.enter_context(patch.object(stack, 'git', side_effect=git_answer))
         command = context.enter_context(patch.object(stack, 'command', side_effect=retarget_error))

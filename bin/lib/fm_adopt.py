@@ -168,6 +168,31 @@ def pushed(rows, task, pr):
                and (row.get('data') or {}).get('adopt_pr') == pr for row in rows)
 
 
+def safety(view, adopt, task, env):
+    """Retained adoption authorization, independent of the restack base transition."""
+    validate(adopt)
+    if env.get('FM_EXTERNAL') != '1':
+        raise ValueError('adopt is only supported for external projects')
+    if view.get('state') != 'OPEN':
+        raise ValueError('adopted PR must be open')
+    if view.get('isCrossRepository') is not False:
+        raise ValueError('fork PR adoption is refused')
+    if not isinstance(view.get('title'), str):
+        raise ValueError('adopted PR identity is missing or malformed')
+    branch = view.get('headRefName')
+    if not isinstance(branch, str) or not branch or branch in (adopt['base'], env.get('FM_BASE', 'main'), 'main', 'master'):
+        raise ValueError('adopted PR head is a protected base branch')
+    # Check both independently: a matching branch must not mask a wrong title.
+    script = Path(__file__).resolve().parents[1] / 'fm-emit.sh'
+    for head, title in ((branch, ''), ('', view.get('title', ''))):
+        result = subprocess.run(['bash', '-c', '. "$1"; fm_task_of_pr "$2" "$3" || true',
+                                 '_', str(script), head, title], env=env,
+                                capture_output=True, text=True, timeout=120, check=True)
+        owner = result.stdout.strip()
+        if owner and owner != task:
+            raise ValueError('adopted PR branch or title names another task: ' + owner)
+
+
 def check(view, adopt, task, env, git_root, pushed, open_heads, repository=None):
     validate(adopt)
     if env.get('FM_EXTERNAL') != '1':
@@ -184,18 +209,7 @@ def check(view, adopt, task, env, git_root, pushed, open_heads, repository=None)
             if task_of(row, env) not in dependencies or not stacking_allowed(env, repository):
                 raise ValueError(f"stacked on an unmanaged PR #{row['number']} or stacking not allowed: adopt the parent first, list its task in depends_on, and confirm stacking")
     effective_base(view, adopt, env, task, repository)
-    branch = view.get('headRefName')
-    if not isinstance(branch, str) or not branch or branch in (adopt['base'], env.get('FM_BASE', 'main'), 'main', 'master'):
-        raise ValueError('adopted PR head is a protected base branch')
-    # Check both independently: a matching branch must not mask a wrong title.
-    script = Path(__file__).resolve().parents[1] / 'fm-emit.sh'
-    for head, title in ((branch, ''), ('', view.get('title', ''))):
-        result = subprocess.run(['bash', '-c', '. "$1"; fm_task_of_pr "$2" "$3" || true',
-                                 '_', str(script), head, title], env=env,
-                                capture_output=True, text=True, timeout=120, check=True)
-        owner = result.stdout.strip()
-        if owner and owner != task:
-            raise ValueError('adopted PR branch or title names another task: ' + owner)
+    safety(view, adopt, task, env)
     _, duplicates, _ = scan(env)
     if adopt['pr'] in duplicates:
         raise ValueError(duplicate_reason(duplicates[adopt['pr']]))

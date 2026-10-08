@@ -600,9 +600,15 @@ def rev(ref):
     return subprocess.check_output(['git', '--git-dir='+os.environ['FM_TEST_REMOTE'], 'rev-parse', ref], text=True).strip()
 if args[:2] == ['pr', 'view']:
     if args[2] == '8':
-        print(json.dumps(dict(number=8, state='MERGED', headRefName='human-parent', headRefOid=view['parent_head'], baseRefName='trunk', isCrossRepository=False)))
+        print(json.dumps(dict(number=8, state='MERGED', headRefName='human-parent', headRefOid=view['parent_head'], baseRefName='trunk', isCrossRepository=False, title='T-222: parent')))
     else:
-        print(json.dumps(dict(number=9, state='OPEN', headRefName='human-child', headRefOid=rev('human-child'), baseRefName=view['baseRefName'], baseRefOid=rev(view['baseRefName']), isCrossRepository=False)))
+        child = dict(number=9, state='OPEN', headRefName='human-child', headRefOid=rev('human-child'), baseRefName=view['baseRefName'], baseRefOid=rev(view['baseRefName']), isCrossRepository=False, title='Human change')
+        count = view.get('reads', 0) + 1
+        view['reads'] = count; path.write_text(json.dumps(view))
+        child.update(view.get('identity', {}) if count == 1 else view.get('changed_identity', view.get('identity', {})))
+        if child.get('isCrossRepository') == 'missing': child.pop('isCrossRepository')
+        fields = args[args.index('--json')+1].split(',')
+        print(json.dumps({key: child[key] for key in fields if key in child}))
 elif args[:2] == ['pr', 'edit']:
     view['baseRefName'] = args[args.index('--base')+1]; path.write_text(json.dumps(view))
 elif args[:2] == ['pr', 'list']:
@@ -622,6 +628,29 @@ else: sys.exit('unexpected GitHub request')
         return subprocess.run(['bash', str(self.engine/'bin/lib/fm-restack.sh'), '--repo', str(self.engine),
             '--project', 'app', '--pr', '9', '--parent', '8', '--expected-head', self.child_head],
             env=self.env, capture_output=True, text=True, timeout=120)
+
+    def test_restack_identity_refusals_emit_nothing(self):
+        # FAIL-FIRST on round-one head: actual wrapper/read path must refuse before publication.
+        self.prepare_stack(retargeted=True)
+        cases = [dict(isCrossRepository=True), dict(isCrossRepository='missing'),
+                 dict(headRefName='t-999-other', title='T-223: child'),
+                 dict(headRefName='t-223-child', title='T-999: other'), dict(title=None)]
+        for changed in (False, True):
+            for identity in cases:
+                with self.subTest(changed=changed, identity=identity):
+                    self.view.pop('identity', None); self.view.pop('changed_identity', None)
+                    self.view['reads'] = 0
+                    self.view['changed_identity' if changed else 'identity'] = identity
+                    self.write_view()
+                    (self.scratch/'git.jsonl').write_text('')
+                    result = self.restack_command()
+                    self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
+                    calls = [json.loads(line) for line in (self.scratch/'git.jsonl').read_text().splitlines()]
+                    self.assertFalse(any('push' in call for call in calls))
+                    if not changed:
+                        self.assertFalse(any('rebase' in call or 'update-ref' in call for call in calls))
+                    rows = [json.loads(line) for line in (self.state/'events.jsonl').read_text().splitlines()]
+                    self.assertFalse(any(row.get('type') == 'commit_pushed' for row in rows))
 
     def test_restack_without_local_objects_and_ready_move(self):
         # FAIL-FIRST: an adopted child can restack before its first worker round.
