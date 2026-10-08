@@ -18,7 +18,10 @@ A, PR, HEAD, BASE, CHECKS = fixture.A, fixture.PR, fixture.HEAD, fixture.BASE, f
 class MergePath(unittest.TestCase):
     # Reuse fixture helpers without inheriting the unrelated lifecycle tests.
     setUp = fixture.LoopTests.setUp
-    record_job = fixture.LoopTests.record_job
+    def record_job(self, kind, task, pr, argv, **extra):
+        # Stock spawn creates the jobs registry for every kind, including gates.
+        self.pilot.data.setdefault('jobs', {})
+        return fixture.LoopTests.record_job(self, kind, task, pr, argv, **extra)
     command = fixture.LoopTests.command
     probe = fixture.LoopTests.probe
     branch_setup = fixture.BranchFixture.branch_setup
@@ -112,7 +115,7 @@ class MergePath(unittest.TestCase):
         command = self.pilot.command
         def fail_request(argv, **kwargs):
             if '--request' in argv:
-                raise RuntimeError('request refused')
+                raise RuntimeError('PRIVATE_CHILD_CANARY_242: Private customer request context.')
             return command(argv, **kwargs)
         with patch.object(self.pilot, 'command', side_effect=fail_request):
             self.poll()
@@ -123,7 +126,16 @@ class MergePath(unittest.TestCase):
         self.assertEqual(sum(c[0] == 'gate' for c in self.calls), 1)
         failure = self.pilot.data['merge_request_failures']['12']
         self.assertEqual(failure['id'], 'D-alpha-T001-1')
-        self.assertNotIn('request refused', json.dumps(self.pilot.data))
+        retained = json.dumps(self.pilot.data)
+        self.assertNotIn('PRIVATE_CHILD_CANARY_242', retained)
+        self.assertNotIn('Private customer request context.', retained)
+        for allowed in ('T-001', 'D-alpha-T001-1', 'author intent and walk fields from the spec'):
+            self.assertIn(allowed, retained)
+        wakes = json.dumps(self.pilot.data['wakes'])
+        self.assertNotIn('PRIVATE_CHILD_CANARY_242', wakes)
+        self.assertNotIn('Private customer request context.', wakes)
+        for allowed in ('T-001', 'D-alpha-T001-1', 'author intent and walk fields from the spec'):
+            self.assertIn(allowed, wakes)
         corrected = self.state / 'decision-details/D-alpha-T001-1.json'
         corrected.parent.mkdir(exist_ok=True)
         corrected.write_text(json.dumps(card()))
