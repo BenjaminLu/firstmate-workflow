@@ -642,6 +642,7 @@ fm_external_prepare
         # sam, samx, samxy, where one actor's name is a prefix of the others.
         (self.repo/'config.yaml').write_text('vendor: codex\nconcurrency: 2\n'
                                              'rosters:\n  workers: [sam]\n  reviewers: [samx, samxy]\n')
+        self.seed_self_authoring()
         def launch(role):
             args=['--task','T-035']
             if role=='review': args += ['--branch','work']

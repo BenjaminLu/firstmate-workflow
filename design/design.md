@@ -1194,6 +1194,74 @@ rebuilt one publishes nothing.
 
 ### 5.4 The pull request protocol
 
+New self pull requests use firstmate-authored operational prose (T-259),
+not the descriptive task title or an acceptance pointer. Before dispatch,
+firstmate writes `state/pr-authoring/<task>.json`: schema 1, task, optional
+`dispatch_reference`, `sources` for spec/design/contract/conventions (each
+`sha256` and explicit `absent` boolean), subject, authored small/complex size,
+problem, expected_result, proposed approach and intent_notes. Each intent note
+has a unique **zero-based acceptance array index** and concise purpose. Door
+records kind/reason; rollback records trigger/action/owner/limits. Omitted
+reversibility and owners are not recorded, never invented.
+
+The subject begins with Add, Fix, Update, Remove, Preserve, Prevent, Record,
+Show, Refresh, Support, Validate, Bound, Use, Keep, Replace, Improve, Allow,
+Reject or Restore and a named object: 1–70 printable ASCII characters, at most
+12 words, no controls/local-state paths/task prefix/generic task subject.
+Final `T-id: subject` is at most 85 characters. Branches, commits and task titles
+retain their existing rules. These structural checks do not establish semantic
+specificity; firstmate judges specificity and approved reference alignment.
+
+After stock pin creation/resolution, the outer launcher validates exact approved
+source digests and retained dispatch reference, then writes a separate sealed
+publication derivative. Its pin digest is SHA-256 of the **entire validated
+resolved stock pin**, UTF-8 `json.dumps(pin, sort_keys=True,
+separators=(",", ":"), ensure_ascii=False)`. It is not a signature or approval;
+stock receipt/authorization checks still apply. First-dispatch drafts need no
+publication pin digest; valid legacy pins need no repin solely for prose. The
+launcher refuses missing/stale prose, source/ref conflicts, symlinks or state
+escapes before model execution/commit/push. Crew cannot author seals or approval.
+
+Captain decision D-firstmate-workflow-T259-1 permits an explicit unsealed-legacy
+publication envelope only for stock-authorized/preflighted first dispatch with
+no existing pin and absent required contract/design. Exact available approved
+bytes retain their digests; unavailable sources use explicit absent sentinels.
+An available config with no gate contract retains its config digest and marks
+contract absent. No unavailable hash is invented. Corrupt existing pins, stale
+preflight, unsupported failure causes and absent prose still refuse. This mode
+has no pin version/digest and labels publication pin unavailable and scope gate
+not authorized by the envelope. Existing no-pin warnings and scope refusal stay.
+
+After commit, copied-code rendering uses approved spec and exact-head diff files.
+It retains an exact private JSON preview, then the launcher passes only title/body
+via an owned mode-600 temporary body file. Small changes use connected prose;
+complex changes use Problem and result, Approach and scope, Approved intent and
+evidence, and Decision, migration and rollback. Expected behavior is expected;
+authored approach remains proposed until verified. Creation-time timestamp/head
+labels required CI, review and six gates pending/not collected; local validation
+not recorded. Check current CI and review at this PR. Trusted self registry
+identity (or canonical GitHub origin in degraded callers) supplies commit links;
+unknown identity omits links and says current evidence unavailable. Raw local
+origin, pin/state paths and worker test claims are never metadata inputs.
+
+Question drafts use the same validated envelope. The launcher passes only scope,
+acceptance or implementation clarification from standalone SCOPE-BLOCKED,
+ASK-PASS-CRITERIA or supported ASK markers. Title is `Ask about <authored object>`;
+body describes the draft awaiting clarification, expected intent and pending
+evidence. Raw notes, marker suffixes and private reasoning never reach rendering.
+The existing authorized self question-file/comment lifecycle remains unchanged.
+
+Only new self PRs change. Existing/human/adopted metadata and all external
+publication rules remain preserved. Old frozen code roots keep prior output;
+updated snapshots enforce authoring without migrating pins, cards, evidence or
+stored door schemas. Read-only `fm_self_pr.py preview` takes repository, task,
+PR, head and current title/body hashes and returns proposed metadata. Repair
+requires a concrete captain decision on that exact preview/head/old hashes and
+remote compare-and-swap through the existing GitHub interface; no automatic
+editing or CI status regeneration is introduced. Reviewer checks prose against
+pin/diff/evidence; creation-time pending results are not an additional rejection
+criterion, approval marker or gate. Instruction checks do not prove model behavior.
+
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
 did not happen.
 

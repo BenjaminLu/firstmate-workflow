@@ -1020,6 +1020,7 @@ mirror_watch_stop() {
 # the branch ref never points at a half-rebuilt tree: a run that dies here
 # leaves the branch as it was, and fm-checkpoint.sh refuses a detached
 # HEAD. A commit made on it anyway is refused before the round's own.
+self_pr_confirmed_base=''
 rebuilt=0; rebuild_clean=0; rebuild_prev=''; rebuild_lease=''; rebuild_base=''; rebuild_mark=''
 rebuild_entry=''; rebuild_probe=''
 rebuild_conflicts=(); rebuild_restore=()
@@ -1163,6 +1164,9 @@ bring_up_to_date() {
   git fetch -q origin "+refs/heads/$BASE:$base_ref" 2>/dev/null || {
     echo "fm-worker: could not fetch $BASE; $branch is not checked against it this round" >&2
     return 0; }
+  if [ "$FM_EXTERNAL" = 0 ]; then
+    self_pr_confirmed_base="$(git rev-parse "$base_ref")" || return 0
+  fi
   head="$(git -C "$tree" rev-parse HEAD)" || return 0
   mb="$(git merge-base "$base_ref" "$head" 2>/dev/null)" || {
     echo "fm-worker: $branch shares no history with $BASE; not rebuilding it" >&2; return 0; }
@@ -1279,6 +1283,25 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
          *) exit "$pin_existing_rc" ;;
        esac ;;
   esac
+fi
+
+# T-259: only the trusted outer launcher seals publication prose, before any
+# adapter or publication. Existing/adopted self PR metadata stays untouched.
+if [ "$FM_EXTERNAL" = 0 ] && [ -z "$PR" ] && [ -z "${adopt_pr:-}" ]; then
+  _fm_wip_done=1 # an authoring refusal must not publish through the EXIT checkpoint
+  self_pr_binding=(--publication-mode unsealed-legacy)
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then
+    self_pr_pin_digest="$(python3 -c 'import hashlib,json,sys; print(hashlib.sha256(json.dumps(json.load(sys.stdin),sort_keys=True,separators=(",",":"),ensure_ascii=False).encode("utf-8")).hexdigest())' \
+      <<<"$FM_SPEC_PIN_JSON")" || exit 65
+    self_pr_binding=(--publication-mode pin-backed --pin-sha256 "$self_pr_pin_digest")
+  fi
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_self_pr.py" seal --task "$TASK" \
+    --evidence-project "$(fm_evidence_project)" "${self_pr_binding[@]}" >/dev/null || exit 65
+  _fm_wip_done=0
+  self_pr_base="${self_pr_confirmed_base:-$rebuild_base}"
+  if [ -z "$self_pr_base" ]; then
+    self_pr_base="$(git -C "$tree" rev-parse "$BASE^{commit}")" || exit 65
+  fi
 fi
 
 if [ -n "${adopt_pr:-}" ] && [ -n "$FM_SPEC_PIN_JSON" ]; then
@@ -2348,7 +2371,31 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   pr_body="Dispatched by firstmate for $TASK. Acceptance is in design/tasks/$TASK.json."
   pr_title="$TASK: project work"
   if [ "$FM_EXTERNAL" = 0 ]; then
-    pr_title="$TASK: $(jq -r .title <<<"$spec")"
+    self_pr_repository="$(fm_project_get "${FM_PROJECT:-firstmate-workflow}" github "$FM_CONFIG" 2>/dev/null || true)"
+    self_pr_origin="$(git -C "$FM_TARGET_ROOT" config --get remote.origin.url 2>/dev/null || true)"
+    self_pr_head="$(git -C "$tree" rev-parse HEAD)" || exit 65
+    self_pr_files="$(scratch_new)" || exit 70
+    scratch_add "$self_pr_files"
+    # NUL-delimited git paths remain data, including quotes and shell syntax.
+    git -C "$tree" diff --name-only -z "$self_pr_base...$self_pr_head" | \
+      python3 -c 'import json,sys; json.dump([p.decode("utf-8") for p in sys.stdin.buffer.read().split(b"\0") if p],sys.stdout)' \
+      > "$self_pr_files" || exit 65
+    self_pr_question=()
+    if first_round_question; then
+      if grep -Eq "^SCOPE-BLOCKED:$TASK([[:space:]]|$)" "$say"; then
+        self_pr_question=(--question scope)
+      elif grep -Eq "^ASK-PASS-CRITERIA:$TASK([[:space:]]|$)" "$say"; then
+        self_pr_question=(--question acceptance)
+      else
+        self_pr_question=(--question implementation)
+      fi
+    fi
+    self_pr_rendered="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_self_pr.py" render \
+      --task "$TASK" --evidence-project "$(fm_evidence_project)" --head "$self_pr_head" "${self_pr_binding[@]}" \
+      --repository "$self_pr_repository" --origin "$self_pr_origin" --files "$self_pr_files" \
+      ${self_pr_question[@]+"${self_pr_question[@]}"})" || exit 65
+    pr_title="$(jq -r .title <<<"$self_pr_rendered")" || exit 65
+    pr_body="$(jq -r .body <<<"$self_pr_rendered")" || exit 65
   else
     pr_body="Task $TASK. Captain acceptance and evidence are retained privately."
     if [ -n "${public_text:-}" ]; then
@@ -2356,9 +2403,17 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
       pr_body="$(jq -r .body <<<"$public_text")"
     fi
   fi
+  pr_body_args=(--body "$pr_body")
+  if [ "$FM_EXTERNAL" = 0 ]; then
+    self_pr_body_file="$(scratch_new)" || exit 70
+    scratch_add "$self_pr_body_file"
+    chmod 600 "$self_pr_body_file" || exit 70
+    printf '%s' "$pr_body" > "$self_pr_body_file" || exit 70
+    pr_body_args=(--body-file "$self_pr_body_file")
+  fi
   url="$(fm_github pr create ${draft_args[@]+"${draft_args[@]}"} --head "$branch" --base "$BASE" \
         --title "$pr_title" \
-        --body "$pr_body" \
+        "${pr_body_args[@]}" \
         2>/dev/null </dev/null | tail -1)"
   # the number, not the url: every step after this addresses the pull
   # request by it, and an event without it leaves the gates checking nothing

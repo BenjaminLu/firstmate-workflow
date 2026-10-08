@@ -46,6 +46,7 @@ check_refusal_clean
 assert_ok "test ! -e '$repo/state/pins/T-Z/1.json'" 'mismatched preflight refuses before first pin publication'
 assert_ok "test ! -e '$d/called'" 'mismatched preflight never invokes adapter'
 seed_spec_preflight "$repo" T-Z
+seed_self_pr_authoring "$repo" T-Z
 run_worker
 assert_ok "test -s '$d/called'" 'exact spec bytes start worker adapter'
 # A repin is a normal approved new snapshot, never a mutation of pin 1.
@@ -73,6 +74,7 @@ assert_ok "cmp '$repo/state/worktrees/T-Z.pid' '$d/pid-before-refusal'" 'repin r
 assert_eq "$(cat "$d/refs-before-refusal")" "$(git -C "$repo" ls-remote --heads origin)" 'repin refusal leaves remote refs untouched'
 assert_ok "test ! -e '$d/called'" 'repin cannot inherit old receipt'
 seed_spec_preflight "$repo" T-Z
+seed_self_pr_authoring "$repo" T-Z
 run_worker
 assert_ok "test -s '$d/called'" 'repin exact bytes start after fresh preflight'
 rm -rf "$d"

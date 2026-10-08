@@ -64,11 +64,14 @@ cat > "$d/stub/git" <<'G'
 #!/usr/bin/env python3
 import pathlib, sys
 args = sys.argv[1:]
-if args[0] == '-C' and args[2] in ('show', 'merge-base', 'diff-tree'):
+if args[0] == '-C' and args[2] in ('show', 'merge-base', 'diff-tree', 'rev-parse', 'config', 'diff', 'ls-tree'):
     import os
     os.chdir(args[1]); args = args[2:]
 if args[0] == 'rev-parse' and (args[-1] == 'HEAD' or args[-1].endswith('^{commit}')):
     print('a'*40)
+elif args[0] == 'config':
+    if args[-2:] == ['--get', 'remote.origin.url']:
+        print('https://github.com/fixture/project.git')
 elif args[0] == 'merge-base':
     if '--is-ancestor' not in args: print('b'*40)
 elif args[0] in ('diff-tree', 'patch-id'):
@@ -83,9 +86,10 @@ elif args[0] == 'show':
     # <rev>:<path>, answered from the working copy like the real branch would
     path = pathlib.Path(args[-1].split(':', 1)[-1])
     if not path.is_file(): sys.exit(128)
-    print(path.read_text())
+    sys.stdout.buffer.write(path.read_bytes())
 elif args[0] == 'diff':
-    pass
+    if '--name-only' in args and '-z' in args:
+        sys.stdout.buffer.write(b'src/thing\0')
 elif args[0] not in ('for-each-ref', 'worktree', '-C'):
     sys.exit('unexpected mock git operation: ' + repr(args))
 G
@@ -112,6 +116,11 @@ fi
 mkdir -p "$3/src"; printf 'work\n' > "$3/src/thing"
 M
 chmod +x "$r/bin/adapters/mock.sh"
+
+for task in T-1 T-2; do
+  bash -c '. "$1/bin/fm-config.sh"; fm_storage_init "$2" || exit 65;
+    python3 "$1/tests/lib/self_pr_authoring.py" "$1" --seed "$3" self' _ "$ROOT" "$r" "$task"
+done
 
 # Two real worker runs, two tasks, one root; transport and repository boundaries are fake.
 ( cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" bin/fm-worker.sh --task T-1 >"$d/worker1.log" 2>&1 )
