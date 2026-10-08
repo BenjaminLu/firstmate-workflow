@@ -1298,7 +1298,8 @@ function intentBody(d, content, locked, detailOnly = false) {
     `</div>${shownScope.length < scopeItems.length ? `<button type="button" class="show-more" data-reveal="${esc(scopeKey)}">${esc(t('showMore').replace('{n}',scopeItems.length - shownScope.length))}</button>` : ''}</section>` : '';
   const notes = hasItems('notes') ? `<section><h4>${esc(t('notesHeading'))}</h4>` +
     sectionItems(d, 'notes', content.notes || [], (note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${sentence('notes',index,note.text)}</p></aside>`) + '</section>' : '';
-  if (detailOnly) return `<div class="intent-alignment">${hasItems('change_points') ? changeWalk(d,content,locked,true) : intent}${how}${alignment}${scope}${notes}</div>`;
+  if (detailOnly && hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,true)}${how}${alignment}${scope}${notes}</div>`;
+  if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`;
   const options = `<section class="acts intent-options">` +
     ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content.options?.[k];
@@ -1319,7 +1320,8 @@ function intentBody(d, content, locked, detailOnly = false) {
     `<p class="explanation">${said(words(content.explanation || ''),d)}</p>` +
     (hasItems('why') ? `<div class="intent-why">${sentences('why')}</div>` : '') +
     (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome),d)}</p>` : '') + '</details>';
-  return `<div class="intent-alignment">${hasItems('change_points') ? changeWalk(d,content,locked,false) : pairedIntent}${how}${scope}${notes}</div>${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
+  if (hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,false)}${how}${scope}${notes}</div>${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
+  return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
 }
 function decisionDetailsButton(d) {
   return `<button type="button" data-decision-details data-id="${esc(d.id)}" aria-controls="sheet-${esc(d.id)}" aria-expanded="${openDecisionSheets.has(d.id)}">${esc(t("decisionDetails"))}</button>`;

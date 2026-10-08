@@ -91,8 +91,8 @@ assert_fail "grep -q . <<<\"\$(grep -vE '^#|^$' '$tbl' | cut -f1 | sort | uniq -
 
 # T-242: confirmation and evidence controls have bilingual, convertible copy.
 for key in doorOneWay doorTwoWay doorRollback showCode intentReviewed specAcceptance codeMore doorConfirmed doorUnconfirmed decisionMissing decisionAlreadyRecorded; do
-  assert_ok "jq -e --arg key '$key' '.[$key]|strings|select(length>0)' '$en' >/dev/null" "English walk key $key"
-  assert_ok "jq -e --arg key '$key' '.[$key]|strings|select(length>0)' '$tw' >/dev/null" "Traditional Chinese walk key $key"
+  assert_ok "jq -e --arg key '$key' '.[\$key]|strings|select(length>0)' '$en' >/dev/null" "English walk key $key"
+  assert_ok "jq -e --arg key '$key' '.[\$key]|strings|select(length>0)' '$tw' >/dev/null" "Traditional Chinese walk key $key"
 done
 walk_cn="$(jq -r .doorUnconfirmed "$tw")"
 while IFS=$'\t' read -r a b; do

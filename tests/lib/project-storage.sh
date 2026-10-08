@@ -72,7 +72,7 @@ if [ "$mode" = request ] && [ "$kind" = merge ] && [ -n "$details" ]; then
     else printf '{"id":"%s","scope":["src/**"],"acceptance":["The check passes."]}\n' "$task" > "$FM_TASKS_DIR/$task.json"; fi
   fi
 fi
-exec bash "$root/bin/fm-decide-real.sh" "${args[@]}"
+HERDR_ENV=0 exec bash "$root/bin/fm-decide-real.sh" "${args[@]}"
 SH
   chmod +x "$root/bin/fm-decide.sh"
 }

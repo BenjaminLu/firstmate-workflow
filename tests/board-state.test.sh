@@ -662,19 +662,23 @@ assert_eq decisionMissing "$(jq -r .code "$d/door-result")" 'unknown check id co
 for route in /decisions/check-door /decisions; do
   suffix=''; [ "$route" = /decisions ] && suffix=',"chosen":"B"'
   for fields in '' ',"reviewed_intents":[1,2]' ',"reviewed_intents":[1,1],"check_answer":0' ',"reviewed_intents":[true],"check_answer":0' ',"reviewed_intents":[3],"check_answer":0' ',"reviewed_intents":[1.5],"check_answer":0' ',"reviewed_intents":null,"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":true' ',"reviewed_intents":[1,2],"check_answer":2' ',"reviewed_intents":[1,2],"check_answer":0,"locale":"xx"' ',"reviewed_intents":{},"check_answer":0' ',"reviewed_intents":[0],"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":null' ',"reviewed_intents":[1,2],"check_answer":1.5' ',"reviewed_intents":[1,2],"check_answer":-1' ',"reviewed_intents":[1,2],"check_answer":0,"locale":null' ',"reviewed_intents":[1,2],"check_answer":"0"' ',"reviewed_intents":[1,2],"check_answer":0,"locale":true' ',"reviewed_intents":[1,2],"check_answer":0,"locale":[]' ',"reviewed_intents":["1",2],"check_answer":0' ',"reviewed_intents":true,"check_answer":0'; do
-    assert_eq 400 "$(door_post "$route" "{\"id\":\"D-9242\"$suffix$fields}")" "$route malformed confirmation: $fields"
+    door_body="{\"id\":\"D-9242\"$suffix$fields}"
+    assert_eq 400 "$(door_post "$route" "$door_body")" "$route malformed confirmation: $fields"
     assert_eq doorUnconfirmed "$(jq -r .code "$d/door-result")" 'malformed door refusal code'
   done
   for fields in ',"reviewed_intents":[1],"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":1'; do
-    assert_eq 409 "$(door_post "$route" "{\"id\":\"D-9242\"$suffix$fields}")" "$route incomplete or wrong confirmation"
+    door_body="{\"id\":\"D-9242\"$suffix$fields}"
+    assert_eq 409 "$(door_post "$route" "$door_body")" "$route incomplete or wrong confirmation"
   done
   for stored in missing null true false '"0"' 1.5 -1 9; do
     if [ "$stored" = missing ]; then jq 'del(.check_answer)' "$d/door-template" > "$d/state/pending/D-9242.json"
     else jq --argjson answer "$stored" '.check_answer=$answer' "$d/door-template" > "$d/state/pending/D-9242.json"; fi
     jq '.details.effect={A:"hold",B:"merge"}' "$d/state/pending/D-9242.json" > "$d/fixed-door"
     mv "$d/fixed-door" "$d/state/pending/D-9242.json"
-    assert_eq 409 "$(door_post "$route" "{\"id\":\"D-9242\"$suffix,\"reviewed_intents\":[1,2],\"check_answer\":0}")" "$route invalid stored answer: $stored"
-    assert_eq 400 "$(door_post "$route" "{\"id\":\"D-9242\"$suffix,\"reviewed_intents\":[1,2]}")" "$route omitted submitted answer with stored $stored"
+    door_body="{\"id\":\"D-9242\"$suffix,\"reviewed_intents\":[1,2],\"check_answer\":0}"
+    assert_eq 409 "$(door_post "$route" "$door_body")" "$route invalid stored answer: $stored"
+    door_body="{\"id\":\"D-9242\"$suffix,\"reviewed_intents\":[1,2]}"
+    assert_eq 400 "$(door_post "$route" "$door_body")" "$route omitted submitted answer with stored $stored"
   done
   jq '.details.effect={A:"hold",B:"merge"} | del(.effect)' "$d/door-template" > "$d/state/pending/D-9242.json"
 done
@@ -689,7 +693,8 @@ assert_lacks "$door_stream" check_answer 'SSE strips stored answer'
 assert_lacks "$door_stream" door_confirmation_fingerprint 'SSE strips fingerprint'
 assert_lacks "$(curl -sf "http://127.0.0.1:$PORT/api/state")" check_answer 'pending state strips answer'
 for locale in en zh-TW zh-CN; do
-  assert_eq 409 "$(door_post /decisions/check-door "{\"id\":\"D-9242\",\"reviewed_intents\":[1,2],\"check_answer\":1,\"locale\":\"$locale\"}")" "$locale wrong answer"
+  door_body="{\"id\":\"D-9242\",\"reviewed_intents\":[1,2],\"check_answer\":1,\"locale\":\"$locale\"}"
+  assert_eq 409 "$(door_post /decisions/check-door "$door_body")" "$locale wrong answer"
   case "$locale" in en) why='Read each intent and choose Keep.';; zh-TW) why='確認每條意圖並選擇保留。';; zh-CN) why='确认每条意图并选择保留。';; esac
   assert_eq "$why" "$(jq -r .why "$d/door-result")" "$locale feedback"
 done
@@ -717,12 +722,14 @@ assert_eq 200 "$(door_post /decisions '{"id":"D-9242","chosen":"B","reviewed_int
 assert_eq true "$(jq .already "$d/door-result")" 'retry returns already success'
 rm -f "$d/state/pending/D-9242.json"
 for reviewed in '[1,2]' '[2,1]'; do
-  assert_eq 200 "$(door_post /decisions "{\"id\":\"D-9242\",\"chosen\":\"B\",\"reviewed_intents\":$reviewed,\"check_answer\":0}")" 'identical and reordered retries need no pending record'
+  door_body="{\"id\":\"D-9242\",\"chosen\":\"B\",\"reviewed_intents\":$reviewed,\"check_answer\":0}"
+  assert_eq 200 "$(door_post /decisions "$door_body")" 'identical and reordered retries need no pending record'
   assert_eq true "$(jq .already "$d/door-result")" 'no-pending retry is already success'
   assert_lacks "$(cat "$d/door-result")" door_confirmation_fingerprint 'no-pending retry strips fingerprint'
 done
 for fields in '' ',"reviewed_intents":[1],"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":1' ',"reviewed_intents":[1,1],"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":true'; do
-  assert_eq 409 "$(door_post /decisions "{\"id\":\"D-9242\",\"chosen\":\"B\"$fields}")" 'changed or absent replay confirmation refuses'
+  door_body="{\"id\":\"D-9242\",\"chosen\":\"B\"$fields}"
+  assert_eq 409 "$(door_post /decisions "$door_body")" 'changed or absent replay confirmation refuses'
   assert_eq doorUnconfirmed "$(jq -r .code "$d/door-result")" 'replay has door refusal code'
 done
 assert_eq 409 "$(door_post /decisions/check-door '{"id":"D-9242","reviewed_intents":[1,2],"check_answer":0}')" 'check on recorded id refuses'

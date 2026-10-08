@@ -24,11 +24,11 @@ class ChangePointSchema(unittest.TestCase):
         # Isolated public-text consumers intentionally do not install STE.
         with patch.dict(sys.modules, {'fm_ste': None}):
             spec = dict(id='T-X', scope=['src/**'], acceptance=['works'])
-            self.assertIn('T-X', prompt('T-X', json.dumps(spec), 'a' * 40))
+            self.assertIn('T-X', prompt('T-X', json.dumps(spec).encode('utf-8'), 'a' * 40))
             for field in ('change_refs', 'check_answer'):
                 with self.subTest(field=field):
                     with self.assertRaisesRegex(ValueError, 'orphan'):
-                        prompt('T-X', json.dumps(dict(spec, **{field: []})), 'a' * 40)
+                        prompt('T-X', json.dumps(dict(spec, **{field: []})).encode('utf-8'), 'a' * 40)
             from fm_spec_preflight import validate_change_refs
             with self.assertRaises(ImportError):
                 validate_change_refs(dict(explain={'en': {'change_points': []}}))

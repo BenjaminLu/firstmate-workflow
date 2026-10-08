@@ -413,12 +413,48 @@ if [ "$MODE" = request ]; then
     ' "$DETAILS" >/dev/null 2>&1 || {
       echo 'fm-decide: details.effect names, for an option the card offers, one of merge (merge cards only), hold, park, drop, dispatch or send_back' >&2; exit 64;
     }
-    walk_spec=''; walk_details=''; walk_refs=''; walk_enriched=false
     if [ "$KIND" != merge ]; then
       jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null && {
         echo 'fm-decide: change_points, door and check apply only to tracked merge cards; nothing was written' >&2; exit 65;
       }
-    else
+    fi
+    ste='null'
+    if jq -e 'any(.en,."zh-TW"; has("intent") or has("why") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table") or has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
+      [ -r "$HERE/lib/fm_ste.py" ] || {
+        echo "fm-decide: missing $HERE/lib/fm_ste.py; nothing was written" >&2; exit 70;
+      }
+      ste_error="$(mktemp)" || exit 70
+      # Validate authored legacy prose first; spec matching owns walk errors.
+      ste_details="$DETAILS"; ste_legacy=''
+      if [ "$KIND" = merge ] && jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
+        ste_legacy="$(mktemp)" || exit 70
+        jq 'del(.en.change_points,.en.door,.en.check,."zh-TW".change_points,."zh-TW".door,."zh-TW".check)' "$DETAILS" > "$ste_legacy" || exit 65
+        ste_details="$ste_legacy"
+      fi
+      ste="$(python3 "$HERE/lib/fm_ste.py" check-details --kind "$KIND" "$ste_details" 2> "$ste_error")"
+      ste_rc=$?
+      [ -z "$ste_legacy" ] || rm -f "$ste_legacy"
+      if [ "$ste_rc" -ne 0 ]; then
+        if [ "$ste_rc" -eq 65 ]; then
+          echo "fm-decide: the card's text breaks the STE rules; nothing was written" >&2
+        fi
+        cat "$ste_error" >&2
+        rm -f "$ste_error"
+        case "$ste_rc" in 64|65) exit "$ste_rc";; *) exit 70;; esac
+      fi
+      rm -f "$ste_error"
+    fi
+    # Preserve authored-card and canonical ownership refusal precedence.
+    [ "$KIND" = choice ] || pr_agrees
+    binding='null'
+    if [ "$KIND" = merge ]; then
+      binding="$(fm_binding candidate --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD")" || exit 65
+    elif [ "$KIND" = merge-untracked ]; then
+      [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
+        echo 'fm-decide: verified candidate SHA required' >&2; exit 65; }
+    fi
+    walk_spec=''; walk_details=''; walk_refs=''; walk_enriched=false
+    if [ "$KIND" = merge ]; then
       walk_spec="$(mktemp)" || exit 70
       trap 'rm -f "$walk_spec" "${walk_details:-}" "${walk_refs:-}"' EXIT
       walk_enriched="$(python3 - "$HERE/lib" "$TASK" "$EXPECTED_HEAD" "$REPO" "$DETAILS" "$walk_spec" <<'PYWALK'
@@ -465,32 +501,9 @@ PYWALK
         DETAILS="$walk_details"
       fi
     fi
-    ste='null'
-    if jq -e 'any(.en,."zh-TW"; has("intent") or has("why") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table") or has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
-      [ -r "$HERE/lib/fm_ste.py" ] || {
-        echo "fm-decide: missing $HERE/lib/fm_ste.py; nothing was written" >&2; exit 70;
-      }
-      ste_error="$(mktemp)" || exit 70
-      ste="$(python3 "$HERE/lib/fm_ste.py" check-details --kind "$KIND" "$DETAILS" 2> "$ste_error")"
-      ste_rc=$?
-      if [ "$ste_rc" -ne 0 ]; then
-        if [ "$ste_rc" -eq 65 ]; then
-          echo "fm-decide: the card's text breaks the STE rules; nothing was written" >&2
-        fi
-        cat "$ste_error" >&2
-        rm -f "$ste_error"
-        case "$ste_rc" in 64|65) exit "$ste_rc";; *) exit 70;; esac
-      fi
-      rm -f "$ste_error"
-    fi
-    # the last check before anything is written: GitHub's word on the pair
-    [ "$KIND" = choice ] || pr_agrees
-    binding='null'
-    if [ "$KIND" = merge ]; then
-      binding="$(fm_binding candidate --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD")" || exit 65
-    elif [ "$KIND" = merge-untracked ]; then
-      [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
-        echo 'fm-decide: verified candidate SHA required' >&2; exit 65; }
+    # Recheck the authoritative fields after injection, before evidence reads.
+    if [ "$walk_enriched" = true ]; then
+      ste="$(python3 "$HERE/lib/fm_ste.py" check-details --kind "$KIND" "$DETAILS")" || exit 65
     fi
     if [ "$walk_enriched" = true ]; then
       walk_refs="$(mktemp)" || exit 70
