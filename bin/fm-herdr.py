@@ -1196,6 +1196,25 @@ def close_generic_window(record, attempt):
     return 'closed'
 
 
+def project_workspace(control, name, clone):
+    """Find or create a labelled workspace under the project's private lock."""
+    clone = Path(clone).resolve()
+    state = clone.parent / 'state'
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / 'herdr-workspace.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        rows = control('workspace', 'list')['workspaces']
+        matches = [row for row in rows if row['label'] == name]
+        if matches:
+            return min(matches, key=lambda row: row['number'])['workspace_id']
+        created = control('workspace', 'create', '--cwd', str(clone),
+                          '--label', name, '--no-focus').get('workspace')
+        if (not isinstance(created, dict) or created.get('label') != name
+                or not created.get('workspace_id')):
+            raise RuntimeError('created workspace label or workspace_id does not match request')
+        return created['workspace_id']
+
+
 def open_herdr_window(attempt, logical, tree, actor, task, env, command):
     """The round's labelled Herdr tab, opened before the round starts, running
     `command` (the follower). Anything uncertain raises and leaves the pane
@@ -1213,9 +1232,11 @@ def open_herdr_window(attempt, logical, tree, actor, task, env, command):
         if name in os.environ and os.environ[name] != current[field]:
             raise RuntimeError('cannot verify caller context: ' + name + ' does not match caller pane')
     focus_before = focus(control('api', 'snapshot')['snapshot'])
+    target = current['workspace_id']
     previous = logical / 'pane.json'
     if previous.exists():
         old = read(previous); pane = old['pane_id']
+        target = old['workspace_id']
         observed = control('pane', 'get', pane)['pane']
         live = control('pane', 'process-info', '--pane', pane)['process_info']
         if (previous.is_symlink() or (Path(old['run']) / 'owner.json').is_symlink()
@@ -1231,7 +1252,15 @@ def open_herdr_window(attempt, logical, tree, actor, task, env, command):
                 or not shell_only(live, pane, old['shell_pid'])):
             raise RuntimeError('fallback pane ownership uncertain; retained')
     else:
-        created = control('tab', 'create', '--workspace', current['workspace_id'],
+        if (env.get('FM_EXTERNAL') == '1' and env.get('FM_PROJECT')
+                and env.get('FM_TARGET_ROOT') and Path(env['FM_TARGET_ROOT']).is_dir()):
+            try:
+                target = project_workspace(control, env['FM_PROJECT'], env['FM_TARGET_ROOT'])
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
+                    subprocess.SubprocessError) as error:
+                with (attempt / 'herdr.log').open('a') as log:
+                    log.write('project workspace unavailable: ' + ' '.join(str(error).splitlines()) + '\n')
+        created = control('tab', 'create', '--workspace', target,
                           '--cwd', str(Path(tree).resolve()), '--label', actor, '--no-focus')
         save(attempt / 'creation.json', created)
         pane = created['root_pane']['pane_id']
@@ -1260,7 +1289,7 @@ def open_herdr_window(attempt, logical, tree, actor, task, env, command):
     if status.get('pane_id') != pane or not status.get('terminal_id') or not shell_only(info, pane):
         raise RuntimeError('new pane is not an observed shell; retained')
     owner = dict(owned=True, actor=actor, task=task, run=str(attempt), pane_id=pane,
-                 caller=caller, caller_tab=current['tab_id'], workspace_id=current['workspace_id'],
+                 caller=caller, caller_tab=current['tab_id'], workspace_id=target,
                  tab_id=old['tab_id'] if previous.exists() else created['tab']['tab_id'],
                  terminal_id=status['terminal_id'], shell_pid=info['shell_pid'],
                  focus_before=focus_before, focus_after=focus(control('api', 'snapshot')['snapshot']))
@@ -2898,6 +2927,20 @@ def roster_command(root, action='show', redraw=''):
 
 def main(args):
     mode, *args = args
+    if mode == 'ensure-workspace':
+        # Onboarding/sync must succeed even without a usable terminal server.
+        try:
+            engine, name, clone = args
+            if window_host(Path(engine)) != 'herdr':
+                print('skip: window host is not herdr')
+            elif not os.environ.get('HERDR_PANE_ID'):
+                print('skip: no caller HERDR_PANE_ID')
+            else:
+                with tempfile.TemporaryDirectory() as directory:
+                    print(project_workspace(Herdr(Path(directory)), name, clone))
+        except Exception as error:
+            print('skip: ' + str(error))
+        return 0
     if mode == 'project':
         try: return project_field(*args)
         except ValueError as error:
