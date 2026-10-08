@@ -615,7 +615,7 @@ const prNumber = (n: unknown): number | null => {
 // (T-112): fm.sh self-update raises it, fm-decide.sh --await and fm-ready.sh
 // read its answer under that pattern only, and it names no owner.
 // --- task grammar (T-119) ---
-// The TypeScript twin of bin/fm-emit.sh's task-id grammar, the one place the
+// The TypeScript twin of bin/lib/fm-task-grammar.sh's task-id grammar, the one place the
 // scripts read it from; tests/board.test.sh lifts this block out and runs it
 // against the shell functions over one table, so the two cannot drift. A
 // task is T-<3+ digits> or SK-<3+ digits>. A branch names its task, prefix in

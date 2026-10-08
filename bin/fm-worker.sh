@@ -417,9 +417,10 @@ if [ "$FM_EXTERNAL" = 1 ]; then
   branch_format_err="$(scratch_new)" || exit 70
   scratch_add "$branch_format_err"
   if ! branch_format="$(fm_conventions branch_format 2>"$branch_format_err")"; then
-    branch_error="cannot read branch format: $(cat "$branch_format_err")"
-    echo "fm-worker: $branch_error" >&2
-    emit --type worker_crashed --en "$branch_error" --tw "無法讀取分支格式：$branch_error"
+    branch_error="$(cat "$branch_format_err")"
+    echo "fm-worker: cannot read branch format: $branch_error" >&2
+    emit --type worker_crashed --en "fm-worker: cannot read branch format: $branch_error" \
+      --tw "fm-worker：無法讀取 branch 格式：${branch_error}"
     exit 65
   fi
   branch_prefix="$(jq -r .prefix <<<"$branch_format")"
@@ -514,7 +515,9 @@ PYCI
 )"; branch_check_rc=$?
   if [ -n "$branch_check" ]; then echo "fm-worker: $branch_check" >&2; fi
   if [ "$branch_check_rc" != 0 ]; then
-    emit --type worker_crashed --en "$branch_check" --tw "分支不符合 CI 觸發規則：$branch_check"
+    patterns="$(jq -r '.patterns | join(",")' <<<"$branch_format")"
+    emit --type worker_crashed --en "fm-worker: $branch_check" \
+      --tw "fm-worker：branch ${branch} 不符合任何 CI 觸發規則（${patterns}）；請在專案 conventions 設定 branch_prefix"
     exit 65
   fi
 fi

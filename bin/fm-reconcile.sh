@@ -344,8 +344,8 @@ awk -F'\t' '$1 != "" { printf "  %-8s %-18s %s%s\n", $1, $2, ($3 == "" ? "" : "#
 
 # --- 2. the pull requests GitHub is holding -------------------------------
 # Use the same task attribution as merge, adoption and the board.
-# shellcheck source=bin/fm-emit.sh
-. "$(dirname "${BASH_SOURCE[0]}")/fm-emit.sh"
+# shellcheck source=bin/lib/fm-task-grammar.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/fm-task-grammar.sh"
 task_of() { fm_task_of_branch "$1" || true; }
 
 # "-" rather than "", so that "no such event at all" and "an event carrying no

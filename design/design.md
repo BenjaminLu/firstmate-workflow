@@ -318,9 +318,11 @@ it is T-105's, and its card is a merge card for T-105. The board hands a task's 
 with the server's reason) otherwise.
 
 **One task-id grammar (T-119).** Which ids are tasks, and which task a branch
-or title names, is written once, in `bin/fm-emit.sh`, which every script
-already depends on; `fm-decide.sh` and `fm-merge.sh` source
-it (sourced, `fm-emit.sh` runs nothing past the grammar), and
+or title names, is written once, in `bin/lib/fm-task-grammar.sh`, a library
+that only defines the grammar. `fm-emit.sh` sources it, so `fm-decide.sh`,
+`fm-merge.sh`, `fm-diagram.sh` and the autopilot still get the grammar by
+sourcing `fm-emit.sh` (which runs nothing past its grammar block when sourced).
+Reconcile sources the library itself, never the event writer.
 `board/server.ts` carries its TypeScript twin between `// --- task grammar
 (T-119) ---` markers, which `tests/board.test.sh` lifts out and runs against
 the shell functions over one table. A task is `T-<3+ digits>` or
@@ -343,9 +345,10 @@ naming the task it holds. Any other name passes, because the suites write
 `merged` for fixture tasks named `A`, `C` and `D`; `fm-merge.sh`, the one
 writer of `merged` outside the suites and `fm-autopilot.sh`, already refuses
 a task that is not the pull request's. It checks no other event's task.
-T-250 makes `bin/fm-reconcile.sh` source this grammar for branch attribution,
-so it reads SK merges and whole numbers such as T-1170. Its pid-file
-`is_task_id` grammar is unchanged. All four stacking branch readers allow the
+T-250 makes `bin/fm-reconcile.sh` source the library for branch attribution,
+so it reads SK merges and whole numbers such as T-1170. The remaining open
+item is its pid-file `is_task_id` at `bin/fm-reconcile.sh:136`, which still
+accepts only `T-<3 digits>`. All four stacking branch readers allow the
 same optional segment; protected branch and expected-head deletion rules remain.
 Unprefixed branches, self branch names, PR titles, gates and T-119's merged-event
 refusal semantics are unchanged.
@@ -5571,7 +5574,7 @@ blank and comment lines ignored; only these three keys and `branch_prefix` are
 allowed. Bare values
 use `[a-z][a-z0-9_-]*`; quote `"zh-TW"` and `"zh-CN"` as JSON. Missing owner files
 supply no default; symlinked, unreadable or invalid ones make preflight refuse
-and the worker refuse branch selection. Invalid format fields in
+and the worker refuse branch selection with exit 65. Invalid format fields in
 CONVENTIONS refuse the project through the shared policy reader. Owner defaults
 are read at round time, not pinned or copied into CONVENTIONS. Onboarding writes
 format fields only from the captain's explicit answers. Firstmate git holds no

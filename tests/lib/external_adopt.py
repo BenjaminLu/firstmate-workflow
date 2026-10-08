@@ -296,6 +296,14 @@ class Authority(unittest.TestCase):
             self.assertIn(10, duplicates)
             self.assertIn('adoption unreadable for T-1', self.adopt.duplicate_reason(duplicates[10]))
 
+    def test_prefixed_branch_adoption_preserves_task_ownership(self):
+        view = dict(state='OPEN', isCrossRepository=False, headRefName='feature/t-001-x',
+                    headRefOid='a'*40, baseRefName='release', title='Public change')
+        with patch.object(self.adopt, 'scan', return_value=({}, {}, {})):
+            self.adopt.check(view, self.value, 'T-001', self.env, self.root, True, [])
+            with self.assertRaisesRegex(ValueError, 'names another task'):
+                self.adopt.check(view, self.value, 'T-002', self.env, self.root, True, [])
+
     def test_adopt_check_self_and_protected_heads(self):
         view = dict(state='OPEN', isCrossRepository=False, headRefName='human',
                     headRefOid='a'*40, baseRefName='release', title='Human change')

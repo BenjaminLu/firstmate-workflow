@@ -95,12 +95,14 @@ else: sys.exit(1)
         self.run_ok('git', '--git-dir='+str(self.remote), 'rev-parse', 'refs/heads/'+expected)
         if warning: self.assertIn(warning, result.stderr)
 
-    def refused(self, message):
+    def refused(self, message, translated):
         result = self.launch()
         self.assertEqual(result.returncode, 65, result.stdout + result.stderr)
         self.assertIn(message, result.stderr)
         events = self.commands(self.state/'events.jsonl')
-        self.assertTrue(any(e['type']=='worker_crashed' and message in e['summary']['en'] for e in events), events)
+        self.assertTrue(any(e['type']=='worker_crashed'
+                            and e['summary']['en'] == message
+                            and e['summary']['zh-TW'] == translated for e in events), events)
         self.assertFalse(any('push' in x or 'worktree' in x and 'add' in x
                              for x in self.commands(Path(self.env['FM_TEST_GIT_LOG']))))
         self.assertFalse(any(x[:2]==['pr','create'] for x in self.commands(self.gh_log)))
@@ -136,7 +138,9 @@ else: sys.exit(1)
 
     def test_nonmatching_ci_refuses_before_worktree(self):
         self.configure(branch_prefix='feature/', ci_branch_patterns=['release/*'], ci_pull_request=False)
-        self.refused('branch feature/t-051-add-a-fee-check matches no CI trigger pattern (release/*); set branch_prefix in the project conventions')
+        self.refused(
+            'fm-worker: branch feature/t-051-add-a-fee-check matches no CI trigger pattern (release/*); set branch_prefix in the project conventions',
+            'fm-worker：branch feature/t-051-add-a-fee-check 不符合任何 CI 觸發規則（release/*）；請在專案 conventions 設定 branch_prefix')
 
     def test_pull_request_trigger_allows_nonmatching_branch(self):
         self.configure(branch_prefix='feature/', ci_branch_patterns=['release/*'], ci_pull_request=True)
@@ -154,7 +158,9 @@ else: sys.exit(1)
 
     def test_malformed_owner_refuses(self):
         self.owner('branch_prefix: feature/\n')
-        self.refused('cannot read branch format:')
+        error = 'fm-conventions: quote conventions string as JSON: branch_prefix'
+        self.refused('fm-worker: cannot read branch format: ' + error,
+                     'fm-worker：無法讀取 branch 格式：' + error)
 
     def test_branch_policy_shapes_and_cli(self):
         policy = conventions.read_policy(self.home/'CONVENTIONS.md')
