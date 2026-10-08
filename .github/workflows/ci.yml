@@ -257,7 +257,7 @@ jobs:
           }
           FM_PROFILE
           [ "$(sha256sum "$fm_logs/profile" | cut -d ' ' -f 1)" = "$fm_hash" ]
-          if timeout 10s "$fm_parser" -Q "$fm_logs/profile" > "$fm_logs/parse.stdout" 2> "$fm_logs/parse.stderr"; then fm_parse_rc=0; else fm_parse_rc=$?; fi
+          if timeout 10s "$fm_parser" -Q -K "$fm_logs/profile" > "$fm_logs/parse.stdout" 2> "$fm_logs/parse.stderr"; then fm_parse_rc=0; else fm_parse_rc=$?; fi
           printf '%s\n' "$fm_parse_rc" > "$fm_logs/parse.status"
           cat "$fm_logs/parse.stdout" "$fm_logs/parse.stderr"
           [ "$fm_parse_rc" = 0 ]
@@ -598,7 +598,7 @@ jobs:
           }
           FM_PROFILE
           [ "$(sha256sum "$fm_logs/profile" | cut -d ' ' -f 1)" = "$fm_hash" ]
-          if timeout 10s "$fm_parser" -Q "$fm_logs/profile" > "$fm_logs/parse.stdout" 2> "$fm_logs/parse.stderr"; then fm_parse_rc=0; else fm_parse_rc=$?; fi
+          if timeout 10s "$fm_parser" -Q -K "$fm_logs/profile" > "$fm_logs/parse.stdout" 2> "$fm_logs/parse.stderr"; then fm_parse_rc=0; else fm_parse_rc=$?; fi
           printf '%s\n' "$fm_parse_rc" > "$fm_logs/parse.status"
           cat "$fm_logs/parse.stdout" "$fm_logs/parse.stderr"
           [ "$fm_parse_rc" = 0 ]
