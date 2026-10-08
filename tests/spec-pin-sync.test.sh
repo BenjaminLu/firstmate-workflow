@@ -187,7 +187,7 @@ rb_seed="$(RB_PINNED=1 rb_build_fixture)" || exit 1
 pinned_seed="$rb_seed"
 for mode in clean edited failed_read; do
   d="$(rb_fixture)"; repo="$d/repo"; branch="$(rb_branch "$d")"
-  rb_replay_conflict "$d"
+  rb_replay_conflict "$d" || exit 1
   sync_repin
   head="$(rb_head "$d" "$branch")"; pushed="$(rb_pushed "$d")"
   printf ':\n' > "$d/step.sh"
