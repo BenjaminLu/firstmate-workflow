@@ -17,10 +17,30 @@ from unittest.mock import patch
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 sys.path.insert(0, str(ROOT / 'tests/lib'))
-import fm_card_refs as refs
 
 
 class CardRefs(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Availability on historical roots is setup, never behavioral RED.
+        global refs
+        import fm_card_refs as refs
+
+    def test_unlisted_valid_hunkless_entries_do_not_block_evidence(self):
+        text = "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-old\n+new\n"
+        variants = ("diff --git a/tool b/tool\nold mode 100644\nnew mode 100755\n",
+                    "diff --git a/empty b/empty\nnew file mode 100644\nindex 0000000..e69de29\n",
+                    "diff --git a/empty b/empty\ndeleted file mode 100644\nindex e69de29..0000000\n")
+        for extra in variants:
+            with self.subTest(diff=extra):
+                entries = refs.parse_diff(text + extra, "owner/repo", 7)
+                self.assertEqual("new", refs.point_code(entries, ["src/a.py"])[0]["snippet"])
+                with self.assertRaisesRegex(ValueError, "no supported hunks"):
+                    refs.point_code(entries, [entries[-1]["new"] or entries[-1]["old"]])
+        for extra in ("", "old mode 100644\n", "unknown metadata\n", "index abc..def\n"):
+            with self.subTest(invalid=extra), self.assertRaises(ValueError):
+                refs.parse_diff(text + "diff --git a/tool b/tool\n" + extra, "owner/repo", 7)
+
     def test_right_hunk_and_snippet_cap(self):
         diff = 'diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1,1 +1,14 @@\n old\n' + ''.join('+new\n' for _ in range(13))
         entries = refs.parse_diff(diff, 'owner/repo', 7)
@@ -119,6 +139,7 @@ class CardRefs(unittest.TestCase):
 class ExecutableRefs(unittest.TestCase):
     """Real git objects/diffs and an executable gh boundary; no mocked reads."""
     def setUp(self):
+        self.assertTrue((ROOT / "bin/lib/fm_card_refs.py").is_file(), "helper CLI availability/setup required")
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.git('init', '-q', '--object-format=sha1')
@@ -127,6 +148,7 @@ class ExecutableRefs(unittest.TestCase):
         self.write('space é.py', 'old\n')
         self.write('gone.py', 'removed\n')
         self.write('old.py', 'rename content\n')
+        self.write('tool', 'executable content\n')
         self.write('image.bin', b'\x00old')
         self.write('many.py', ''.join(f'line {n}\n' for n in range(240)))
         self.write('tests/test space é.py', 'header\ndef test_saved():\n    pass\n')
@@ -214,6 +236,19 @@ else:
             if call['argv'][0] == 'pr': self.assertEqual('owner/repo',call['argv'][call['argv'].index('--repo')+1])
         self.assertNotIn('spec.json',json.dumps(calls))
 
+    def test_real_git_unlisted_mode_and_empty_file(self):
+        for variant in ('mode', 'empty'):
+            with self.subTest(variant=variant):
+                if variant == 'mode': self.git('update-index', '--chmod=+x', 'tool')
+                else: self.write('empty', ''); self.git('add', 'empty')
+                self.write('diff.txt', self.git('diff', '--cached', self.base))
+                (self.root/'views').unlink(missing_ok=True)
+                result = self.invoke('owner/repo')
+                self.assertEqual(0, result.returncode, result.stderr)
+                doc = json.loads(result.stdout)
+                self.assertEqual('space é.py', doc['points'][0]['code'][0]['file'])
+                self.assertEqual(2, doc['points'][0]['tests'][0]['line'])
+
     def test_discovery_refuses_before_followup_reads(self):
         for url in ('https://evil.test/owner/repo','http://github.com/owner/repo',None,'https://github.com/other/repo'):
             with self.subTest(url=url):
@@ -257,6 +292,10 @@ else:
 class StockRequests(unittest.TestCase):
     """Stock request publication with real committed specs and authoritative pins."""
     def setUp(self):
+        # Test-only overlays must retain these exact source-root dependencies:
+        # tests/decide.test.sh fixture prefix, tests/lib/project-storage.sh and
+        # tests/lib/ste_cases.py (card and walk_card). Production modules always
+        # come from ROOT/bin/lib, including on a historical behavioral baseline.
         source = (ROOT / 'tests/decide.test.sh').read_text().split('\nd="$(fixture)"',1)[0]
         source = source.replace('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"','ROOT='+shlex.quote(str(ROOT)))
         result = subprocess.run(['bash','-c',source+'\nengine="$(fixture)"\nprintf "language: en\\n" > "$engine/config.yaml"\nproject_fixture_config "$engine" || exit $?\nprintf "%s\\n" "$engine"'],capture_output=True,text=True,check=True)
@@ -281,6 +320,7 @@ class StockRequests(unittest.TestCase):
         self.write('src/a.py','new\n')
         self.commit_spec(self.enriched)
         self.write('.fixture-diff',self.git('diff',self.base,self.head))
+        self.request_number = 0
         self.env = dict(os.environ,FM_GH=str(self.root / 'gh'),FM_ROOT=str(self.root),HERDR_ENV='0')
         self.pin_env = dict(FM_ENGINE_ROOT=str(self.root),FM_TARGET_ROOT=str(self.root),FM_STATE_DIR=str(self.root/'state'),
                             FM_TASKS_DIR=str(self.root/'design/tasks'),FM_DESIGN=str(self.root/'design/design.md'),FM_PROJECT='',FM_EXTERNAL='0',FM_BASE='main')
@@ -298,7 +338,11 @@ class StockRequests(unittest.TestCase):
         self.head=self.git('rev-parse','HEAD').strip()
         self.write('prs.jsonl',json.dumps(dict(number=7,state='OPEN',headRefOid=self.head,headRefName='t-242-fixture',title='T-242: fixture'))+'\n')
 
-    def request(self,ident='D-9242',details=None,kind='merge',purpose=None):
+    def request(self,ident=None,details=None,kind='merge',purpose=None):
+        if ident is None:
+            self.request_number += 1
+            ident = 'D-' + str(924200 + self.request_number)
+        self.last_request_id = ident
         self.write('authored.json',json.dumps(self.details if details is None else details))
         argv=['bash',str(self.root/'bin/fm-decide.sh'),'--request',ident,'--kind',kind,
               '--details',str(self.root/'authored.json')]
@@ -307,14 +351,37 @@ class StockRequests(unittest.TestCase):
         if purpose: argv += ['--purpose',purpose]
         return subprocess.run(argv,cwd=self.root,env=self.env,capture_output=True,text=True)
 
-    def pending(self,ident='D-9242'):
+    def pending(self,ident=None):
+        ident = self.last_request_id if ident is None else ident
         return self.root/'state/pending'/ (ident+'.json')
+
+    def test_stock_mixed_real_git_diff_preserves_listed_evidence(self):
+        self.write('tool', 'executable content\n')
+        self.git('add', 'tool'); self.git('commit', '-qm', 'fixture tool')
+        for variant in ('mode', 'empty'):
+            with self.subTest(variant=variant):
+                if variant == 'mode': self.git('update-index', '--chmod=+x', 'tool')
+                else: self.write('empty', ''); self.git('add', 'empty')
+                self.git('commit', '-qm', 'fixture hunkless ' + variant)
+                self.head = self.git('rev-parse', 'HEAD').strip()
+                self.write('prs.jsonl', json.dumps(dict(number=7,state='OPEN',headRefOid=self.head,headRefName='t-242-fixture',title='T-242: fixture'))+'\n')
+                # Whole PR includes the genuine text diff and hunkless entry.
+                self.write('.fixture-diff', self.git('diff', self.base, self.head))
+                result = self.request()
+                self.assertEqual(0, result.returncode, result.stderr)
+                doc = json.loads(self.pending().read_text())
+                self.assertIn('change_points', doc['details']['en'])
+                self.assertIn('refs', doc['details'])
+                self.assertEqual('src/a.py', doc['details']['refs']['points'][0]['code'][0]['file'])
+                self.assertEqual('new', doc['details']['refs']['points'][0]['code'][0]['snippet'])
 
     def test_no_pin_reads_committed_spec_and_ignores_mutable_file(self):
         self.write('design/tasks/T-242.json',json.dumps(self.legacy))
         result=self.request()
         self.assertEqual(0,result.returncode,result.stderr)
         doc=json.loads(self.pending().read_text())
+        self.assertIn('change_points', doc['details']['en'])
+        self.assertIn('refs', doc['details'])
         self.assertEqual(self.enriched['explain']['en']['change_points'],doc['details']['en']['change_points'])
         self.assertEqual(2,doc['details']['refs']['points'][0]['tests'][0]['line'])
         self.assertIn('/blob/'+self.head+'/',doc['details']['refs']['spec_url'])
@@ -322,7 +389,8 @@ class StockRequests(unittest.TestCase):
 
     def test_legacy_card_needs_neither_helper_nor_repository_discovery(self):
         self.commit_spec(self.legacy)
-        (self.root/'bin/lib/fm_card_refs.py').unlink()
+        (self.root/'bin/lib/fm_card_refs.py').unlink(missing_ok=True)
+        self.assertFalse((self.root/'bin/lib/fm_card_refs.py').exists())
         result=self.request(); self.assertEqual(0,result.returncode,result.stderr)
         doc=json.loads(self.pending().read_text())
         self.assertEqual(self.details,doc['details'])
@@ -339,6 +407,7 @@ class StockRequests(unittest.TestCase):
         result=self.request(details=details); self.assertEqual(0,result.returncode,result.stderr)
         doc=json.loads(self.pending().read_text())
         for lang in ('en','zh-TW'):
+            self.assertIn('change_points', doc['details'][lang])
             for field in ('change_points','door','check'): self.assertEqual(details[lang][field],doc['details'][lang][field])
         self.assertIn('refs',doc['details'])
 
@@ -364,6 +433,7 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
                 self.assertEqual(65,result.returncode,result.stderr)
                 self.assertIn('head differs',result.stderr)
                 self.assertFalse(self.pending().exists())
+                self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
 
     def test_author_mismatches_and_orphan_fields_refuse_without_card(self):
         from copy import deepcopy
@@ -376,12 +446,14 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
                 self.assertEqual(65,result.returncode,result.stderr)
                 self.assertIn(field,result.stderr)
                 self.assertFalse(self.pending().exists())
+                self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
         missing=deepcopy(self.details)
         for lang in ('en','zh-TW'): missing[lang].pop('intent')
         result=self.request(details=missing)
         self.assertEqual(65,result.returncode)
         self.assertIn('author the intent card from the spec',result.stderr)
         self.assertFalse(self.pending().exists())
+        self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
 
     def test_nonmerge_kinds_refuse_every_walk_field(self):
         for kind,purpose in [('choice',None),('choice','dispatch'),('choice','repin'),('choice','scope'),('merge-untracked',None)]:
@@ -391,16 +463,19 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
                     result=self.request(details=details,kind=kind,purpose=purpose)
                     self.assertEqual(65,result.returncode,result.stderr)
                     self.assertFalse(self.pending().exists())
+                    self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
 
     def test_one_way_missing_answer_and_details_points_without_spec_points(self):
         malformed=dict(self.enriched); malformed.pop('check_answer')
         self.commit_spec(malformed)
         result=self.request(); self.assertEqual(65,result.returncode)
         self.assertFalse(self.pending().exists())
+        self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
         self.commit_spec(self.legacy)
         details=json.loads(json.dumps(self.details)); details['en']['change_points']=[dict(intent=1,how='The check passes.')]
         result=self.request(details=details); self.assertEqual(65,result.returncode)
         self.assertFalse(self.pending().exists())
+        self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
 
     def test_discovery_refusals_are_cardless_at_stock_boundary(self):
         original=(self.root/'gh').read_text()
@@ -414,6 +489,7 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
                 self.assertEqual(65,result.returncode,result.stderr)
                 self.assertIn('repository discovery',result.stderr)
                 self.assertFalse(self.pending().exists())
+                self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
                 calls=(self.root/'ghcalls').read_text().splitlines()
                 discovery=next(i for i,line in enumerate(calls) if line.startswith('repo view'))
                 self.assertEqual(discovery+1,len(calls))
@@ -443,14 +519,18 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
                 result=self.request()
                 self.assertEqual(65,result.returncode,result.stderr)
                 self.assertFalse(self.pending().exists())
+                self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
         two=deepcopy(self.enriched); two.pop('check_answer')
         for loc in two['explain'].values(): loc['door']['kind']='two-way'; loc.pop('check')
         malformed=deepcopy(two); malformed['check_answer']=0; self.commit_spec(malformed)
         result=self.request(); self.assertEqual(65,result.returncode)
         self.assertFalse(self.pending().exists())
+        self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
         self.commit_spec(two)
         result=self.request(); self.assertEqual(0,result.returncode,result.stderr)
         doc=json.loads(self.pending().read_text())
+        self.assertIn('change_points', doc['details']['en'])
+        self.assertIn('refs', doc['details'])
         self.assertEqual('two-way',doc['details']['en']['door']['kind'])
         self.assertNotIn('check_answer',doc)
         self.assertNotIn('check',doc['details']['en'])
@@ -460,6 +540,7 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
         result=self.request()
         self.assertEqual(65,result.returncode)
         self.assertFalse(self.pending().exists())
+        self.assertEqual([], list((self.root/'state/pending').glob('*.json')))
 
     def test_external_no_pin_uses_private_spec_and_target_clone_cwd(self):
         home=Path((self.root/'.fixture-fm-home').read_text().strip()); workspace=home/'projects/beta'; target=workspace/'repo'
@@ -488,6 +569,8 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
         result=self.request(allocated.stdout.strip())
         self.assertEqual(0,result.returncode,result.stderr)
         doc=json.loads((workspace/'state/pending/D-beta-T242-1.json').read_text())
+        self.assertIn('change_points', doc['details']['en'])
+        self.assertIn('refs', doc['details'])
         self.assertIsNone(doc['details']['refs']['spec_url'])
         self.assertEqual(2,doc['details']['refs']['points'][0]['tests'][0]['line'])
         calls=[json.loads(line) for line in (self.root/'captured.jsonl').read_text().splitlines()]
@@ -521,7 +604,8 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
         pins.create()
         self.write('design/tasks/T-242.json',json.dumps(self.enriched)+'\n')
         result=self.request(); self.assertEqual(0,result.returncode,result.stderr)
-        old=self.pending().read_bytes()
+        old_path=self.pending()
+        old=old_path.read_bytes()
         self.assertNotIn('change_points',json.loads(old)['details']['en'])
         self.commit_spec(self.enriched)
         decision=dict(id='D-fixture-repin',task='T-242',project='firstmate-workflow',chosen='A',kind='choice',ts='2026-10-02T00:00:00Z')
@@ -531,7 +615,7 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
         pins.create(decision='D-fixture-repin')
         result=self.request('D-9243'); self.assertEqual(0,result.returncode,result.stderr)
         self.assertIn('change_points',json.loads(self.pending('D-9243').read_text())['details']['en'])
-        self.assertEqual(old,self.pending().read_bytes())
+        self.assertEqual(old,old_path.read_bytes())
 
 
 if __name__ == '__main__':

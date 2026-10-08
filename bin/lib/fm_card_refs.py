@@ -126,8 +126,16 @@ def parse_diff(diff, repo, pr):
         refresh_url()
         if not current['code']:
             kind = 'binary' if current['binary'] else 'rename' if current['old'] != current['new'] else None
-            if kind is None: raise ValueError('diff has no supported hunks')
-            current['code'].append(dict(file=current['new'] or current['old'], start=None,
+            metadata = current['metadata']
+            mode_only = (len(metadata) == 2 and
+                         re.fullmatch(r'old mode [0-7]{6}', metadata[0]) and
+                         re.fullmatch(r'new mode [0-7]{6}', metadata[1]))
+            empty_file = (len(metadata) == 2 and
+                          re.fullmatch(r'(?:new|deleted) file mode [0-7]{6}', metadata[0]) and
+                          re.fullmatch(r'index (?:0+\.\.e69de29[0-9a-f]*|e69de29[0-9a-f]*\.\.0+)', metadata[1]))
+            if kind is None and not (mode_only or empty_file):
+                raise ValueError('diff has no supported hunks')
+            if kind is not None: current['code'].append(dict(file=current['new'] or current['old'], start=None,
                                         end=None, url=current['url'], snippet='', kind=kind))
         entries.append(current)
 
@@ -137,9 +145,10 @@ def parse_diff(diff, repo, pr):
             old, new = header_paths(line)
             path = new or old
             anchor = hashlib.sha256(path.encode('utf-8')).hexdigest()
-            current = dict(old=old, new=new, code=[], binary=False,
+            current = dict(old=old, new=new, code=[], binary=False, metadata=[],
                            url=f'https://github.com/{repo}/pull/{pr}/files#diff-{anchor}')
         elif current is not None:
+            if hunk is None: current['metadata'].append(line)
             if line.startswith('@@ '):
                 finish_hunk()
                 match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
@@ -167,6 +176,8 @@ def point_code(entries, files):
         matches = [entry for entry in entries if path in (entry['old'], entry['new'])]
         if not matches: raise ValueError('listed code file absent from diff: ' + path)
         for entry in matches:
+            if not entry['code']:
+                raise ValueError('listed code file has no supported hunks: ' + path)
             if not any(entry is previous for previous in selected): selected.append(entry)
     return [item for entry in selected for item in entry['code']]
 
