@@ -1019,12 +1019,11 @@ class Session(SessionFixture):
         events.write_text(before)
         self.assertEqual('dispatched', m.crew_last_events(self.repo)[ghost]['type'])
     def test_execute_child_prints_heartbeat_while_adapter_runs(self):
+        from session_heartbeat_fixture import HeartbeatFixture  # tests/lib/session_heartbeat_fixture.py
         attempt = self.repo / 'state/runs/worker-hb-t035-r1/cursor-agent-hb'
         attempt.mkdir(parents=True)
         adapter = self.repo / 'bin/adapters/slow.sh'
         adapter.parent.mkdir(parents=True, exist_ok=True)
-        adapter.write_text('#!/usr/bin/env bash\nsleep 0.45\necho done >> "$4"\n')
-        adapter.chmod(0o755)
         m.save(attempt / 'invocation.json',
                dict(adapter=str(adapter), prompt=str(attempt / 'prompt.md'),
                     tree=str(self.repo), actor='worker-hb-t035-r1', role='worker', task='T-035'))
@@ -1036,15 +1035,14 @@ class Session(SessionFixture):
         fd = os.open(lock, os.O_RDWR)
         self.addCleanup(lambda: os.close(fd) if fd >= 0 else None)
         with patch.dict(os.environ, {'FM_HEARTBEAT_SECS': '0.15'}):
-            import io, contextlib
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
+            with HeartbeatFixture(m, attempt, adapter) as fixture:
                 rc = m.execute_child(attempt, fd)
-        self.assertEqual(0, rc)
-        text = buf.getvalue()
+        text = fixture.output.getvalue()
         self.assertIn('worker-hb-t035-r1 worker started on T-035', text)
         self.assertIn('still running', text)
+        self.assertEqual(0, rc)
         self.assertRegex(text, r'finished exit=0 after \d+s')
+        fixture.verify_completed(self)
 
     def decision_files(self):
         state = self.repo / 'state'
