@@ -595,6 +595,12 @@ function chrome() {
 }
 
 function render(s) {
+  // Native details toggles are delivered later. Read live disclosure before
+  // any patch can overwrite a just-opened (or just-closed) strip with stale
+  // state, regardless of whether this render came from a sheet or a refresh.
+  document.querySelectorAll('#deck details.dstrip').forEach(el => {
+    if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
+  });
   const focus = document.activeElement;
   const focusSheet = focus?.closest?.('.decision-sheet')?.dataset.id;
   const focusKey = focus?.dataset?.id;
@@ -896,7 +902,6 @@ function render(s) {
   syncDecisionBars();
   for (const r of refused.values()) r.announced = true;
   deck.querySelectorAll('details.dstrip').forEach(el => el.ontoggle = () => {
-    if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
     if (el.open) DIAGRAM.mount(el, lang).catch(() => {});
   });
   deck.querySelectorAll('[data-open]').forEach(a => a.onclick = e => {
