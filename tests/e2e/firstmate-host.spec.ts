@@ -1,3 +1,4 @@
+import { openCrewSheet } from './lib/board';
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeTasks, details } from './lib/fixture';
 import { mkdirSync, writeFileSync, unlinkSync, chmodSync, readFileSync, existsSync } from 'node:fs';
@@ -13,6 +14,7 @@ for (const lang of ['en', 'zh-TW']) {
     const b = await startBoard(root, { FM_HARNESS: 'claude' });
     try {
       await page.goto(`${b.url}/?lang=${lang}`);
+      await openCrewSheet(page);
       const row = page.locator('.roster [data-roster="firstmate"]');
       await expect(row.locator('.rv')).toHaveText('codex');
       await expect(row.locator('.rv')).not.toHaveClass(/warn/);

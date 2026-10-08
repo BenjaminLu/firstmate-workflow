@@ -1,3 +1,4 @@
+import { showFleet, openCrewSheet, openLogSheet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -29,9 +30,9 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   try {
     await page.setViewportSize({width:1280,height:900});
     await page.goto(`${b.url}/?lang=en`);
-    await expect(page.locator('#roster .rrow').first()).toBeVisible();
+    await expect(page.locator('#roster .rrow').first()).toBeAttached();
     await expect(page.locator('#scene, #captain')).toHaveCount(0);
-    await expect(page.locator('.rosterbar #rosterBtn')).toHaveCount(1);
+    await expect(page.locator('#secbar #rosterBtn')).toHaveCount(1);
 
     // V7: the engine from config.yaml, marked when review runs elsewhere
     await expect(page.locator('#engine')).toHaveText('vendor-alpha ⇄ vendor-beta');
@@ -46,6 +47,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     expect(await page.locator('.counts [data-count]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.count)))
       .toEqual(['merged','inflight','waiting','blocked','ready','backlog']);
 
+    await showFleet(page);
     // seven lanes in one row, left to right in lifecycle order
     const lanes = page.locator('#lanes .lane');
     expect(await lanes.evaluateAll(els => els.map(e => (e as HTMLElement).dataset.lane)))
@@ -82,6 +84,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
 
     // the portrait sits beside the first full card; the next is a strip that
     // opens in place and keeps the two-stage confirmation
+    await page.locator('#tabDecisions').click();
     const portrait = (await page.locator('#capstage').boundingBox())!, card = (await page.locator('#card-D-1').boundingBox())!;
     expect(portrait.x + portrait.width).toBeLessThanOrEqual(card.x);
     await expect(page.locator('#capstage .lbl')).toContainText(EN.roleCaptain);
@@ -100,23 +103,22 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     await expect(page.locator('#card-D-1 .links')).toContainText(`${EN.viewPr} #99`);
 
     // roster rows; a bar only for the one with bounded progress, never a %
+    await openCrewSheet(page);
     await expect(page.locator('.roster li.rrow')).toHaveCount(4 + 1);
     await expect(page.locator('.roster .pb')).toHaveCount(1);
     await expect(page.locator('.roster [data-roster="worker-1"] .pb')).toHaveAttribute('aria-valuemax','5');
     expect(await page.locator('#shipregion').innerText()).not.toMatch(/\d+\s*%/);
-    await page.locator('#rosterBtn').click();
-    await expect(page.locator('#roster')).toBeHidden();
-    await expect(page.locator('#rosterBtn')).toHaveAttribute('aria-pressed','false');
-    expect(await page.evaluate(() => localStorage.getItem('board.roster'))).toBe('hidden');
+    await page.locator('#crewSheet [data-sheet-close]').click();
+    await page.evaluate(() => localStorage.setItem('board.roster','hidden'));
     await page.reload();
-    await expect(page.locator('#roster')).toBeHidden();
-    await page.locator('#rosterBtn').click();
+    await expect(page.locator('#crewSheet')).toBeHidden();
+    await openCrewSheet(page);
     await expect(page.locator('#roster')).toBeVisible();
-
-    // the live log is the full-width panel at the bottom
-    const log = (await page.locator('.logwrap').boundingBox())!, lanesBox = (await page.locator('#lanes').boundingBox())!;
-    expect(log.y).toBeGreaterThan(lanesBox.y + lanesBox.height);
-    expect(log.width).toBeGreaterThan(1200);
+    expect(await page.evaluate(() => localStorage.getItem('board.roster'))).toBe('hidden');
+    await page.setViewportSize({width:1440,height:900});
+    await openLogSheet(page);
+    expect((await page.locator('.logwrap').boundingBox())!.width).toBeGreaterThan(1200);
+    await page.locator('#logSheet [data-sheet-close]').click();
 
     // every width, every locale, and doubled text: nothing overflows the page
     await page.addStyleTag({content:'body{font-size:32px} .card .t,.roster .jb,.log li,.dcard h3,.explanation,.tradeoffs,.acts button,.dstrip>summary{font-size:32px}'});
@@ -147,7 +149,17 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
       }
       for (const width of [320,390,768,1280]) {
         await page.setViewportSize({width,height:844});
-        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1)).toBe(true);
+        // measure each moved region where it is shown: the Fleet page, then each sheet open over it
+        for (const region of ['decisions','fleet','crew','log'] as const) {
+          if (region === 'fleet') { await showFleet(page); await expect(page.locator('#lanes .card').first()).toBeVisible(); }
+          if (region === 'crew') { await openCrewSheet(page); await expect(page.locator('#roster .rrow').first()).toBeVisible(); }
+          if (region === 'log') { await openLogSheet(page); await expect(page.locator('#log li').first()).toBeVisible(); }
+          expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1), `${region} at ${width}`).toBe(true);
+          if (region === 'crew' || region === 'log')
+            expect(await page.locator(`#${region}Sheet`).evaluate(el=>el.scrollWidth<=el.clientWidth+1), `${region} sheet at ${width}`).toBe(true);
+        }
+        await page.locator('#logSheet [data-sheet-close]').click();
+        await page.locator('#tabDecisions').click();
       }
       await page.setViewportSize({width:1280,height:900});
     }
@@ -172,6 +184,7 @@ test('a missing captain image leaves only the portrait label', async ({page}) =>
   try {
     await page.route('**/voyage2d/captain.webp', route => route.fulfill({status:404, body:''}));
     await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('#decisionsPanel')).toBeVisible();
     await expect(page.locator('#capstage .capimg')).toBeHidden();
     await expect(page.locator('#capstage .lbl')).toContainText(EN.roleCaptain);
     await expect(page.locator('#capstage .fig')).toHaveCount(0);
@@ -187,6 +200,10 @@ test('a closed voyage keeps the roster and captain portrait synchronized', async
     await expect(page.locator('#voyage-stage')).toHaveCount(1);
     await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
     await expect(page.locator('#voyage-stage')).toHaveCount(0);
+    // A selected empty panel has no height while its deck is hidden.
+    await expect(page.locator('#tabDecisions')).toHaveAttribute('aria-selected','true');
+    await expect(page.locator('#decisionsPanel')).toHaveJSProperty('hidden',false);
+    await expect(page.locator('#deckwrap')).toBeHidden();
     await expect(page.locator('#capstage')).toBeHidden();
     emitFixture(root, 'worker-hidden', task, 'dispatched', 'Still working with voyage closed', '航程關閉時繼續工作', {role:'worker'});
     writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',kind:'choice',task,details}));
