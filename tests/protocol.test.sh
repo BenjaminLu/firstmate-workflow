@@ -63,4 +63,26 @@ record "$d" other-reviewer 'REJECT:T-Z'
 assert_eq 0 "$(FM_REVIEWER_LOGIN=reviewer-1 code "$d" 2)" 'explicit reviewer filtering applies to local verdicts'
 assert_eq 3 "$(code "$d" 2)" 'without filtering the latest local rejection counts'
 rm -rf "$d"
+# Current approval blocks repair syntax; semantic closure remains independent.
+for kind in plain dropped duplicate malformed incomplete "done" open; do
+  d="$(fixture)"
+  record "$d" reviewer-1 $'1. open history\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
+  record "$d" reviewer-2 $'1. open timestamp\n2. open history\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
+  assert_contains "$(run "$d" 2 2>&1)" 'new item 2' 'old unlabelled-item error persists'
+  case "$kind" in
+    plain) next='APPROVE:T-Z' ;;
+    dropped) next=$'1. done timestamp\nCRITERIA-COMPLETE:T-Z\nAPPROVE:T-Z' ;;
+    duplicate) next=$'1. done timestamp\n1. done history\nCRITERIA-COMPLETE:T-Z\nAPPROVE:T-Z' ;;
+    malformed) next=$'1. timestamp\n2. history\nCRITERIA-COMPLETE:T-Z\nAPPROVE:T-Z' ;;
+    incomplete) next=$'1. done timestamp\n2. done history\nAPPROVE:T-Z' ;;
+    done|open) next="1. $kind timestamp"$'\n'"2. $kind history"$'\nCRITERIA-COMPLETE:T-Z\nAPPROVE:T-Z' ;;
+  esac
+  record "$d" reviewer-3 "$next"
+  case "$kind" in
+    done) assert_eq 0 "$(code "$d" 3)" 'complete done approval clears syntax through current-items logic' ;;
+    open) assert_eq 0 "$(code "$d" 3)" 'open approval passes syntax; semantic refusal belongs to reviewer contract' ;;
+    *) assert_eq 3 "$(code "$d" 3)" "$kind approval cannot waive old syntax failure" ;;
+  esac
+  rm -rf "$d"
+done
 finish

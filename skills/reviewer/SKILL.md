@@ -231,13 +231,33 @@ not numbers, for any summary above it. A list restarting at `1.` after a blank
 line or an unindented non-item label (such as `**Standing list**`, with or
 without surrounding blank lines) starts a new block. Wrapped lines,
 indented continuation paragraphs and blank lines inside an item belong to
-that item. An APPROVE does not need to re-issue the list.
+that item. An ordinary no-ASK APPROVE does not need to re-issue the list.
 `bin/fm-protocol.sh` reads only that final block. The script does not detect every
 violation; report them to [firstmate](../firstmate/SKILL.md) for the board.
 Write the first list as if it is your one chance to be exhaustive, because it
 is: T-126 took ten rounds, one new finding per round from round seven on.
 
-`ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an unclear one; answer it with the complete standing list.
+`ASK-PASS-CRITERIA:<task-id>` may come from a worker who finds no list or an
+unclear one, or from a genuine firstmate operator requesting clarification.
+When the launcher delivers that exact standalone marker, before any truthful
+verdict (APPROVE or REJECT), independently reissue the complete contiguous
+numbered standing list and close it with `CRITERIA-COMPLETE:<task-id>`.
+This is the ASK exception to ordinary approval's optional list. Preserve every
+prior numbered item and explain its finding associations transparently; mark
+each done/open with factual evidence. Do not renumber away open findings,
+invent same-head regressions or new ground, require changes without findings,
+or select APPROVE merely to repair syntax. An APPROVE requires truthful closure
+of findings even though the syntax parser accepts an approval block with open
+items. Syntax cannot establish semantic closure.
+
+Only the marker crosses from ask records: operator and worker prose and private
+state paths stay excluded, as do firstmate briefs and worker reports. An ASK is
+not reviewer evidence or a verdict. Historical signed and unsealed records and
+existing pins remain immutable. A plain APPROVE cannot erase an earlier syntax
+failure; a new complete numbered closing block may correct current syntax under
+the unchanged parser, without rewriting earlier associations or signatures.
+Frozen running snapshots retain their original instructions; this clarification
+applies to new stock launches when ASK is delivered.
 
 Where to find them under T-135: from round two the launcher supplies the
 standing list and relevant prior rounds from local records in **The closed list**
