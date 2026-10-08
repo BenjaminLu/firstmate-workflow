@@ -253,5 +253,16 @@
   "ciOnlyEvidence": "Fail-first did not run. The project's required CI checks are the only remaining test evidence for this change. Confirm they are green before choosing A.",
   "whyYouSeeThis": "Why you see this",
   "decisionDetails": "Decision details",
-  "decisionClose": "Close details"
+  "decisionClose": "Close details",
+  "tabDecisions": "Decisions",
+  "tabFleet": "Fleet",
+  "secLog": "Log",
+  "sheetCrew": "Crew roster",
+  "sheetLog": "Log",
+  "sheetClose": "Close",
+  "sheetBack": "Back",
+  "pagerFirst": "First",
+  "pagerPrev": "Previous",
+  "pagerNext": "Next",
+  "pagerPosition": "Page {page} of {total}"
 }

@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -70,6 +71,7 @@ for (const hasPr of [false, true]) {
     const box = page.locator('#dropConfirm');
     try {
       await page.goto(`${b.url}/?lang=en`);
+      await showFleet(page);
       for (const action of ['park', 'drop'] as const) {
         await page.locator('[data-menu="T-051"]').click();
         await expect(page.locator('[data-task="T-051"] .cacts button')).toHaveText([EN.park, EN.drop]);
@@ -97,6 +99,7 @@ test('T-118: a task parked while its card is pending stays in the captain lane, 
   try {
     await page.goto(`${b.url}/?lang=en`);
     await expect(captain).toHaveCount(1);
+    await showFleet(page);
     await page.locator('[data-menu="T-060"]').click();
     await expect(page.locator('[data-task="T-060"] .cacts button')).toHaveText([EN.park, EN.drop]);
     await page.locator('[data-task="T-060"] [data-act="park"]').click();
@@ -108,6 +111,7 @@ test('T-118: a task parked while its card is pending stays in the captain lane, 
     await expect(page.locator('#parked [data-task="T-060"]')).toHaveCount(0);
     expect(t118Events(root).pop()).toMatchObject({type:'parked',actor:'captain',task:'T-060'});
     // it offers unpark now, not a second park
+    await showFleet(page);
     await page.locator('[data-menu="T-060"]').click();
     await expect(page.locator('[data-task="T-060"] .cacts button')).toHaveText([EN.unpark, EN.drop]);
     // a refusal the server sends is shown by its own text, not the generic line
@@ -116,11 +120,13 @@ test('T-118: a task parked while its card is pending stays in the captain lane, 
     await page.locator('[data-task="T-060"] [data-act="unpark"]').click();
     await expect(page.locator('#taskFeedback')).toHaveText(EN.confirmRequired);
     await page.unroute('**/tasks');
+    await showFleet(page);
     await page.locator('[data-menu="T-060"]').click();
     await page.locator('[data-task="T-060"] [data-act="unpark"]').click();
     await expect(captain.locator('.badge.b-parked')).toHaveCount(0);
     await expect(page.locator('#taskFeedback')).toHaveText('');
     // parked again and the card withdrawn: the park is what places it
+    await showFleet(page);
     await page.locator('[data-menu="T-060"]').click();
     await page.locator('[data-task="T-060"] [data-act="park"]').click();
     await page.locator('#dropConfirm [data-confirm="park"]').click();
@@ -183,6 +189,7 @@ test('T-118: a closed task is reopened from the history menu, behind a confirm s
     await page.goto(`${b.url}/?lang=en`);
     // closed tasks sit in no lane: the history is the only place to reopen one
     await expect(page.locator('#lanes [data-task="T-080"]')).toHaveCount(0);
+    await showFleet(page);
     await page.locator('#history > summary').click();
     await expect(inHistory).toHaveCount(1);
     // a refusal for want of a reason is shown by its own text
@@ -224,6 +231,7 @@ test('T-118: reopening moves a merged card out of merged, and a card under a fin
     await page.locator('#card-D-1118 .confirm').click();
     await expect(page.locator('#card-D-1118')).toHaveCount(0);
     // the merged card offers reopening, behind a confirm step that needs a reason
+    await showFleet(page);
     await page.locator('[data-lane="merged"] [data-menu="T-117"]').click();
     await expect(page.locator('[data-task="T-117"] .cacts button')).toHaveText([EN.reopen]);
     await page.locator('[data-task="T-117"] [data-act="reopen"]').click();
@@ -248,6 +256,7 @@ test('T-118: reopening moves a merged card out of merged, and a card under a fin
       title:'Merge #97',details,gates:{branch:true,rebase:true,scope:true,'fail-first':true,ci:true,approval:true}}));
     await expect(page.locator('#card-D-1119')).toHaveCount(1);
     await expect(page.locator('#card-D-1119 .final-note')).toHaveCount(0);
+    await page.locator('#tabDecisions').click();
     await page.locator('#card-D-1119 .opt[data-c="A"]').click();
     await page.locator('#card-D-1119 .confirm').click();
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '').toContain('--pr 97 --task T-117');

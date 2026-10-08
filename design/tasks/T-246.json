@@ -1,0 +1,253 @@
+{
+  "id": "T-246",
+  "title": "board v2 tabs and sheets: under the pinned voyage stage two top-level tabs, Decisions (the captain cards) and Fleet (the full lane wall as its own full-width page with a list and detail view), and the crew roster and log as sheets from one summary bar; history pages 12, parked 6 and the log 12 per page on the client, the crew roster sheet is wide and tall enough to read, and a task opened from a sheet or the Fleet page never stacks a third layer",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [
+    "T-241",
+    "T-243",
+    "T-245"
+  ],
+  "scope": [
+    "board/public/index.html",
+    "board/public/board.css",
+    "board/public/board.js",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "i18n/tw2cn.tsv",
+    "tests/e2e/board-v2-sheets.spec.ts",
+    "tests/e2e/board-layout.spec.ts",
+    "tests/e2e/board-continuation.spec.ts",
+    "tests/e2e/firstmate-host.spec.ts",
+    "tests/e2e/board-auth.spec.ts",
+    "tests/e2e/game.spec.ts",
+    "tests/e2e/board-brief-coverage.spec.ts",
+    "tests/e2e/board-card-effects.spec.ts",
+    "tests/e2e/board-decisions.spec.ts",
+    "tests/e2e/board-chips.spec.ts",
+    "tests/e2e/board-crew.spec.ts",
+    "tests/e2e/board-merges.spec.ts",
+    "tests/e2e/board-locales.spec.ts",
+    "tests/e2e/board-review-duration.spec.ts",
+    "tests/e2e/board-pr-links.spec.ts",
+    "tests/e2e/board-task-actions.spec.ts",
+    "tests/e2e/board-preflight.spec.ts",
+    "tests/e2e/board-v2-shell.spec.ts",
+    "tests/e2e/board-log-paging.spec.ts",
+    "tests/e2e/board-task-detail.spec.ts",
+    "tests/e2e/board-projects.spec.ts",
+    "tests/e2e/board-waiting.spec.ts",
+    "tests/e2e/board-v2-card.spec.ts",
+    "tests/i18n.test.sh",
+    "tests/e2e/lib/board.ts",
+    "design/design.md",
+    "design/tasks/T-246.json"
+  ],
+  "acceptance": [
+    "Why. The captain reviewed four prototype rounds of the board on 2026-10-07 and approved the last one, verbatim: \"看板樣式可以了, 可以以這個版本開發\". Earlier notes from the captain, verbatim in substance: the page had no unity and too much text, the captain card needs the largest area, a dark mode toggle is needed, and the voyage game stays pinned at the top and larger. Later that day: \"船員名冊顯示的太窄, 高度太限縮, 閱讀順序應該是先看意圖重點列表, 再帶到動畫邏輯帶看\". The approved design is in the round's local brief (firstmate records state/briefs/T-246.design.md for every round); its prototype code is reference only and holds no board data. Board v2 is split into three tasks: T-241 the shell, T-245 the captain card, T-246 the sheets. The captain then added, verbatim: \"版面都擠壓了, 不如backlog那整排卡片牆換到另一個大的分頁, 跟船長合併卡同一層級\".",
+    "Change 1, tabs, summary bar and sheets. Under the voyage stage (T-241) a tab bar `#tabs` (role=tablist) holds two tabs at the same level: `#tabDecisions` (key `tabDecisions`) whose panel holds #capstage and #deckwrap with the captain cards, and `#tabFleet` (key `tabFleet`) whose panel is a full-width page holding .lanes-wrap (with #lanes, #parked, #dropzone, #dropConfirm and #history). #tabDecisions shows a badge with the pending card count (counts.waiting) when it is above zero. The chosen tab is stored in localStorage key board.tab inside try/catch; on load the board opens on Decisions whenever any card is pending, and otherwise on the stored tab (Decisions when none). A summary bar `#secbar` replaces .rosterbar and holds two buttons: crew (#rosterBtn moves here and becomes this button; it keeps its `rosterBtn` label in both dictionaries, and the aboard count that index.html writes into `.rosterbar .aboard` on every render moves to a `#secbar .aboard` span next to it, with the same `aboard` key and text) and log (`#logBtn`, key `secLog`, with the latest event); each opens a sheet with role=\"dialog\" and aria-modal, titled by key `sheetCrew` or `sheetLog`, closed by Esc or its close button (key `sheetClose`), focus returning to the opener; because it is a dialog, game.js's double-Escape does not hide the voyage stage while it is open. The crew sheet holds #shipregion (with #roster) and the log sheet holds .logwrap (with #log and T-243's load-older control); the log sheet opens 96vw wide up to 1480px and 80vh tall, full width below 760px. Every id stays and moves with its region; drag and drop to park and drop works on the Fleet page; game.js can still move #counts, #deckwrap and .lanes-wrap into its drawer in full mode, and they return to their tab panel afterwards. Opening a task never stacks a third layer (captain, 2026-10-07). Only lane cards open a task today (the .lanes-wrap click and keydown handlers in board/public/index.html call openTaskDetail); roster rows and log lines open no task, and this task adds none, so a task detail exists only on the Fleet page. There, at 760px wide and above, .lanes-wrap becomes two panes, the lanes, parked cards and history on the left and #taskDetail on the right, with no overlay; #taskDetail stays a child of .lanes-wrap, a sibling of #lanes, as today. Below 760px the detail replaces the list, with a back control (key `sheetBack`) that returns to the list at its scroll position. Opening the crew or log sheet, or switching tabs, closes an open Fleet detail first (as its close control does), so a hidden detail never takes Esc or focus. On the Fleet page with no sheet open, Esc closes the task detail. The crew and log sheets close on Esc. While a crew or log sheet is open, T-245's capture-phase Escape handler for `.decision-sheet` (the keydown listener after syncDecisionBars in board/public/index.html) does nothing, so Esc closes that sheet; on the Decisions tab with no sheet open it closes a decision details sheet as today. The right pane is #taskDetail itself, with its rendering and close control, so detail behaviour (deep link, actions, focus return to the card) stays as it is.",
+    "Change 2, client-side pages. History (the existing <details id=\"history\"> on the Fleet page; it keeps its closed default and its remembered open state) shows 12 cards per page; parked cards 6 per page; the log 12 lines per page over what it holds (T-243's load-older appends to it). Each pager has first, previous, next and a position label (new keys `pagerFirst`, `pagerPrev`, `pagerNext`, `pagerPosition`). No API change.",
+    "Change 3, the crew sheet. It opens 96vw wide up to 1480px, with no cap on row height and 15px text, every roster column readable without truncating names or task titles; below 760px wide it is full width, one stacked block per crew member, with no horizontal scroll. It always starts closed. Opening it sets SHIP.rosterOn to true so #roster shows its rows whatever board.roster holds; the board no longer writes board.roster; board.rosterSort and board.rosterGroup keep working.",
+    "Not changed, stated. board/server.ts and every API, ship.js and ship.css, the captain card's own layout (T-245), the theme and stage (T-241), T-243's /api/events and the load-older control's behaviour, and the voyage game.",
+    "Tests, new behaviour (fail on base, pass after). tests/e2e/board-v2-sheets.spec.ts: the tab bar sits under the voyage stage with Decisions and Fleet at the same level; with a pending card the board opens on Decisions and its badge shows the pending count, even when board.tab='fleet' is stored; with nothing pending it opens on the stored tab, and a throwing localStorage still lets the tabs switch; the Fleet page is full width and holds the lanes, parked cards and history; opening a backlog card on the Fleet page at 1440 shows list and detail side by side with no overlay, and at 390 the detail replaces the list and the back control returns to it; the crew and log buttons open their sheets as dialogs, Esc closes them, and a double Esc with a sheet open leaves the voyage stage shown; Esc closes an open task detail on the Fleet page; opening the crew sheet with a Fleet detail open closes the detail, and Esc then closes the sheet with focus on #rosterBtn; switching to Decisions with a Fleet detail open closes it, and Esc there closes an open decision details sheet with focus on its details button; an open crew sheet takes Esc before a decision details sheet; history pages 12 per page through every finished card; parked pages 6; the log pages 12; at 1440x900 the crew sheet is 96vw wide up to 1480px with no clipped row, and at 390 it is full width with stacked blocks; with board.roster='hidden' stored the crew sheet still shows its rows. tests/i18n.test.sh gains an explicit loop, like T-243's, asserting that every new key exists in both dictionaries: tabDecisions, tabFleet, secLog, sheetCrew, sheetLog, sheetClose, sheetBack, pagerFirst, pagerPrev, pagerNext and pagerPosition.",
+    "Tests, updated and regression. tests/e2e/lib/board.ts's open() waits for the first render, `#rosterBtn` with a non-empty label and an attached (not visible) `#roster .rrow`, instead of a visible `#roster .rrow`. tests/e2e/board-layout.spec.ts: the visible `#roster .rrow` right after goto (about line 32) becomes an attached `#roster .rrow` (the crew sheet starts closed); `.rosterbar #rosterBtn` (about line 34) becomes `#secbar #rosterBtn`; the `#rosterBtn` text check against `rosterBtn` (about line 131) and the zh-CN check (about lines 138-140) stay; it returns to the Decisions tab before the portrait and #card-D-1/#card-D-2 bounding-box and click steps (about lines 85-99); it opens the Fleet tab before the lanes-in-one-row check; the 'log below the lanes' check (about lines 116-118) becomes 'the log sheet opens over the page and its .logwrap is wider than 1200px at 1440'; and its roster hide-toggle reload check becomes the board.roster='hidden' check above. tests/e2e/board-continuation.spec.ts: it calls showFleet before each #history step and returns to the Decisions tab before each #card-D-1 step (about lines 39-81), so the history summary count, its closed default and its remembered open state are checked on the Fleet page and the textarea value and focus on Decisions; it pages history (12 per page) to reach all 31 cards in order; '.rosterbar button' in the font-size loop (about line 45) becomes '#secbar button'; and the two #roster screenshots (about lines 107 and 110) open the crew sheet first. tests/e2e/firstmate-host.spec.ts opens the crew sheet before reading .roster [data-roster]. tests/e2e/board-auth.spec.ts opens the Fleet tab before reading .lanes .card and .cmenu. tests/e2e/game.spec.ts opens the Fleet tab before its .lanes-wrap position check. tests/e2e/lib/board.ts gains three helpers, showFleet(page), openCrewSheet(page) and openLogSheet(page), which the suites above use too. Each of these suites reads or acts on a region that moves into the Fleet page or a sheet, and calls the matching helper before that step, with its assertions unchanged: board-brief-coverage (#log), board-card-effects (#history, #lanes, #parked, #log), board-decisions (.lanes, #roster .rrow), board-chips (#history, #roster), board-crew (#roster, data-roster), board-merges (#roster .rrow), board-locales (.rrow, and `.rosterbar .aboard` at about lines 48-50 becomes `#secbar .aboard` with the same text), board-review-duration (#lanes), board-pr-links (.lanes-wrap, #dropzone, #history, #parked, #log, #roster), board-task-actions (#lanes, #parked, #dropzone), board-preflight (#roster), board-v2-shell (.logwrap, #log, data-roster), board-log-paging (#log), board-task-detail (#log, and showFleet before each lane-card click at about lines 24-26, 70, 83, 111 and 114; its parent check at about line 31 stays true), board-projects (#history, #lanes, #parked, data-roster) and board-waiting (.rrow, data-roster). tests/e2e/board-v2-card.spec.ts (T-245) keeps its Escape-order case in the new layout: with the decision details sheet open it calls showFleet, opens T-001 in the Fleet detail pane, Esc closes the pane and focus returns to the card, then it returns to the Decisions tab, where the sheet kept its open state and Esc closes it with focus on its details button. A read that needs no visibility may stay as it is; the worker states which. Every other suite passes unchanged.",
+    "Migration. Display only. board.roster='hidden' no longer hides the roster rows in the sheet; tested above.",
+    "Docs. design/design.md §8 'The captain's board': edit in place for the Decisions and Fleet tabs, the remembered tab and the pending rule, the summary bar, the two sheets, the list and detail view, their pages and the crew sheet size."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "Decisions and Fleet are two tabs at the same level, and the crew and the log open as sheets."
+        },
+        {
+          "kind": "fact",
+          "text": "History, parked cards and the log show pages."
+        },
+        {
+          "kind": "fact",
+          "text": "The crew roster sheet is wide and tall enough to read."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "You approved the board prototype on 2026-10-07: \"看板樣式可以了, 可以以這個版本開發\"."
+        },
+        {
+          "kind": "fact",
+          "text": "You said the crew roster was too narrow and too short."
+        },
+        {
+          "kind": "fact",
+          "text": "You said the page felt crowded and asked to move the lane wall to its own tab."
+        }
+      ],
+      "scope_in": [
+        "index.html, board.css and board.js: the tabs, the bar, the sheets and the pagers",
+        "i18n labels and the key test",
+        "a new sheets test, the shared helper and every board test that reads a moved region",
+        "design section 8"
+      ],
+      "scope_out": [
+        "the server and every API",
+        "the captain card, the theme and the stage",
+        "ship.js, ship.css and the voyage game"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the tab bar switches Decisions and Fleet, and the bar opens the crew and log sheets. The new sheets test proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the pagers split history, parked cards and the log. The new sheets test proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the crew sheet opens wide, and it stacks on a phone. The new sheets test proves it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Every region keeps its element ids, so the game and the tests still find them."
+        },
+        {
+          "kind": "note",
+          "text": "A task opens only from the Fleet page, as a pane beside the list, never as a third layer."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Board renders each region"
+        },
+        {
+          "state": "gone",
+          "label": "Every region open on the page"
+        },
+        {
+          "state": "gone",
+          "label": "Narrow crew roster"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Board renders each region"
+        },
+        {
+          "state": "new",
+          "label": "Decisions and Fleet tabs"
+        },
+        {
+          "state": "new",
+          "label": "Sheets for crew and log"
+        },
+        {
+          "state": "new",
+          "label": "Pages and a wide roster"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "決策和艦隊是同一層級的兩個分頁，船員和日誌打開成抽屜。"
+        },
+        {
+          "kind": "fact",
+          "text": "歷史、暫停的卡和日誌分頁顯示。"
+        },
+        {
+          "kind": "fact",
+          "text": "船員名冊抽屜夠寬也夠高，方便閱讀。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 核准看板原型：\"看板樣式可以了, 可以以這個版本開發\"。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長說船員名冊太窄，高度也太小。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長說版面太擠，要求把卡片牆移到獨立分頁。"
+        }
+      ],
+      "scope_in": [
+        "index.html、board.css、board.js：分頁、摘要列、sheet 和分頁器",
+        "i18n 標籤和 key 測試",
+        "新的 sheet 測試、共用 helper，以及所有讀到移動區塊的看板測試",
+        "design 第 8 節"
+      ],
+      "scope_out": [
+        "伺服器和所有 API",
+        "船長卡、主題和舞台",
+        "ship.js、ship.css 和航程遊戲"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：分頁列切換決策和艦隊，摘要列打開船員和日誌抽屜。新的抽屜測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：分頁器切分歷史、暫停的卡和日誌。新的抽屜測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：船員抽屜打開時夠寬，手機上改成堆疊。新的抽屜測試證明這點。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "每個區塊保留元素 id，遊戲和測試都找得到。"
+        },
+        {
+          "kind": "note",
+          "text": "任務只從艦隊頁打開，顯示在清單旁的窗格，不會疊成第三層。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "看板顯示各區塊"
+        },
+        {
+          "state": "gone",
+          "label": "所有區塊攤在頁面上"
+        },
+        {
+          "state": "gone",
+          "label": "船員名冊太窄"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "看板顯示各區塊"
+        },
+        {
+          "state": "new",
+          "label": "決策和艦隊分頁"
+        },
+        {
+          "state": "new",
+          "label": "船員和日誌抽屜"
+        },
+        {
+          "state": "new",
+          "label": "分頁和寬名冊"
+        }
+      ]
+    }
+  }
+}

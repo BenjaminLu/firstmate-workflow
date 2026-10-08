@@ -1,3 +1,4 @@
+import { openCrewSheet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -16,7 +17,9 @@ test("the captain merges from the board", async ({ page }) => {
   const b = await startBoard(makeRoot([...CREW]));
   try {
   await page.goto(`${b.url}/?lang=zh-TW`);
+  await openCrewSheet(page);
   await expect(page.locator("#roster .rrow").first()).toBeVisible();
+  await page.locator("#crewSheet [data-sheet-close]").click();
   const card = page.locator(".dcard").first();
   await expect(card).toBeVisible();
   await expect(card.locator(".gates li")).toHaveCount(6);   // six named gates
