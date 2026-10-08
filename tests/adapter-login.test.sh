@@ -296,6 +296,15 @@ for v in claude codex cursor-agent gemini; do
   assert_eq "0" "$(FM_ROUND_UNSANDBOXED=1 confined darwin "$pv/no-such-sandbox" "$pk/none.json" "$v")" \
     "$v runs under the operator's hatch though the host has no OS sandbox"
   assert_ok "test -e '$pv/argv'" "($v's CLI did run)"
+  if [ "$v" = cursor-agent ]; then
+    # T-219 fail-first: plain mode also gets a fresh short data directory.
+    plain_data="$(sed -n 's/^CURSOR_DATA_DIR=//p' "$pv/env")"
+    assert_matches "$plain_data" '^(/private)?/tmp/fmc\.[A-Za-z0-9]+$' "Cursor plain mode receives private data"
+    assert_lacks "$(cat "$pv/argv")" "--write=" "Cursor plain CLI receives no write argument"
+    if [ -n "$plain_data" ]; then
+      assert_fail "test -d '$plain_data'" "Cursor plain data is cleaned up"
+    fi
+  fi
   assert_fail "test -e '$pk/profile.sb'" "with no sandbox profile around it"
   assert_contains "$(cat "$pv/err")" "WITHOUT the OS sandbox" "and $v says so on stderr"
   assert_contains "$(cat "$pv/env" 2>/dev/null)" "FM_IN_ROUND=1" "the round is still marked as one"

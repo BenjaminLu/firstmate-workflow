@@ -207,7 +207,8 @@ fetch failed
 getaddrinfo ENOTFOUND api.example.com
 connect ECONNREFUSED 127.0.0.1:443
 connect ETIMEDOUT 10.0.0.1:443
-getaddrinfo EAI_AGAIN api.example.com"
+getaddrinfo EAI_AGAIN api.example.com
+You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 7:58 AM."
 while IFS= read -r broken; do
   [ -n "$broken" ] || continue
   assert_eq "2" "$(verdict "$broken" 0)" "an outage reading \"$(printf '%.38s' "$broken")...\""
