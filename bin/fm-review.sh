@@ -959,7 +959,25 @@ context_checkout_matches() {
 restore_context_evidence() {
   # Always regenerate from authenticated retained bytes, including uncapped
   # prompts which have no evidence-path.txt and both checkout refresh paths.
+  local previous_refresh=false current_refresh
+  if [ -f "$work/experiment-status.json" ]; then
+    previous_refresh="$(jq -r '.requires_context_refresh // false' "$work/experiment-status.json")" || return 70
+  fi
   prepare_experiment_evidence || return 70
+  current_refresh="$(jq -r '.requires_context_refresh' "$work/experiment-status.json")" || return 70
+  # Ordinary retries keep the original prompt and archive reference. A fresh
+  # checkout needs its archived components restored, not a new nonce/path.
+  if [ "$previous_refresh" = false ] && [ "$current_refresh" = false ]; then
+    if [ -f "$work/evidence-path.txt" ]; then
+      local original_archive
+      original_archive="$(cat "$work/evidence-path.txt")"
+      mkdir -p "$original_archive" &&
+        cp "$work/intro.md" "$work/history.md" "$work/evidence.md" \
+           "$work/diff.md" "$work/outro.md" "$work/pins.json" "$original_archive/"
+      return "$?"
+    fi
+    return 0
+  fi
   if [ ! -f "$work/evidence-path.txt" ]; then
     python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_context.py" \
       "$work" "$REVIEW_MODE" "${CHECKOUT:-}"
@@ -1333,7 +1351,7 @@ decided="$(fm_evidence verdict --round "$ROUND" --head "$R_HEAD" --base "$R_BASE
 }
 evidence_ref="$(jq -r .signature "$FM_RUN_DIR/evidence-record.json")"
 if [ "$FM_EXTERNAL" = 1 ] && [ "$experiment_count" -gt 0 ]; then
-  evidence_ref="experiment-review-$(python3 -c 'import secrets; print(secrets.token_hex(12))')" || exit 65
+  evidence_ref="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_context.py" opaque-experiment-reference)" || exit 65
   printf '%s\n' "$evidence_ref" > "$FM_RUN_DIR/experimental-projection-ref.txt"
 fi
 provenance_level=legacy

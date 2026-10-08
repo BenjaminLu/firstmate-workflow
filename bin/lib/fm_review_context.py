@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import argparse
 import os
+import secrets
 
 CAP = 512 * 1024
 QUOTE_CAP = 16 * 1024
@@ -35,7 +36,8 @@ def prepare_experiments(directory, mode, checkout, head, base, code):
         standard.write_bytes((directory/'evidence.md').read_bytes())
     (directory/'evidence.md').write_bytes(standard.read_bytes() + text.encode())
     (directory/'experiment-status.json').write_text(json.dumps(dict(
-        has_experiments=bool(count), experiment_count=count, provenance_level='unverified', index=index)))
+        has_experiments=bool(count), experiment_count=count, provenance_level='unverified', index=index,
+        requires_context_refresh=bool(records or unavailable))))
 
 
 def verify_effective_experiment_policy(args):
@@ -251,6 +253,9 @@ def compose(directory, mode, checkout):
 
 def main():
     try:
+        if sys.argv[1:] == ['opaque-experiment-reference']:
+            print('experiment-review-' + secrets.token_hex(12))
+            return 0
         if sys.argv[1:2] == ['prepare-experiments']:
             _, directory, mode, checkout, head, base, code = sys.argv[1:]
             prepare_experiments(Path(directory), mode, checkout, head, base, code)

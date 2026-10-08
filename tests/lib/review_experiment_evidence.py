@@ -860,6 +860,43 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
             tree = self.checkout()
         self.assertTrue((work/'evidence-path.txt').is_file())
 
+    def test_no_experiment_refresh_preserves_original_prompt_and_archive(self):
+        import fm_review_context as context
+        self.frozen_contract()
+        tree = self.checkout()
+        work = self.root/'ordinary-review-work'
+        work.mkdir()
+        for name in context.PARTS:
+            (work/(name+'.md')).write_text('complete standing criteria\n' if name == 'history' else '')
+        (work/'pins.json').write_text(json.dumps(dict(head=self.head, base=self.base, patch='', files=[])))
+        source = (ROOT/'bin/fm-review.sh').read_text()
+        block = source[source.index('restore_context_evidence() {'):source.index('\nif ! context_checkout_matches;')]
+        env = dict(os.environ, work=str(work), REVIEW_MODE='run', CHECKOUT=str(tree),
+                   R_HEAD=self.head, R_BASE=self.base, FM_CODE_ROOT=str(self.code), REPO=str(self.repo), CREW_DATA='{}')
+        for oversized in (False, True):
+            if oversized:
+                (work/'diff.md').write_text('large inline patch\n'*70000)
+            context.prepare_experiments(work, 'run', str(tree), self.head, self.base, str(self.code))
+            context.compose(work, 'run', str(tree))
+            prompt = (work/'prompt.md').read_bytes()
+            archive = (work/'evidence-path.txt').read_bytes() if oversized else None
+            shutil.rmtree(tree)
+            tree = self.checkout()
+            result = subprocess.run(['bash', '-c', 'fm_evidence_project() { echo self; };\n'+block+
+                '\nrestore_context_evidence'], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((work/'prompt.md').read_bytes(), prompt)
+            self.assertFalse(json.loads((work/'experiment-status.json').read_text())['requires_context_refresh'])
+            if archive:
+                self.assertEqual((work/'evidence-path.txt').read_bytes(), archive)
+                self.assertEqual((Path(archive.decode().strip())/'history.md').read_bytes(), (work/'history.md').read_bytes())
+        # A stale record has no attachments but must still regenerate diagnostics.
+        self.retained()
+        context.prepare_experiments(work, 'run', str(tree), self.base, self.base, str(self.code))
+        status = json.loads((work/'experiment-status.json').read_text())
+        self.assertEqual(status['experiment_count'], 0)
+        self.assertTrue(status['requires_context_refresh'])
+
     def test_truncated_outputs_cannot_prove_omitted_assertion(self):
         self.frozen_contract()
         self.manifest['experiments'][0]['artifacts'][0]['truncated'] = True
