@@ -52,6 +52,67 @@ def eventually(predicate, seconds=WAIT):
         time.sleep(.02)
 
 
+def workspace_row(name='demo', workspace_id='w-demo', number=2):
+    # Real Herdr workspace list/create row shape (2026-10-07).
+    return dict(active_tab_id=workspace_id+'-root', agent_status='idle', focused=False,
+                label=name, number=number, pane_count=1, tab_count=1, workspace_id=workspace_id)
+
+
+class ProjectWorkspaceControl:
+    """Scripted Herdr server; unwrap result exactly as Herdr.__call__ does."""
+    def __init__(self, rows=(), failure=None, created_label='demo'):
+        self.rows = list(rows) if rows is not None else None
+        self.failure = failure
+        self.created_label = created_label
+        self.calls = []
+        self.panes = []
+        self.tabs = []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        if args == ('workspace', 'list'):
+            if self.failure: raise self.failure
+            result = dict(type='workspace_list', workspaces=self.rows)
+        elif args[:2] == ('workspace', 'create'):
+            assert '--no-focus' in args
+            row = workspace_row(self.created_label)
+            self.rows.append(row)
+            result = dict(type='workspace_created', workspace=row,
+                          tab=dict(tab_id='workspace-root', workspace_id='w-demo'),
+                          root_pane=dict(pane_id='workspace-shell', workspace_id='w-demo'))
+        elif args == ('pane', 'get', 'caller'):
+            result = dict(pane=dict(pane_id='caller', tab_id='caller-tab', workspace_id='workspace'))
+        elif args == ('api', 'snapshot'):
+            result = dict(snapshot=dict(focused_pane_id='caller', focused_tab_id='caller-tab',
+                focused_workspace_id='workspace', panes=self.panes, tabs=self.tabs,
+                layouts=[dict(tab_id=t['tab_id'], workspace_id=t['workspace_id'],
+                              panes=[dict(pane_id='owned')], splits=[]) for t in self.tabs]))
+        elif args[:2] == ('tab', 'create'):
+            assert '--no-focus' in args
+            workspace = args[args.index('--workspace')+1]
+            self.panes = [dict(pane_id='owned', terminal_id='terminal', tab_id='crew-tab',
+                               workspace_id=workspace, label='', tokens={})]
+            self.tabs = [dict(tab_id='crew-tab', workspace_id=workspace,
+                              label=args[args.index('--label')+1], pane_count=1)]
+            result = dict(root_pane=self.panes[0], tab=self.tabs[0])
+        elif args[:2] == ('pane', 'get'):
+            result = dict(pane=self.panes[0])
+        elif args[:2] == ('pane', 'process-info'):
+            result = dict(process_info=dict(pane_id='owned', shell_pid=42,
+                                           foreground_processes=[dict(pid=42)]))
+        elif args[:2] == ('pane', 'rename'):
+            self.panes[0]['label'] = args[3]; result = {}
+        elif args[:2] == ('pane', 'report-metadata'):
+            self.panes[0]['tokens'] = dict(args[i+1].split('=', 1)
+                                          for i in range(len(args)-1) if args[i] == '--token')
+            result = {}
+        elif args[:2] in (('pane', 'report-agent'), ('agent', 'rename'), ('pane', 'run')):
+            result = {}
+        else:
+            raise AssertionError(args)
+        return json.loads(json.dumps(dict(result=result)))['result']
+
+
 class LifecycleFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -238,19 +299,34 @@ fail=os.environ.get('FM_TEST_HERDR_FAIL')
 if (fail=='pane-run' and a[:2]==['pane','run']) or (
         fail=='report-working' and a[:2]==['pane','report-agent'] and a[a.index('--state')+1]=='working'):
  print('error: '+' '.join(a[:2])+' failed',file=sys.stderr); raise SystemExit(1)
-if a[:2]==['tab','create']:
+if a==['workspace','list']:
+ rows=[json.loads(p.read_text()) for p in r.glob('ws-*')]
+ rows.append(dict(workspace_id='workspace',label='caller',number=1,focused=True,
+                  active_tab_id='caller-tab',pane_count=1,tab_count=1,agent_status='idle'))
+ result=dict(type='workspace_list',workspaces=rows)
+elif a[:2]==['workspace','create']:
  assert '--no-focus' in a and '--focus' not in a
- assert a[a.index('--workspace')+1]=='workspace'
+ assert pathlib.Path(a[a.index('--cwd')+1]).is_dir()
+ w='ws-'+uuid.uuid4().hex
+ row=dict(workspace_id=w,label=a[a.index('--label')+1],number=len(list(r.glob('ws-*')))+2,
+          focused=False,active_tab_id=w+'-tab',pane_count=1,tab_count=1,agent_status='idle')
+ save(r/w,row)
+ result=dict(type='workspace_created',workspace=row,
+             tab=dict(tab_id=w+'-tab',workspace_id=w),
+             root_pane=dict(pane_id=w+'-pane',tab_id=w+'-tab',workspace_id=w))
+elif a[:2]==['tab','create']:
+ assert '--no-focus' in a and '--focus' not in a
+ workspace=a[a.index('--workspace')+1]
  p='pane-'+uuid.uuid4().hex
  t='tab-'+uuid.uuid4().hex
- v=dict(pane_id=p,terminal_id=p+'-terminal',tab_id=t,workspace_id='workspace',label='',tokens={},agent_status='idle')
- tab=dict(tab_id=t,workspace_id='workspace',label=a[a.index('--label')+1],pane_count=1)
+ v=dict(pane_id=p,terminal_id=p+'-terminal',tab_id=t,workspace_id=workspace,label='',tokens={},agent_status='idle')
+ tab=dict(tab_id=t,workspace_id=workspace,label=a[a.index('--label')+1],pane_count=1)
  save(r/p,v); save(r/t,tab); result={'root_pane':v,'tab':tab}
  if os.environ.get('FM_TEST_FOCUS')=='changed': (r/'focus-changed').touch()
 elif a==['api','snapshot']:
  panes=[pane(p.name) for p in r.glob('pane-*')]
  tabs=[json.loads(p.read_text()) for p in r.glob('tab-*')]
- layouts=[dict(tab_id=t['tab_id'],workspace_id='workspace',panes=[dict(pane_id=p['pane_id']) for p in panes if p['tab_id']==t['tab_id']],splits=[]) for t in tabs]
+ layouts=[dict(tab_id=t['tab_id'],workspace_id=t['workspace_id'],panes=[dict(pane_id=p['pane_id']) for p in panes if p['tab_id']==t['tab_id']],splits=[]) for t in tabs]
  focus='other' if (r/'focus-changed').exists() else 'caller'
  result={'snapshot':dict(panes=panes,tabs=tabs,layouts=layouts,focused_pane_id=focus,focused_tab_id='caller-tab',focused_workspace_id='workspace')}
  if (r/'malformed').exists(): result['snapshot']['layouts']=None
