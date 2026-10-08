@@ -17,7 +17,8 @@ for (const empty of [false, true]) test(`intent-only card omits optional content
   try {
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('#card-D-211');
-    await expect(card.locator('h4')).toHaveText(['Intent', 'How it works', 'Options']);
+    await expect(card.locator('.intent-alignment h4')).toHaveText(['Intent', 'How it works']);
+    await expect(card.locator('.decision-sheet h4')).toHaveText(['Options']);
     await expect(card.locator('.intent-why, .intent-outcome, .intent-scope, .confirm-questions')).toHaveCount(0);
     await expect(card.locator('.confirm')).toBeDisabled();
     await card.locator('[data-c="A"]').click();
@@ -49,11 +50,12 @@ for (const missingRules of [false, true]) test(`intent sections and stored chips
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('#card-D-211');
     await expect(card.locator('.intent-alignment')).toBeVisible();
-    for (const text of ['Intent', 'How it works', 'Alignment', 'Board cards', 'Other pages', 'The card shows the result.', 'Check the scope.', 'Do not dispatch yet.']) await expect(card).toContainText(text);
+    for (const text of ['Intent', 'How it works', 'Board cards', 'Other pages', 'The card shows the result.', 'Check the scope.', 'Do not dispatch yet.']) await expect(card).toContainText(text);
     await expect(card.locator('.ste-pill')).toHaveText('STE · 6/7');
-    await expect(card.locator('.ste-chip').first()).toContainText('17/20');
-    await expect(card.locator('.ste-sentence').filter({hasText:'The card stays small.'}).locator('.ste-chip')).toContainText('4/20');
-    await expect(card.locator('[data-rule="R3"]')).toHaveAttribute('title',missingRules ? 'R3' : 'R3 — Use one instruction per step.');
+    await expect(card.locator('[aria-label="Alignment"]')).toHaveCount(1);
+    await expect(card.locator('.ste-chip,.ste-sentence')).toHaveCount(0);
+    await card.getByText('Why you see this', {exact:true}).click();
+    await expect(card).toContainText('The card stays small.');
     const state = await (await page.request.get(`${b.url}/api/state`)).json();
     if (missingRules) expect(state.ste_rules).toEqual([]);
     else expect(state.ste_rules).toContainEqual({id:'R3',en:'Use one instruction per step.','zh-TW':'每個步驟只寫一個指令。'});
@@ -61,6 +63,7 @@ for (const missingRules of [false, true]) test(`intent sections and stored chips
     await expect(page.locator('#card-D-212 .intent-alignment')).toHaveCount(0);
     await card.locator('[data-c="A"]').click();
     await expect(card.locator('.confirm')).toBeDisabled();
+    await card.locator('[data-decision-details]').click();
     await card.locator('[data-question="0"][data-ok="yes"]').click();
     await expect(card.locator('.confirm')).toBeDisabled();
     await card.locator('[data-question="1"][data-ok="no"]').click();
@@ -73,7 +76,7 @@ for (const missingRules of [false, true]) test(`intent sections and stored chips
     await page.locator('[data-l="zh-CN"]').click();
     await expect(card).toContainText('检查任务修改。');
     await expect(card.locator('.ste-pill')).toHaveText('STE · 2/3');
-    await expect(card.locator('[data-rule="Z2"]')).toHaveAttribute('title',missingRules ? 'Z2' : 'Z2 — 每个步驟只写一个动作。');
+    await expect(card.locator('.ste-chip')).toHaveCount(0);
     await expect(correction).toHaveValue('  Change the scope 🚢  ');
     await page.locator('[data-l="en"]').click();
     expect(await page.evaluate(() => (window as any).VOYAGE?.hidden)).not.toBe(true);
@@ -129,6 +132,7 @@ test('all Yes still needs a valid custom pick; submitted question controls lock'
   try {
     await page.goto(`${b.url}/?lang=en`);
     const card=page.locator('#card-D-211');
+    await card.locator('[data-decision-details]').click();
     await card.locator('[data-question="0"][data-ok="yes"]').click();
     await card.locator('[data-question="1"][data-ok="yes"]').click();
     await expect(card.locator('.confirm')).toBeDisabled();
