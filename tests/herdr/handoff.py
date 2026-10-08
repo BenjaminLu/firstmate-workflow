@@ -161,7 +161,7 @@ class Entrypoints(EntrypointsFixture):
         self.assertEqual('captain',approvals[0]['actor'])
         self.assertEqual('T-035',approvals[0]['task'])
         self.assertEqual(dict(type='greenlit',actor='captain',task='T-035',
-                              project='self',ts='2026-10-03T00:00:00Z'),approvals[0])
+                              project='firstmate-workflow',ts='2026-10-03T00:00:00Z'),approvals[0])
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work','--name','Quinn'],
                            FM_TEST_VERDICT='REJECT')
         self.assertEqual(0,answer.returncode,answer.stderr)

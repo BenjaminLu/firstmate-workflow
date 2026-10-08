@@ -419,9 +419,16 @@ else: print('[]')
         self.assertFalse((self.state/'pr-authoring/previews').exists())
 
     def test_existing_self_metadata_preserved_without_draft(self):
-        (self.repo/'config.yaml').write_text('vendor: mock\nproject:\n  check: true\ndefault_project: self\nprojects:\n  self:\n    repo: .\n    github: fixture/project\n    base: main\n    design: design/design.md\n    tasks: design/tasks\n    project:\n      check: true\n')
+        (self.repo/'config.yaml').write_text('vendor: mock\ndefault_project: firstmate-workflow\n'
+            'projects:\n  firstmate-workflow:\n    repo: .\n    github: fixture/project\n'
+            '    base: main\n    required_check: ci\n    design: design/design.md\n'
+            '    tasks: design/tasks\n    project:\n      check: true\n')
         self.git('add', 'config.yaml'); self.git('commit', '-qm', 'registered self fixture')
-        self.git('push', '-q', 'origin', 'main'); self.author()
+        self.git('push', '-q', 'origin', 'main')
+        self.evidence_project = 'firstmate-workflow'
+        (self.state/'events.jsonl').write_text(json.dumps(dict(type='greenlit', task='T-259',
+            actor='captain', project=self.evidence_project, ts='2026-10-03T00:00:00Z'))+'\n')
+        self.seed_preflight(); self.author()
         result = self.worker(); self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         (self.state/'pr-authoring/T-259.json').unlink(); (self.home/'published.json').unlink()
         (self.repo/'bin/adapters/mock.sh').write_text('#!/usr/bin/env bash\n[ "$1" = run ] || exit 64\n'

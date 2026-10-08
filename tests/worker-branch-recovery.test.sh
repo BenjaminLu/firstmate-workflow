@@ -60,8 +60,8 @@ long_title='a mock task with a title long enough that slugging it truncates to t
 jq --arg t "$long_title" '.title=$t' "$r21/design/tasks/T-Z.json" > "$r21/design/T-Z.next"
 mv "$r21/design/T-Z.next" "$r21/design/tasks/T-Z.json"
 seed_spec_preflight "$r21" T-Z
-seed_self_pr_authoring "$r21" T-Z self
 ( cd "$r21" && git add -A && git commit -qm retitle && git push -q origin main )
+seed_self_pr_authoring "$r21" T-Z self
 cat > "$r21/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
@@ -108,8 +108,8 @@ long_title='a mock task whose title is long enough that a fresh slug truncates d
 jq --arg t "$long_title" '.title=$t' "$r22/design/tasks/T-Z.json" > "$r22/design/T-Z.next"
 mv "$r22/design/T-Z.next" "$r22/design/tasks/T-Z.json"
 seed_spec_preflight "$r22" T-Z
-seed_self_pr_authoring "$r22" T-Z self
 ( cd "$r22" && git add -A && git commit -qm retitle && git push -q origin main )
+seed_self_pr_authoring "$r22" T-Z self
 cat > "$r22/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64

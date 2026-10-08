@@ -108,7 +108,18 @@ for leftover in empty commit dirty spec spec_pr; do
       mkdir -p "$tl/design/tasks"
       jq '.acceptance=["AUTHORED_SPEC"]' "$rl/design/tasks/T-N.json" > "$tl/design/tasks/T-N.json"
       git -C "$tl" add earlier.txt design/tasks/T-N.json; git -C "$tl" commit -qm earlier
-      seed_spec_preflight "$rl" T-N "$tl/design/tasks/T-N.json" ;;
+      # Establish immutable approved branch intent before the mutable root widens.
+      cp "$rl/design/tasks/T-N.json" "$dl/widened-spec.json"
+      cp "$tl/design/tasks/T-N.json" "$rl/design/tasks/T-N.json"
+      seed_spec_preflight "$rl" T-N "$tl/design/tasks/T-N.json"
+      seed_self_pr_authoring "$rl" T-N self
+      (
+        . "$ROOT/bin/fm-config.sh"
+        fm_storage_init "$rl" || exit 65
+        fm_pin create --task T-N --require-preflight self >/dev/null
+      ) || exit 1
+      cp "$dl/widened-spec.json" "$rl/design/tasks/T-N.json"
+      seed_self_pr_authoring "$rl" T-N self ;;
     dirty) echo authored > "$tl/earlier.txt" ;;
     spec|spec_pr)
       mkdir -p "$tl/design/tasks"
