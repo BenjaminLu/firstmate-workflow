@@ -1,0 +1,279 @@
+{
+  "id": "T-254",
+  "title": "External reviewer findings reach firstmate as soon as they land, and the external reviewers are asked for every new head: for an external project with review external or both, a new changes-requested or commented review or comment from a named reviewer on a mapped pull request makes the autopilot refresh the existing T-140 external-verdict evidence (bodies stay in that private store) and queue one wake per review or comment id; the autopilot requests review from the project's confirmed request_reviewers (default: the recorded reviewers) when it first sees a mapped external pull request and on every new head; the board's task detail shows the reviewer states and each finding's file:line, without bodies",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_autopilot.py",
+    "bin/lib/fm_evidence.py",
+    "bin/lib/fm_conventions.py",
+    "bin/lib/fm_onboard.py",
+    "board/server.ts",
+    "board/public/index.html",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "i18n/tw2cn.tsv",
+    "tests/lib/autopilot_cases.py",
+    "tests/autopilot.test.sh",
+    "tests/lib/autopilot_reviewer_wake.py",
+    "tests/lib/evidence_summary.py",
+    "tests/evidence-summary.test.sh",
+    "tests/lib/task_detail_fixture.py",
+    "tests/board-task-detail.test.sh",
+    "tests/e2e/board-task-detail.spec.ts",
+    "tests/lib/external_pr_format.py",
+    "tests/external-reviews.test.sh",
+    "docs/autopilot.md",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-254.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-07 a company reviewer requested changes on a managed external pull request, and firstmate learned of it only when the captain asked. The autopilot's wake carried no finding text, and nothing collects the external evidence (T-140, bin/lib/fm_external.py collect :96-195, kept as an `external-verdict` record) when a review lands: collect runs from a review (bin/fm-review.sh :867) and from merge readiness (bin/lib/fm_binding.py :255-258), and the worker's projection (bin/fm-worker.sh :1727, :2385) collects only on its thread-reply path (bin/lib/fm_external.py :257). Today Pilot.pull (bin/lib/fm_autopilot.py :443) folds every changes-requested or commented review and every comment into one debounced batch per reviewer (key `<number>:<reviewer>`, :480-494). The autopilot also asks reviewers only on a head change, only reviewers that reviewed an older head, and never in post mode local (:450-458, recheck :324-366), so a new external pull request asks nobody. The captain said, verbatim: \"都要照對應reviewer的意見參考改良\" and \"你應該主動request reviewer去review你有新commit的PR, 在現在的例子, 你已經知道BB8和R2D2是reviewer, 那你應該提交PR和新commit的時候同時去request review\", and approved the task with \"好 先B再C 其他照你的意思改\".",
+    "Change 1, refresh the existing evidence (bin/lib/fm_autopilot.py Pilot.pull). When `self.ctx['external']` is true, `self.policy['review']` is `external` or `both` and the batch loop at :480-494 meets a new row (its seen token is new) whose author is one of `self.policy['reviewers']` (case-insensitive), Pilot.pull runs, once per pull call, `self.command(self.script('fm-external.sh', 'collect', '--task', task, '--pr', number, '--branch', pr['head']['ref']))`; `self.script` (:169-174) appends `--repo <root>` and `--project <project>`, so the exact argv is `[<bin>/fm-external.sh, collect, --task, <task>, --pr, <number>, --branch, <head ref>, --repo, <root>, --project, <project>]`. That writes or refreshes the T-140 `external-verdict` record (no second store) and prints the record as JSON (bin/lib/fm_external.py :287-306). Validation, in this order, each failure with a fixed class: `command` (self.command raised, :159-165), `json` (stdout is not a JSON object), `fields` (`head` is not a 40-hex string, `ready` is not a bool or `findings` is not a list), `stale-head` (`head` differs from `pr['head']['sha']`). A valid record with `ready: false` is `blocked`, with `ready: true` it is `ready`; a named reviewer without a review is UNKNOWN inside the record and only makes it blocked (:98-119), it is not a failure. The pilot keeps only ready, the head and `len(findings)`. A failure calls `self.attention('external-evidence-<class>', task, pr, 'external evidence refresh failed: <class>', '外部證據更新失敗：<class>')` (bin/lib/fm_autopilot_loop.py :119-120), queued under the identity `external-evidence-<class>-<number>-<head>`, so each class wakes once per head; the texts are fixed: no stderr, stdout, body, path or URL, since queued text reaches the wake transport (:208). The reasons are distinct from `advance-error`, so it is queued when an advance error already exists for the same head; it does not stop the wake in Change 2.",
+    "Change 2, one wake per review or comment id (bin/lib/fm_autopilot.py, same loop). For these projects and these named-reviewer rows, the batch key becomes `<number>:<reviewer>:<source>:<row id>`, where source is `review` for a review row and the row's `_source` tag that Pilot.poll adds (:552, :556-557), `review-comment` or `issue-comment`, for a comment row, and `comment` when `_source` is missing; the source keeps equal numeric ids from different endpoints apart. Each review or comment closes its own debounced batch, and the wake line is `<task> #<number> <reviewer> <state or source> <row id>: external evidence <ready|blocked|unknown> at <short head>, <n> finding(s); read fm_external findings for the task` (state CHANGES_REQUESTED or COMMENTED for a review; `unknown` and the count omitted when Change 1 failed). The seen token keeps its shape (:486-487), so an edited review or comment is a new token and wakes again for the same id. The line carries no body text, path or URL. Rows from reviewers outside the named list, the self project, and external projects with `review: fm` keep today's per-reviewer batch and line byte for byte, and run no collect.",
+    "Change 3, the evidence summary (bin/lib/fm_evidence.py summary :310-334), metadata only, by explicit nested allowlists. For an `external-verdict` record the row adds `ready`, `blockers` (each truncated to 200 characters), `states` as {reviewer: {state, reviewed_head, covers}} (no `review`) and `findings` as [{id, reviewer, path, line, reviewed_head, resolved}] in the record's order; no finding body, URL, review text, `reviews`, `threads` or `comments` enters the row, so design §8's rule that no report or verdict body enters `/api/task` holds. Other kinds are unchanged.",
+    "Change 4, the board (board/server.ts taskDetail :2322-2421; board/public/index.html detail panel about :940-985). taskDetail adds `external_review`: the summary row of the latest `external-verdict` record for the task (Change 3 fields plus its head and time), or null when none exists; every finding gains `current: reviewed_head === record.head`. The self project always returns null. The panel renders the section only when `external_review` is not null (a self task keeps exactly its sections today, tests/e2e/board-task-detail.spec.ts :30). New keys, each reached by a literal double-quoted t(\"...\") call because the i18n scan finds only those (tests/i18n.test.sh :46-50): `detailExternalReview` (title), `detailCoversPatch` and `detailOlderPatch` (covers label), `detailCurrentHead` (current-head marker), `detailResolved` and `detailUnresolved`, `detailNoCitedLine`; the state badges show GitHub's state names untranslated. The section shows one line per named reviewer with its state badge (APPROVED, CHANGES_REQUESTED, COMMENTED, UNKNOWN) and the covers label, then each finding as reviewer, `path:line` (or `detailNoCitedLine`), the current-head marker and the resolved label; no body. Refresh: detailSignature (about :947) gains, for an external task, the current minute; a task is external when `task.project` is set and differs from `latest.default_project` (board/server.ts sets default_project in the state, about :1657, and every board task carries a project, the self project included), so the self project's tasks, named `fixture` in the e2e registry, do not gain the minute (Math.floor(Date.now()/60000)), so an open external task's panel re-fetches at most once a minute when a state event arrives, even when the task fields are unchanged; the board sends state only when its stamp changes (board/server.ts stateStamp about :954-975 and its comparison about :2543) and the stamp does not cover the evidence store, so a change to the evidence alone appears at the next state event after the minute has passed. Self tasks keep today's signature. Keys go to i18n/ui.en.json and i18n/ui.zh-TW.json, and to i18n/tw2cn.tsv if the lint needs a pair.",
+    "Change 5, ask the external reviewers on every new head (bin/lib/fm_conventions.py, bin/lib/fm_onboard.py, bin/lib/fm_autopilot.py :450-458 and recheck :324-366). (a) CONVENTIONS gains the optional data field `request_reviewers`: a JSON list of at most 15 unique logins matching the reviewer pattern of bin/lib/fm_external.py :100 (`[bot]` suffix allowed), validated in fm_conventions.validate; `request_reviewers(policy)` in fm_conventions.py returns the field when present, otherwise the recorded `reviewers` list; an empty list disables requests. (b) Onboarding: fm_onboard.approve drops any inferred `request_reviewers` (as it does the PR format fields, :279) and takes it only from the captain's answers; `allowed` (:283-286) and edit (:322) accept it; the existing `policy` question (:186-188) keeps the three-question contract and adds `request_reviewers` to its evidence (the recorded reviewers) and its recommendation text, so the captain confirms the list at onboarding. (c) The autopilot, for an external project only: when Pilot.pull resolves a task for a pull request whose `rechecked` record is missing, lacks the marker `rule: 'external-request'` (a record written by the old rule, :450-456, kept by prune_branches in bin/lib/fm_autopilot_branches.py :19-22) or names another head, it sets `rechecked[number] = {head, names, rule: 'external-request'}` with names = request_reviewers(policy) minus the pull request author read as `(pr.get('user') or {}).get('login', '')`, case-insensitive (a missing author excludes nobody; the real API always sends `user`, the shared `PR` fixture at tests/lib/autopilot_cases.py :22-24 does not), and recheck then posts `gh api -X POST repos/<repository>/pulls/<number>/requested_reviewers -f reviewers[]=<name> --include` for each name not already in `pr['requested_reviewers']` and without a review at this head, regardless of whether the name reviewed before (a re-request) and regardless of post mode, because the captain confirmed the list. One request per name keeps one refused login from blocking the rest. The existing outcome rules stay: 201 completes; 422 wakes once with GitHub's message and no retry; other failures retry at offsets 0, 1 and 3, then wake once; no failure stops the pull, a worker round or a gate. The self project keeps today's returning-reviewer rule and its post-local queue line byte for byte. The worker script does not request reviews: the autopilot sees the opened pull request and each pushed head on its next poll, and it already owns the durable request record.",
+    "Change 6, mapping, stated. Changes 1, 2 and 5 run only after `self.task(pr)` (bin/lib/fm_autopilot.py :275) resolves a task, so they cover every pull request the task grammar and adoption (T-237) map today. An unmapped pull request stays unmapped; this task does not change the grammar.",
+    "Not changed, stated. bin/lib/fm_external.py and bin/fm-external.sh; collect's callers bin/fm-review.sh :867, bin/lib/fm_binding.py :255-258 (which calls collect itself) and the context pack (bin/lib/fm_context_pack.py :296-301, which uses collect and findings_text); existing evidence signatures and authorized pins (bin/lib/fm_binding.py :71, :269); firstmate posts no review, comment or check; post mode stays as configured; bin/fm-worker.sh.",
+    "Tests, new behaviour (each fails on the base commit and passes after). In a new file tests/lib/autopilot_reviewer_wake.py, because tests/lib/autopilot_cases.py already has 1191 lines and the worker contract caps a file under tests/ at 1200: a mixin class `ReviewerWakeCases` that `PilotTests` in tests/lib/autopilot_cases.py inherits beside `TestingRefreshCases`, so tests/autopilot.test.sh runs it with no new runner. tests/lib/autopilot_cases.py changes only by one import line preceded by the comment `# Shared feature cases: tests/lib/autopilot_reviewer_wake.py` and by the new base class, and tests/autopilot.test.sh names the file in a `# Shared feature cases:` header line. Line numbers in this spec are approximate (base 8f5e95a); each one is anchored by the identifier or quoted text beside it, which wins over the number. Cases on the existing `external_pilot` fixture with policy review `both` and reviewers ['Rev'], rows shaped like the real API (reviews: id, user.login, state, body, commit_id, submitted_at, html_url; review comments: id, pull_request_review_id, path, line, original_line, body, commit_id, user.login, updated_at; issue comments: id, body, user.login, updated_at, html_url), each comment row carrying `_source` as Pilot.poll adds it because the cases call pull directly. The fixture's `command` answers the collect argv with a record shaped like fm_external's: {kind: 'external-verdict', task, pr, head: <PR head sha>, ready, blockers, states: {rev: {state, reviewed_head, covers, review}}, findings: [two rows with id, reviewer, path, line, body, url, reviewed_head, resolved]}; failures raise RuntimeError carrying a sentinel stderr `SECRET-BODY src/x.py:9 https://example.invalid/r`. Cases: (1) a CHANGES_REQUESTED review from `rev` (lower case, so membership is case-insensitive) runs the exact collect argv once and queues one wake whose line names the review id, `review`, `external evidence blocked` and `2 finding(s)`, without the body or html_url, while a CHANGES_REQUESTED review from `other` in the same pull keeps today's `<number>:other` key and line and adds no collect; (2) a review and a review comment in one pull run collect once and queue two wakes; (3) an issue comment names `issue-comment`, and a comment row without `_source` names `comment`; (4) a review and a review comment from `rev` with the same numeric id queue two wakes; (5) for each failure class (command, json, fields, stale-head), on its own pilot, one attention under `external-evidence-<class>-<number>-<head>` with exactly the English and zh-TW texts of Change 1 is queued even when an `advance-error` attention for the same head exists, the review wake says `unknown`, and no queued text contains the sentinel; (6) a record with ready true says `external evidence ready`; (7) policy review `external` behaves like `both`; (8) an edited body of the same review queues one more wake; (9) an external pilot with review `fm` and a named-reviewer row runs no collect and queues today's per-reviewer line and key; (10) restart: a state file holding seen tokens, a pending batch under the old key and an already queued wake loads, replays nothing, flushes the old batch once, and a new row then flushes under the new key beside it. Change 5, with the existing recheck harness (:623-646, POST answered with an `HTTP/2.0 201 Created` line, a blank line and a PR JSON body, or 422 with a `message` body): (11) first sight of an external pull request with reviewers ['Rev', 'Bot'] and author `bot` posts one request for `Rev` only, with the exact argv of the existing recheck test (:667); (12) a new head re-requests `Rev` although `Rev` reviewed the old head, in post mode local too; a pre-upgrade record `{head: <current head>, names: []}` without the marker is replaced once and `Rev` is asked; (13) a 422 for one name still requests the other and wakes once; (14) a transport failure retries at 0, 1 and 3 and never raises from pull; (15) an external pull of the shared `PR` fixture, which has no `user` key, records `rechecked` without raising and asks every listed reviewer; `request_reviewers: []` posts nothing and `request_reviewers: ['Other']` asks only `Other`. In tests/lib/external_pr_format.py (tests/external-pr-format.test.sh): (16) fm_conventions.validate accepts a valid `request_reviewers` and refuses a non-list, a duplicate, a bad login and 16 names; request_reviewers(policy) falls back to `reviewers`; fm_onboard.approve drops an inferred value, keeps the captain's answer, edit accepts the field, and questions still returns three entries with `request_reviewers` in the policy question's evidence. In tests/lib/evidence_summary.py (tests/evidence-summary.test.sh), with its own store: (17) the summary row of an external-verdict record carries ready, blockers, states and findings with path and line, and no key at any depth is `body`, `url`, `review`, `reviews`, `threads` or `comments`. In tests/board-task-detail.test.sh with tests/lib/task_detail_fixture.py: (18) the external task response (fetched at about :98) returns `external_review` with states, findings and `current` per finding, and contains neither `BEGIN` nor the fixture's sentinel body; the self task returns null. In tests/e2e/board-task-detail.spec.ts: (19) in English and in zh-TW the panel shows the section title, each state badge, both covers labels, `path:line` and the no-line fallback, the current-head marker and both resolved labels, and a self task still lists exactly Spec, Tests and Progress (:30); (20) after the page clock advances one minute and an unrelated events.jsonl line triggers a state event (as at :37-39), an open external panel re-fetches and shows a changed finding, while a self panel does not re-fetch.",
+    "Tests, updated and regression (pass on base and after). tests/lib/autopilot_cases.py :301 test_failure_and_findings_batch_per_reviewer, :581 test_review_edits_extend_only_their_reviewers_quiet_period and the recheck tests :648-770 (self pilot) keep their assertions; the duplicate suppression (:488, case 1 pulled twice) and outsider batching (:491, the `other` row in case 1) are regressions; tests/onboard-remote.test.sh :30 (three questions) and tests/onboard-cli.test.sh :14 keep passing; tests/lib/external_adopt.py :433 passes no review rows and keeps its outcome; tests/external-review-entrypoint.test.sh :53 and tests/external-review-launchers.test.sh :32 keep the wrapper and projection behaviour; tests/e2e/board-crew.spec.ts :45 keeps its evidence-summary assertions; tests/autopilot.test.sh, tests/external-reviews.test.sh, tests/evidence-summary.test.sh, tests/external-pr-format.test.sh and tests/i18n.test.sh pass.",
+    "Callers, all listed. Pilot.pull (bin/lib/fm_autopilot.py :443) is called from Pilot.poll (:563), tests/lib/autopilot_branch_fixture.py :92 (pull_at, used by tests/lib/autopilot_cases.py), tests/lib/autopilot_cases.py :967, :971, tests/lib/autopilot_task_resolution.py :94, :95, :184, :186, tests/lib/autopilot_loop.py :497, :726, tests/lib/external_adopt.py :433 and tests/lib/merge_authorization.py :47; all run the self pilot, pass no review rows, or use review fm, so they keep their outcome; the external ones among them that see a new pull request now also record `rechecked` and, with no reviewers in DEFAULTS, request nobody. fm_conventions.validate and read_policy are called by fm_autopilot (:134), fm_onboard and bin/fm-config.sh fm_conventions (:1140); the new field is optional, so existing CONVENTIONS files stay valid. fm_evidence summary is called from board/server.ts taskDetail (:2333-2335), `fm_evidence.py summary`, tests/lib/evidence_summary.py and tests/e2e/board-crew.spec.ts (:45, unchanged). taskDetail is served by /api/task (about :2457-2459) and read by the detail panel; tests/e2e/board-task-detail.spec.ts (:2 fixture import, :20, :109) gains cases 19 and 20; the shared external API fixtures in tests/external-reviews.test.sh :31 and tests/external-review-entrypoint.test.sh :3 stay unchanged.",
+    "Migration. Seen tokens keep their shape, so a review already seen before the upgrade raises no wake and gets no evidence backfill; pending batches under the old `<number>:<reviewer>` key flush once as before, beside new-key batches (case 10). No stored record format changes: summary only projects fields the external-verdict record holds, and evidence signatures and pins are untouched. CONVENTIONS files without `request_reviewers` request the recorded reviewers; an external pull request already open at upgrade has no `rechecked` record carrying the `external-request` marker, so it is asked once at the first poll after upgrade (case 12).",
+    "Docs. design/design.md §15.2 Registry and conventions, the external review pre-check paragraph (about :5189, \"for review: external or both is only a pre-check\"), edited in place: the autopilot refreshes the external evidence when a named reviewer posts, queues one wake per review or comment id, and asks request_reviewers on first sight and every new head; design/design.md §15.7 Portable roles and stock execution, the T-247 CONVENTIONS fields paragraph (about :5519-5524, \"T-247 adds three optional CONVENTIONS fields\") gains `request_reviewers`. design/design.md §8 The captain's board, the /api/task paragraph (about :1860-1871, \"The panel reads GET `/api/task\"): the summary projects external-review states and finding locations, without bodies. design/design.md §15.8 Pilot and advanced integration, the reviewer re-check sentences (about :5727-5728 and :5744-5748, \"Reviewer re-check requests are recorded per PR head\") note the external rule. docs/autopilot.md :35 and :46-51, :74-80: per-id batches and the external request rule. skills/firstmate/SKILL.md near :995 (confirm request_reviewers with the PR format fields at onboarding) and near :1167: firstmate reads the findings with the shell function `fm_external collect --format prompt` (bin/fm-config.sh :1112; bin/fm-external.sh takes no --format), briefs the next round with each finding and its file:line, amends and repins the spec when a finding changes agreed behaviour, and reports which findings were addressed."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "Each named reviewer review or comment raises its own wake for firstmate."
+        },
+        {
+          "kind": "fact",
+          "text": "The autopilot refreshes the private external evidence before the wake."
+        },
+        {
+          "kind": "fact",
+          "text": "The autopilot asks the external reviewers for each new pull request and each new head."
+        },
+        {
+          "kind": "fact",
+          "text": "The board shows reviewer states and finding locations for the task."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "A company reviewer asked for changes, and firstmate saw it only when you asked."
+        },
+        {
+          "kind": "fact",
+          "text": "You said on 2026-10-07: \"都要照對應reviewer的意見參考改良\"."
+        },
+        {
+          "kind": "fact",
+          "text": "You also said that firstmate must request review for each new PR and each new commit."
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_autopilot.py: the external review path and the review requests",
+        "bin/lib/fm_conventions.py and onboarding: the request_reviewers field",
+        "bin/lib/fm_evidence.py: the summary fields",
+        "board/server.ts and the detail panel",
+        "tests and docs"
+      ],
+      "scope_out": [
+        "The self project",
+        "Reviews or comments from firstmate",
+        "The branch name grammar",
+        "bin/fm-worker.sh"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: the autopilot queues one wake for each review or comment id. Test cases 1 to 4, 8, 9 and 10 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the autopilot runs the existing collect step once for each pull. Test cases 1, 2, 5, 6 and 7 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the autopilot asks the reviewers on the first poll and on each new head. Test cases 11 to 16 prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: the task detail lists the states and the finding locations without bodies. Test cases 17 to 20 prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "The wake line, the attention text and the board carry no review text."
+        },
+        {
+          "kind": "caution",
+          "text": "Review requests go out in every post mode, because you confirm the list at onboarding."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Autopilot reads PR reviews"
+        },
+        {
+          "state": "gone",
+          "label": "One batch per reviewer"
+        },
+        {
+          "state": "gone",
+          "label": "Evidence waits for a round"
+        },
+        {
+          "state": "gone",
+          "label": "New PR asks nobody"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Autopilot reads PR reviews"
+        },
+        {
+          "state": "new",
+          "label": "Refresh external evidence now"
+        },
+        {
+          "state": "new",
+          "label": "One wake per review id"
+        },
+        {
+          "state": "new",
+          "label": "Ask reviewers on each head"
+        },
+        {
+          "state": "new",
+          "label": "Board shows the evidence"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "每個指定 reviewer 的審查或留言都各自喚醒 firstmate。"
+        },
+        {
+          "kind": "fact",
+          "text": "喚醒前，autopilot 先更新私密的外部審查證據。"
+        },
+        {
+          "kind": "fact",
+          "text": "每個新 PR 和每個新 head，autopilot 都請外部 reviewer 審查。"
+        },
+        {
+          "kind": "fact",
+          "text": "看板顯示這個任務的 reviewer 狀態和意見位置。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "公司 reviewer 要求修改，firstmate 等你問了才發現。"
+        },
+        {
+          "kind": "fact",
+          "text": "你在 2026-10-07 說：「都要照對應reviewer的意見參考改良」。"
+        },
+        {
+          "kind": "fact",
+          "text": "你也說 firstmate 開 PR 和推新 commit 時，要同時請 reviewer 審查。"
+        }
+      ],
+      "scope_in": [
+        "bin/lib/fm_autopilot.py：外部審查路徑和請求審查",
+        "bin/lib/fm_conventions.py 和 onboarding：request_reviewers 欄位",
+        "bin/lib/fm_evidence.py：摘要欄位",
+        "board/server.ts 和詳情面板",
+        "測試和文件"
+      ],
+      "scope_out": [
+        "本專案",
+        "firstmate 發的審查或留言",
+        "分支命名規則",
+        "bin/fm-worker.sh"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：autopilot 對每個審查或留言 id 發一次喚醒。測試案例 1 到 4、8、9、10 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：autopilot 每次拉取只跑一次既有的 collect。測試案例 1、2、5、6、7 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：autopilot 第一次看到 PR 和每個新 head 都請 reviewer 審查。測試案例 11 到 16 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：任務詳情列出狀態和意見位置，不含內文。測試案例 17 到 20 證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "喚醒文字、提醒文字和看板都不含審查內文。"
+        },
+        {
+          "kind": "caution",
+          "text": "不論 post 模式都會請求審查，因為名單由你在 onboarding 時確認。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Autopilot 讀取 PR 審查"
+        },
+        {
+          "state": "gone",
+          "label": "每個 reviewer 一批"
+        },
+        {
+          "state": "gone",
+          "label": "證據等下一輪才更新"
+        },
+        {
+          "state": "gone",
+          "label": "新 PR 不請任何人審查"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Autopilot 讀取 PR 審查"
+        },
+        {
+          "state": "new",
+          "label": "立即更新外部證據"
+        },
+        {
+          "state": "new",
+          "label": "每個審查 id 一次喚醒"
+        },
+        {
+          "state": "new",
+          "label": "每個 head 都請求審查"
+        },
+        {
+          "state": "new",
+          "label": "看板顯示證據"
+        }
+      ]
+    }
+  }
+}

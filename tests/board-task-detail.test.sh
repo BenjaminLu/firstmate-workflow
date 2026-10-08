@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Shared feature cases: tests/lib/task_detail_fixture.py
 . "$ROOT/tests/lib/board.sh"
 . "$ROOT/tests/lib/project-storage.sh"
 g="$(safe_tmpdir)"
@@ -36,6 +37,7 @@ curl -s "$url/api/task?id=T-002" > "$g/merged"
 assert_eq 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$(jq -r '.rounds[0].head' "$g/merged")" 'review evidence supplies head in nameless self namespace'
 assert_eq null "$(jq -r '.rounds[1].head' "$g/merged")" 'push events never supply heads'
 assert_eq 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$(jq -r '.rounds[0].worker_head' "$g/merged")" 'worker report supplies its own head'
+assert_eq null "$(jq -r '.external_review' "$g/merged")" 'self task suppresses external review records'
 assert_eq APPROVE "$(jq -r '.rounds[0].verdict' "$g/merged")" 'verdict marker is public metadata'
 assert_eq codex "$(jq -r '.rounds[0].worker_vendor' "$g/merged")" 'round vendor comes from the identity payload'
 assert_eq 'Brief headline' "$(jq -r '.brief' "$g/merged")" 'only brief first line is public'
@@ -96,6 +98,10 @@ project_fixture_config "$g"
 external="$(project_fixture_state "$g" beta)"
 python3 "$ROOT/tests/lib/task_detail_fixture.py" "$g" "$external" beta
 curl -s "$url/api/task?project=beta&id=T-002" > "$g/beta"
+assert_eq CHANGES_REQUESTED "$(jq -r '.external_review.states.Rev.state' "$g/beta")" 'external reviewer states are projected'
+assert_eq '[true,false]' "$(jq -c '[.external_review.findings[].current]' "$g/beta")" 'findings mark the record head'
+assert_eq 'src/x.py:9' "$(jq -r '.external_review.findings[0]|.path+":"+(.line|tostring)' "$g/beta")" 'finding location survives'
+assert_eq false "$(jq '[..|strings|select(contains("BEGIN") or contains("SECRET-EXTERNAL-BODY"))]|length>0' "$g/beta")" 'external review bodies stay private'
 assert_eq beta "$(jq -r '.task.project' "$g/beta")" 'external task resolves from its own spec'
 assert_eq 'Brief headline beta' "$(jq -r '.brief' "$g/beta")" 'external evidence is isolated'
 assert_eq 'D-beta-T002-1' "$(jq -r '.cards[0].id' "$g/beta")" 'external cards are isolated'
