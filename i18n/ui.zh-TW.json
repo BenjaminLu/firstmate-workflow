@@ -250,5 +250,8 @@
   "detailNoCards": "尚無決策卡。",
   "detailBrief": "最新工作摘要",
   "gateNotRunnable": "無法執行：{reason}",
-  "ciOnlyEvidence": "fail-first 沒有執行。專案的必要 CI 檢查是這次變更僅剩的測試證據。選擇 A 前，請確認這些檢查全部通過。"
+  "ciOnlyEvidence": "fail-first 沒有執行。專案的必要 CI 檢查是這次變更僅剩的測試證據。選擇 A 前，請確認這些檢查全部通過。",
+  "whyYouSeeThis": "為何顯示這張卡片",
+  "decisionDetails": "決策詳情",
+  "decisionClose": "關閉詳情"
 }
