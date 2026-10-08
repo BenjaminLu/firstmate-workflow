@@ -287,7 +287,7 @@ rm -f "$work/ctl/env"
 # Never printed: read only to classify, by the same signatures the adapters
 # use to tell a live outage from a working run (bin/adapters/_lib.sh),
 # narrowed to what a status check itself says.
-_FM_QUOTA='quota exceeded|quota exhausted|out of quota|rate limit exceeded|rate limit reached|rate-limited|rate limited|429 too many requests|too many requests,|status 429'
+_FM_QUOTA='quota exceeded|quota exhausted|out of quota|hit your usage limit|rate limit exceeded|rate limit reached|rate-limited|rate limited|429 too many requests|too many requests,|status 429'
 _FM_EXPIRED='expired|token has expired|please log in again|session expired'
 _FM_UNAUTH='not authenticated|not logged in|no credentials|please run [a-z0-9 ._-]{0,30}login|please use [a-z0-9 ._-]{0,30}login|login required|authentication required|authentication failed|unauthori[sz]ed|401 unauthorized|403 forbidden|status 401|status 403|invalid api key|missing api key|no api key found|set an auth method|no auth method|specify one of the following environment variables'
 

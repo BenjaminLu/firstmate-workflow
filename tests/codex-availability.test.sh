@@ -136,6 +136,26 @@ sys.exit(int(os.environ['FIXTURE_EXIT']))
                     self.assertEqual('unknown', m.completion('worker', 'T-167', final))
 
     def test_real_errors_and_cli_failures(self):
+        # T-219 fail-first: captured bytes; ASCII fixtures reserialize the same objects.
+        captured = [
+            '{"type":"error","message":"You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 7:58 AM."}',
+            '{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 7:58 AM."}}',
+        ]
+        for ascii_only in (False, True):
+            lines = [json.dumps(json.loads(line), ensure_ascii=True) for line in captured] if ascii_only else captured
+            for diagnostics in ([lines[0]], [lines[1]], lines):
+                with self.subTest(ascii_only=ascii_only, diagnostics=diagnostics):
+                    self.run_adapter(self.stream() + '\n'.join(diagnostics) + '\n', 2, rc=1)
+        # Managed payload exclusion is a guard; the exact legacy phrase -> 2 is new.
+        quoted = self.stream(quote='You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 7:58 AM.', answer='You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 7:58 AM.')
+        # Remove the stream helper's unrelated ENOTFOUND command, so the legacy
+        # assertion can only turn red/green on the new usage-limit signature.
+        payloads = [json.loads(line) for line in quoted.split('\n') if line]
+        payloads[2]['item']['command'] = 'cat captured-diagnostic.txt'
+        quoted = '\n'.join(json.dumps(event, ensure_ascii=False) for event in payloads) + '\n'
+        self.run_adapter(quoted, 0)
+        self.run_adapter(quoted, 2, FM_ATTEMPT_DIR='')
+        # Existing quota and exit-code cases below are unchanged regression guards.
         for phrase in ['authentication required', 'quota exceeded', 'network error: ENOTFOUND']:
             for kind in ['error', 'turn.failed']:
                 event = dict(type=kind, **({'message':phrase} if kind == 'error' else {'error':{'message':phrase}}))
