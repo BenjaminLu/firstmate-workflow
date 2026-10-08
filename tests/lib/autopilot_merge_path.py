@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+os.environ['HERDR_ENV'] = '0'
 import shutil
 import shlex
 import subprocess
