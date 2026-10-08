@@ -12,6 +12,7 @@ import tempfile
 
 from fm_binding import command, fetch_ref, git, github, remote_head, sha
 from fm_conventions import read_policy
+import fm_adopt
 
 
 class RestackConflict(ValueError):
@@ -47,7 +48,7 @@ def deletable(repository, branch):
         return False
 
 
-def select_base(repository, base, dependencies, merged, allowed):
+def select_base(repository, base, dependencies, merged, allowed, adopted=None):
     pending = [dep for dep in dependencies if dep not in merged]
     if not pending:
         return {'name': base}
@@ -58,19 +59,22 @@ def select_base(repository, base, dependencies, merged, allowed):
                  '--limit', '1000', '--json', 'number,headRefName,headRefOid,isCrossRepository')
     if not isinstance(prs, list) or len(prs) >= 1000:
         raise ValueError('open PR list is incomplete or invalid')
-    matches = [pr for pr in prs if re.match(
-        r'^' + re.escape(dep) + r'(?:-|$)',
-        re.sub(r'^[A-Za-z0-9._-]+/', '', pr['headRefName'].lower(), count=1))]
+    matches = [pr for pr in prs if pr.get('number') == (adopted or {}).get(pending[0])
+               and pr.get('isCrossRepository') is False]
+    if not matches:
+        matches = [pr for pr in prs if re.match(
+            r'^' + re.escape(dep) + r'(?:-|$)',
+            re.sub(r'^[A-Za-z0-9._-]+/', '', pr['headRefName'].lower(), count=1))]
     if len(matches) != 1 or matches[0].get('isCrossRepository') is not False:
         raise ValueError('dependency has no unique same-repository open PR')
     pr = matches[0]
     return {'name': pr['headRefName'], 'head': sha(pr['headRefOid']), 'pr': pr['number']}
 
 
-def release_parent(root, repository, branch, expected, policy):
+def release_parent(root, repository, branch, expected, policy, adopted_branch=False):
     if not policy.get('delete_branch') or not deletable(repository, branch):
         return
-    if branch in ('main', 'master', policy['base']) or not re.match(r'^(?:[A-Za-z0-9._-]+/)?(?:t|sk)-\d+(?:-|$)', branch, re.I):
+    if branch in ('main', 'master', policy['base']) or (not adopted_branch and not re.match(r'^(?:[A-Za-z0-9._-]+/)?(?:t|sk)-\d+(?:-|$)', branch, re.I)):
         raise ValueError('refusing protected/non-task parent deletion')
     from urllib.parse import quote
     info = github(repository, 'api', 'repos/' + repository + '/branches/' + quote(branch, safe=''))
@@ -87,13 +91,25 @@ def release_parent(root, repository, branch, expected, policy):
         git(root, 'update-ref', '-d', 'refs/heads/' + branch, expected)
 
 
+def adopted_child(pr):
+    owners, duplicates, _ = fm_adopt.scan(os.environ)
+    if pr in duplicates:
+        raise ValueError(fm_adopt.duplicate_reason(duplicates[pr]))
+    task = owners.get(pr)
+    adopt = fm_adopt.pinned_adoption(os.environ, task) if task else None
+    if task and not adopt:
+        raise ValueError("adoption not pinned; restack needs the captain's A")
+    return task, adopt
+
+
 def restack(root, repository, pr, parent, expected, policy, scratch):
     if policy.get('force_with_lease') is not True or policy.get('stacking') != 'allowed':
         raise ValueError('restack requires confirmed stacking and force-with-lease policy')
     sha(expected)
     child = remote_head(repository, pr)
     branch = child['headRefName']
-    if branch in ('main', 'master', 'HEAD', policy['base']) or not re.match(r'^(?:[A-Za-z0-9._-]+/)?(?:t|sk)-\d+(?:-|$)', branch, re.I):
+    task, adopt = adopted_child(pr)
+    if branch in ('main', 'master', 'HEAD', policy['base']) or (not adopt and not re.match(r'^(?:[A-Za-z0-9._-]+/)?(?:t|sk)-\d+(?:-|$)', branch, re.I)):
         raise ValueError('protected or non-task branch cannot be restacked')
     git(root, 'check-ref-format', 'refs/heads/' + branch)
     if child['headRefOid'] != expected:
@@ -101,12 +117,26 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
     try:
         local = git(root, 'rev-parse', 'refs/heads/' + branch)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
-        raise RestackStaleLocal('local task ref is not the expected head; synchronize before restacking') from error
+        if not adopt or git(root, 'for-each-ref', '--format=%(refname)', 'refs/heads/' + branch):
+            raise RestackStaleLocal('local task ref is not the expected head; synchronize before restacking') from error
+        fetched = fetch_ref(root, 'https://github.com/' + repository + '.git', 'refs/pull/' + str(pr) + '/head')
+        if fetched != expected:
+            raise RestackMoved('fetched child head differs from expected head')
+        git(root, 'update-ref', 'refs/heads/' + branch, expected, '')
+        local = expected
     if local != expected:
         raise RestackStaleLocal('local task ref is not the expected head; synchronize before restacking')
     parent_view = github(repository, 'pr', 'view', str(parent), '--repo', repository,
                          '--json', 'state,headRefName,headRefOid,baseRefName')
-    if parent_view['state'] != 'MERGED' or child['baseRefName'] != parent_view['headRefName']:
+    if adopt and parent_view['headRefName'] != adopt['base']:
+        raise ValueError(f'parent #{parent} is not the adopted base')
+    if adopt and not fm_adopt.pushed(fm_adopt.event_rows(os.environ), task, pr):
+        try:
+            git(root, 'merge-base', '--is-ancestor', adopt['head'], expected)
+        except ValueError as error:
+            raise ValueError('approved adoption head is no longer an ancestor') from error
+    if parent_view['state'] != 'MERGED' or (child['baseRefName'] != parent_view['headRefName']
+            and not (adopt and child['baseRefName'] == parent_view['baseRefName'])):
         raise ValueError('parent must be the merged PR for the child base')
     target = parent_view['baseRefName']
     git(root, 'check-ref-format', 'refs/heads/' + target)
@@ -163,7 +193,8 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
                                          ' (expected old head ' + expected + '): ' + str(error)) from error
             try:
                 try:
-                    command([os.environ.get('FM_GH', 'gh'), 'pr', 'edit', str(pr), '--repo', repository, '--base', target])
+                    if child['baseRefName'] != target:
+                        command([os.environ.get('FM_GH', 'gh'), 'pr', 'edit', str(pr), '--repo', repository, '--base', target])
                 except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
                     raise ValueError('retarget to ' + target +
                                      ' failed; synchronize and finish retarget before review: ' + str(error)) from error
@@ -182,12 +213,17 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
                     'refs/heads/' + target + ':refs/remotes/origin/' + target)
                 release = 'retained by policy or open dependents'
                 try:
-                    release_parent(root, repository, parent_view['headRefName'], old_base, policy)
+                    parent_task = fm_adopt.scan(os.environ)[0].get(parent)
+                    parent_adopt = fm_adopt.pinned_adoption(os.environ, parent_task) if parent_task else None
+                    release_parent(root, repository, parent_view['headRefName'], old_base, policy,
+                                   adopted_branch=bool(parent_adopt))
                     release = 'retention policy applied'
                 except (ValueError, OSError) as error:
                     release = 'cleanup deferred: ' + str(error)
                 result = {'head': head, 'base': target, 'base_head': new_base, 'parent_cleanup': release,
                           'requires': 'synchronize local base; fresh review binding, CI and six gates'}
+                if adopt:
+                    result.update(task=task, adopt_pr=pr)
                 return result
             except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
                 raise RestackPublished('task head published as ' + head + '; ' + str(error)) from error
@@ -231,7 +267,8 @@ def main():
                 row = json.loads(line)
                 if row.get('type') == 'merged' and row.get('project', os.environ.get('FM_PROJECT')) == os.environ.get('FM_PROJECT'):
                     merged.add(row.get('task'))
-        print(json.dumps(select_base(repo, base, task.get('depends_on', []), merged, policy['stacking'] == 'allowed')))
+        print(json.dumps(select_base(repo, base, task.get('depends_on', []), merged, policy['stacking'] == 'allowed',
+                                         adopted={task: pr for pr, task in fm_adopt.scan(os.environ)[0].items()})))
     else:
         if policy.get('force_with_lease') is not True or policy.get('stacking') != 'allowed':
             raise ValueError('restack requires confirmed stacking and force-with-lease policy')
@@ -239,12 +276,14 @@ def main():
             raise ValueError('restack requires --pr --parent --expected-head')
         child = remote_head(repo, args.pr)
         match = re.match(r'^(?:[A-Za-z0-9._-]+/)?((?:t|sk)-[0-9]+)(?:-|$)', child['headRefName'], re.I)
-        if not match:
+        task, adopt = adopted_child(args.pr)
+        if not match and not adopt:
             raise ValueError('restack requires a task branch')
+        task = task or match[1].upper()
         state = Path(os.environ['FM_STATE_DIR'])
         (state / 'runs').mkdir(parents=True, exist_ok=True)
         # Same exclusion as fm-worker and cleanup. Kernel ownership ends on exit.
-        with (state / 'runs' / ('.worker-' + match[1].upper() + '.lock')).open('a') as lock:
+        with (state / 'runs' / ('.worker-' + task + '.lock')).open('a') as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:

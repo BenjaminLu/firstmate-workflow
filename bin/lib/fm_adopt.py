@@ -85,9 +85,82 @@ def duplicate_reason(tasks):
     return 'adopted by two tasks: ' + ', '.join(tasks)
 
 
-def base_matches(view, adopt):
-    if view.get('baseRefName') != adopt['base']:
-        raise ValueError(f"adopted PR base changed from {adopt['base']} to {view.get('baseRefName')}; a new spec and A card are needed")
+def pinned_adoption(env, task):
+    if env.get('FM_EXTERNAL') != '1' or not task:
+        return None
+    pin = Pins(env, task).resolve(if_present=True)
+    if pin is None:
+        return None
+    spec = json.loads(pin['snapshots']['spec']['text'])
+    return validate(spec['adopt']) if 'adopt' in spec else None
+
+
+def task_of(view, env):
+    single, duplicates, _ = scan(env)
+    number = view.get('number')
+    if number in duplicates:
+        raise ValueError(duplicate_reason(duplicates[number]))
+    if number in single:
+        return single[number]
+    script = Path(__file__).resolve().parents[1] / 'fm-emit.sh'
+    result = subprocess.run(['bash', '-c', '. "$1"; fm_task_of_pr "$2" "$3" || true',
+                             '_', str(script), view.get('headRefName', ''), view.get('title', '')],
+                            env=env, capture_output=True, text=True, timeout=120, check=True)
+    return result.stdout.strip()
+
+
+def event_rows(env):
+    path = Path(env['FM_STATE_DIR']) / 'events.jsonl'
+    rows = []
+    if path.exists():
+        for line in path.read_text().splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get('project', 'firstmate-workflow') == env.get('FM_PROJECT'):
+                rows.append(row)
+    return rows
+
+
+def stacking_allowed(env, repository):
+    from fm_conventions import read_policy
+    path = Path(env['FM_STATE_DIR']).parent / 'CONVENTIONS.md'
+    try:
+        return read_policy(path, repository, env.get('FM_BASE') or 'main')['stacking'] == 'allowed'
+    except (ValueError, OSError):
+        return False
+
+
+def effective_base(view, adopt, env, task, repository):
+    base = view.get('baseRefName')
+    dependencies = (authorized_spec(env, task) or {}).get('depends_on', []) if task else []
+    if base != adopt['base']:
+        parents = binding.github(repository, 'pr', 'list', '--repo', repository,
+                                 '--state', 'merged', '--head', adopt['base'], '--json',
+                                 'number,headRefName,baseRefName,isCrossRepository') if task else []
+        matches = [p for p in parents if p.get('headRefName') == adopt['base']
+                   and p.get('isCrossRepository') is False]
+        if (len(matches) != 1 or matches[0].get('baseRefName') != base
+                or task_of(matches[0], env) not in dependencies):
+            raise ValueError(f"adopted PR base changed from {adopt['base']} to {base}; a new spec and A card are needed")
+        if not any(row.get('type') == 'commit_pushed' and row.get('task') == task
+                   and (row.get('data') or {}).get('restacked') is True
+                   and (row.get('data') or {}).get('adopt_pr') == adopt['pr'] for row in event_rows(env)):
+            raise ValueError('parent merged; run bin/lib/fm-restack.sh for this PR first')
+    if task:
+        parents = binding.github(repository, 'pr', 'list', '--repo', repository,
+                                 '--state', 'open', '--head', base, '--json',
+                                 'number,headRefName,isCrossRepository')
+        managed = any(p.get('headRefName') == base and p.get('isCrossRepository') is False
+                      and task_of(p, env) in dependencies for p in parents)
+        if managed and not stacking_allowed(env, repository):
+            raise ValueError('stacked adopted PR requires confirmed stacking policy')
+    return base
+
+
+def base_matches(view, adopt, env=None, task=None, repository=None):
+    return effective_base(view, adopt, env or {}, task, repository)
 
 
 def pushed(rows, task, pr):
@@ -95,7 +168,7 @@ def pushed(rows, task, pr):
                and (row.get('data') or {}).get('adopt_pr') == pr for row in rows)
 
 
-def check(view, adopt, task, env, git_root, pushed, open_heads):
+def check(view, adopt, task, env, git_root, pushed, open_heads, repository=None):
     validate(adopt)
     if env.get('FM_EXTERNAL') != '1':
         raise ValueError('adopt is only supported for external projects')
@@ -103,10 +176,14 @@ def check(view, adopt, task, env, git_root, pushed, open_heads):
         raise ValueError('adopted PR must be open')
     if view.get('isCrossRepository') is not False:
         raise ValueError('fork PR adoption is refused')
-    base_matches(view, adopt)
-    if any(row.get('number') != adopt['pr'] and row.get('isCrossRepository') is False
-           and row.get('headRefName') == adopt['base'] for row in open_heads):
-        raise ValueError('stacked PR: adoption of a stacked PR is T-239')
+    repository = repository or env.get('FM_BINDING_REPOSITORY') or binding.repository(git_root)
+    dependencies = (authorized_spec(env, task) or {}).get('depends_on', [])
+    for row in open_heads:
+        if (row.get('number') != adopt['pr'] and row.get('isCrossRepository') is False
+                and row.get('headRefName') == view.get('baseRefName')):
+            if task_of(row, env) not in dependencies or not stacking_allowed(env, repository):
+                raise ValueError(f"stacked on an unmanaged PR #{row['number']} or stacking not allowed: adopt the parent first, list its task in depends_on, and confirm stacking")
+    effective_base(view, adopt, env, task, repository)
     branch = view.get('headRefName')
     if not isinstance(branch, str) or not branch or branch in (adopt['base'], env.get('FM_BASE', 'main'), 'main', 'master'):
         raise ValueError('adopted PR head is a protected base branch')
@@ -165,16 +242,7 @@ def main():
             print(single[args.pr])
         return
     if args.mode == 'pushed':
-        path = Path(os.environ['FM_STATE_DIR']) / 'events.jsonl'
-        rows = []
-        if path.exists():
-            for line in path.read_text().splitlines():
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(row, dict) and row.get('project', 'firstmate-workflow') == os.environ.get('FM_PROJECT'):
-                    rows.append(row)
+        rows = event_rows(os.environ)
         sys.exit(0 if pushed(rows, args.task, args.pr) else 1)
     adopt = adoption(os.environ, args.task)
     if not adopt or adopt['pr'] != args.pr:
@@ -186,7 +254,7 @@ def main():
                                '--json', 'number,headRefName,isCrossRepository', '--limit', '1000')
     if len(open_heads) >= 1000:
         raise ValueError('complete open PR list required for adoption')
-    check(view, adopt, args.task, dict(os.environ), args.root, args.pushed, open_heads)
+    check(view, adopt, args.task, dict(os.environ), args.root, args.pushed, open_heads, repo)
 
 
 if __name__ == '__main__':
