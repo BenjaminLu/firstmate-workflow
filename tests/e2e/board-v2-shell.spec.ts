@@ -1,3 +1,4 @@
+import { openCrewSheet, openLogSheet } from './lib/board';
 import { expect, type Page } from '@playwright/test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -168,15 +169,16 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
     await expect(page.locator('#engine')).toBeVisible();
     await expect(page.locator('#readOnly')).toBeVisible();
     await page.locator('.dstrip > summary').click();
+    await openCrewSheet(page);
     await page.locator('.rgroupbtn').click();
     await expect(page.locator('.roster h4.rgroup').first()).toBeVisible();
     await expect(page.locator(`.roster [data-roster="${warningCrewId}"] .rm.warn`)).toBeVisible({timeout:15000});
-    // ship.css's narrow roster grid (out of this task's scope; T-246 owns it) gives .rv no
-    // width at 390, so the vendor cell is only rendered, not visible, there.
     const vendorWarn=page.locator(`.roster [data-roster="${warningCrewId}"] .rv.warn`);
-    if(width===1440) await expect(vendorWarn).toBeVisible({timeout:15000});
-    else await expect(vendorWarn).toHaveCount(1,{timeout:15000});
+    await expect(vendorWarn).toBeVisible({timeout:15000});
+    await openLogSheet(page);
     await expect(page.locator('#log .k-greenlit')).toBeVisible();
+    await page.locator('#logSheet [data-sheet-close]').click();
+    await openCrewSheet(page);
     expect(await page.evaluate(()=>{
       const s=getComputedStyle(document.documentElement);
       return ['brass','warn','wait','ok','bad','accent','fg','fg2','fg3'].map(k=>s.getPropertyValue('--'+k).trim().toUpperCase());

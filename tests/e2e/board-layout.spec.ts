@@ -1,3 +1,4 @@
+import { showFleet, openCrewSheet, openLogSheet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -29,9 +30,9 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   try {
     await page.setViewportSize({width:1280,height:900});
     await page.goto(`${b.url}/?lang=en`);
-    await expect(page.locator('#roster .rrow').first()).toBeVisible();
+    await expect(page.locator('#roster .rrow').first()).toBeAttached();
     await expect(page.locator('#scene, #captain')).toHaveCount(0);
-    await expect(page.locator('.rosterbar #rosterBtn')).toHaveCount(1);
+    await expect(page.locator('#secbar #rosterBtn')).toHaveCount(1);
 
     // V7: the engine from config.yaml, marked when review runs elsewhere
     await expect(page.locator('#engine')).toHaveText('vendor-alpha ⇄ vendor-beta');
@@ -46,6 +47,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     expect(await page.locator('.counts [data-count]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.count)))
       .toEqual(['merged','inflight','waiting','blocked','ready','backlog']);
 
+    await showFleet(page);
     // seven lanes in one row, left to right in lifecycle order
     const lanes = page.locator('#lanes .lane');
     expect(await lanes.evaluateAll(els => els.map(e => (e as HTMLElement).dataset.lane)))
@@ -82,6 +84,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
 
     // the portrait sits beside the first full card; the next is a strip that
     // opens in place and keeps the two-stage confirmation
+    await page.locator('#tabDecisions').click();
     const portrait = (await page.locator('#capstage').boundingBox())!, card = (await page.locator('#card-D-1').boundingBox())!;
     expect(portrait.x + portrait.width).toBeLessThanOrEqual(card.x);
     await expect(page.locator('#capstage .lbl')).toContainText(EN.roleCaptain);
@@ -104,19 +107,16 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     await expect(page.locator('.roster .pb')).toHaveCount(1);
     await expect(page.locator('.roster [data-roster="worker-1"] .pb')).toHaveAttribute('aria-valuemax','5');
     expect(await page.locator('#shipregion').innerText()).not.toMatch(/\d+\s*%/);
-    await page.locator('#rosterBtn').click();
-    await expect(page.locator('#roster')).toBeHidden();
-    await expect(page.locator('#rosterBtn')).toHaveAttribute('aria-pressed','false');
-    expect(await page.evaluate(() => localStorage.getItem('board.roster'))).toBe('hidden');
+    await page.evaluate(() => localStorage.setItem('board.roster','hidden'));
     await page.reload();
-    await expect(page.locator('#roster')).toBeHidden();
-    await page.locator('#rosterBtn').click();
+    await expect(page.locator('#crewSheet')).toBeHidden();
+    await openCrewSheet(page);
     await expect(page.locator('#roster')).toBeVisible();
-
-    // the live log is the full-width panel at the bottom
-    const log = (await page.locator('.logwrap').boundingBox())!, lanesBox = (await page.locator('#lanes').boundingBox())!;
-    expect(log.y).toBeGreaterThan(lanesBox.y + lanesBox.height);
-    expect(log.width).toBeGreaterThan(1200);
+    expect(await page.evaluate(() => localStorage.getItem('board.roster'))).toBe('hidden');
+    await page.setViewportSize({width:1440,height:900});
+    await openLogSheet(page);
+    expect((await page.locator('.logwrap').boundingBox())!.width).toBeGreaterThan(1200);
+    await page.locator('#logSheet [data-sheet-close]').click();
 
     // every width, every locale, and doubled text: nothing overflows the page
     await page.addStyleTag({content:'body{font-size:32px} .card .t,.roster .jb,.log li,.dcard h3,.explanation,.tradeoffs,.acts button,.dstrip>summary{font-size:32px}'});

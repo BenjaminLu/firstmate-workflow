@@ -1,3 +1,4 @@
+import { openCrewSheet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -16,6 +17,7 @@ test('legacy scalar records disclose missing details without invented translatio
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=zh-TW`);
+    await openCrewSheet(page);
     await expect(page.locator('.dcard')).toContainText('Legacy literal title');
     await expect(page.locator('.explanation')).toHaveText(TW.missingDetails);
     await expect(page.locator('.tradeoffs')).toHaveCount(0);
@@ -69,6 +71,7 @@ test("T-127: vendor, model and CLI version are separate fields, read from the ru
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);
+    await openCrewSheet(page);
     await expect(page.locator("#roster .rrow").first()).toBeVisible();
 
     // the header's engine badge shows the vendors actually running now
@@ -105,6 +108,7 @@ test("T-127: an old run without vendor or model still renders", async ({ page })
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);
+    await openCrewSheet(page);
     await expect(page.locator("#roster .rrow").first()).toBeVisible();
     const card = page.locator('[data-roster="worker-1"]');
     await expect(card.locator(".rv")).toHaveText(EN.crewUnknown);

@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -63,6 +64,7 @@ test('a tab without the credential says it is read-only, in both languages, and 
       await expect(page.locator(control)).toBeDisabled();
       await expect(page.locator(control)).toHaveAttribute('title', EN.readOnlyTip);
     }
+    await showFleet(page);
     await expect(page.locator('.lanes .card')).not.toHaveCount(0);
     await expect(page.locator('.lanes .cmenu')).not.toHaveCount(0);
     for (const menu of await page.locator('.cmenu').all()) {

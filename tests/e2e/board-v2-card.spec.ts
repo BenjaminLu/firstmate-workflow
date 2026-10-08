@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeTasks } from './lib/fixture';
 import { intentCard } from './lib/intent-card';
@@ -71,6 +72,7 @@ for (const collapsed of [false, true]) test(`task detail owns Escape with a ${co
       await page.keyboard.press('Escape');
       await expect(sheet).not.toHaveAttribute('hidden');
     }
+    await showFleet(page);
     const task = page.locator('.card[data-task="T-001"]');
     await task.click();
     const panel = page.locator('#taskDetail');
@@ -79,6 +81,7 @@ for (const collapsed of [false, true]) test(`task detail owns Escape with a ${co
     await expect(panel).toBeHidden();
     await expect(task).toBeFocused();
     await expect(sheet).not.toHaveAttribute('hidden');
+    await page.locator('#tabDecisions').click();
     if (collapsed) await strip.locator(':scope > summary').click();
     await expect(sheet).toBeVisible();
     await sheet.locator('[data-decision-close]').focus();

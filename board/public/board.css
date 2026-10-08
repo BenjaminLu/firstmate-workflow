@@ -67,3 +67,52 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 #deck :is(.decision-bar,.decision-sheet) button{background:var(--bg3);background-image:none;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:8px;cursor:pointer}
 #deck :is(.decision-bar,.decision-sheet) textarea{box-sizing:border-box;max-width:100%;width:100%;background:var(--bg3);color:var(--fg)}
 #deck .decision-bar button[aria-pressed=true]{border-color:var(--accent)}
+
+/* T-246: the two workflow pages share one summary bar below the voyage. */
+#tabs{display:flex;flex-wrap:wrap;gap:8px;padding:12px 20px 0}
+#tabs button,#secbar button,.pager button,.board-sheet>header button{font:inherit;min-height:44px;padding:8px 16px;border:1px solid var(--line);border-radius:8px;background:var(--bg2);color:var(--fg);cursor:pointer}
+#tabs [aria-selected=true]{border-color:var(--accent);background:var(--bg3)}
+#tabs .badge{margin-left:8px;padding:2px 8px;border-radius:12px;background:var(--accent);color:var(--bg)}
+#secbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:12px 20px;color:var(--fg2);font-size:15px}
+#latestEvent{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#decisionsPanel,#fleetPanel{width:100%;min-width:0}
+#decisionsPanel[hidden],#fleetPanel[hidden],.pager [hidden],.card[hidden],.log li[hidden],#tabs [hidden]{display:none}
+.board-sheet{box-sizing:border-box;width:96vw;max-width:1480px;height:80vh;max-height:90dvh;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);overflow:auto}
+.board-sheet::backdrop{background:#0006}
+.board-sheet>header{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;background:var(--bg2);border-bottom:1px solid var(--line)}
+.board-sheet>header h2{margin:0;font-size:21px}
+#crewSheet #shipregion{padding:16px}
+#crewSheet .roster{max-height:none;width:100%;overflow:visible}
+#crewSheet .roster .rows{max-height:none;overflow:visible}
+#crewSheet .roster li.rrow{height:auto;max-height:none;overflow:visible}
+#crewSheet .roster :is(.nm,.jb,.tk,.tt,.st,.rl,.pj,.rd,.rv,.rm,.rc,.rpr,.cwindow,.att,.rsort,.rcol){font-size:15px;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;min-width:0}
+#logSheet .logwrap{padding:16px 20px;width:100%;box-sizing:border-box}
+#logSheet .log{max-height:none;overflow:visible}
+.pager{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;padding:12px 0;font-size:15px}
+.pager button:disabled{opacity:.45;cursor:default}
+.lanes-wrap.has-detail{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,42%);gap:16px;align-items:start}
+.lanes-wrap.has-detail>:not(#taskDetail){grid-column:1}
+.lanes-wrap #taskDetail{position:sticky;grid-column:2;grid-row:1 / span 7;top:var(--task-detail-top,64px);bottom:auto;left:auto;right:auto;width:100%;max-width:100%;max-height:calc(100dvh - var(--task-detail-top,64px) - 12px);box-sizing:border-box;box-shadow:none;z-index:2}
+.lanes-wrap.has-detail #lanes{grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr))}
+.detail-back{display:none}
+@media(max-width:759px){
+  .board-sheet{width:100vw;max-width:100vw;border-radius:0;max-height:100dvh}
+  #crewSheet #shipregion{padding:8px}
+  #crewSheet .roster li.rrow{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:12px}
+  #crewSheet .roster .rhead{display:flex;flex-wrap:wrap;gap:8px}
+  #crewSheet .roster .rhead .rcol{display:none}
+  #crewSheet .roster li.rrow [data-label]::before{content:attr(data-label) ' ';font-weight:600}
+  .lanes-wrap.has-detail{display:block}
+  .lanes-wrap.has-detail>:not(#taskDetail){display:none}
+  .lanes-wrap #taskDetail{position:relative;top:auto;max-height:none;overflow:visible}
+  .task-detail .detail-toolbar{top:var(--task-detail-top,64px)}
+  .detail-back{display:inline;margin-right:8px}
+}
+
+@media(min-width:760px){
+  #crewSheet .roster :is(.rhead,li.rrow){grid-template-columns:8px minmax(0,1fr) minmax(0,.7fr) minmax(0,1fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,2.6fr)}
+}
+
+@media(min-width:1100px){
+  #crewSheet .roster :is(.rhead,li.rrow){grid-template-columns:8px minmax(0,1fr) minmax(0,.7fr) minmax(220px,1.6fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,2.6fr)}
+}

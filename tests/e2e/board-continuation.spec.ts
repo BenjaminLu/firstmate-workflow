@@ -1,3 +1,4 @@
+import { showFleet, openCrewSheet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -37,17 +38,20 @@ test('continuation history, readable mobile content and persistent controls', as
     await page.setViewportSize({width:390,height:844});
     await page.goto(b.url+'/?lang=en');
     await expect(page.locator('#history')).toHaveJSProperty('open',false);
+    await showFleet(page);
     await expect(page.locator('#history summary')).toContainText('31');
     await expect(page.locator('[data-roster="worker-ghost"]')).toHaveCount(0);
+    await page.locator('#tabDecisions').click();
     // a pending card under a merged task is shown, not hidden, and says the task is final (T-118)
     await expect(page.locator('#card-D-999 .final-note')).toContainText(
       EN.finalNote.replace('{task}','T-999').replace('{stage}',EN.laneMerged));
-    for(const selector of ['.roster .jb','.rosterbar button','.roster .nm','.roster .st'])
+    for(const selector of ['.roster .jb','#secbar button','.roster .nm','.roster .st'])
       expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(13);
     await expect(page.locator('#history .card').first()).not.toBeVisible();
     expect((await page.locator('.dcard').first().boundingBox())!.y).toBeLessThan(844);
     // merged is a lane now, but a short one: the latest few, newest first,
     // and a pointer at the history for the rest
+    await showFleet(page);
     const mergedLane=page.locator('[data-lane="merged"]');
     await expect(mergedLane.locator('h3 i')).toHaveText('31');
     await expect(mergedLane.locator('.card')).toHaveCount(5);
@@ -60,19 +64,29 @@ test('continuation history, readable mobile content and persistent controls', as
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
     await expect(page.locator('#history summary')).toContainText('31');
     let posts=0;page.on('request',r=>{if(r.method()==='POST')posts++;});
+    await page.locator('#tabDecisions').click();
     await page.locator('#card-D-1 [data-c="custom"]').click();
     await page.locator('#card-D-1 textarea').fill('Literal 船長');
+    await showFleet(page);
     await page.locator('#history summary').focus(); await page.keyboard.press('Enter');
-    await expect(page.locator('#history .card')).toHaveCount(31);
-    for(let i=0;i<30;i++)await expect(page.locator('#history .card').nth(i)).toContainText(`H-${i}`);
-    await expect(page.locator('#history .card').nth(29)).toContainText('#129');
-    await expect(page.locator('#history .card').last()).toContainText('T-999');
-    await expect(page.locator('#history .card').last()).toContainText('#999');
+    const seen:string[]=[];
+    for(let offset=0;offset<31;offset+=12) {
+      const cards=page.locator('#history .card:visible');
+      await expect(cards).toHaveCount(Math.min(12,31-offset));
+      seen.push(...await cards.evaluateAll(els=>els.map(el=>(el as HTMLElement).dataset.history!)));
+      if(offset+12<31) await page.locator('#historyPager [data-page="next"]').click();
+    }
+    expect(seen).toEqual([...Array.from({length:30},(_,i)=>`H-${i}`),'T-999']);
+    await expect(page.locator('#history .card:visible').nth(5)).toContainText('#129');
+    await expect(page.locator('#history .card:visible').last()).toContainText('T-999');
+    await expect(page.locator('#history .card:visible').last()).toContainText('#999');
+    await page.locator('#history summary').focus();
     await page.evaluate("fetch('/api/state').then(r => r.json()).then(render)");
     await expect(page.locator('#history')).toHaveJSProperty('open',true);
     await expect(page.locator('#history summary')).toBeFocused();
     await expect(page.locator('#card-D-1 textarea')).toHaveValue('Literal 船長');
     await page.locator('#history summary').click();
+    await page.locator('#tabDecisions').click();
     await page.locator('#card-D-1 textarea').focus();
     emitFixture(root,'github','T-005','merged','Completed task','任務已完成');
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
@@ -80,8 +94,10 @@ test('continuation history, readable mobile content and persistent controls', as
     await expect(page.locator('#history')).toHaveJSProperty('open',false);
     await expect(page.locator('#card-D-1 textarea')).toBeFocused();
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
+    await showFleet(page);
     await page.locator('#history summary').focus();await page.keyboard.press('Enter');
     await expect(page.locator('#history')).toHaveJSProperty('open',true);
+    await page.locator('#tabDecisions').click();
     for (const locale of ['en','zh-TW','zh-CN']) {
       await page.locator(`[data-l="${locale}"]`).click();
       for (const width of [320,390,768,1280]) {
@@ -104,10 +120,14 @@ test('continuation history, readable mobile content and persistent controls', as
     }
     await page.setViewportSize({width:1280,height:900});await page.evaluate(()=>scrollTo(0,0));
     await page.screenshot({path:testInfo.outputPath('desktop-decisions.png')});
+    await openCrewSheet(page);
     await page.locator('#roster').screenshot({path:testInfo.outputPath('desktop-roster.png')});
+    await page.locator('#crewSheet [data-sheet-close]').click();
     await page.setViewportSize({width:320,height:844});
     await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:testInfo.outputPath('mobile-decisions.png')});
+    await openCrewSheet(page);
     await page.locator('#roster').screenshot({path:testInfo.outputPath('mobile-roster.png')});
+    await page.locator('#crewSheet [data-sheet-close]').click();
     await page.addStyleTag({content:'body{font-size:32px} .dcard h3{font-size:44px} .explanation,.tradeoffs,.acts button,.acts label,.acts textarea{font-size:32px}'});
     await expect(page.locator('#card-D-1 textarea')).toHaveCSS('display','block');
     const textareaSize = await page.locator('#card-D-1 textarea').evaluate(el => ({

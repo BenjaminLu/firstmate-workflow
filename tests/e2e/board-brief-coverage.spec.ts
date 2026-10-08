@@ -1,3 +1,4 @@
+import { openLogSheet } from './lib/board';
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, readTasks } from './lib/fixture';
 import { emitFixture } from './lib/board';
@@ -16,6 +17,7 @@ test('brief gaps, deferrals and waivers display authored bilingual warnings', as
   try {
     for (const lang of ['en', 'zh-TW']) {
       await page.goto(`${board.url}/?lang=${lang}`);
+    await openLogSheet(page);
       const warnings = page.locator('#log .evidence-warning');
       await expect(warnings).toHaveCount(3);
       for (const c of cases) await expect(warnings.filter({hasText:lang === 'en' ? c.en : c.tw})).toHaveCount(1);
