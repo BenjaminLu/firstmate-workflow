@@ -231,7 +231,7 @@ class EntrypointsFixture(unittest.TestCase):
         (self.repo / 'design/tasks').mkdir(parents=True)
         (self.repo / 'design/tasks/T-035.json').write_text(json.dumps(dict(id='T-035',title='test',scope=['src/**'],depends_on=[],acceptance=['works'])))
         (self.repo / 'design/design.md').write_text('## 6. Gates\nEvidence\n## 8. Board\n')
-        (self.repo / 'config.yaml').write_text('vendor: codex\nconcurrency: 2\n')
+        (self.repo / 'config.yaml').write_text('vendor: codex\nconcurrency: 2\nproject:\n  check: true\n')
         # Shared receipt helper: tests/lib/spec-preflight.sh. Seed only fixture bytes.
         subprocess.run(['bash', '-c',
                         '. "$1/tests/lib/spec-preflight.sh"; ROOT="$1"; seed_spec_preflight "$2" T-035',
@@ -439,7 +439,7 @@ raise SystemExit(int(os.environ.get('FM_TEST_EXIT','0')))
         self.executable('git', r'''
 import json,os,pathlib,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
-if a[0]=='-C' and a[2] in ('config','show','merge-base','diff-tree','fetch','rev-parse','branch','update-ref'): a=a[2:]
+if a[0]=='-C' and a[2] in ('config','show','merge-base','diff-tree','fetch','rev-parse','branch','update-ref','diff','ls-tree'): a=a[2:]
 if a==['config','--get','remote.origin.url']:
  print('https://github.com/fixture/project.git')
 elif a[0]=='show':
@@ -469,6 +469,8 @@ elif a[:2]==['worktree','add']:
  pathlib.Path(a[-2]).mkdir(parents=True,exist_ok=True)
 elif 'status' in a:
  p=pathlib.Path(a[a.index('-C')+1]); print('?? work.txt' if (p/'work.txt').exists() else '')
+elif a[0]=='diff' and '--name-only' in a and '-z' in a:
+ sys.stdout.buffer.write(b'work.txt\0')
 elif a[0]=='diff': print('diff --git a/test b/test\n+change')
 elif a[0]=='branch': print('t-035-test')
 ''')
@@ -482,6 +484,15 @@ if a[:2]==['pr','view'] and '--json' in a and a[a.index('--json')+1]=='headRefOi
 else:
  print('https://example.invalid/pull/35' if 'create' in a else '[]')
 ''')
+
+        self.seed_self_authoring()
+
+    def seed_self_authoring(self):
+        subprocess.run(['bash', '-c',
+                        '. "$1/bin/fm-config.sh"; fm_storage_init "$2" || exit 65; '
+                        'python3 "$1/tests/lib/self_pr_authoring.py" "$1" --seed T-035 self',
+                        'seed-self-authoring', str(root), str(self.repo)],
+                       env=self.env, check=True, capture_output=True, text=True)
 
     def executable(self, name, content):
         p=self.fake/name; p.write_text('#!'+sys.executable+'\n'+STATUS_PRELUDE.get(name,'')+content); p.chmod(0o755)
@@ -601,6 +612,7 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         if api_key:
             with (self.repo/'config.yaml').open('a') as config:
                 config.write('billing:\n  codex: api-key\n')
+            self.seed_self_authoring()
         # a round in a Herdr window, a reviewer's, and a headless one
         for script,args,extra in (('fm-worker.sh',['--task','T-035'],{}),
                                   ('fm-review.sh',['--task','T-035','--branch','work'],{}),

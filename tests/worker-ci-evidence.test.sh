@@ -268,7 +268,8 @@ chmod +x "$d19/stub/gh"
 check_strict_job_stub "$d19/stub/gh" 1
 install_ci_evidence "$d19" "https://github.com/o/r/actions/runs/81/job/1"
 # Fail only the optional log capture. `--pr 25` skips lookup_err, so
-# the first worker allocation is log_err; chain_result must still succeed
+# the first allocation holds required pin bytes and the second is log_err;
+# chain_result must still succeed
 # before the adapter can capture the prompt. Keep state outside the shim's
 # process because scratch_new runs in command substitutions.
 mkdir -p "$d19/tmp"
@@ -276,8 +277,12 @@ real_mktemp19="$(command -v mktemp)"
 cat > "$d19/stub/mktemp" <<'M'
 #!/usr/bin/env bash
 if [ "$#" -eq 1 ] && [ "$1" = "$TMPDIR/fm-worker-XXXXXX" ]; then
-  if [ ! -e "$FM_MKTEMP_FAILED" ]; then
-    : > "$FM_MKTEMP_FAILED"
+  allocation=0
+  [ ! -f "$FM_MKTEMP_FAILED.count" ] || read -r allocation < "$FM_MKTEMP_FAILED.count"
+  allocation=$((allocation + 1))
+  printf '%s\n' "$allocation" > "$FM_MKTEMP_FAILED.count"
+  if [ "$allocation" = 2 ]; then
+    printf '%s\n' "$allocation" > "$FM_MKTEMP_FAILED"
     exit 1
   fi
 fi
@@ -291,7 +296,7 @@ cap19="$d19/sent.md"
     bin/fm-worker.sh --task T-Z --pr 25 >/dev/null 2>&1 )
 rc19=$?
 assert_eq "0" "$rc19" "optional log allocation failure still completes the worker run"
-assert_ok "test -f '$d19/mktemp-failed'" "the optional log allocation failure was exercised"
+assert_eq "2" "$(cat "$d19/mktemp-failed")" "only the second allocation, optional log capture, was refused"
 assert_ok "test -s '$cap19'" "the adapter ran and captured the prompt after allocation failure"
 sent19="$(cat "$cap19" 2>/dev/null)"
 assert_contains "$sent19" "The log for job 1 could not be fetched" \

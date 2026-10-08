@@ -86,7 +86,7 @@ class PublicText(unittest.TestCase):
         spec = dict(self.spec, **(fields or {}))
         commit = section(WORKER, 'commit_msg="$TASK:', 'fm_private_stage "$tree"')
         publication = section(WORKER, '  pr_body="Dispatched by firstmate',
-                              '  url="$(fm_github pr create')
+                              '  url="$(fm_github pr create') if external else ''
         script = ('set -eu\nTASK=T-051; branch=t-051-work; num=9\n'
                   f'FM_EXTERNAL={external}; FM_CODE_ROOT={shlex.quote(str(ROOT))}\n'
                   '''fm_conventions() { if [ "$1" = pr_format ]; then echo '{"pr_title":"plain","pr_sections":[],"pr_language":"en"}'; else echo '[]'; fi; }
@@ -101,8 +101,7 @@ fm_project() { :; }; fm_project_reviewer_mode() { :; }; fm_cfg_in() { :; }; FM_S
             ({'public_title': TITLE, 'public_summary': SUMMARY}, 1, TITLE, SUMMARY),
             ({'public_title': TITLE}, 1, TITLE, ''),
             ({}, 1, 'project work', 'Task T-051. ' + FOOTER),
-            ({'public_title': 'Utilize the widget'}, 1, 'project work', 'Task T-051. ' + FOOTER),
-            ({}, 0, 'Private launch strategy', 'Dispatched by firstmate for T-051. Acceptance is in design/tasks/T-051.json.')
+            ({'public_title': 'Utilize the widget'}, 1, 'project work', 'Task T-051. ' + FOOTER)
         ):
             with self.subTest(fields=fields, external=external):
                 p = self.shell(fields, external, tail='printf "%s\\n%s\\n%s" "$commit_msg" "$pr_title" "$pr_body"')
@@ -111,6 +110,18 @@ fm_project() { :; }; fm_project_reviewer_mode() { :; }; fm_cfg_in() { :; }; FM_S
                 self.assertEqual(p.stdout, f'{expected}\n{expected}\n{body}')
                 if external:
                     self.assertNotIn('Private launch strategy', p.stdout)
+
+    def test_self_subject_is_authored_without_changing_commit_title(self):
+        from fm_self_pr import render
+        draft = dict(subject='Show the approved fixture result', size='small',
+                     problem='The former body omitted context.', expected_result='Readers can assess intent.',
+                     approach='Render the approved purpose.', intent_notes=[dict(index=0, note='Explain intent.')])
+        envelope = dict(draft=draft, mode='pin-backed', dispatch_reference=None)
+        result = render(envelope, self.spec, 'a'*40, ['widget'])
+        self.assertEqual(result['title'], 'T-051: Show the approved fixture result')
+        self.assertIn('Readers can assess intent.', result['body'])
+        self.assertIn('Required CI: pending', result['body'])
+        self.assertNotIn('Acceptance is in', result['body'])
 
     def test_helper_failure_and_empty_spec_fall_back_silently(self):
         for prefix in ('spec=', 'unset spec FM_CODE_ROOT', 'FM_CODE_ROOT=/missing',

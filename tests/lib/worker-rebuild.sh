@@ -9,6 +9,7 @@
 # clone - so the worker has to FETCH the base, its own local main is stale -
 # and round two continues the pull request.
 rb_build_fixture() {   # build each immutable seed with round one done
+  local RB_AUTHOR_PROJECT=self
   local d r
   d="$(fixture)" || return 1; r="$d/repo"
   (
@@ -62,7 +63,9 @@ S
     printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$r/state/events.jsonl"
     seed_spec_preflight "$r" T-Z "" firstmate-workflow || return 1
     project_args=(--project firstmate-workflow)
+    RB_AUTHOR_PROJECT=firstmate-workflow
   fi
+  seed_self_pr_authoring "$r" T-Z "${RB_AUTHOR_PROJECT:-self}" || return 1
   ghstub "$d" >/dev/null
   ( cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" FM_T_STEP="$d/round-one.sh" \
       bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"} >/dev/null 2>&1 ) || return 1

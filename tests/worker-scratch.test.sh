@@ -3,10 +3,28 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/worker.sh
 . "$ROOT/tests/lib/worker.sh"
+# A failed fixture on base is honest negative evidence, never permission to
+# construct /repo, /stub or /tmp from an empty command-substitution result.
+require_scratch_fixture() {
+  local candidate="$1" base resolved leaf
+  base="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || return 1
+  [ -n "$candidate" ] && [ -d "$candidate" ] && [ ! -L "$candidate" ] || return 1
+  resolved="$(cd "$candidate" && pwd -P)" || return 1
+  [ "$candidate" = "$resolved" ] || return 1
+  case "$resolved" in "$base"/fm-test.*) ;; *) return 1 ;; esac
+  leaf="${resolved#"$base"/}"
+  case "$leaf" in */*) return 1 ;; esac
+  [ -d "$candidate/repo" ] && [ ! -L "$candidate/repo" ] &&
+    [ -d "$candidate/remote.git" ] && [ ! -L "$candidate/remote.git" ]
+}
 # and if it cannot be kept either, the run says so rather than pointing
 # at a path inside the worktree as though it were safe - which is what
 # the fallback this replaces did
-d11="$(fixture)"; r11="$d11/repo"; GH11="$(ghstub "$d11")"
+d11="$(fixture)" && require_scratch_fixture "$d11" || {
+  echo "worker-scratch: fixture d11 failed or returned an invalid owned directory" >&2
+  exit 1
+}
+r11="$d11/repo"; GH11="$(ghstub "$d11")"
 cat > "$r11/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
@@ -42,7 +60,11 @@ leak_check() {   # leak_check <label> <tmpdir> ; the run has already happened
 }
 
 # the exit-73 route, which makes say_err
-d14="$(fixture)"; r14="$d14/repo"; GH14="$(ghstub "$d14")"
+d14="$(fixture)" && require_scratch_fixture "$d14" || {
+  echo "worker-scratch: fixture d14 failed or returned an invalid owned directory" >&2
+  exit 1
+}
+r14="$d14/repo"; GH14="$(ghstub "$d14")"
 cat > "$r14/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
@@ -71,7 +93,11 @@ rm -rf "$d14"
 
 # the exit-74 route, which makes lookup_err - a different file on a
 # different path, and the comment says every one of them
-d15="$(fixture)"; r15="$d15/repo"; GH15="$(ghstub "$d15")"
+d15="$(fixture)" && require_scratch_fixture "$d15" || {
+  echo "worker-scratch: fixture d15 failed or returned an invalid owned directory" >&2
+  exit 1
+}
+r15="$d15/repo"; GH15="$(ghstub "$d15")"
 cat > "$r15/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
@@ -104,7 +130,7 @@ case " $* " in *" pr list "*) echo 9; exit 0 ;; esac
 exit 0
 G
 chmod +x "$d15/stub/gh"
-rm -rf "$d15/tmp"; mkdir -p "$d15/tmp"
+safe_rm_rf "$d15/tmp"; mkdir -p "$d15/tmp"
 started15="$d15/started"
 mkfifo "$d15/release"
 exec 8<> "$d15/release"

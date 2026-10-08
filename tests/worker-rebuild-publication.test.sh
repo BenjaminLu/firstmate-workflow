@@ -188,16 +188,17 @@ jq '.title="main retitled the task"' design/tasks/T-Z.json > n && mv n design/ta
 S
 rb_move_main "$dV6" "$dV6/main.sh" || exit 1
 oldV6="$(rb_head "$dV6" "$bV6")"; pushedV6="$(rb_pushed "$dV6")"
-# Refuse only the restore's file-writing show, not fm_task's pipe read.
+# Refuse only the pin-backed restore to this disposable task entry.
 mkdir -p "$dV6/gitwrap"
-cat > "$dV6/gitwrap/git" <<W
+real_cpV6="$(command -v cp)"
+cat > "$dV6/gitwrap/cp" <<W
 #!/usr/bin/env bash
-if [ "\${1:-}" = show ] && [ "\${2:-}" = "$oldV6:design/tasks/T-Z.json" ] && [ -f /dev/stdout ]; then
-  exit 128
+if [ "\${2:-}" = "$dV6/repo/state/worktrees/T-Z/design/tasks/T-Z.json" ]; then
+  exit 1
 fi
-exec "$rb_git_real" "\$@"
+exec "$real_cpV6" "\$@"
 W
-chmod +x "$dV6/gitwrap/git"
+chmod +x "$dV6/gitwrap/cp"
 PATH="$dV6/gitwrap:$PATH" rb_round_two "$dV6" "$dV2/ask.sh"
 rb_rebuilt "$dV6" "V6"
 pV6="$(cat "$dV6/prompt.md")"

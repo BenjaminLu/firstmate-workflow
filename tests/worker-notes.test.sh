@@ -98,6 +98,7 @@ for question_seed in seeded committed; do
   jq -n '{id:"T-Q",title:"question",scope:["src/**","design/tasks/T-Q.json"],acceptance:["needs clarification"]}' \
     > "$rq/design/tasks/T-Q.json"
   seed_spec_preflight "$rq" T-Q
+  seed_self_pr_authoring "$rq" T-Q self
   if [ "$question_seed" = committed ]; then
     mkdir -p "$rq/state/worktrees"
     git -C "$rq" worktree add -q -b t-q-question "$rq/state/worktrees/T-Q" main

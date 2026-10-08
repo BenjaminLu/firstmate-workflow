@@ -55,6 +55,7 @@ dn="$(fixture)"; rn="$dn/repo"; GHn="$(ghstub "$dn")"
 jq -n '{id:"T-N",title:"a new task",scope:["src/**","design/tasks/T-N.json"],acceptance:["it exists"]}' \
   > "$rn/design/tasks/T-N.json"
 seed_spec_preflight "$rn" T-N
+seed_self_pr_authoring "$rn" T-N self
 assert_eq "?? design/tasks/T-N.json" "$(git -C "$rn" status --porcelain -- design/tasks)" \
   "the new task's spec is untracked in the dispatching repository"
 outn="$(cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" bin/fm-worker.sh --task T-N --name worker-n 2>&1)"
@@ -69,6 +70,7 @@ assert_contains "$outn" "design/tasks/T-N.json is not on the base; copied into t
 dn2="$(fixture)"; rn2="$dn2/repo"; GHn2="$(ghstub "$dn2")"
 jq -n '{id:"T-N",title:"a new task",scope:["src/**"],acceptance:["it exists"]}' > "$rn2/design/tasks/T-N.json"
 seed_spec_preflight "$rn2" T-N
+seed_self_pr_authoring "$rn2" T-N self
 outn2="$(cd "$rn2" && FM_ROOT="$rn2" FM_GH="$GHn2" FM_MOCK_FILE=design/tasks/T-N.json \
   FM_MOCK_BODY="$(cat "$rn2/design/tasks/T-N.json")" bin/fm-worker.sh --task T-N --name worker-n2 2>&1)"
 assert_eq "1" "$?" "a round that only has the copied spec changed nothing"
@@ -99,13 +101,25 @@ for leftover in empty commit dirty spec spec_pr; do
   git -C "$rl" worktree add -q -b "$bl" "$tl" main
   jq -n '{id:"T-N",title:"a new task",scope:["src/**"],acceptance:["WIDENED_SPEC"]}' > "$rl/design/tasks/T-N.json"
   seed_spec_preflight "$rl" T-N
+  seed_self_pr_authoring "$rl" T-N self
   case "$leftover" in
     commit)
       echo authored > "$tl/earlier.txt"
       mkdir -p "$tl/design/tasks"
       jq '.acceptance=["AUTHORED_SPEC"]' "$rl/design/tasks/T-N.json" > "$tl/design/tasks/T-N.json"
       git -C "$tl" add earlier.txt design/tasks/T-N.json; git -C "$tl" commit -qm earlier
-      seed_spec_preflight "$rl" T-N "$tl/design/tasks/T-N.json" ;;
+      # Establish immutable approved branch intent before the mutable root widens.
+      cp "$rl/design/tasks/T-N.json" "$dl/widened-spec.json"
+      cp "$tl/design/tasks/T-N.json" "$rl/design/tasks/T-N.json"
+      seed_spec_preflight "$rl" T-N "$tl/design/tasks/T-N.json"
+      seed_self_pr_authoring "$rl" T-N self
+      (
+        . "$ROOT/bin/fm-config.sh"
+        fm_storage_init "$rl" || exit 65
+        fm_pin create --task T-N --require-preflight self >/dev/null
+      ) || exit 1
+      cp "$dl/widened-spec.json" "$rl/design/tasks/T-N.json"
+      seed_self_pr_authoring "$rl" T-N self ;;
     dirty) echo authored > "$tl/earlier.txt" ;;
     spec|spec_pr)
       mkdir -p "$tl/design/tasks"
@@ -160,6 +174,7 @@ done
 # reporting the model it actually ran on (bin/adapters/mock.sh).
 d3="$(fixture)"; r3="$d3/repo"; GH3="$(ghstub "$d3")"
 printf 'model: mock-model-a\n' >> "$r3/config.yaml"
+seed_self_pr_authoring "$r3" T-Z
 ( cd "$r3" && FM_ROOT="$r3" FM_GH="$GH3" FM_MOCK_MODEL="mock-model-b" bin/fm-worker.sh --task T-Z --name worker-m >/dev/null 2>&1 )
 assert_eq "0" "$?" "a round with a configured model still exits 0"
 log3="$r3/state/events.jsonl"
@@ -186,6 +201,7 @@ assert_ne "" "$(jq -r '.summary."zh-TW"' <<<"$mrow3")" "and a zh-TW one"
 # no mismatch when the run reports the model it was asked for
 d4="$(fixture)"; r4="$d4/repo"; GH4="$(ghstub "$d4")"
 printf 'model: mock-model-a\n' >> "$r4/config.yaml"
+seed_self_pr_authoring "$r4" T-Z
 ( cd "$r4" && FM_ROOT="$r4" FM_GH="$GH4" FM_MOCK_MODEL="mock-model-a" bin/fm-worker.sh --task T-Z --name worker-n >/dev/null 2>&1 )
 log4="$r4/state/events.jsonl"
 m4actor="$(jq -r 'select(.type=="dispatched")|.actor' "$log4")"
@@ -222,6 +238,7 @@ models:
 fallback:
   - mock
 Y
+seed_self_pr_authoring "$rv5" T-Z
 cat > "$rv5/bin/adapters/down.sh" <<D
 #!/usr/bin/env bash
 printf 'down=%s\n' "\${FM_MODEL-unset}" >> "$dv5/handed"
@@ -257,6 +274,7 @@ assert_eq '["mock","model-mock"]' \
 # gets that vendor's model
 dv6="$(fixture)"; rv6="$dv6/repo"; GHv6="$(ghstub "$dv6")"
 cp "$rv5/config.yaml" "$rv6/config.yaml"
+seed_self_pr_authoring "$rv6" T-Z
 ( cd "$rv6" && FM_ROOT="$rv6" FM_GH="$GHv6" FM_MOCK_MODEL="model-mock" bin/fm-worker.sh --task T-Z --vendor mock --name worker-q >/dev/null 2>&1 )
 mv6actor="$(jq -r 'select(.type=="dispatched")|.actor' "$rv6/state/events.jsonl")"
 assert_eq '["mock","model-mock"]' \
@@ -265,6 +283,7 @@ assert_eq '["mock","model-mock"]' \
 # a vendor with no model named runs on its CLI's default, and records it
 dv7="$(fixture)"; rv7="$dv7/repo"; GHv7="$(ghstub "$dv7")"
 printf 'vendor: mock\nmodels:\n  down: model-down\n' > "$rv7/config.yaml"
+seed_self_pr_authoring "$rv7" T-Z
 ( cd "$rv7" && FM_ROOT="$rv7" FM_GH="$GHv7" FM_MOCK_MODEL="mock-cli-default" bin/fm-worker.sh --task T-Z --name worker-r >/dev/null 2>&1 )
 mv7actor="$(jq -r 'select(.type=="dispatched")|.actor' "$rv7/state/events.jsonl")"
 assert_eq '["mock","","mock-cli-default",false]' \

@@ -13,6 +13,7 @@ for scenario in matching stale mismatched; do
   jq '.depends_on=["T-901"]' "$r/design/tasks/T-902.json" > "$d/task"
   mv "$d/task" "$r/design/tasks/T-902.json"
   seed_spec_preflight "$r" T-902
+  seed_self_pr_authoring "$r" T-902 self
   cat > "$r/bin/adapters/mock.sh" <<'MOCK'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
@@ -31,6 +32,7 @@ MOCK
   [ "$scenario" != stale ] || advertised=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   [ "$scenario" != mismatched ] || parent_branch=t-999-unrelated
   stacking_gh "$d" "$advertised" "$parent_branch"
+  seed_self_pr_authoring "$r" T-902 self
   out="$(cd "$r" && GH_REPO=fixture/project FM_ROOT="$r" FM_GH="$d/gh" bin/fm-worker.sh --task T-902 2>&1)"; code=$?
   printf '%s\n' "$out" > "$d/worker.out"
   if [ "$scenario" = matching ]; then

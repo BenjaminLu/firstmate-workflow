@@ -1,50 +1,41 @@
 <!--
-One pull request implements one task, design/tasks/T-xxx.json. Pull requests
-opened by bin/fm-worker.sh carry a one-line body instead ("Dispatched by
-firstmate for T-xxx. Acceptance is in design/tasks/T-xxx.json."); a worker's
-notes, when it leaves any, arrive as comments. Write in English. Delete any
-comment you have answered.
+Firstmate authors new self PR subjects and operational prose before dispatch.
+Subjects use an allowed action verb and named object, one printable ASCII line,
+1–70 characters and at most 12 words. Final titles are T-id: subject (<=85).
+Small changes use connected problem/result prose, proposed approach, observed
+scope, validation status, dispatch provenance and recorded door/rollback.
+Complex changes use the four sections below. Size is authored.
+
+The launcher binds prose to stock approved snapshots; scope comes from the
+exact-head diff and gate 3 uses the approved pin, never a mutable branch spec.
+The approved narrow legacy exception explicitly labels absent publication pin
+and scope-gate authority; it is neither sealing nor approval.
+CI, review and all six gates are pending/not collected at creation; local
+validation is not recorded. Check current CI and review at this PR. Creation
+prose is not readiness evidence. Do not assert executed tests without evidence.
+Existing/human/adopted metadata stays unchanged. External templates remain
+upstream. Question drafts publish only the bounded clarification purpose.
 -->
 
-## Task
+## Problem and result
 
-T-xxx — implements design/design.md section N (<section title>)
+<!-- Explain the concrete problem and expected behavior. -->
 
-## What changed
+## Approach and scope
 
-<!-- What the change does, in a few sentences. The acceptance criteria are in
-the task entry; say how this meets them, not what they are. -->
+<!-- Proposed approach until firstmate verifies it. Include observed exact-head
+files and approved task identity, rather than copying the task's entire title. -->
 
-## Scope
+## Approved intent and evidence
 
-<!-- Gate 3 compares every changed path with the task's `scope` globs in
-design/tasks/T-xxx.json, read from this branch. -->
+<!-- Summarize referenced approved purposes. Intent indices are zero-based
+acceptance array indices. Include timestamp and exact head; required CI, review
+and the six gates start pending/not collected; local validation not recorded.
+Fail-first assertions belong in the worker report with file:line; the gates own
+red/base and green/head execution. Never turn initial prose into a pass claim. -->
 
-- [ ] Every changed file is inside the task's `scope`. If the work needs a file
-      outside it, it is named here with the reason, and the change stops until
-      the captain decides.
+## Decision, migration and rollback
 
-## Evidence
-
-<!-- Which tests are new or changed, and that each one failed before the
-implementation existed. A change whose every non-test path matches
-config.yaml's `docs` globs needs no new test; say so if that is the case. -->
-
-- Fail-first:
-- Required check:
-
-## Captain decisions
-
-<!-- Cite each decision this change relies on by id (D-xxxx = option), or write
-"none". A scope change is a decision, never an agreement in a conversation. -->
-
-## Gates
-
-<!-- bin/fm-gate.sh checks these (design/design.md section 6), bound to the current head. -->
-
-- [ ] 1. branch: the branch carries commits.
-- [ ] 2. rebase: it rebases onto its base cleanly.
-- [ ] 3. scope: the diff stays inside the approved scope.
-- [ ] 4. fail-first: reverting implementation turns tests red, unless all implementation changes are declared docs.
-- [ ] 5. ci: the required GitHub checks and statuses are green.
-- [ ] 6. approval: bound reviewer approval covers this change.
+<!-- Cite verified retained dispatch reference, otherwise not recorded. State
+recorded door reason and rollback trigger/action/owner/limits; omissions are
+not recorded. Preserve existing metadata and frozen-code migration boundaries. -->

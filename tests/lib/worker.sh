@@ -43,6 +43,17 @@ check_strict_run_stub() (
   assert_eq "could not find any workflow run" "$response" "run $id missing flag cannot return fixture output"
 )
 
+# Explicit setup boundary; never repairs missing/stale authoring at invocation.
+seed_self_pr_authoring() { # repo, task, optional evidence namespace
+  local author_repo="$1" author_task="$2" author_project="${3:-self}"
+  cp "$ROOT/bin/lib/fm_self_pr.py" "$author_repo/bin/lib/" || return 1
+  HERDR_ENV=0 bash -c '
+    . "$1/bin/fm-config.sh"
+    fm_storage_init "$2" || exit 65
+    python3 "$1/tests/lib/self_pr_authoring.py" "$1" --seed "$3" "$4"
+  ' _ "$ROOT" "$author_repo" "$author_task" "$author_project"
+}
+
 fixture() {                     # a repo with a remote, a task, and the real scripts
   local d; d="$(safe_tmpdir)"; local bare="$d/remote.git" task="${1:-T-Z}"
   git init -q --bare "$bare"
@@ -61,13 +72,14 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   stack_base_fixture bin
   cp "$ROOT/skills/worker/SKILL.md" "$d/repo/skills/worker/"
-  printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
+  printf 'vendor: mock\nfallback:\n  - mock\nproject:\n  check: true\n' > config.yaml
   jq -n --arg task "$task" '{id:$task,title:"a mock task",scope:["src/**"],acceptance:["it exists"]}' \
     > "design/tasks/$task.json"
   printf '# design\n## 6. gates\nseven of them\n## 8. board\n' > design/design.md
   git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
   ) || return 1
   seed_spec_preflight "$d/repo" "$task" || return 1
+  seed_self_pr_authoring "$d/repo" "$task" || return 1
   printf '%s' "$d"
 }
 

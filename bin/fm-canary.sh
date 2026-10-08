@@ -571,6 +571,41 @@ destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
     failed=1
     return 1
   fi
+  if [ "$label" = self ]; then
+    if ! (cd "$engine" && "${scrub[@]}" HERDR_ENV=0 FM_ROOT="$engine" bash -c '
+      . "$1/bin/fm-config.sh"
+      fm_storage_init "$1" || exit 65
+      python3 - "$1/bin/lib" "$2" <<"PY_AUTHOR"
+import json, os, sys
+from pathlib import Path
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from fm_spec_pins import Pins
+from fm_self_pr import authority, source_digests, validate, save, state_path
+pins = Pins(os.environ, sys.argv[2])
+events = state_path(pins.state, "events.jsonl")
+events.parent.mkdir(parents=True, exist_ok=True)
+if pins.approval(None) is None:
+    with events.open("a") as out:
+        out.write(json.dumps(dict(type="greenlit", actor="captain", task=pins.task,
+                                 project=pins.project, ts="2026-10-03T00:00:00Z"))+"\n")
+_, _, snapshots, approval, _ = authority(pins.task, "self", prospective=True)
+spec = json.loads(snapshots["spec"]["text"])
+draft = dict(schema=1, task=pins.task, sources=source_digests(snapshots),
+             subject="Restore the hostile fixture worktree", size="small",
+             problem="A hostile fixture round destroys its own worktree.",
+             expected_result="The owned mirror restores the fixture work.",
+             approach="Exercise restoration using an isolated scripted workload.",
+             intent_notes=[dict(index=0, note="Preserve the approved hostile restoration drill.")])
+validate(draft, spec, draft["sources"], approval)
+save(state_path(pins.state, "pr-authoring/"+pins.task+".json"), draft)
+PY_AUTHOR
+    ' _ "$engine" "$id"); then
+      record_destroy "$label" "$mode" "$id" 0 'could not author canary self publication'
+      failed=1
+      return 1
+    fi
+  fi
   out="$(cd "$engine" \
     && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct \
        ${project_env[@]+"${project_env[@]}"} FM_GH="$gh" FM_HOSTILE_MODE="$mode" FM_MIRROR_INTERVAL=1 \

@@ -11,6 +11,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dPol="$(fixture)"; rPol="$dPol/repo"; GHPol="$(ghstub "$dPol")"
 printf 'vendor: mock\nfallback:\n  - mock\npolicy:\n  network: registry.npmjs.org\n  worker:\n    cpu: 600\n' \
   > "$rPol/config.yaml"
+  seed_self_pr_authoring "$rPol" T-Z
 cat > "$rPol/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
@@ -72,6 +73,7 @@ hatch_round() {   # hatch_round <dir> <env...> -> stdout+stderr; the mock's view
   local dd="$1" rr="$1/repo" gg; shift
   gg="$(ghstub "$dd")"
   printf 'vendor: mock\nfallback:\n  - mock\n' > "$rr/config.yaml"
+  seed_self_pr_authoring "$rr" T-Z
   cp "$rPol/bin/adapters/mock.sh" "$rr/bin/adapters/mock.sh"
   (cd "$rr" && env FM_ROOT="$rr" FM_GH="$gg" FM_T_POL="$dd" "$@" bin/fm-worker.sh --task T-Z 2>&1)
 }
