@@ -1246,11 +1246,31 @@ read the private findings before deciding the next round's scope.
 
 `fm-autopilot.sh` passes that SHA to `fm-decide.sh --expected-head <sha>`. A manually
 raised tracked merge card needs the same flag and a signed readiness record.
-The board forwards the recorded SHA; never replace it with a fresh PR read.
-`fm-merge.sh --expected-head <sha>` revalidates the receipt and calls GitHub
-with `--match-head-commit`. A moved or unverifiable head settles as failed,
-with a bilingual `decision_made` outcome. Refresh evidence and raise a new card;
-do not retry the failed answer automatically. Old unsigned evidence remains standing-list history, never
+The board forwards the recorded SHA and, for tracked cards, a verified-shape
+64-hex signed readiness signature. `fm-merge.sh` keeps the original binding and
+uses `--match-head-commit` for the accepted readiness head. An eligible signed
+tracked card enters carry evaluation across merges of the project base, subject
+to unchanged patch, files, spec/contract/conventions hashes, the same current
+signed review, eligible review policy, and fresh signed six-gate readiness with
+green required checks. External/both policy refuses changed review heads;
+stacked PRs, own commits, changed inputs/reviews, forged or missing card evidence,
+failed checks, closed PRs and known same-head DIRTY conflicts refuse with reasons.
+Transient reads and pending evidence wait; an unchanged caught-up head whose
+readiness needs a branch update refuses when no update will arrive.
+
+The helper waits up to `FM_MERGE_CARRY_SECONDS` (3600 seconds), polling every
+`FM_MERGE_CARRY_POLL` (30 seconds) for the autopilot's branch update, CI and gates.
+It freezes one copied engine code root for binding, adoption, emission and final
+cleanup while preserving real project/storage/git roots. It fast-forwards the
+local project base on every try after independent signed pre-sync validation;
+firstmate need not synchronize it by hand during carry. Local commits, dirty
+files in the way, another worktree's base, missing refs and fetch failures wait
+and are named at the deadline. It never updates the PR branch, reruns CI or runs
+gates itself. While that merge is running, raise no new card for the task. Success
+merges the new exact head and the merged event names `carried_from` and `head`.
+Only a refused or timed-out carry (decision `failed` with its bilingual reason)
+needs refreshed evidence and a new card; never retry a failed answer automatically.
+Unsigned/untracked cards retain their existing path. Old unsigned evidence remains standing-list history, never
 merge authority: obtain a new signed source-bound review. A legacy external
 evidence directory requiring relocation stays held for firstmate to coordinate
 an approved migration. Never delete a rejection to recover readiness.
