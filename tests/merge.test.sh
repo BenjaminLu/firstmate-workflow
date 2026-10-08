@@ -58,7 +58,7 @@ G
 # pr_is <fixture> <state> <head branch> [title] [number]: what GitHub holds
 # for that pull request (#9 unless named) now
 pr_is() { jq -cn --arg s "$2" --arg b "$3" --arg t "${4:-a pull request}" --argjson n "${5:-9}" \
-  '{number:$n,state:$s,headRefName:$b,title:$t,headRefOid:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > "$1/pr.json"; }
+  '{number:$n,state:$s,headRefName:$b,title:$t,baseRefName:"main",headRefOid:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > "$1/pr.json"; }
 types() { jq -r '.type + " " + (.task // "-")' "$1/state/events.jsonl" 2>/dev/null | tr '\n' ' '; }
 
 # --- what it refuses ----------------------------------------------------
@@ -457,4 +457,175 @@ rm -rf "$d"
 
 python3 "$ROOT/tests/lib/external_adopt.py" "$ROOT" merge
 assert_eq 0 "$?" 'adopted PR merge follows pinned ownership and base'
+# T-220: signed tracked answers carry only through the bounded helper path.
+carry_fixture() {
+  d="$(fixture OPEN t-009-board)"
+  git -C "$d" config user.name Fixture; git -C "$d" config user.email fixture@example.invalid
+  printf base > "$d/base-file"; git -C "$d" add base-file; git -C "$d" commit -qm base
+  git clone -q --bare "$d" "$d-origin"
+  git -C "$d" remote set-url origin "$d-origin"
+  jq '.headRefOid="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' "$d/pr.json" > "$d/next"
+  mv "$d/next" "$d/pr.json"
+  # PATH survives the immutable engine re-exec. Observe the actual wait
+  # boundary in this fixture only, forwarding unchanged to the real sleeper.
+  real_sleep="$(command -v sleep)"
+  : > "$d/sleepcalls"
+  cat > "$d/stub/sleep" <<SLEEP
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> "$d/sleepcalls"
+exec "$real_sleep" "\$@"
+SLEEP
+  chmod +x "$d/stub/sleep"
+  real_git="$(command -v git)"
+  cat > "$d/stub/git" <<GIT
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> "$d/gitcalls"
+exec "$real_git" "\$@"
+GIT
+  chmod +x "$d/stub/git"
+}
+carry_merge() {
+  PATH="$d/stub:$PATH" FM_ROOT="$d" FM_GH="$d/stub/gh" FM_MERGE_CARRY_SECONDS="${carry_seconds:-5}" FM_MERGE_CARRY_POLL=1 \
+    bash "$d/bin/fm-merge.sh" --pr 9 --task T-009 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    --bound-signature cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+}
+carry_fixture
+printf '%s\n' '{"head":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}' > "$d/.fixture-carry"
+out="$(carry_merge 2>&1)"; assert_eq 0 "$?" 'carried head merges'
+assert_contains "$(cat "$d/ghcalls")" '--match-head-commit bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' 'merge uses carried head'
+assert_eq aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$(jq -r 'select(.type=="merged")|.data.carried_from' "$d/state/events.jsonl")" 'event names original head'
+assert_eq bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$(jq -r 'select(.type=="merged")|.data.head' "$d/state/events.jsonl")" 'event names merged head'
+assert_contains "$(jq -r 'select(.type=="merged")|.summary["zh-TW"]' "$d/state/events.jsonl")" '答案沿用' 'carried event authored in both locales'
+rm -rf "$d" "$d-origin"
+for mode in wait refuse; do
+  carry_fixture; carry_seconds=2
+  printf 'fixture readiness %s\n' "$mode" > "$d/.fixture-carry-$mode"
+  out="$(carry_merge 2>&1)"; status=$?
+  assert_eq 1 "$status" "carry $mode refuses"
+  if [ "$mode" = wait ]; then
+    assert_contains "$out" waited 'wait deadline en'; assert_contains "$out" 已等待 'wait deadline tw'
+    assert_ok "test -s '$d/sleepcalls'" 'waiting carry reaches the observed sleep boundary'
+    assert_contains "$(cat "$d/.fixture-carry-calls")" full 'waiting carry evaluates full readiness'
+  else
+    assert_contains "$out" 'cannot carry' 'lasting refusal en'; assert_contains "$out" 無法沿用 'lasting refusal tw'
+    assert_eq "" "$(cat "$d/sleepcalls")" 'lasting refusal never invokes wait sleep'
+    assert_eq "$(printf 'pre-sync\nfull')" "$(cat "$d/.fixture-carry-calls")" 'lasting refusal evaluates readiness once without retry'
+  fi
+  assert_lacks "$(cat "$d/ghcalls")" 'pr merge' 'refusal merges nothing'
+  rm -rf "$d" "$d-origin"
+done
+# Unknown state is unreadable throughout the carry helper, never terminal.
+for remote_state in UNKNOWN 7; do
+  carry_fixture; carry_seconds=0
+  jq --arg state "$remote_state" '.state=$state' "$d/pr.json" > "$d/next"
+  mv "$d/next" "$d/pr.json"
+  out="$(carry_merge 2>&1)"; assert_eq 1 "$?" 'unreadable state reaches bounded deadline'
+  assert_contains "$out" waited 'unknown state waits rather than permanently refusing'
+  assert_lacks "$(cat "$d/gitcalls" 2>/dev/null)" fetch 'unknown state authorizes no sync'
+  assert_lacks "$(cat "$d/ghcalls")" 'pr merge' 'unknown state authorizes no merge'
+  rm -rf "$d" "$d-origin"
+done
+carry_seconds=5
+carry_fixture
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --task T-009 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2>&1)"
+assert_eq 1 "$?" 'unsigned moved head still refuses'; assert_contains "$out" 'PR head changed' 'unsigned route unchanged'
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --bound-signature cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc 2>&1)"
+assert_eq 1 "$?" 'signature without explicit task keeps old moved-head refusal'
+assert_contains "$out" 'PR head changed' 'no-task signature does not enter carry'
+out="$(FM_ROOT="$d" bash "$d/bin/fm-merge.sh" --pr 9 --bound-signature fixture 2>&1)"
+assert_eq 64 "$?" 'invalid signature shape refused'
+out="$(FM_ROOT="$d" bash "$d/bin/fm-merge.sh" --pr 9 --bound-signature '' 2>&1)"
+assert_eq 64 "$?" 'explicit empty signature is invalid'
+rm -rf "$d" "$d-origin"
+carry_fixture
+jq '.baseRefName="t-008-parent"' "$d/pr.json" > "$d/next"; mv "$d/next" "$d/pr.json"
+before="$(git -C "$d" rev-parse main)"
+out="$(carry_merge 2>&1)"; assert_eq 1 "$?" 'stacked signed card refuses immediately'
+assert_contains "$out" 'stacked on t-008-parent' 'stacked reason en'; assert_contains "$out" '疊在 t-008-parent' 'stacked reason tw'
+assert_fail "test -e '$d/.fixture-carry-calls'" 'stacked card never evaluates carry'
+assert_lacks "$(cat "$d/gitcalls" 2>/dev/null)" fetch 'stacked card never fetches'
+assert_eq "$before" "$(git -C "$d" rev-parse main)" 'stacked card never synchronizes base'
+rm -rf "$d" "$d-origin"
+carry_fixture
+jq '.state="MERGED"|.headRefName="t-010-other"' "$d/pr.json" > "$d/next"; mv "$d/next" "$d/pr.json"
+out="$(carry_merge 2>&1)"; assert_eq 1 "$?" 'merged wrong-task card refuses'
+assert_contains "$out" "not T-009's" 'ownership precedes merged state'; assert_lacks "$out" 'already merged' 'wrong card cannot settle as merged'
+rm -rf "$d" "$d-origin"
+# Ownership is re-read during the wait, before MERGED can settle another task.
+carry_fixture
+printf 'waiting for readiness\n' > "$d/.fixture-carry-wait"
+python3 "$ROOT/tests/lib/carry_ownership.py" "$ROOT" "$d"
+assert_eq 0 "$?" 'during-wait MERGED still checks ownership first'
+rm -rf "$d" "$d-origin"
+carry_fixture
+printf 'transient precheck read\n' > "$d/.fixture-precheck-wait"
+carry_seconds=2
+out="$(carry_merge 2>&1)"; assert_eq 1 "$?" 'unreadable precheck waits to deadline'
+assert_contains "$out" 'transient precheck read' 'precheck wait reason retained'
+assert_lacks "$(cat "$d/gitcalls" 2>/dev/null)" fetch 'precheck wait performs no synchronization'
+assert_lacks "$(cat "$d/.fixture-carry-calls")" full 'precheck wait grants no full acceptance'
+rm -rf "$d" "$d-origin"
+carry_seconds=5
+# Lasting precheck refusals must win over divergent AND dirty base sync75.
+for local_state in divergent dirty; do
+  for reason in 'evidence store failed verification: forged or modified local evidence record' 'no current local approval' 'external review policy: a review identity is bound to its head'; do
+    carry_fixture
+    old="$(git -C "$d" rev-parse main)"
+    git clone -q "$d-origin" "$d-writer"
+    git -C "$d-writer" config user.name Fixture; git -C "$d-writer" config user.email fixture@example.invalid
+    printf remote > "$d-writer/base-file"; git -C "$d-writer" commit -qam advance
+    git -C "$d-writer" push -q origin main
+    if [ "$local_state" = divergent ]; then
+      printf own > "$d/own"; git -C "$d" add own; git -C "$d" commit -qm own
+    else
+      printf dirty > "$d/base-file"
+    fi
+    before="$(git -C "$d" rev-parse main)"
+    printf '%s\n' "$reason" > "$d/.fixture-precheck-refuse"
+    out="$(carry_merge 2>&1)"; assert_eq 1 "$?" 'lasting precheck wins'
+    assert_contains "$out" "$reason" 'lasting reason preserved'
+    assert_eq "" "$(cat "$d/sleepcalls")" 'lasting precheck refusal never invokes wait sleep'
+    assert_eq pre-sync "$(cat "$d/.fixture-carry-calls")" 'lasting precheck runs once without retry'
+    assert_eq "$before" "$(git -C "$d" rev-parse main)" 'lasting refusal writes no base'
+    assert_lacks "$(cat "$d/.fixture-carry-calls")" full 'lasting precheck prevents full carry'
+    assert_lacks "$(cat "$d/gitcalls" 2>/dev/null)" fetch 'lasting precheck performs no synchronization'
+    assert_lacks "$(cat "$d/ghcalls")" 'pr merge' 'lasting precheck prevents merge'
+    rm -rf "$d" "$d-origin" "$d-writer"
+  done
+done
+# A valid precheck plus sync75 waits; a full carry wait still synchronizes main.
+for mode in divergent advance; do
+  carry_fixture; carry_seconds=2
+  old="$(git -C "$d" rev-parse main)"
+  git clone -q "$d-origin" "$d-writer"
+  git -C "$d-writer" config user.name Fixture; git -C "$d-writer" config user.email fixture@example.invalid
+  printf live > "$d-writer/live"; git -C "$d-writer" add live; git -C "$d-writer" commit -qm advance
+  git -C "$d-writer" push -q origin main
+  live="$(git -C "$d-writer" rev-parse main)"
+  if [ "$mode" = divergent ]; then
+    printf own > "$d/own"; git -C "$d" add own; git -C "$d" commit -qm own
+    old="$(git -C "$d" rev-parse main)"
+  fi
+  printf 'no signed six-gate readiness for candidate\n' > "$d/.fixture-carry-wait"
+  out="$(carry_merge 2>&1)"; assert_eq 1 "$?" 'sync/wait deadline refuses'
+  assert_contains "$out" waited 'deadline message retained'
+  if [ "$mode" = divergent ]; then
+    assert_contains "$out" 'cannot be fast-forwarded' 'sync reason survives deadline'
+    assert_eq "$old" "$(git -C "$d" rev-parse main)" 'divergent base untouched'
+    assert_lacks "$(cat "$d/.fixture-carry-calls")" full 'sync75 prevents full carry'
+  else
+    assert_eq "$live" "$(git -C "$d" rev-parse main)" 'sync advances before readiness arrives'
+    assert_contains "$(cat "$d/.fixture-carry-calls")" full 'full carry only follows successful sync'
+  fi
+  rm -rf "$d" "$d-origin" "$d-writer"
+done
+carry_seconds=5
+# Valid shape alone never changes untracked routing.
+d="$(fixture OPEN hotfix 'hotfix')"
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --untracked --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --bound-signature cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc 2>&1)"
+assert_eq 0 "$?" 'signed-shape untracked card keeps existing route'
+assert_fail "test -e '$d/.fixture-carry-calls'" 'untracked never calls carry'
+rm -rf "$d"
+python3 "$ROOT/tests/lib/carry_code.py" "$ROOT"
+assert_eq 0 "$?" "carry freezes executable binding, adoption, emission and final cleanup with real project storage"
 finish
