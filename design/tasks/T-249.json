@@ -1,0 +1,224 @@
+{
+  "id": "T-249",
+  "title": "each managed external project gets its own Herdr workspace labelled with the project name: its rounds open their crew tabs there (found by label, created with --no-focus when missing, a hand-made workspace with that label reused), fm-project sync ensures the workspace, and any lookup failure falls back to the caller workspace; the self project is unchanged",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-herdr.py",
+    "bin/fm-project.sh",
+    "bin/fm-config.sh",
+    "bin/fm-canary.sh",
+    "tests/lib/herdr.py",
+    "tests/herdr/windows.py",
+    "tests/project-worktrees.test.sh",
+    "tests/project-migration.test.sh",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-249.json"
+  ],
+  "acceptance": [
+    "Why. The captain asked on 2026-10-07, verbatim: \"有辦法把你訥管進來的managed project都顯示在herdr上的spaces區域嗎?\" and then approved this spec: \"要我寫 T-249 的 spec, ok\". Today bin/fm-herdr.py open_herdr_window (origin/main ~:1198-1300) always opens a crew tab with `herdr tab create --workspace <caller workspace_id> ...` (~:1233), so every round of every project lands in the caller's (the engine's) workspace. The captain created one workspace per external project by hand; nothing places rounds there.",
+    "Change 1, project workspace lookup (bin/fm-herdr.py). Add `project_workspace(control, name, clone)`: call `control('workspace', 'list')` and read `result.workspaces` (each row has `workspace_id`, `label`, `number`, `focused`, `active_tab_id`, `pane_count`, `tab_count`, `agent_status`, the shape real Herdr returns). Exactly one row whose `label` equals `name` returns its `workspace_id` (a workspace the captain created by hand with that label is reused as is). More than one matching row returns the `workspace_id` of the row with the smallest `number` (the oldest), so a duplicate never blocks placement and the choice is stable. No matching row creates one with `control('workspace', 'create', '--cwd', str(Path(clone).resolve()), '--label', name, '--no-focus')`; the reply's `result.workspace` must have `label == name` and a non-empty `workspace_id`, else RuntimeError; its id is returned. Find-or-create is serialised per project: the whole list-then-create runs while holding an exclusive `fcntl.flock` on `<project home>/state/herdr-workspace.lock`, where `<project home>` is the parent directory of the clone (`FM_HOME/projects/<name>`, the project's private state, never engine state); the lock file is created if missing and left in place; failure to open or lock it raises OSError, which callers treat like any other lookup failure. Two concurrent first rounds of one project therefore create one workspace. The root shell pane that `workspace create` starts is left as it is (it is the captain's, never owned or closed by fm).",
+    "Change 2, crew tabs open in the project workspace (bin/fm-herdr.py open_herdr_window). After the caller checks and the `focus_before` snapshot read (so the existing call order `pane get caller`, then `api snapshot`, stays first), compute the target workspace: when the round env passed in (`env`) has `FM_EXTERNAL == '1'`, a non-empty `FM_PROJECT` and an existing directory `FM_TARGET_ROOT`, target = `project_workspace(control, env['FM_PROJECT'], env['FM_TARGET_ROOT'])`; any exception from the set the launch path already catches (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError and subprocess.SubprocessError, which covers a hung `workspace list` raising subprocess.TimeoutExpired from Herdr's 15-second subprocess timeout and a malformed reply such as `workspaces: null` or a non-dict row) falls back to `current['workspace_id']` and appends one line `project workspace unavailable: <reason>` to the attempt's herdr.log (no raise, the round still gets a window in the caller workspace). Otherwise (self project, or the env lacks those keys) target = `current['workspace_id']`, byte-for-byte today's behaviour. `tab create` uses `--workspace <target>`; `owner['workspace_id']` = target. Reuse of a recorded pane (pane.json) is unchanged: a task that already has a pane.json keeps that pane and its recorded workspace (possibly the caller workspace) for later rounds; owned_tab and close_owned compare `owner['workspace_id']`, so no other change. Only a task without a pane.json gets the project workspace. Focus: `--no-focus` everywhere; the existing focus_before/focus_after equality check stays and also covers workspace creation.",
+    "Change 3, onboarding and sync create the workspace (bin/fm-herdr.py, bin/fm-project.sh). Add a CLI mode `bin/fm-herdr.py ensure-workspace <engine-root> <name> <clone>`: when `window_host(engine-root) == 'herdr'` and HERDR_PANE_ID is set, it creates a `tempfile.TemporaryDirectory()`, builds `Herdr(<that directory>)` so the control's herdr.log goes there and is removed with it (nothing is written in the engine, the clone or the working directory), calls project_workspace and prints the workspace id; otherwise it prints `skip: <reason>`. `main` gets a new `ensure-workspace` mode wrapped in its own try/except over every Exception, printing `skip: <reason>` and returning 0, so the `__main__` handler's exit 70 is never reached from this mode. bin/fm-project.sh sync_clone, after the existing fm_design_check call (~:175), only for an external project (repo != .) and only when FM_HERDR_WORKSPACE is not `0`, runs `python3 \"$_fm_code_dir/fm-herdr.py\" ensure-workspace \"$REPO\" \"$NAME\" \"$clone\" >/dev/null 2>&1 || true`. Sync's exit code and output are otherwise unchanged. Sync callers: bin/fm-project.sh itself (the operator, onboarding), bin/lib/fm_conventions_watch.py design_sync (~:26-28, the watcher's scheduled sync), bin/fm-canary.sh (~:661, `fm-project.sh sync destroy-fixture`) and bin/fm-config.sh fm_external_prepare (~:1056-1061), which every external entry point runs (bin/fm-worker.sh:81, bin/fm-review.sh:83, bin/lib/fm_concurrent.py:114). fm_external_prepare's sync call gets `FM_HERDR_WORKSPACE=0` in front of it, so a worker or reviewer round adds no Herdr calls before its own window lookup (Change 2 already finds or creates the workspace when the round opens its tab). Per-round ensure-workspace is not intended.",
+    "Change 4, no workspace from fixtures (bin/fm-canary.sh, tests/project-worktrees.test.sh, tests/project-migration.test.sh). bin/fm-canary.sh's `fm-project.sh sync destroy-fixture` call (~:661) runs with `env -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID HERDR_ENV=0`, so a canary started inside Herdr never creates a 'destroy-fixture' workspace. tests/project-worktrees.test.sh (sync at :24) and tests/project-migration.test.sh (sync at :36, :40), the two sync suites that keep inherited HERDR_* today, add right after their existing `FM_*` scrub (:3) `unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID; export HERDR_ENV=0`, so running them from the captain's Herdr session never touches the live Herdr. The other suites that run sync already clear HERDR_* (tests/design-check.test.sh:8, tests/conventions-watch.test.sh:37, tests/project.test.sh:9, tests/onboard-remote.test.sh:8) and tests/canary.test.sh exports HERDR_ENV=0 after its scrub; they are unchanged.",
+    "Not changed, stated. The self project's crew tabs stay in the caller workspace. cmux and tmux windows are unchanged. No workspace is ever closed, renamed or focused by fm. Workspace labels live only in the local Herdr server; nothing new enters git or engine state. The board, events and pins are untouched.",
+    "Tests, new behaviour (each fails on the base commit and passes after), in tests/herdr/windows.py (run by tests/herdr-windows.test.sh) with a scripted `control` double: (a) external round env with FM_EXTERNAL=1, FM_PROJECT=demo and an existing FM_TARGET_ROOT, `workspace list` returning one row labelled `demo` with workspace_id `w-demo` → `tab create` is called with `--workspace w-demo` and owner.json has workspace_id `w-demo`; (b) no row labelled demo → `workspace create --cwd <root> --label demo --no-focus` is called once, then `tab create --workspace` uses the created id; (c) two rows labelled demo with numbers 5 and 3 → no create, the tab opens in the workspace of the row numbered 3; (g) two threads calling project_workspace for the same project at the same time against one shared double whose `workspace list` returns no row until a `workspace create` has happened → exactly one `workspace create` call, and both return the same id; (d) `workspace create` replying with another label → caller workspace fallback with the reason logged; (f) `workspace list` raising subprocess.TimeoutExpired, and separately replying `workspaces: null` → the tab still opens in the caller workspace and herdr.log names the reason; (e) `bin/fm-herdr.py ensure-workspace` with HERDR_PANE_ID unset prints `skip:` and exits 0, and with a Herdr double creates the workspace once and reuses it on a second call, leaves no herdr.log in the engine root or the current directory, and exits 0 when the double raises. The double's `workspace list` and `workspace create` replies use the exact JSON shape captured from real Herdr on 2026-10-07 (list: `{\"result\":{\"type\":\"workspace_list\",\"workspaces\":[{\"active_tab_id\",\"agent_status\",\"focused\",\"label\",\"number\",\"pane_count\",\"tab_count\",\"workspace_id\"}]}}`; create: `{\"result\":{\"type\":\"workspace_created\",\"workspace\":{...same keys},\"tab\":{...},\"root_pane\":{...}}}`).",
+    "Tests, updated (fixture). tests/lib/herdr.py's fake `herdr` executable: `tab create` accepts any `--workspace` value and records it on the created tab and pane (today it asserts `--workspace == 'workspace'` and hard-codes workspace_id); `api snapshot` builds layouts from each tab's own workspace_id; add `workspace list` (rows from saved `ws-*` files plus the caller's `workspace`) and `workspace create` (asserts `--no-focus`, saves a `ws-*` row, replies in the real shape). Every existing caller still passes `workspace` and sees the same values as before.",
+    "Tests, regression (pass on base and after). tests/herdr-windows.test.sh existing cases (including test_matching_or_unspecified_membership_reaches_focus_read, whose calls stay exactly `pane get caller` then `api snapshot` because env={} is not external), tests/herdr-lifecycle.test.sh, tests/herdr-transport.test.sh, tests/herdr-handoff.test.sh, tests/herdr-close-receipt.test.sh, tests/herdr-roster.test.sh, tests/herdr-agentlost.test.sh, tests/herdr-credentials.test.sh, tests/herdr-emitstatus.test.sh and tests/decide.test.sh (all users of tests/lib/herdr.py), the sync suites tests/design-check.test.sh, tests/conventions-watch.test.sh, tests/project.test.sh, tests/onboard-remote.test.sh (all already clear HERDR_*), tests/project-worktrees.test.sh and tests/project-migration.test.sh (scrubbed by Change 4), so ensure-workspace prints skip and sync output is unchanged; tests/canary.test.sh (already scrubs HERDR_* and exports HERDR_ENV=0); and the external entry-point suites tests/external-execution.test.sh (scrubs HERDR_* at :32), tests/external-pr-format.test.sh (tests/lib/external_pr_format.py scrubs HERDR_* at :12, :45) and tests/concurrent-projects.test.sh (tests/lib/concurrent_projects.py stubs fm-project.sh at :150), which reach fm_external_prepare and now pass FM_HERDR_WORKSPACE=0 to sync.",
+    "Callers, all listed. `tab create` has one caller (open_herdr_window). open_herdr_window has one caller (the launch path ~:1526). owner['workspace_id'] readers: owned_tab (~:660), close_owned (~:681), the pre-launch wait loop in open_herdr_window and the env override HERDR_WORKSPACE_ID; all read the owner record, so they follow the target. `workspace list/create` have no caller today. sync_clone is the only place a managed clone is created or fetched; its callers are the operator's fm-project.sh sync, bin/lib/fm_conventions_watch.py design_sync, bin/fm-canary.sh (~:661) and bin/fm-config.sh fm_external_prepare (~:1059; reached from bin/fm-worker.sh:81, bin/fm-review.sh:83 and bin/lib/fm_concurrent.py:114), the last with FM_HERDR_WORKSPACE=0.",
+    "Migration. None for stored records: owner.json keeps the same keys and only `workspace_id` may carry the project workspace id. Rounds already running keep their recorded owner and close where they opened. A task that already has a pane.json keeps reusing that pane and its workspace; a task without one gets the project workspace at its next external round. Projects without a workspace get one at their next sync or next external round. Hand-made workspaces with a matching label are reused.",
+    "Docs. design/design.md §11 (Self-update; the Herdr paragraph sits in its unnumbered crew-window subsection), the Herdr paragraph that starts `With Herdr, \\`herdr tab create --workspace <caller-workspace>` (origin/main ~:3445): edit in place to say an external project's rounds open in the workspace labelled with the project name, found or created with --no-focus, falling back to the caller workspace when that lookup fails; sync ensures the workspace. skills/firstmate/SKILL.md, the terminal-host paragraph (~:164-180): one sentence with the same rule."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "Each managed external project has its own Herdr workspace with the project name."
+        },
+        {
+          "kind": "fact",
+          "text": "The rounds of an external project open their tabs in that workspace."
+        },
+        {
+          "kind": "fact",
+          "text": "A sync creates a missing workspace, and a workspace that you made by hand is used again."
+        },
+        {
+          "kind": "fact",
+          "text": "Firstmate never takes focus, and a failed lookup keeps the tab in the caller workspace."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "The captain asked to see each managed project in the Herdr spaces area."
+        },
+        {
+          "kind": "fact",
+          "text": "Today every crew tab opens in the workspace of the caller."
+        }
+      ],
+      "scope_in": [
+        "bin/fm-herdr.py: workspace lookup, tab placement, the workspace step",
+        "bin/fm-project.sh: sync calls the workspace step",
+        "tests/lib/herdr.py and tests/herdr/windows.py",
+        "design Herdr paragraph and the firstmate skill",
+        "bin/fm-config.sh, bin/fm-canary.sh and two sync suites: no workspace from rounds or fixtures"
+      ],
+      "scope_out": [
+        "cmux and tmux windows",
+        "The self project tabs",
+        "Closing or renaming workspaces"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: project_workspace finds the workspace by its label or creates it under a project lock. Tests a, b, c and g prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: tab create uses the project workspace for an external round. Test a proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: sync runs the workspace step, and a second call uses the same workspace. Test e proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 4: every create uses no-focus, and a lookup error falls back to the caller workspace. Tests c and d prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "The labels stay in the local Herdr server only, and nothing new enters git."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Round asks for a window"
+        },
+        {
+          "state": "gone",
+          "label": "Tab opens in caller workspace"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Round asks for a window"
+        },
+        {
+          "state": "new",
+          "label": "Find workspace by project label"
+        },
+        {
+          "state": "new",
+          "label": "Create it if missing"
+        },
+        {
+          "state": "new",
+          "label": "Tab opens in project workspace"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "每個受管外部專案都有自己的 Herdr 工作區，名稱就是專案名。"
+        },
+        {
+          "kind": "fact",
+          "text": "外部專案的回合把分頁開在該工作區。"
+        },
+        {
+          "kind": "fact",
+          "text": "同步時會建立缺少的工作區，你手動建的同名工作區會沿用。"
+        },
+        {
+          "kind": "fact",
+          "text": "firstmate 不搶焦點，查找失敗時分頁留在呼叫者的工作區。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長要求在 Herdr 的 spaces 區看到每個受管專案。"
+        },
+        {
+          "kind": "fact",
+          "text": "現在每個船員分頁都開在呼叫者的工作區。"
+        }
+      ],
+      "scope_in": [
+        "bin/fm-herdr.py：工作區查找、分頁位置、ensure-workspace",
+        "bin/fm-project.sh：同步時呼叫 ensure-workspace",
+        "tests/lib/herdr.py 和 tests/herdr/windows.py",
+        "設計文件的 Herdr 段落和 firstmate skill",
+        "bin/fm-config.sh、bin/fm-canary.sh 和兩個同步測試：回合和測試不建工作區"
+      ],
+      "scope_out": [
+        "cmux 和 tmux 視窗",
+        "self 專案的分頁",
+        "關閉或改名工作區"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：project_workspace 依名稱找到工作區，或在專案鎖內建立。測試 a、b、c 和 g 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：外部回合的 tab create 使用專案工作區。測試 a 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：同步執行 ensure-workspace，第二次呼叫沿用同一工作區。測試 e 證明。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 4：每次建立都用 no-focus，查找出錯時退回呼叫者工作區。測試 c 和 d 證明。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "名稱只存在本機的 Herdr 伺服器，不會進 git。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "回合要求視窗"
+        },
+        {
+          "state": "gone",
+          "label": "分頁開在呼叫者工作區"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "回合要求視窗"
+        },
+        {
+          "state": "new",
+          "label": "依專案名找工作區"
+        },
+        {
+          "state": "new",
+          "label": "找不到就建立"
+        },
+        {
+          "state": "new",
+          "label": "分頁開在專案工作區"
+        }
+      ]
+    }
+  }
+}
