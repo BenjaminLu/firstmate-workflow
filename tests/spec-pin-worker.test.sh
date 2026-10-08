@@ -18,6 +18,7 @@ printf 'implemented\n' > "$3/src/feature"
 M
 chmod +x "$repo/bin/adapters/mock.sh"
 seed_spec_preflight "$repo" T-Z "" firstmate-workflow
+seed_self_pr_authoring "$repo" T-Z firstmate-workflow
 (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --project firstmate-workflow) > "$d/out" 2>&1
 assert_eq 0 "$?" 'authorized worker pins before running its adapter'
 assert_ok "test -f '$repo/state/pins/T-Z/1.json'" 'worker stores its first pin outside the worktree'
@@ -122,6 +123,11 @@ for missing in contract design; do
       git -C "$repo" add config.yaml
       git -C "$repo" commit -qm 'legacy missing design'
       git -C "$repo" push -q origin main
+    else
+      printf 'vendor: mock\n' > "$repo/config.yaml"
+      git -C "$repo" add config.yaml
+      git -C "$repo" commit -qm 'legacy missing contract'
+      git -C "$repo" push -q origin main
     fi
     mkdir -p "$repo/state/pins/T-Z"
     touch "$repo/state/pins/T-Z/.lock"
@@ -149,6 +155,7 @@ M
     assert_ok "test ! -d '$repo/state/worktrees/T-Z'" 'legacy refusal creates no worktree'
     assert_eq '' "$(git -C "$repo" ls-remote --heads origin 't-z-*')" 'legacy refusal pushes no branch'
     seed_spec_preflight "$repo" T-Z "" "$evidence_project"
+    seed_self_pr_authoring "$repo" T-Z "$evidence_project"
     (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"}) > "$d/out" 2>&1
     assert_eq 0 "$?" "authorized worker survives missing $missing ($mode self)"
     assert_ok "test -s '$d/prompt.md'" 'legacy worker still runs its adapter'

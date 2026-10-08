@@ -248,7 +248,7 @@ chmod +x "$rKill/bin/adapters/mock.sh"
 # caller so the test can wait on its kernel exit notification after SIGKILL.
 mkdir -p "$dKill/mirror-tools"
 real_rsync="$(command -v rsync)"
-printf '#!/usr/bin/env bash\nprintf "%%s\n" "$PPID" > %q\nexec %q "$@"\n' \
+printf '#!/usr/bin/env bash\nif [ "${1:-}" != --server ]; then printf "%%s\n" "$PPID" > %q; fi\nexec %q "$@"\n' \
   "$dKill/mirror.pid" "$real_rsync" > "$dKill/mirror-tools/rsync"
 chmod +x "$dKill/mirror-tools/rsync"
 startedKill="$dKill/started"; adapterpidKill="$dKill/adapter.pid"; mirdirKill="$rKill/state/mirrors/self/T-KILL"

@@ -20,6 +20,16 @@ You are one crew member on one task. You get a worktree of your own, a task
 spec, and the part of the design that bears on it. You do not see the rest of
 the crew and you do not need to.
 
+Firstmate authors new self PR publication prose before dispatch. The trusted
+outer launcher validates exact approved source digests and retained references,
+then seals a separate derivative (or explicitly labels the approved narrow
+unsealed-legacy compatibility mode). Workers never create approval or seals.
+The copied renderer uses exact approved spec/head/diff, never worker test claims
+or raw question reasoning. Existing self/adopted metadata stays preserved.
+Name concrete fail-first assertions with file:line in the worker report; the
+launcher owns PR publication and the gates own execution.
+
+
 ## What you do
 
 Implement the task against the design and approved spec supplied in your prompt.

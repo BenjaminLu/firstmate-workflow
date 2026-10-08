@@ -161,6 +161,7 @@ rm -rf "$dl"
 # exit 65 throws it away with the worktree.
 d4="$(fixture)"; r4="$d4/repo"; GH4="$(ghstub "$d4")"
 printf 'vendor: nosuchvendor\nfallback:\n  - mock\n' > "$r4/config.yaml"
+seed_self_pr_authoring "$r4" T-Z
 out4="$(cd "$r4" && FM_ROOT="$r4" FM_GH="$GH4" bin/fm-worker.sh --task T-Z 2>&1)"
 assert_eq "65" "$?" "a vendor with no adapter is a configuration error, not an outage"
 assert_contains "$out4" "nosuchvendor" "and the worker names it"

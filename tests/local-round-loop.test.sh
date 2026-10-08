@@ -23,7 +23,6 @@ projects:
     tasks: design/tasks
     projection: local
 CONFIG
-seed_spec_preflight "$repo" T-Z "" firstmate-workflow
 cat > "$repo/bin/adapters/mock.sh" <<'ADAPTER'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
@@ -46,6 +45,8 @@ export GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:
 git -C "$repo" add .
 git -C "$repo" commit -qm 'local loop fixture'
 git -C "$repo" push -q origin main
+seed_spec_preflight "$repo" T-Z "" firstmate-workflow
+seed_self_pr_authoring "$repo" T-Z firstmate-workflow
 mkdir -p "$d/stub"
 cat > "$d/stub/gh" <<'GH'
 #!/usr/bin/env bash
