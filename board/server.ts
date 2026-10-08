@@ -2390,6 +2390,10 @@ const taskDetail = (project: string, id: string, locale: string) => {
   for (const round of rounds.values()) round.head ??= round.worker_head;
   const ready = records.filter(r => r.kind === "readiness").at(-1);
   const readiness = ready ? { head: ready.head, gate_base: ready.gate_base, gates: ready.gates, ...(ready.gates_unmapped ? { gates_unmapped: true } : {}), checks: ready.checks, round: ready.round } : null;
+  const externalRecord = external ? records.filter(r => r.kind === "external-verdict").at(-1) : null;
+  const external_review = externalRecord ? { ...externalRecord,
+    findings: externalRecord.findings.map((finding: any) => ({ ...finding,
+      current: finding.reviewed_head === externalRecord.head })) } : null;
   const brief = records.filter(r => r.kind === "brief").at(-1)?.brief ?? null;
   const current = buildState(project, true).tasks.find(t => t.id === id && (t.project || "") === project);
   if (!rounds.size) notes.push("not dispatched yet");
@@ -2416,7 +2420,7 @@ const taskDetail = (project: string, id: string, locale: string) => {
     milestone: spec.milestone ?? null, depends_on: strings(spec.depends_on), scope: strings(spec.scope), acceptance: strings(spec.acceptance),
     ...("explain" in spec ? { explain: spec.explain } : {}), explain_ste: explainSte,
     diagram: existsSync(join(diagramDir, `${diagramName}.${lang}.html`)), diagram_name: diagramName },
-    cards, tests, readiness, rounds: [...rounds.values()].sort((a, b) => a.round - b.round), brief, notes };
+    cards, tests, readiness, external_review, rounds: [...rounds.values()].sort((a, b) => a.round - b.round), brief, notes };
 };
 
 const serveFile = (name: string) => {
