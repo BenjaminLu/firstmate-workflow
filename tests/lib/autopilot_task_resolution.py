@@ -116,31 +116,31 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
     def test_boundary_and_missing_timestamp_do_not_wake(self):
         self.record('ask', 1000)
         self.draft()
-        self.assertEqual(self.pilot.data['wakes'], {})
+        self.assertEqual(set(self.pilot.data['wakes']), {'autopilot-' + A.key(['firstmate-workflow', 'draft-168-' + HEAD])})
         path = next(self.store.directory.glob('*.json'))
         record = json.loads(path.read_text()); record.pop('time')
         path.write_text(json.dumps(record))
         self.draft()
-        self.assertEqual(self.pilot.data['wakes'], {})
+        self.assertEqual(set(self.pilot.data['wakes']), {'autopilot-' + A.key(['firstmate-workflow', 'draft-168-' + HEAD])})
 
     def test_restart_ignores_old_ask_on_draft_and_new_ask_wakes_once(self):
         self.record('ask', 999)
         self.pilot = self.start(1100)
         self.draft()
-        self.assertEqual(self.pilot.data['wakes'], {}, 'old draft ASK must not replay')
+        self.assertEqual(set(self.pilot.data['wakes']), {'autopilot-' + A.key(['firstmate-workflow', 'draft-168-' + HEAD])}, 'old draft ASK must not replay')
         self.record('ask', 1101)
         self.draft(); self.draft()
-        self.assertEqual(len(self.pilot.data['wakes']), 1, 'new ASK must wake once')
+        self.assertEqual(len(self.pilot.data['wakes']), 2, 'new ASK must wake once')
         self.pilot = self.start(1200); self.draft()
-        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.assertEqual(len(self.pilot.data['wakes']), 2)
 
     def test_later_brief_answers_ask_and_next_ask_same_head_wakes(self):
         self.record('ask', 1001); self.draft()
         self.record('brief', 1002, head=BASE, authorized=True)
         self.draft()
-        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.assertEqual(len(self.pilot.data['wakes']), 2)
         self.record('ask', 1003); self.draft(); self.draft()
-        self.assertEqual(len(self.pilot.data['wakes']), 2, 'distinct unanswered ASK needs its own wake')
+        self.assertEqual(len(self.pilot.data['wakes']), 3, 'distinct unanswered ASK needs its own wake')
 
     def test_upgrade_preserves_legacy_ask_delivery_without_hiding_future_asks(self):
         self.record('ask', 1001)
@@ -167,7 +167,7 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
         self.record('brief', 1002, head=BASE, authorized=True)
         self.record('ask', 1003, head=BASE)
         self.draft()
-        self.assertEqual(self.pilot.data['wakes'], {})
+        self.assertEqual(set(self.pilot.data['wakes']), {'autopilot-' + A.key(['firstmate-workflow', 'draft-168-' + HEAD])})
 
     def test_legacy_ask_delivery_is_bound_to_pr_and_head(self):
         self.record('ask', 1001)
