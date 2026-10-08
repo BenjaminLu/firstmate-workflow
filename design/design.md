@@ -1288,8 +1288,8 @@ that needs to become ready. Draft creation during a question round is unchanged.
 | String | Posted by | Meaning |
 |---|---|---|
 | `APPROVE:<task-id>` | reviewer | the only valid pass signal |
-| `ASK-PASS-CRITERIA:<task-id>` | worker | finds no standing list, or an unclear one, and asks for it |
-| `CRITERIA-COMPLETE:<task-id>` | reviewer | closes every `REJECT`, from round one: the numbered list before it is the task's standing list |
+| `ASK-PASS-CRITERIA:<task-id>` | worker or genuine firstmate operator | requests standing-list clarification; only the exact standalone marker reaches the reviewer, never ask prose or private paths |
+| `CRITERIA-COMPLETE:<task-id>` | reviewer | closes every `REJECT` and every delivered ASK clarification before any truthful verdict, including APPROVE; the preceding numbered block is the standing list |
 | `REGRESSION:<task-id>` | reviewer | labels a new item on the standing list: newly introduced by the latest change |
 | `NEW-GROUND:<task-id>` | reviewer | labels a new item on the standing list: the latest change touched code the list never covered |
 
@@ -1653,7 +1653,7 @@ non-item label (such as `**Standing list**`, with or without surrounding blank
 lines) starts a new block. Wrapped
 lines, indented continuation paragraphs and blank lines inside an item belong
 to that item. Duplicate or skipped numbers inside the block remain errors;
-an APPROVE need not re-issue the list.
+an ordinary no-ASK APPROVE need not re-issue the list.
 
 1. The first REJECT creates the standing list. Each later REJECT re-issues it:
    the same numbering, each earlier item marked **done** or **open**, and any
@@ -1669,7 +1669,15 @@ an APPROVE need not re-issue the list.
    unclear one after a REJECT. Before edits, without a delayed round threshold, the worker writes it in
    `.fm-say.md` for script publication before touching a line and waits; that
    asking round changes no implementation files. The reviewer answers with the
-   complete numbered list and `CRITERIA-COMPLETE:<task-id>`.
+   complete contiguous numbered list and `CRITERIA-COMPLETE:<task-id>` before
+   any truthful verdict, including APPROVE or REJECT. A genuine firstmate
+   operator may also request clarification with this marker; it is an operator
+   question, never fabricated worker or reviewer evidence. This ASK exception
+   overrides ordinary approval's optional list. Preserve every prior numbered
+   item, explain finding associations transparently, and mark each done/open
+   with factual evidence. Do not invent same-head regressions or new ground,
+   renumber away findings, require changes without findings, or choose approval
+   merely to repair syntax.
 5. Report protocol violations to firstmate for board coordination.
    Historical implementation until T-135: `bin/fm-protocol.sh` gates from round three on a standing list:
    any comment with a numbered list before a standalone
@@ -1690,6 +1698,20 @@ an APPROVE need not re-issue the list.
    finding matches the item it cites, does not authenticate the markers, and
    does not prove that a regression or new ground is real. A passing protocol
    check does not establish compliance with this role contract.
+
+Local ASK transport carries only the exact standalone marker from worker or
+firstmate ask records. Operator/worker prose, private state paths, worker reports
+and firstmate briefs stay excluded from reviewer prompts and public projection.
+Historical signed and unsealed legacy records and existing pins remain byte-for-byte
+immutable; readable unsealed history gains no authenticated gate authority.
+Frozen running snapshots retain their original instruction. Only new stock
+launches receiving ASK use the clarification exception, including existing tasks.
+Initially approved tasks and valid REJECT followed by ordinary no-ASK APPROVE
+remain compatible. Plain approval preserves an old syntax failure; a new complete
+numbered closing block may clear it through unchanged current-items logic.
+Parser, signatures, source binding and eligibility remain unchanged. A complete
+APPROVE block containing open items can pass syntax: independently refusing that
+semantic inconsistency is the reviewer contract, not an automatic gate promise.
 
 T-135 replaces the following historical T-073 comment transport with local
 records. Every REJECT supplies criteria from round one; every reviewer from

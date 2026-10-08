@@ -798,4 +798,344 @@ M
   rm -rf "$df"
 done
 
+# Locally owned stock managed CLI fixture; no manufactured authentication.
+python3 - "$ROOT" <<'PY_ASK'
+import json
+import os
+import hashlib
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+root = Path(sys.argv[1])
+
+class AskClarification(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name).resolve()
+        self.repo = self.home / 'repo'
+        self.repo.mkdir()
+        self.tools = self.home / 'tools'
+        self.tools.mkdir()
+        self.roundtmp = self.home / 'tmp'
+        self.roundtmp.mkdir()
+        self.env = {k: v for k, v in os.environ.items()
+                    if not k.startswith(('FM_', 'HERDR_', 'GIT_', 'CODEX_', 'CMUX_', 'TMUX', 'XDG_'))}
+        self.env.update(HOME=str(self.home), TMPDIR=str(self.roundtmp),
+                        PATH=str(self.tools) + os.pathsep + os.environ['PATH'],
+                        GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
+                        FM_ROOT=str(self.repo), FM_TRANSPORT='direct', HERDR_ENV='0',
+                        GH_REPO='fixture/project', FM_REVIEW_CI_WAIT='0', FM_GH=str(self.tools / 'gh'))
+        shutil.copytree(root / 'bin', self.repo / 'bin')
+        shutil.copytree(root / 'skills', self.repo / 'skills')
+        (self.repo / 'design/tasks').mkdir(parents=True)
+        (self.repo / 'design/tasks/T-Z.json').write_text(json.dumps(dict(
+            id='T-Z', title='fixture', scope=['src/**'], acceptance=['pinned review'])))
+        (self.repo / 'config.yaml').write_text(
+            'vendor: codex\nreviewer:\n  vendor: codex\n  mode: run\n  model: fixture-model\n')
+        self.write(self.repo / 'bin/fm-auth-probe.sh',
+                   '#!/bin/sh\necho "status: authenticated"\n')
+        # This is only a launch fixture, never evidence of OS confinement.
+        self.write(self.repo / 'bin/fm-sandbox.sh', '''#!/bin/sh
+case "$1" in
+ os) echo darwin;;
+ covers) echo 'write read network sockets env repo-config refuse ulimit';;
+ run)
+   shift
+   while [ "$1" != -- ]; do
+     case "$1" in --started=*) echo started > "${1#*=}";; esac
+     shift
+   done
+   shift
+   exec "$@";;
+ *) exit 99;;
+esac
+''')
+        self.git('init', '-q', '-b', 'main')
+        self.git('config', 'user.name', 'Fixture')
+        self.git('config', 'user.email', 'fixture@example.invalid')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'base')
+        self.base = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-qb', 'work')
+        (self.repo / 'src').mkdir()
+        (self.repo / 'src/a').write_text('pinned change\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'head')
+        self.head = self.git('rev-parse', 'HEAD')
+        self.git('commit', '-q', '--allow-empty', '-m', 'later head')
+        self.later = self.git('rev-parse', 'HEAD')
+        self.git('reset', '--hard', self.head)
+        self.git('checkout', '-q', 'main')
+        self.git('config', 'url.' + str(self.repo) + '.insteadOf', 'https://github.com/fixture/project.git')
+        self.git('update-ref', 'refs/pull/9/head', self.head)
+        self.write(self.tools / 'gh', '''#!/usr/bin/env python3
+import json, pathlib, subprocess, sys
+home = pathlib.Path(HOME_LITERAL)
+args = sys.argv[1:]
+with (home / 'ghcalls').open('a') as f: f.write(json.dumps(args) + '\\n')
+if args[:2] == ['pr', 'comment']:
+    (home / 'published').write_text(args[args.index('--body') + 1])
+elif args and args[0] == 'api' and 'protection' in ' '.join(args):
+    if (home / 'move').exists():
+        subprocess.run(['git', '-C', str(home / 'repo'), 'update-ref', 'refs/heads/work', LATER_LITERAL], check=True)
+    print('{"contexts":["ci"]}')
+elif args and args[0] == 'api' and 'check-runs' in ' '.join(args):
+    print('{"check_runs":[]}')
+elif args[:2] == ['pr', 'view'] and 'comments' in args:
+    print((home / 'comments.json').read_text() if (home / 'comments.json').exists() else '{"comments":[]}')
+elif args[:2] == ['pr', 'view'] and 'headRefOid,baseRefOid,baseRefName,headRefName,state' in args:
+    head = subprocess.check_output(['git', '-C', str(home / 'repo'), 'rev-parse', 'refs/pull/9/head'], text=True).strip()
+    print(json.dumps(dict(state='OPEN', headRefOid=head, baseRefOid=BASE_LITERAL,
+                         headRefName='work', baseRefName='main')))
+elif '--json' in args:
+    print('[]')
+'''.replace('HOME_LITERAL', repr(str(self.home))).replace('LATER_LITERAL', repr(self.later)).replace('HEAD_LITERAL', repr(self.head)).replace('BASE_LITERAL', repr(self.base)))
+        self.write(self.tools / 'codex', '''#!/usr/bin/env python3
+import json, pathlib, subprocess, sys, re, hashlib
+home = pathlib.Path(HOME_LITERAL)
+if sys.argv[1:] == ['--version']:
+    print('codex-cli fixture'); raise SystemExit
+assert sys.argv[1] == 'exec' and sys.argv[-1] == '-'
+assert '--json' in sys.argv and '--output-last-message' not in sys.argv
+assert sys.argv[sys.argv.index('-m') + 1] == 'fixture-model'
+prompt = sys.stdin.read()
+mode = (home / 'mode').read_text()
+old = list(home.glob('capture-*.json'))
+number = len(old) + 1
+checkout = pathlib.Path.cwd()
+record = dict(prompt=prompt, checkout=str(checkout),
+              head=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              clean=not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip())
+if '# Bounded review context' in prompt:
+    archive = pathlib.Path(re.search(r'are retained in (.+?)\\. Those paths', prompt)[1])
+    assert checkout in archive.parents
+    record['archive'] = str(archive)
+    record['sources'] = {p.name: p.read_text() for p in archive.iterdir()}
+    for name in ('history.md', 'diff.md'):
+        digest = hashlib.sha256((archive / name).read_bytes()).hexdigest()
+        assert digest in prompt, (name, 'missing source digest')
+(home / ('capture-%s.json' % number)).write_text(json.dumps(record))
+assert record['clean'], 'every invocation starts fresh'
+(checkout / 'review-scratch').write_text('legitimate reviewer write')
+print(json.dumps({'type':'thread.started', 'thread_id':'fixture'}))
+print(json.dumps({'type':'turn.started'}))
+answer = (home / 'answer').read_text()
+print(json.dumps({'type':'item.completed','item':{'type':'command_execution','aggregated_output':answer}}))
+if mode == 'unavailable':
+    print('rate limit exceeded'); raise SystemExit(2)
+if mode == 'retry' and number == 1:
+    answer = 'Read the files; no decision yet.'
+if mode == 'transcript':
+    answer = 'No signed final answer.'
+print(json.dumps({'type':'item.completed','item':{'id':'final','type':'agent_message','text':answer}}))
+if mode != 'failed-turn':
+    print(json.dumps({'type':'turn.completed','usage':{}}))
+else:
+    print(json.dumps({'type':'turn.failed','error':{'message':'fixture failure'}}))
+'''.replace('HOME_LITERAL', repr(str(self.home))))
+
+    def write(self, path, source):
+        path.write_text(source)
+        path.chmod(0o755)
+
+    def git(self, *args):
+        return subprocess.check_output(['git', '-C', str(self.repo), *args],
+            env=self.env, stderr=subprocess.DEVNULL, text=True).strip()
+
+    def run_review(self, mode='success', round_number='1', **extra):
+        (self.home / 'mode').write_text(mode)
+        result = subprocess.run([str(self.repo / 'bin/fm-review.sh'), '--task', 'T-Z',
+            '--branch', 'work', '--pr', '9', '--round', round_number], cwd=self.repo, env=dict(self.env, **extra),
+            capture_output=True, text=True, timeout=90)
+        self.assertFalse(list(self.roundtmp.glob('fm-review.*')), result.stderr)
+        self.assertFalse(list(self.roundtmp.glob('fm-round.*')), result.stderr)
+        return result
+
+    def seed(self, actor, text):
+        subprocess.run([sys.executable, str(root / 'tests/lib/evidence.py'), str(root),
+                        str(self.repo / 'state'), 'T-Z', actor, text], env=self.env, check=True)
+
+    def test_ask_clarification_every_truthful_verdict_and_round(self):
+        self.seed('reviewer-old', '1. open history\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z')
+        self.seed('reviewer-old', '1. open timestamp\n2. open history\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z')
+        records = self.repo / 'state/evidence/self/T-Z'
+        legacy = json.loads(next(records.glob('*.json')).read_text())
+        legacy.pop('signature')
+        (records / '00000000-unsealed.json').write_text(json.dumps(legacy))
+        for actor in ('firstmate', 'worker-fixture'):
+            self.seed(actor, 'PRIVATE_PROSE /private/STATE_SENTINEL\nASK-PASS-CRITERIA:T-Z')
+        before = {p: p.read_bytes() for p in records.glob('*.json')}
+        pins = {}
+        for number, verdict in ((2, 'APPROVE'), (3, 'REJECT'), (5, 'APPROVE')):
+            state = 'done' if verdict == 'APPROVE' else 'open'
+            (self.home / 'answer').write_text(f'1. {state} timestamp: independently checked\n2. {state} history: independently checked\nCRITERIA-COMPLETE:T-Z\n{verdict}:T-Z\nREVIEWER_COMPLETE:T-Z')
+            result = self.run_review(round_number=str(number))
+            self.assertEqual(0, result.returncode, result.stderr)
+            capture = json.loads(sorted(self.home.glob('capture-*.json'))[-1].read_text())
+            self.assertIn('ASK-PASS-CRITERIA:T-Z', capture['prompt'])
+            self.assertIn('Before any truthful verdict, including APPROVE or REJECT, independently reissue the complete contiguous numbered standing list', capture['prompt'], 'ASK clarification every truthful verdict: fixed stock instruction')
+            self.assertIn('close it with CRITERIA-COMPLETE:T-Z', capture['prompt'])
+            self.assertNotIn('PRIVATE_PROSE', capture['prompt'])
+            receipt = json.loads(max((self.repo / 'state').rglob('last-result.json'), key=lambda p: p.stat().st_mtime_ns).read_text())
+            latest = [json.loads(p.read_text()) for p in sorted(records.glob('*.json')) if json.loads(p.read_text())['kind'] == 'verdict'][-1]
+            self.assertEqual('authenticated', latest['provenance']['level'])
+            self.assertEqual(receipt['final_sha256'], latest['provenance']['final_sha256'])
+            self.assertEqual(hashlib.sha256((Path(receipt['attempt']) / 'final.txt').read_bytes()).hexdigest(), receipt['final_sha256'])
+            self.assertEqual(capture['checkout'], receipt['review']['checkout'])
+            self.assertEqual(self.head, receipt['review']['head'])
+            self.assertEqual(self.head, latest['binding']['head'])
+            self.assertEqual(self.base, latest['binding']['base'])
+            self.assertEqual(self.base, receipt['review']['base'])
+            invocation = json.loads((Path(receipt['attempt']) / 'invocation.json').read_text())
+            self.assertEqual(invocation['review'], receipt['review'])
+            self.assertEqual(invocation['actor'], receipt['actor'])
+            self.assertEqual(receipt['review']['patch'], latest['binding']['patch'])
+            self.assertEqual(pins, {p: p.read_bytes() for p in pins})
+            pins.update({p: p.read_bytes() for p in (self.repo / 'state').rglob('*')
+                         if p.is_file() and p.name in ('spec.json', 'design.md', 'contract.yaml')})
+        self.assertTrue(pins, 'existing pin bytes were compared across new launches')
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_ordinary_approval_migration_without_ask(self):
+        for number in (1, 2):
+            (self.home / 'answer').write_text('APPROVE:T-Z\nREVIEWER_COMPLETE:T-Z')
+            result = self.run_review(round_number=str(number))
+            self.assertEqual(0, result.returncode, result.stderr)
+            capture = json.loads(sorted(self.home.glob('capture-*.json'))[-1].read_text())
+            self.assertNotIn('Before any truthful verdict, including APPROVE or REJECT, independently reissue', capture['prompt'])
+            if number == 1:
+                self.seed('reviewer-old', 'ASK-PASS-CRITERIA:T-Z\n1. open history\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z')
+
+    def test_worker_only_ask_and_private_old_instruction_mutation(self):
+        self.seed('worker-fixture', 'WORKER_ONLY_PROSE\nASK-PASS-CRITERIA:T-Z')
+        (self.home / 'answer').write_text('APPROVE:T-Z\nREVIEWER_COMPLETE:T-Z')
+        result = self.run_review(round_number='2')
+        self.assertEqual(0, result.returncode, result.stderr)
+        capture = json.loads((self.home / 'capture-1.json').read_text())
+        instruction = 'Before any truthful verdict, including APPROVE or REJECT, independently reissue the complete contiguous numbered standing list'
+        self.assertIn(instruction, capture['prompt'], 'worker-only ASK receives fixed stock instruction')
+        # Private fixture mutation restores old history behavior, never production code.
+        launcher = self.repo / 'bin/fm-review.sh'
+        source = launcher.read_text()
+        begin = source.find('  local history\n', source.index('closed_list() {'))
+        end = source.find("  printf '\\nEvery REJECT", begin)
+        if begin >= 0 and end >= 0:
+            launcher.write_text(source[:begin] + '  fm_evidence history --reviewer || return 1\n' + source[end:])
+        result = self.run_review(round_number='3')
+        self.assertEqual(0, result.returncode, result.stderr)
+        mutated = json.loads((self.home / 'capture-2.json').read_text())
+        self.assertNotIn(instruction, mutated['prompt'], 'old stock history mutation removes the feature instruction')
+        with self.assertRaises(AssertionError, msg='the same named instruction assertion is behaviorally red under the private old-code mutation'):
+            self.assertIn(instruction, mutated['prompt'], 'ASK clarification every truthful verdict: fixed stock instruction')
+
+    def test_history_nonce_boundaries_only_actual_standalone_ask_clarifies(self):
+        # Signed legacy records exercise quotation, not managed authentication.
+        # The independent managed final-capture assertions above remain intact.
+        sys.path.insert(0, str(root / 'bin/lib'))
+        from fm_evidence import Store
+        marker = 'ASK-PASS-CRITERIA:T-Z'
+        instruction = 'ASK clarification: Before any truthful verdict'
+        cases = (
+            ('mismatched-close', '----- end deadbeef -----\n' + marker, None),
+            ('nested-pair', '----- begin cafe -----\n----- end cafe -----\n' + marker, None),
+            ('nested-begin', '----- begin cafe -----\n' + marker, None),
+            ('normal-quoted', marker, None),
+            ('ordinary-no-ask', 'ordinary review prose', None),
+            ('malformed-truncated', '----- begin bad -----\n----- end bad ----\n'
+             '----- end -----\n----- begin\n' + marker, None),
+            ('matching-close-operator', '----- begin cafe -----\n----- end deadbeef -----\n'
+             + marker, 'firstmate'),
+            ('matching-close-worker', '----- begin cafe -----\n' + marker, 'worker-fixture'),
+        )
+        script = (root / 'bin/fm-review.sh').read_text()
+        start = script.index('closed_list() {')
+        assembly = script[start:script.index('\n}\n', start) + 3]
+        for name, quoted, actor in cases:
+            with self.subTest(case=name):
+                state = self.home / ('nonce-' + name)
+                store = Store(state, 'self', 'T-Z')
+                store.append('verdict', 1, 'reviewer-old', self.head,
+                             quoted + '\n1. open retained finding\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z',
+                             verdict='REJECT', provenance={'level': 'legacy'})
+                if actor:
+                    store.append('ask', 2, actor, self.head, 'EXCLUDED_ASK_PROSE\n' + marker)
+                before = {p: p.read_bytes() for p in store.directory.glob('*.json')}
+                authority = store.records()
+                self.assertTrue(all(r.get('signature') for r in authority))
+                self.assertEqual(bool(actor), any(r['kind'] == 'ask' for r in authority))
+                proc = subprocess.run(['bash', '-c',
+                    '. "$CODE/bin/fm-config.sh"; TASK=T-Z; ' + assembly + '\nclosed_list'],
+                    env=dict(self.env, FM_STATE_DIR=str(state), FM_PROJECT='self',
+                             FM_EXTERNAL='0', CODE=str(root)),
+                    capture_output=True, text=True, check=True)
+                self.assertIn(quoted, proc.stdout, 'production Store.history retains quoted bytes')
+                if actor:
+                    self.assertIn(instruction, proc.stdout,
+                                  'exact generated enclosing close restores genuine standalone ASK')
+                else:
+                    self.assertNotIn(instruction, proc.stdout,
+                                     'nonce boundary: quoted markers never request clarification')
+                self.assertNotIn('EXCLUDED_ASK_PROSE', proc.stdout)
+                self.assertEqual(before, {p: p.read_bytes() for p in store.directory.glob('*.json')})
+                self.assertEqual(authority, store.records(), 'signed history authority unchanged')
+
+    def test_external_private_store_marker_only_stock_context(self):
+        # Execute the stock history assembly against a private external Store.
+        # No authenticated verdict is manufactured in this transport fixture.
+        sys.path.insert(0, str(root / 'bin/lib'))
+        from fm_evidence import Store
+        from fm_review_context import compose
+        private = self.home / 'PRIVATE_STATE_SENTINEL'
+        store = Store(private, 'private-project', 'T-Z', external=True)
+        for actor in ('firstmate', 'worker-fixture'):
+            store.append('ask', 2, actor, self.head,
+                         f'PRIVATE_{actor}_PROSE {private}\nASK-PASS-CRITERIA:T-Z')
+        store.append('worker-report', 2, 'worker-fixture', self.head, 'PRIVATE_REPORT_PROSE')
+        store.append('brief', 2, 'firstmate', self.head, 'PRIVATE_BRIEF_PROSE')
+        before = {p: p.read_bytes() for p in store.directory.glob('*.json')}
+        # Real Store.history and the launcher's own fixed instruction, not a test copy.
+        script = (root / 'bin/fm-review.sh').read_text()
+        start = script.index('closed_list() {')
+        end = script.index('\n}\n', start) + 3
+        assembly = script[start:end]
+        proc = subprocess.run(['bash', '-c',
+            '. "$CODE/bin/fm-config.sh"; TASK=T-Z; ' + assembly + '\nclosed_list'],
+            env=dict(self.env, FM_EXTERNAL='1', FM_STATE_DIR=str(private),
+                     FM_PROJECT='private-project', CODE=str(root)),
+            capture_output=True, text=True, check=True)
+        context = self.home / 'public-context'
+        context.mkdir()
+        for part in ('intro', 'history', 'evidence', 'diff', 'outro'):
+            (context / (part + '.md')).write_text(proc.stdout if part == 'history' else '')
+        compose(context, 'diff', self.repo)
+        prompt = (context / 'prompt.md').read_text()
+        self.assertIn('ASK-PASS-CRITERIA:T-Z', prompt)
+        self.assertIn('Before any truthful verdict, including APPROVE or REJECT', prompt)
+        public = (context / 'prompt.md').read_bytes()
+        # Real optional-comment wrapper; only the final delivery endpoint is a fixture.
+        subprocess.run(['bash', '-c',
+            '. "$CODE/bin/fm-config.sh"; fm_projection() { echo comments; }; '
+            'fm_github() { cp "$5" "$COMMENT"; }; '
+            'fm_comment_projection 9 --body-file "$PUBLIC"'],
+            env=dict(self.env, FM_EXTERNAL='1', CODE=str(root),
+                     COMMENT=str(self.home / 'optional-comment'), PUBLIC=str(context / 'prompt.md')),
+            check=True)
+        (self.repo / 'public-artifact').write_bytes(public)
+        for path in [*context.glob('*.md'), self.home / 'optional-comment', self.repo / 'public-artifact']:
+            content = path.read_text()
+            for sentinel in ('PRIVATE_firstmate_PROSE', 'PRIVATE_worker-fixture_PROSE',
+                             'PRIVATE_STATE_SENTINEL', 'PRIVATE_REPORT_PROSE', 'PRIVATE_BRIEF_PROSE'):
+                self.assertNotIn(sentinel, content)
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertFalse((self.repo / 'state/evidence/private-project').exists())
+
+unittest.main(argv=['ask-clarification'], verbosity=2)
+PY_ASK
+assert_eq 0 "$?" "managed ASK clarification lifecycle"
+
 finish
