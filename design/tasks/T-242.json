@@ -1,0 +1,292 @@
+{
+  "id": "T-242",
+  "title": "a merge card explains each change point and its door: the spec explain carries change points (intent, how, files, tests) and a one-way or two-way door with its reason and rollback, plus a comprehension check for a one-way door; fm-decide attaches the code hunks and test lines of each change point from the pull request at the expected head; the board walks intent → spec line → code → test, marks the door, and the server refuses A on a one-way card until every intent is marked reviewed and the check is answered correctly",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [
+    "T-245",
+    "T-246"
+  ],
+  "scope": [
+    "bin/lib/fm_ste.py",
+    "bin/lib/fm_spec_preflight.py",
+    "bin/lib/fm_card_refs.py",
+    "bin/fm-decide.sh",
+    "board/server.ts",
+    "board/public/index.html",
+    "board/public/board.css",
+    "board/public/board.js",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "i18n/tw2cn.tsv",
+    "tests/card-refs.test.sh",
+    "tests/lib/card_refs.py",
+    "tests/ste.test.sh",
+    "tests/spec-preflight.test.sh",
+    "tests/decide.test.sh",
+    "tests/board-state.test.sh",
+    "tests/e2e/board-change-points.spec.ts",
+    "tests/e2e/board-decisions.spec.ts",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-242.json",
+    "tests/board-task-detail.test.sh",
+    "tests/e2e/board-task-detail.spec.ts",
+    "tests/e2e/board-intent-cards.spec.ts",
+    "tests/lib/ste_cases.py",
+    "tests/lib/spec_preflight_cases.py",
+    "tests/e2e/lib/intent-card.ts",
+    "tests/e2e/lib/fixture.ts",
+    "tests/lib/project-storage.sh",
+    "tests/lib/autopilot_merge_path.py",
+    "bin/lib/fm_autopilot_loop.py",
+    "tests/i18n.test.sh"
+  ],
+  "acceptance": [
+    "Why. The captain approved the board prototype on 2026-10-07: \"看板樣式可以了, 可以以這個版本開發\". In the review rounds before that, the captain asked, verbatim: \"文字和diagram圖片還是沒有講解改造細節, 也沒有對回原始intent需求, 每一個改造點也沒有連結回相關的github code snippet和tests位置\", \"意圖對齊要能引導船長看懂改造有符合當初的意圖, spec能對上, 引導船長要細看的話要去哪裡看實際這一段的程式改了什麼? 相關的testcase是什麼?\" and \"標註這個PR上線的話是一個單向門還是雙向門, 雙向門還有機會rollback, 單向門建議船長細看看懂, 如何在選項引導船長確認自己有看懂?\". The prototype's data shapes, UX walkthrough and rendering are in the round's local brief (firstmate records state/briefs/T-242.design.md); its code is reference only. Later that day the captain added, verbatim: \"船員名冊顯示的太窄, 高度太限縮, 閱讀順序應該是先看意圖重點列表, 再帶到動畫邏輯帶看\"; this task builds the intent key-point walk with code and test links, and the per-block diff walk and the animated hero scene, with links from each intent row into them, follow in T-244. Base note: T-245 is merged; board.js, board.css, intent rows and decision bars exist. T-246 must merge before T-242 implementation because its tabs/sheets share these files. Re-preflight against that base. Normative visual requirements are all stated here: intent key points first; evidence (intent, spec acceptance, named tests, door reason and rollback) is visible without expanding code; each code section starts closed; comprehension is answerable from evidence alone. The local prototype brief is reference only and need not exist in an isolated checkout. T-244 owns animation and per-block diff walkthrough.",
+    "Change 1, explain schema (bin/lib/fm_ste.py, bin/lib/fm_spec_preflight.py). check-explain and check-details accept three optional per-locale fields. `change_points`: a list, one item per change point, `{intent: N, how: text}` where N names an existing Intent N of the same locale and `how` is one STE fact sentence; both locales have the same count and the same intent numbers. `door`: `{kind: 'one-way'|'two-way', reason: text, rollback: text}` with the same kind in both locales; `rollback` is required for two-way and may say what cannot be undone for one-way. `check`: `{q: text, options: [text, text, ...2-4], why: text, about: {intent: N}}` present only when the door is one-way and required then. Every text is checked by the existing STE rules and limits. A locale-free top-level spec field `change_refs` (fm_spec_preflight validates it; bin/lib/fm_config_tasks.py keeps calling only check_explain, which is intended: fm_spec_preflight and fm-decide are where the cross-field rules are enforced) lists, index-aligned with change_points, `{files: [repo paths], tests: [{file, name}], acceptance: [0-based indices into the spec's acceptance list]}`, and a top-level `check_answer` holds the 0-based correct option index; preflight refuses an acceptance index or a check_answer index out of range, a change_refs length that differs from change_points, or a one-way door with no check. All three fields stay optional: specs and cards without them are valid as today. The new fields are added to fm_ste's known explain and card fields but not to the fields check-details requires on every merge card, so existing merge cards stay valid; bin/fm-decide.sh's own copy of the field list (around line 413) gets the same three names.",
+    "Change 2, the card takes the spec's walk (new bin/lib/fm_card_refs.py, bin/fm-decide.sh). On `fm-decide.sh --request --kind merge --pr N --expected-head SHA`, fm-decide reads the task's spec the way fm_binding does: the pin from Pins(env, task).resolve(if_present=True), or, when no pin exists, the self project spec committed at SHA and the external project spec in private FM_TASKS_DIR; a corrupt pin exits 65 with no card. If the spec explain has change_points, fm-decide puts the spec's change_points, door and check of each locale onto the card details itself (firstmate does not author them); the card's own `intent` items must equal the spec explain's intent items in each locale (same count, same text), and details that already carry any of the three new fields must equal the spec's, or fm-decide exits 65 with a message naming the mismatch and writes no card; a details file with no intent fields at all, for a task whose spec has change_points, also exits 65 asking firstmate to author the intent card from the spec; a card details file with change_points whose spec has none, or a one-way spec door without check_answer, also exits 65. check-details then runs as today on the result. After check-details, fm-decide runs fm_card_refs.py and adds one locale-free top-level details field `refs`, which STE never checks: `{spec_url, acceptance: [the spec's acceptance lines], points: [one per change point: {acceptance: [indices], code: [...], tests: [...]}]}`. fm_card_refs.py runs `gh pr view N --repo <project github> --json headRefOid` through the existing gh wrapper (FM_GH), then `gh pr diff N --repo <project github>`, then the view again, and exits 65 (fm-decide writes no card) unless both views report SHA; `code` holds, for each listed file, each hunk of that diff as `{file, start, end, url, snippet}` for added/context text hunks (the Diff completeness clause defines other kinds) with url `https://github.com/<repo>/pull/N/files#diff-<sha256(path)>R<start>`, at most 12 added or context lines in snippet, and over 20 hunks per change point truncated with a `more` count; `tests` holds, for each `{file, name}`, the line where the name first appears in `git show SHA:<file>` in the project's clone, as `{file, line, name, url}` with a blob URL at SHA, or `line: null, url: null` when the name is absent or git show fails. For the self project spec_url is the spec's blob URL at SHA; for an external project, whose pinned spec lives in private state, spec_url is null and the acceptance lines show as text, so no generated private storage link reaches the card. fm-decide copies the spec's `check_answer` into the pending record as a top-level field `check_answer`, never inside details. `gh pr diff` and the two `gh pr view` calls are new network reads of this command. fm-decide refuses (exit 65) change_points, door or check in the details of every other card kind, including merge-untracked, dispatch, choice, readiness and repin cards. The enriched details are written to a temporary file before the payload is built, and fm_card_refs.py never names both fm-decide and --request (tests/decide.test.sh's raiser sweep).",
+    "Change 3, the server enforces the door (board/server.ts). The check is a comprehension prompt, not a secret: the answer stays readable in the committed spec (spec_url) and through the localhost /file route, and that is accepted. The board still does not hand it to the page unasked: the server removes `check_answer` where it sends pending items (/api/state and SSE; pending() itself keeps it for POST /decisions), and /api/task and publicDecision never include it. POST /decisions on a card whose details.en.door.kind is one-way, when the answer would merge (the effect the server derives for that choice is merge, whatever the letter; a choice recorded as change because a question got No does not merge and needs no check), requires `reviewed_intents` (every intent number of the card) and `check_answer` equal to the pending record's `check_answer`; otherwise it answers 409 with code `doorUnconfirmed` and records nothing. The recorded decision keeps `reviewed_intents` and `check_ok: true`. Two-way cards, cards with no door (every card raised before this task) and answers that do not merge are unchanged.",
+    "Change 4, the card (board/public/index.html and board.js). On a card with change_points, the intent key-point list (today built by intentBody() in board/public/index.html under the intentHeading and alignmentHeading keys; T-245 nests the done items under the intent rows) becomes a guided walk, read first as the captain asked: one step per Intent N; each step opens first to its evidence view: its spec acceptance lines (refs.points[i].acceptance into refs.acceptance, linked by spec_url when present), each change point's `how` sentence, its tests (file:line, name, link) and the card's CI and review status; the code hunks (file:line, the snippet, a link to the PR diff) sit in a collapsed 'Show code' section under each change point, closed by default on every card including one-way doors, and open only on click; each step ends with an 'I checked this intent' tick. The door shows as a badge (one-way in flag red, two-way in kelp) with the reason, and the rollback for two-way. For a one-way door the decision bar locks A and says what is missing (unticked intents, the unanswered question) until every intent is ticked and the question is answered; a wrong answer shows the card's `why` without scolding. The page sends `reviewed_intents` and `check_answer` with A; the server's answer is the authority. Cards without the new fields render as before. The task detail panel (intentBody's second caller, index.html around line 951) shows the same walk read-only for a merge card with refs (no ticks, no lock), and for a spec explain with change_points but no refs it lists each change point's `how` under its Intent N with no code or test links. The door badge, reason and rollback are part of the evidence view. The comprehension check is answerable from the evidence view alone: fm_spec_preflight refuses a spec whose check names no intent, acceptance line or test that the evidence view shows (the check carries `about: {intent: N}` and its question and answer must be stated in that intent's acceptance lines or its change points' `how`), and A unlocks after the intents are ticked and the check is answered, without any 'Show code' section ever being opened.",
+    "Not changed, stated. Choice cards (including purpose dispatch, purpose repin and readiness use) and merge-untracked cards; the merge itself (fm-merge.sh) and the six gates; the event types; the T-241 layout and tokens; existing specs and cards without the new fields.",
+    "Tests, new behaviour (fail on base, pass after). tests/card-refs.test.sh with tests/lib/card_refs.py: a fixture repository and a stubbed gh that answers `gh pr diff` and `gh pr view --json headRefOid` like GitHub does; refs for two change points come out with the right file, start/end, sha256 anchor, snippet cap and test line; a head that differs in either gh pr view refuses; a missing test name gives line null; an over-cap hunk list carries `more`. tests/ste.test.sh: a valid explain with change_points, door and check passes; a mismatched intent number, a kind that differs by locale, a one-way door with no check and a check on a two-way door each fail. tests/spec-preflight.test.sh: change_refs length mismatch and an out-of-range check_answer are refused. tests/board-state.test.sh: neither /api/state, the SSE state, /api/task nor a recorded decision's public view contains check_answer; a pending merge card with no door is answered A exactly as today; a one-way A without reviewed_intents, or with a wrong answer, gets 409 doorUnconfirmed and no decision file; the right answer records the decision with reviewed_intents. tests/e2e/board-change-points.spec.ts: the walk steps, links and snippets render, A stays locked until every tick and the right answer, and the two-way card answers in one click. tests/decide.test.sh: `fm-decide.sh --request --kind merge` on a spec with change_points puts change_points, door and check on the card and refs as a top-level details field; writes check_answer top-level and never in details; writes spec_url for the self project and null for an external one with no private path anywhere in the card; exits 65 with no pending file when the head moves between the two views, when authored details differ from the spec's change_points or door, and for a one-way spec with no check_answer. tests/spec-preflight.test.sh also refuses an out-of-range acceptance index. tests/decide.test.sh also covers: a details file with no intent fields for a spec with change_points exits 65 and the autopilot's raise reports it; intents that differ from the spec's exit 65; matching intents get change_points, door, check and refs. tests/e2e/board-change-points.spec.ts also opens the task detail panel for a merge card with refs (read-only walk) and for a spec explain with change_points but no card (how text, no links). tests/decide.test.sh also: change_points, door or check on kind choice (including purpose dispatch, purpose repin and readiness) or kind merge-untracked exits 65; a task with no pin reads the spec committed at SHA; a corrupt pin exits 65. tests/e2e/board-change-points.spec.ts also checks that on a one-way card every 'Show code' section is closed on load, that ticking every intent and answering the check unlocks A with no code section opened, and that 'Show code' opens and closes a change point's hunks; tests/spec-preflight.test.sh refuses a check with no `about` intent.",
+    "Tests, regression. tests/decide.test.sh: merge cards without change_points are built byte for byte as today; tests/e2e/board-decisions.spec.ts stays green; existing check-explain and check-details cases pass unchanged. tests/e2e/board-intent-cards.spec.ts keeps passing for cards without change_points; tests/board-task-detail.test.sh and tests/e2e/board-task-detail.spec.ts keep passing and the first also asserts the detail endpoint omits check_answer.",
+    "Callers, all listed. fm_ste.check_explain is called by fm_spec_preflight.py and the fm_ste CLI; check_details by fm-decide.sh and the CLI; fm-decide.sh --kind merge is invoked by bin/lib/fm_autopilot_loop.py (merge-card raise) and by firstmate by hand; the pending payload is built in board/server.ts pending() and read by index.html, board.js and the voyage game (games/voyage-2d/src/board-source.js reads localized details.options and posts /decisions without reviewed_intents/check_answer); POST /decisions is called by index.html and games/voyage-2d/src/board-source.js. bin/lib/fm_config_tasks.py calls check_explain on every task file. The task detail endpoint (board/server.ts, the cards list of /api/task) returns card details. bin/fm-diagram.sh runs check-explain and reads named fields of pending records (it never reads check_answer). Test helpers: tests/lib/ste_cases.py (used by tests/ste.test.sh and tests/decide.test.sh), tests/lib/spec_preflight_cases.py, and tests/e2e/lib/intent-card.ts and tests/e2e/lib/fixture.ts for the card fixtures. Voyage one-way behavior is deliberately server-refused: the unmodified game caller has no confirmation fields and cannot complete a one-way merge-effect decision; the server responds400 doorUnconfirmed, records no decision/event or merge effect, and the captain completes confirmation in the main card instead. Do not add auto-confirmation, bypass fields or change the game client. The existing game returns response JSON/code unchanged; main card guidance for doorUnconfirmed must direct the captain to its confirmation controls. Add a real authenticated iframe/game decision request case in already-scoped tests/e2e/board-change-points.spec.ts proving refusal, continued pending state, no effects, and successful main-card confirmation; retain tests/e2e/game.spec.ts unchanged for ordinary/no-door/nonmerge game commands.",
+    "Migration. Optional fields only. Specs without change_points, their cards, and pending and decided records written before this task behave as today. For a task whose spec gains change_points, fm-decide now refuses a merge-card details file that has no intent fields or whose intents differ from the spec's (exit 65, no card), so the autopilot's merge-card raise for that task waits until firstmate writes the intent card from the spec; this is stated in the firstmate skill and tested in tests/decide.test.sh. A matching details file gets the walk added.",
+    "Docs. design/design.md §8 'The captain's board' (the captain card) and §5.2 (the explain paragraph and the check-details merge rules): edit in place for change_points, door, check, change_refs and check_answer, the refs attached at the head, the server-side door check and the stripped answer. skills/firstmate/SKILL.md: when writing a spec, judge the door (a stored-format change, a published external write or a force-push of a shared branch is one-way) and write change_points, change_refs and, for a one-way door, the check.",
+    "Schema combinations and indices, normative clarification. The complete absence of change_points, door, check, change_refs and check_answer remains legacy behavior. Nonempty change_points requires door and nonempty index-aligned change_refs; orphan fields are refused. Every intent has at least one point; duplicate intent references are allowed for distinct change points. Intent numbers are integers (not bool), 1-based in range; acceptance indices and check_answer are integers (not bool), 0-based in range. Both locales have matching point counts/intent sequence, door kind, check option count/order meaning and about.intent. One-way requires nonempty rollback text stating the irreversible consequence, check and check_answer. Two-way requires nonempty concrete rollback text and forbids check/check_answer. check.options has 2–4 nonempty STE strings. check.about.intent is required and valid. Validation runs before any publication; add positive and each negative combination to STE/preflight/decide fixtures.\n\nEvidence-only deterministic support. check.about.intent associates the question with one intent; in each locale the correct option text must occur verbatim as a nonempty substring in that intent's visible text, its change-point how text, door.reason or door.rollback. check.why cannot be the sole source because it is not visible before the check. Preflight validates both locales using the shared check_answer; wrong-index, absent-evidence, invalid-intent and supported-answer cases are explicit. Independent reviewer also checks whether bilingual options correspond and whether the question truthfully tests that evidence; structural substring support is not a semantic verdict.",
+    "Correct-answer protocol, selected contract. Preserve the approved requirement that the merge-effect control stays locked until every intent is reviewed and the answer is correct. Add POST /decisions/check-door with captain authentication and the same origin/session guards as /decisions. Body contains decision id, reviewed intent numbers and answer index. Read the current pending card and return {ok:true} only for a valid complete one-way confirmation; otherwise return {ok:false,code:'doorUnconfirmed',why:<localized text>}. This route never records an answer, writes decision/event state or runs merge/effect commands. Do not return check_answer. The browser sends this check after confirmation changes; pending/incomplete/wrong responses keep every merge-effect control locked. Bind the response to the current decision confirmation values; changes or stale responses invalidate it. Final POST /decisions still independently rechecks the submitted reviewed set/answer against its current pending record. An existing No response producing effect change bypasses the merge-door requirement. Non-A merge letters receive identical checks; A with non-merge effect does not. Direct POST failures leave no writes or merge side effects. Add route/auth/state and e2e wrong→correct/changed-input/stale-response cases.\n\nStored-answer validity, both routes. On a one-way card requiring confirmation, POST /decisions/check-door and final merge-effect POST /decisions refuse a missing, null, boolean, noninteger or out-of-range stored check_answer with HTTP409 {ok:false,code:'doorUnconfirmed',why:<locale check.why>}. Missing/malformed submitted answer receives the wire-contract malformed response. Both routes validate storage before claiming confirmation. No refusal creates a decision file/directory, emits a decision/merge event or invokes an effect. tests/board-state.test.sh separately covers every stored-invalid shape and omitted submitted answer through both routes; the final write must remain after validation.\n\nExact check-route wire contract. POST /decisions/check-door accepts JSON {id:string, reviewed_intents:number[], check_answer:number, locale:'en'|'zh-TW'|'zh-CN'}. reviewed_intents contains unique 1-based intent numbers in range; order is immaterial and normalizes ascending. bool, noninteger, duplicates, out-of-range entries and nonarray are malformed. A valid incomplete set is unconfirmed. check_answer is a 0-based integer, not bool, in the stored question option range. Both check route and POST /decisions use these same field names/normalization; final route retains existing chosen/text/answers fields. locale absent defaults to configured captain language; unsupported/type-invalid locale is malformed. en and zh-TW use their card check.why; zh-CN applies the existing Traditional-to-Simplified conversion, with no new external dependency. Auth/origin/session refusal uses existing guard/status semantics. Invalid JSON/shape/id syntax/locale or missing submitted confirmation fields returns400 {ok:false,code:'doorUnconfirmed',why:<localized check.why when pending available, otherwise localized generic confirmation message>}; unknown id404 {ok:false,code:'decisionMissing'}; valid incomplete/wrong answer or malformed stored answer409 {ok:false,code:'doorUnconfirmed',why:<localized text>}; success200 {ok:true,id:<id>}. An already-recorded id on the check route returns409 {ok:false,code:'decisionAlreadyRecorded'} without mutation. All responses use JSON and never expose stored answer. The final POST retains existing response envelopes for success/existing non-door errors but uses these malformed/unconfirmed confirmation statuses. Tests cover en/zh-TW/zh-CN feedback, omitted locale/default, unsupported locale, all malformed fields, reordered complete set, incomplete set and non-recording successful check. No state/stream event is emitted by a check. Final-response browser normalization: before its existing success test `if (!r.error) answered.add(id); sent.delete(id);`, normalize any parsed final response with ok:false into an error result using localized why (or localized fallback), preserving code and confirmation inputs. Keep that existing success/lock sequence and the unchanged tests/board-card-layout.test.sh assertion valid. On final400/409 after a successful check-route verification, never add answered, clear picks/drafts/reviewed intents/answer, or hide the card; clear in-flight state, invalidate stale confirmation, display localized feedback and leave the same card pending and retryable. Add scoped E2E cases for successful verification followed by final400 and409 in both locales, retaining inputs and recovering with new confirmation, and preserve legacy r.error,403 and unreachable handling.",
+    "Diff completeness. Paths are repository-relative normalized POSIX paths: refuse absolute paths, dot/dotdot segments, NUL/control characters, duplicates and invalid decoding. Decode Git C-quoted path headers (including escaped Unicode bytes) correctly; URL percent-encode repository path segments while computing diff anchor SHA256 from the actual UTF-8 path. Parse text hunks with old/new ranges. Added/context snippets use right-side R anchors; deletion-only hunks use old-side L anchors with at most12 removed/context lines and side:'left'. Existing file deletion links remain PR-diff links, not nonexistent head blobs. Binary and rename-only changes produce a link with kind:'binary' or kind:'rename', null start/end and empty snippet; no invented code lines. Match listed files against either old or new normalized path, include each once, and refuse a listed code file absent from the diff with exit65. Truncate over20 entries per point with point.more equal omitted count. Test quoted/space/non-ASCII paths, traversal rejection, deletions, binary, rename-only, absent files and URL encoding. Missing named test gets line:null and url:null; distinguish that valid helper result from failed helper launch.",
+    "Privacy boundary. Local private cards may display authored acceptance/explain prose, including private path text when intentionally authored. The helper never generates an external spec storage path/link; external spec_url is null. No private task prose, acceptance, storage metadata or paths are sent in gh arguments, external writes or generated URLs. GitHub reads contain only repository/PR parameters. All generated source/test URLs contain validated repository-relative paths and expected head. Add captured-gh-arguments/public-write and URL assertions; do not claim to scrub arbitrary locally displayed authored prose.",
+    "Pins and migration. An existing valid pin remains authoritative and adding fields to a mutable task file does not upgrade it. Upgrade uses the existing captain-approved repin flow and exact spec preflight; self committed spec must continue matching its active pin where current policy requires it. Old pin without fields produces legacy card even when mutable task text gains fields; new pin produces enriched card. Already-pending legacy cards remain legacy after task/repin changes; no retroactive door guard applies. Test all three plus external no-pin private spec. Rejecting merge-only fields on choice/merge-untracked is the deliberate narrow exception to unchanged card-kind behavior.",
+    "Regression and fixture inventory. Run tests/spec-explain.test.sh (tests/lib/spec_explain_cases.py), tests/board-card-layout.test.sh, tests/i18n.test.sh, tests/autopilot-merge-path.test.sh (tests/lib/autopilot_merge_path.py), tests/decisions.test.sh, tests/board-card-effects.test.sh and tests/skill-update-cards.test.sh in addition to the listed regressions. Keep the old intent renderer branch and legacy no-door behavior unchanged. Check missing-name helper behavior separately from fail-first implementation assertions; helper absence/launch errors never count as behavioral test failures. Add mismatch-authored-check, details-points/spec-no-points and all schema combinations. Audit isolated module-copy fixtures; load fm_card_refs.py only for enrichment-bearing merge cards so legacy isolated installations still work. Add tests/lib/project-storage.sh to scope if enriched fixtures need that module.\n\nFurther regressions and enforced base prerequisite. Retain tests/board-auth.test.sh, tests/e2e/board-card-lock.spec.ts and tests/board-live-stream.test.sh unchanged as regressions for authentication, stale response/double-submit and stream behavior. New check-route guard coverage belongs in tests/board-state.test.sh already scoped; existing auth/lock/stream files are not authorized for assertion changes by this inventory. Task depends_on includes T-246 as well as T-245. No further exact spec preflight or dispatch occurs on a base lacking merged T-246; after its merge and self-update, perform whole-standing-list preflight on that base and report the authoritative SHA. The present amendment analysis on the old base is planning, not fulfillment of that prerequisite. Later-base sheet regression: retain tests/e2e/board-v2-sheets.spec.ts unchanged, including its decision-sheet/task-detail interaction. Add enriched walk cases navigating through Fleet and task detail in already-scoped tests/e2e/board-change-points.spec.ts; do not weaken or edit the sheet regression. Preserve tests/e2e/board-v2-card.spec.ts exact legacy intent layout/state/locale cases, tests/board-projects.test.sh public decision projection, tests/e2e/board-crew.spec.ts exact selected-copy inventory, and their shared-fixture defaults unchanged. New enrichment fixtures are explicit opt-in and must not alter legacy default module inventories or assertion contracts; any necessary outside assertion change requires separate exact scope approval.",
+    "Additional caller mirrors. bin/lib/fm_merge_details.py imports check_details and maintains INTENT_FIELDS; it deliberately continues excluding merge-only enrichment fields because fm-decide enriches from the authoritative spec, not copied dispatch details. Its existing generated details must preserve the exact explain intents. board/server.ts calls check-explain for task detail. Include those callers and the autopilot-merge-path regression; no edit to fm_merge_details is requested unless a verified incompatibility needs a separately reviewed scope amendment. Executable producer mirror: tests/lib/gate_not_runnable.py test_merge_payload_carries_warning extracts and executes the actual jq payload expression with only legacy variables. Retain tests/gate-not-runnable.test.sh unchanged and preserve that legacy expression contract: enrichment/check-answer integration must not introduce an unconditionally required shell variable, input file or helper into the legacy extracted expression. With no enriched spec, the old fixture still runs the production expression and keeps not_runnable gates and reasons. Do not edit tests/lib/gate_not_runnable.py; any inability to preserve this contract requires an explicit later scope proposal instead of changing this outside-scope fixture.",
+    "Autopilot refusal/recovery, selected contract. A merge-card request refusal on mismatched intent/fields creates no card and does not terminate the supervisor. Its failed advancement job records the concrete refusal and uses the existing bounded retry/wake mechanism, naming the task/reserved id and required authored-details correction without leaking private text. After firstmate supplies corrected details, the changed input permits a new advancement attempt; the actual stock request succeeds and creates one card, without duplicate requests/effects. Test this real request-failure path and recovery in tests/lib/autopilot_merge_path.py rather than only calling fm-decide directly. Add bin/lib/fm_autopilot_loop.py to scope only for handling that currently unhandled request failure; no other scheduler behavior changes.",
+    "i18n. New visible controls, door labels, Show code, review confirmations, check feedback and doorUnconfirmed have matching English/Traditional Chinese keys and Simplified conversion coverage. Use lint-reachable literal double-quoted t calls and the server refusal-code registry. Extend explicit assertions in tests/i18n.test.sh for new keys/conversion. Missing-key and untranslated-error regressions stay active.",
+    "Amendment precedence. The detailed clauses Schema combinations, Correct-answer protocol, Evidence-only support, Diff completeness, Privacy boundary, Pins/migration, Regression inventory, Caller mirrors, Autopilot refusal/recovery and i18n replace incompatible shorter wording in Changes1–4 and original tests. They are the single selected implementation contract in this draft; no alternative route or relaxed unlock behavior is requested. This normative draft is not captain approval. Applying the formal amendment, pinning and dispatch remain blocked on a fresh captain A for these exact bytes and scope. No production work begins before exact SPEC-OK on a base containing merged T-246.",
+    "Confirmation replay/idempotency. After a successful one-way merge-effect decision, store normalized reviewed_intents, check_ok:true and a private door_confirmation_fingerprint equal to SHA256 of canonical compact JSON {reviewed_intents:<sorted unique list>,check_answer:<submitted integer>}. Never return this fingerprint through state/SSE/task/publicDecision. On repeated POST for this stored decision, preserve existing choice/custom/ordinary-answer comparison and also require valid present confirmation fields yielding exactly the stored fingerprint. Reordered identical intent numbers are identical retries and return existing success with already:true; omitted, malformed or changed confirmations return409 code doorUnconfirmed without writes/events/effects. A pending record need not remain for retry comparison. An unchanged retry cannot rerun merge or any effect. Legacy/nonmerge/No→change decisions retain current idempotency behavior and need no fingerprint. Tests cover identical/reordered retries, omitted/changed intent or answer, fingerprint privacy, and one effect total.",
+    "Canonical repository discovery with no registry. Registered project mode uses the confirmed project github and --repo for all head/diff reads. In unregistered self mode omit --repo for canonical discovery via the existing FM_GH wrapper: gh repo view --json nameWithOwner,url from the actual project clone cwd. Require returned url to be an absolute HTTPS repository URL with hostname exactly github.com, no userinfo, port, query or fragment, and pathname exactly /<owner>/<repo> (optional trailing slash) matching nameWithOwner; validate exactly two nonempty owner/repository components against the configured repository grammar; reject mismatched identity or any other host before follow-up reads or generated links; no guessed identity from task IDs, local directory names or private paths. Use the returned canonical owner/repo explicitly for subsequent head/diff reads and generated HTTPS URLs. Discovery failure, missing/malformed/non-GitHub identity or unsuccessful read exits65 with actionable repository-discovery message, before card writes; no fallback fabricated URL. Captured gh argv/cwd fixture verifies enriched unregistered success, refusal, explicit follow-up --repo and canonical URL construction. Legacy no-enrichment unregistered mode never gains this discovery call and keeps its existing behavior. Captured-gh fixtures cover a syntactically valid nameWithOwner with a disallowed-host URL, non-HTTPS URL, missing URL and owner/path mismatch: all exit65 before card writes. Configured registered projects retain their existing github.com identity contract and require no new discovery call."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "Each change point on a merge card maps to its intent, its spec line, its code and its tests."
+        },
+        {
+          "kind": "fact",
+          "text": "The card marks the change as a one-way or two-way door, with the reason and the rollback."
+        },
+        {
+          "kind": "fact",
+          "text": "For a one-way door, you confirm each intent and answer one question before A unlocks."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "You approved the board prototype on 2026-10-07: \"看板樣式可以了, 可以以這個版本開發\"."
+        },
+        {
+          "kind": "fact",
+          "text": "You asked that each change links to its intent, its code and its tests."
+        },
+        {
+          "kind": "fact",
+          "text": "You asked the card to mark a one-way or two-way door and to check your understanding."
+        },
+        {
+          "kind": "fact",
+          "text": "You asked to read the intent list first. T-244 adds the animated walk-through after it."
+        }
+      ],
+      "scope_in": [
+        "fm_ste.py and the spec preflight: the new fields",
+        "a new fm_card_refs.py and fm-decide.sh: code and test refs",
+        "board/server.ts: the stripped answer and the door check",
+        "the board card and i18n",
+        "new and updated tests, design and the firstmate skill"
+      ],
+      "scope_out": [
+        "the diff walk and the animated hero scene",
+        "the merge, the six gates and the event types",
+        "cards without the new fields"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: fm-decide attaches the code hunks and test lines at the head. The card refs test proves it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: the STE checker accepts the door, and the card shows it. The STE test and the new board test prove it."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: the server refuses an unconfirmed A on a one-way card. The board state test and the new board test prove it."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "The check is a prompt, not a secret. The state payload leaves the answer out, and the server checks it."
+        },
+        {
+          "kind": "note",
+          "text": "Evidence comes first on every card. The code view stays closed until you open it."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Spec explains the task"
+        },
+        {
+          "state": "gone",
+          "label": "Card lists intents as prose"
+        },
+        {
+          "state": "gone",
+          "label": "Captain hunts for code"
+        },
+        {
+          "state": "gone",
+          "label": "A is always one click"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Spec explains the task"
+        },
+        {
+          "state": "new",
+          "label": "Spec adds change points and door"
+        },
+        {
+          "state": "new",
+          "label": "fm-decide attaches code and tests"
+        },
+        {
+          "state": "new",
+          "label": "Card walks each intent"
+        },
+        {
+          "state": "new",
+          "label": "Server checks one-way A"
+        }
+      ]
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "合併卡上每個改造點都對應意圖、spec 條目、程式碼和測試。"
+        },
+        {
+          "kind": "fact",
+          "text": "卡片標出單向門或雙向門，寫明理由和 rollback 方式。"
+        },
+        {
+          "kind": "fact",
+          "text": "單向門要先確認每條意圖並答對一題，A 才會解鎖。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "船長在 2026-10-07 核准看板原型：\"看板樣式可以了, 可以以這個版本開發\"。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長要求每個改造點連回意圖、程式碼和測試。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長要求卡片標出單向門或雙向門，並確認船長看懂。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長要求先看意圖列表。T-244 在後面加上動畫導覽。"
+        }
+      ],
+      "scope_in": [
+        "fm_ste.py 和 spec 預審：新欄位",
+        "新的 fm_card_refs.py 和 fm-decide.sh：程式碼和測試位置",
+        "board/server.ts：隱藏答案並檢查單向門",
+        "看板卡片和 i18n",
+        "新增和更新的測試、設計和 firstmate skill"
+      ],
+      "scope_out": [
+        "逐段 diff 導覽和動態主圖",
+        "合併、六關和事件類型",
+        "沒有新欄位的卡片"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：fm-decide 在 head 上附加程式碼片段和測試行。卡片位置測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：STE 檢查接受門的欄位，卡片顯示它。STE 測試和新看板測試證明這點。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：伺服器拒絕未確認的單向門 A。看板狀態測試和新看板測試證明這點。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "確認題是提示，不是祕密。狀態資料不帶答案，由伺服器檢查。"
+        },
+        {
+          "kind": "note",
+          "text": "每張卡都先顯示證據。程式碼要點開才看得到。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "spec 說明任務"
+        },
+        {
+          "state": "gone",
+          "label": "卡片用文字列出意圖"
+        },
+        {
+          "state": "gone",
+          "label": "船長自己找程式碼"
+        },
+        {
+          "state": "gone",
+          "label": "A 永遠一鍵送出"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "spec 說明任務"
+        },
+        {
+          "state": "new",
+          "label": "spec 加上改造點和門"
+        },
+        {
+          "state": "new",
+          "label": "fm-decide 附上程式碼和測試"
+        },
+        {
+          "state": "new",
+          "label": "卡片逐條走過意圖"
+        },
+        {
+          "state": "new",
+          "label": "伺服器檢查單向門 A"
+        }
+      ]
+    }
+  }
+}

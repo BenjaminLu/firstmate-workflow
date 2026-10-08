@@ -19,6 +19,40 @@ managed = importlib.util.module_from_spec(loader)
 loader.loader.exec_module(managed)
 
 
+class ChangePointSchema(unittest.TestCase):
+    def test_evidence_and_indices(self):
+        from copy import deepcopy
+        from fm_spec_preflight import validate_change_refs
+        loader = importlib.util.spec_from_file_location('ste_cases', ROOT / 'tests/lib/ste_cases.py')
+        cases = importlib.util.module_from_spec(loader); loader.loader.exec_module(cases)
+        spec = dict(explain=cases.walk_card(), acceptance=['The check passes.'],
+                    change_refs=[dict(files=['src/a.py'], tests=[dict(file='tests/a.py', name='test_a')], acceptance=[0])],
+                    check_answer=0)
+        validate_change_refs(spec)
+        for name, mutate in [
+            ('wrong answer evidence', lambda d: d.update(check_answer=1)),
+            ('bool answer', lambda d: d.update(check_answer=True)),
+            ('out of range answer', lambda d: d.update(check_answer=2)),
+            ('length mismatch', lambda d: d.update(change_refs=[])),
+            ('acceptance range', lambda d: d['change_refs'][0].update(acceptance=[1])),
+            ('bool acceptance', lambda d: d['change_refs'][0].update(acceptance=[True])),
+            ('traversal', lambda d: d['change_refs'][0].update(files=['../a'])),
+            ('duplicate files', lambda d: d['change_refs'][0].update(files=['a', 'a'])),
+            ('missing answer', lambda d: d.pop('check_answer')),
+            ('invalid about', lambda d: d['explain']['en']['check'].update(about=dict(intent=2))),
+            ('absent evidence', lambda d: d['explain']['zh-TW']['check']['options'].__setitem__(0, '不存在。')),
+        ]:
+            with self.subTest(name=name):
+                bad = deepcopy(spec); mutate(bad)
+                with self.assertRaises(ValueError): validate_change_refs(bad)
+        two = deepcopy(spec); two['explain'] = cases.walk_card('two-way'); two.pop('check_answer')
+        validate_change_refs(two)
+        two['check_answer'] = 0
+        with self.assertRaises(ValueError): validate_change_refs(two)
+        validate_change_refs(dict(acceptance=['legacy']))
+        with self.assertRaises(ValueError): validate_change_refs(dict(change_refs=[]))
+
+
 class Preflight(unittest.TestCase):
     def setUp(self):
         clean = patch.dict(os.environ, {'HERDR_ENV': '0'}, clear=True)

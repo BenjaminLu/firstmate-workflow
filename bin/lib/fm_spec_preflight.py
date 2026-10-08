@@ -143,6 +143,67 @@ def structure(answer, task, acceptance_count, previous=None):
     return parsed
 
 
+def repository_path(value):
+    if (not isinstance(value, str) or not value or value.startswith('/') or '\\' in value
+            or any(part in ('', '.', '..') for part in value.split('/'))
+            or any(ord(c) < 32 or 127 <= ord(c) <= 159 or 55296 <= ord(c) <= 57343 for c in value)):
+        raise ValueError('change_refs: expected normalized repository-relative path')
+    return value
+
+
+def validate_change_refs(spec):
+    """Validate locale-free walk fields and evidence visible before confirmation."""
+    import fm_ste
+    explain = spec.get('explain', {})
+    enriched = any(field in explain.get(lang, {}) for lang in fm_ste.LOCALES for field in fm_ste.WALK_FIELDS)
+    if not enriched:
+        if 'change_refs' in spec or 'check_answer' in spec:
+            raise ValueError('change_refs/check_answer: orphan field')
+        return
+    fm_ste._validate(explain)
+    points = explain['en']['change_points']
+    refs = spec.get('change_refs')
+    if not isinstance(refs, list) or not refs or len(refs) != len(points):
+        raise ValueError('change_refs: length must match change_points')
+    acceptance = spec.get('acceptance', [])
+    for ref in refs:
+        if not isinstance(ref, dict) or set(ref) != {'files', 'tests', 'acceptance'}:
+            raise ValueError('change_refs: expected files, tests and acceptance')
+        files, tests, indices = ref['files'], ref['tests'], ref['acceptance']
+        if not isinstance(files, list) or not files or not isinstance(tests, list) or not tests or not isinstance(indices, list) or not indices:
+            raise ValueError('change_refs: expected nonempty arrays')
+        normalized = [repository_path(file) for file in files]
+        if len(set(normalized)) != len(normalized):
+            raise ValueError('change_refs.files: duplicate paths')
+        seen = set()
+        for test in tests:
+            if not isinstance(test, dict) or set(test) != {'file', 'name'}:
+                raise ValueError('change_refs.tests: expected file and name')
+            repository_path(test['file'])
+            fm_ste._text(test['name'], 'change_refs.tests.name')
+            pair = (test['file'], test['name'])
+            if pair in seen:
+                raise ValueError('change_refs.tests: duplicate test')
+            seen.add(pair)
+        if any(not fm_ste._integer(index, 0, len(acceptance) - 1) for index in indices) or len(set(indices)) != len(indices):
+            raise ValueError('change_refs.acceptance: invalid or duplicate index')
+    if explain['en']['door']['kind'] == 'two-way':
+        if 'check_answer' in spec:
+            raise ValueError('check_answer: forbidden for two-way door')
+        return
+    answer = spec.get('check_answer')
+    for lang in fm_ste.LOCALES:
+        loc = explain[lang]
+        check = loc['check']
+        if not fm_ste._integer(answer, 0, len(check['options']) - 1):
+            raise ValueError('check_answer: missing or out of range')
+        number = check['about']['intent']
+        visible = [loc['intent'][number - 1]['text'], loc['door']['reason'], loc['door']['rollback']]
+        visible += [p['how'] for p in loc['change_points'] if p['intent'] == number]
+        if not any(check['options'][answer] in text for text in visible):
+            raise ValueError(lang + '.check: correct answer absent from visible evidence')
+
+
 def prompt(task, data, base, previous=None):
     spec = json.loads(data)
     if spec.get('id') != task or not spec.get('scope') or not spec.get('acceptance'):
@@ -166,6 +227,7 @@ def prompt(task, data, base, previous=None):
                 raise ValueError('STE check failed')
         except (ImportError, ValueError) as error:
             raise ValueError('explain: ' + str(error)) from error
+    validate_change_refs(spec)
     history = ''
     if previous is not None:
         _, block = _standing_block(previous['text'], task)
