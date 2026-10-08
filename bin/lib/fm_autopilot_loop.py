@@ -283,7 +283,11 @@ class MechanicalLoop:
                        f'{task} SCOPE-BLOCKED/ASK: ' + ask.get('text', ''),
                        f'{task} 工作範圍或問題需要 firstmate 判斷')
             return
-        if pr.get('draft'): return
+        if pr.get('draft'):
+            self.queue(f'draft-{pr["number"]}-{head}', task,
+                       f'{task} #{pr["number"]} is a draft at {head[:12]}: the merge path waits; mark it ready',
+                       f'{task} #{pr["number"]} 仍是草稿：合併流程在等待，請標成 ready')
+            return
         # Reconsider only changed evidence: CI completion, a new bound verdict,
         # new authored details or release of a project's merge slot. A timer
         # seeing identical inputs never launches another gate or model.
@@ -502,11 +506,22 @@ class MechanicalLoop:
                 raise ValueError('invalid allocated merge card id')
             details = self.state / 'decision-details' / (ident + '.json')
             if not details.is_file():
-                self.attention('details', task, pr, f'{task} ready: merge card details needed ({ident}): {details}',
-                               f'{task} 已就緒：需要 firstmate 撰寫合併決策卡內容（{ident}）：{details}')
-                return
-            # fm-decide validates the authored content and current signed gate
-            # readiness again. Nothing here manufactures a recommendation.
+                from fm_merge_details import build
+                try:
+                    if self.ctx['external']:
+                        raise ValueError('external project: author the details')
+                    content = build(self.state, owner, task, pr['number'])
+                    # Built output is not an input to advance's fingerprint.
+                    details = self.state / 'decision-details-built' / (ident + '.json')
+                    details.parent.mkdir(exist_ok=True)
+                    save_json(details, content)
+                except ValueError as error:
+                    self.attention('details', task, pr,
+                                   f'{task} ready: merge card details needed ({ident}): {error}',
+                                   f'{task} 已就緒：需要 firstmate 撰寫合併決策卡內容（{ident}）：{error}')
+                    return
+            # fm-decide validates the content and current signed gate readiness
+            # again; deriving details never substitutes for those checks.
             self.command(self.script('fm-decide.sh', '--request', ident, '--task', task, '--project', owner,
                 '--kind', 'merge', '--pr', pr['number'], '--expected-head', head, '--details', details))
 
