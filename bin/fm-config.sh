@@ -1073,7 +1073,7 @@ fm_target_validate() {
 fm_external_prepare() {
   [ "${FM_EXTERNAL:-0}" = 1 ] || return 0
   local service="${FM_CODE_ROOT:-$FM_ENGINE_ROOT}/bin/fm-project.sh"
-  "$service" sync "$FM_PROJECT" --repo "$FM_ENGINE_ROOT" || return 65
+  FM_HERDR_WORKSPACE=0 "$service" sync "$FM_PROJECT" --repo "$FM_ENGINE_ROOT" || return 65
   fm_target_validate || return 65
   "$service" verify "$FM_PROJECT" --repo "$FM_ENGINE_ROOT" || return 65
 }
