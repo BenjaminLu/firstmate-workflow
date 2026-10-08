@@ -1,3 +1,4 @@
+import { showFleet } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -156,11 +157,13 @@ test('two projects with the same task id: menu, drop confirmation and drag act o
 
     // the menu and its confirming step name beta's card, and Escape and
     // cancel hand focus back to beta's menu button, not alpha's
+    await showFleet(page);
     await menu('beta','T-001').click();
     await expect(page.locator('.cacts [data-key="beta/T-001"]')).toHaveText([EN.park, EN.drop]);
     await expect(page.locator('.cacts [data-key="alpha/T-001"]')).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(menu('beta','T-001')).toBeFocused();
+    await showFleet(page);
     await menu('beta','T-001').click();
     await page.locator('.cacts [data-key="beta/T-001"][data-act="drop"]').click();
     await expect(page.locator('#dropConfirm')).toContainText(EN.dropConfirm.replace('{id}','T-001'));
@@ -168,6 +171,7 @@ test('two projects with the same task id: menu, drop confirmation and drag act o
     await page.locator('[data-cancel-drop][data-key="beta/T-001"]').click();
     await expect(page.locator('#dropConfirm')).toBeHidden();
     await expect(menu('beta','T-001')).toBeFocused();
+    await showFleet(page);
     await menu('beta','T-001').click();
     await page.locator('.cacts [data-key="beta/T-001"][data-act="drop"]').click();
     await expect(page.locator('#dropConfirm .pchip')).toHaveText('beta');
@@ -177,6 +181,7 @@ test('two projects with the same task id: menu, drop confirmation and drag act o
     expect(acted()).toEqual([]);
 
     // confirming drops beta's T-001 alone
+    await showFleet(page);
     await menu('beta','T-001').click();
     await page.locator('.cacts [data-key="beta/T-001"][data-act="drop"]').click();
     await page.locator('[data-confirm-drop][data-key="beta/T-001"]').click();
@@ -246,6 +251,7 @@ test('a board of one project shows no project chip anywhere, and says a merge ou
     await expect(row).toContainText(TW.mergeUnknown);
     await page.locator('#langs [data-l="en"]').click();
     // the drop confirmation, open
+    await showFleet(page);
     await page.locator('[data-menu="T-2"]').click();
     await page.locator('.cacts [data-act="drop"]').click();
     await expect(page.locator('#dropConfirm')).toContainText(EN.dropConfirm.replace('{id}','T-2'));
