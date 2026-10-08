@@ -607,7 +607,7 @@ fi
 
 # Read bytes, not locale-dependent character classes: bash 3.2 can absorb
 # non-ASCII punctuation into an unbraced variable name. Scan text recursively
-# under both trees, including embedded snippets and lint-source files. A NUL
+# under bin, tests and .githooks, including snippets and lint-source files. A NUL
 # anywhere marks binary content (including generated Python bytecode); no
 # extension or cache-directory exclusions may hide real textual snippets.
 stage "non-ASCII variable boundary"
@@ -635,6 +635,20 @@ then
   pass "private fetch refs"
 else
   flunk "private fetch refs"
+fi
+
+if python3 "$_fm_code_dir/lib/fm_ci_checks.py" patsub-amp .
+then
+  pass "patsub replacement portability"
+else
+  flunk "patsub replacement portability"
+fi
+
+if python3 "$_fm_code_dir/lib/fm_ci_checks.py" brace-json .
+then
+  pass "escaped JSON in command substitutions"
+else
+  flunk "escaped JSON in command substitutions"
 fi
 
 stage "test hygiene"
