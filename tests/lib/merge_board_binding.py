@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import select
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -38,7 +39,7 @@ try:
         raise AssertionError('board did not announce its port')
     url = 'http://127.0.0.1:' + port
     secret = (Path(auth.name) / ('firstmate/board-' + port + '.secret')).read_text().strip()
-    for index, mode in enumerate(('stale', 'atomic', 'missing', 'unavailable', 'matching'), 1):
+    for index, mode in enumerate(('stale', 'atomic', 'missing', 'unavailable', 'carry-refused', 'carry-timeout', 'matching'), 1):
         ident = 'D-' + str(800 + index)
         (root / 'pr.json').write_text(json.dumps(dict(number=9, state='OPEN', headRefName='t-009-board',
             title='T-009: fixture', headRefOid=('b' if mode == 'stale' else 'a')*40)))
@@ -47,6 +48,13 @@ try:
         if mode == 'atomic': (root / 'move-on-merge').touch()
         if mode == 'unavailable':
             (root/'bin/lib/fm_lifeline.py').rename(root/'bin/lib/lifeline.saved')
+        if mode in ('carry-refused', 'carry-timeout'):
+            helper=root/'bin/fm-merge.sh'
+            helper.rename(root/'bin/merge.saved')
+            message = ("fm-merge: the captain's answer cannot carry to the current head: fixture / 船長的答案無法沿用到目前版本：fixture" if mode=='carry-refused' else
+                       "fm-merge: waited 1 min for readiness on the updated head: no signed six-gate readiness for candidate / 已等待 1 分鐘，更新後的版本仍未就緒：fixture")
+            helper.write_text("#!/usr/bin/env bash\nprintf '%s\\n' " + shlex.quote(message) + '\nexit 1\n')
+            helper.chmod(0o755)
         (root/'ghcalls').write_text('')
         card = dict(id=ident, kind='merge', task='T-009', pr=9, title='Merge verified candidate')
         if mode != 'missing': card['expected_head'] = 'a'*40
@@ -75,12 +83,14 @@ try:
             assert summary['en'] and summary['zh-TW']
             calls = (root/'ghcalls').read_text()
             reasons = dict(stale='PR head changed or is unverifiable', missing='missing verified candidate SHA',
-                           atomic='GitHub refused the bound merge', unavailable='Merge helper unavailable')
+                           atomic='GitHub refused the bound merge', unavailable='Merge helper unavailable',
+                           **{'carry-refused':'cannot carry to the current head','carry-timeout':'for readiness on the updated head'})
             assert reasons[mode] in failures[0]['data']['reason'], failures
             translated = dict(stale='PR 版本已變更或無法驗證；請更新審核與關卡',
                               missing='缺少已驗證的候選版本 SHA',
                               atomic='GitHub 拒絕合併指定版本；請重新確認 PR 狀態',
-                              unavailable='無法啟動合併程式')
+                              unavailable='無法啟動合併程式',
+                              **{'carry-refused':'船長的答案無法沿用到目前版本；需要新的合併卡','carry-timeout':'等待更新後版本就緒逾時；需要新的合併卡'})
             assert summary['zh-TW'] == ident + '：合併失敗：' + translated[mode]
             if mode == 'atomic':
                 assert sum('pr merge' in line for line in calls.splitlines()) == 1
@@ -90,6 +100,8 @@ try:
             if mode == 'unavailable':
                 assert summary['zh-TW'] == ident + '：合併失敗：無法啟動合併程式'
                 (root/'bin/lib/lifeline.saved').rename(root/'bin/lib/fm_lifeline.py')
+            if mode in ('carry-refused','carry-timeout'):
+                (root/'bin/merge.saved').replace(root/'bin/fm-merge.sh')
             assert not any(e['type']=='merged' for e in events)
     calls = (root/'ghcalls').read_text()
     assert '--match-head-commit ' + 'a'*40 in calls
