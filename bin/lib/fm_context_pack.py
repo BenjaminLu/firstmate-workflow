@@ -130,16 +130,25 @@ class Collector:
         self.root, self.gh, self.head = root, gh, head
         self.log_error_file = log_error_file
         self.gaps = []
+        self.timeout = float(os.environ.get("FM_GH_TIMEOUT", "120"))
 
     def command(self, args):
-        result = subprocess.run(args, cwd=self.root, capture_output=True, text=True)
+        try:
+            result = subprocess.run(args, cwd=self.root, capture_output=True, text=True,
+                                    timeout=self.timeout)
+        except subprocess.TimeoutExpired as error:
+            raise ValueError(f'{args[0]} evidence unavailable: timed out') from error
         if result.returncode:
             raise ValueError(f'{args[0]} evidence unavailable: {result.stderr.strip()[:500]}')
         return result.stdout
 
     def github(self, *args):
         try:
-            result = subprocess.run(github_argv(self.gh, args), cwd=self.root, capture_output=True, text=True)
+            try:
+                result = subprocess.run(github_argv(self.gh, args), cwd=self.root,
+                                        capture_output=True, text=True, timeout=self.timeout)
+            except subprocess.TimeoutExpired as error:
+                raise ValueError('gh evidence unavailable: timed out') from error
             allowed = (0, 1, 8) if args[:2] == ('pr', 'checks') else (0,)
             if result.returncode not in allowed:
                 raise ValueError(f'gh evidence unavailable: {result.stderr.strip()[:500]}')
@@ -179,8 +188,14 @@ class Collector:
         with tempfile.TemporaryFile() as output, (
                 open(self.log_error_file, 'w+b') if self.log_error_file
                 else tempfile.TemporaryFile()) as errors:
-            result = subprocess.run(github_argv(self.gh, ['run', 'view', '--job', str(job), '--log-failed']),
-                                    cwd=self.root, stdout=output, stderr=errors)
+            try:
+                result = subprocess.run(github_argv(self.gh, ['run', 'view', '--job', str(job), '--log-failed']),
+                                        cwd=self.root, stdout=output, stderr=errors,
+                                        timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                message = f'Job {job} failed-log evidence unavailable: timed out'
+                self.gaps.append(message)
+                return [], message
             output.seek(0)
             offset, context_bytes = 0, 0
             detail = False

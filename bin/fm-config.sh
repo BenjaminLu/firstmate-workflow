@@ -90,6 +90,23 @@ fm_vendors() { printf '%s\n' claude codex cursor-agent gemini; }
 
 _fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
+# Bound stalled git transfers without replacing the operator's SSH identity.
+# Resolve core.sshCommand here, once: later git -C clones inherit this value.
+_fm_ssh_options='-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4'
+if [ "${GIT_SSH_COMMAND+x}" = x ]; then
+  case "$GIT_SSH_COMMAND" in
+    *ServerAliveInterval*) ;;
+    *) GIT_SSH_COMMAND="$GIT_SSH_COMMAND $_fm_ssh_options" ;;
+  esac
+  export GIT_SSH_COMMAND
+elif [ "${GIT_SSH+x}" != x ]; then
+  _fm_ssh_base="$(git config --get core.sshCommand 2>/dev/null)" || _fm_ssh_base=ssh
+  export GIT_SSH_COMMAND="$_fm_ssh_base $_fm_ssh_options"
+fi
+export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT-1000}"
+export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME-60}"
+unset _fm_ssh_options _fm_ssh_base
+
 # The project contract: the self registry or historical `project:` block, which the target
 # project fills in so that nothing here has to know its toolchain.
 #
@@ -1078,14 +1095,106 @@ fm_external_base() {
   git -C "$FM_TARGET_ROOT" merge -q --ff-only "$remote_head" || return 65
 }
 
+# Foreground executable deadline. The runner owns and drains the whole command
+# group, including descendants holding stdout open. No coreutils dependency.
+fm_with_timeout() {
+  perl -e '
+    use strict;
+    use warnings;
+    use POSIX qw(SIG_BLOCK SIG_SETMASK SIGTERM SIGINT SIGHUP SIGALRM);
+    use Time::HiRes qw(alarm sleep);
+    my $seconds = shift @ARGV;
+    die "fm_with_timeout: expected positive seconds and an executable\n"
+      unless defined($seconds) && $seconds =~ /^\d+(?:\.\d+)?$/ && $seconds > 0 && @ARGV;
+    my $blocked = POSIX::SigSet->new(SIGTERM, SIGINT, SIGHUP, SIGALRM);
+    my $previous = POSIX::SigSet->new();
+    POSIX::sigprocmask(SIG_BLOCK, $blocked, $previous) or die "sigprocmask: $!";
+    my $pid = fork();
+    die "fork: $!" unless defined $pid;
+    if (!$pid) {
+      setpgrp(0, 0) or POSIX::_exit(127);
+      $SIG{$_} = "DEFAULT" for qw(TERM INT HUP ALRM);
+      POSIX::sigprocmask(SIG_SETMASK, $previous);
+      exec { $ARGV[0] } @ARGV or POSIX::_exit(127);
+    }
+    # Either side can establish the group before a pending stop is delivered.
+    setpgrp($pid, $pid);
+    my $stop = sub {
+      my ($signal, $status) = @_;
+      $SIG{$_} = "IGNORE" for qw(TERM INT HUP ALRM);
+      alarm(0);
+      kill $signal, -$pid;
+      sleep 2;
+      kill "KILL", -$pid;
+      waitpid($pid, 0);
+      exit $status;
+    };
+    $SIG{ALRM} = sub { $stop->("TERM", 124) };
+    $SIG{TERM} = sub { $stop->("TERM", 143) };
+    $SIG{INT}  = sub { $stop->("INT", 130) };
+    $SIG{HUP}  = sub { $stop->("HUP", 129) };
+    POSIX::sigprocmask(SIG_SETMASK, $previous);
+    alarm($seconds);
+    waitpid($pid, 0);
+    my $status = $?;
+    alarm(0);
+    exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);
+  ' "$@"
+}
+
+# Only these gh operations are safe to replay after an unknown timeout.
+fm_gh_is_read() {
+  case "${1:-} ${2:-}" in
+    'pr view'|'pr list'|'pr checks'|'run view'|'run list') return 0 ;;
+  esac
+  [ "${1:-}" = api ] || return 1
+  shift
+  local method='' fields=0 arg
+  while [ "$#" -gt 0 ]; do
+    arg="$1"; shift
+    case "$arg" in
+      -X|--method) [ "$#" -gt 0 ] || return 1; method="$1"; shift
+        [ "$method" = GET ] || return 1 ;;
+      --method=*) method="${arg#*=}"; [ "$method" = GET ] || return 1 ;;
+      -X?*) method="${arg#-X}"; [ "$method" = GET ] || return 1 ;;
+      -f|-F|--field|--raw-field|--input)
+        fields=1; [ "$#" -gt 0 ] || return 1; shift ;;
+      -f?*|-F?*|--field=*|--raw-field=*|--input=*) fields=1 ;;
+    esac
+  done
+  [ "$method" = GET ] || [ "$fields" = 0 ]
+}
+
+fm_gh_read() (
+  # A subshell scopes cleanup to this call, preserving the launcher's traps.
+  local output rc attempt=0
+  local -a delays
+  output="$(mktemp "${TMPDIR:-/tmp}/fm-gh.XXXXXX")" || return 70
+  trap 'rm -f "$output"' EXIT
+  read -r -a delays <<<"${FM_GH_RETRY_DELAYS:-5 15}"
+  while :; do
+    rc=0
+    fm_with_timeout "${FM_GH_TIMEOUT:-120}" "$@" >"$output" || rc=$?
+    if [ "$rc" != 124 ] || [ "$attempt" -ge 2 ]; then
+      cat "$output"
+      return "$rc"
+    fi
+    sleep "${delays[$attempt]:-0}"
+    attempt=$((attempt + 1))
+  done
+)
+
 # PR and Actions commands must never derive an external repository from cwd.
 # REST calls do not accept --repo: callers must interpolate GH_REPO into
 # their endpoint (only legacy self calls without it may use gh placeholders).
 fm_github() {
-  if [ "${FM_EXTERNAL:-0}" = 1 ]; then
-    "${GH:-${FM_GH:-gh}}" "$@" --repo "$GH_REPO"
+  if [ "${FM_EXTERNAL:-0}" = 1 ] && [ "${1:-}" != api ]; then
+    set -- "$@" --repo "$GH_REPO"
+  fi
+  if fm_gh_is_read "$@"; then
+    fm_gh_read "${GH:-${FM_GH:-gh}}" "$@"
   else
-    "${GH:-${FM_GH:-gh}}" "$@"
+    fm_with_timeout "${FM_GH_TIMEOUT:-120}" "${GH:-${FM_GH:-gh}}" "$@"
   fi
 }
 
