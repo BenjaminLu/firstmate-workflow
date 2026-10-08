@@ -1030,6 +1030,12 @@ Existing SPEC-OK receipts stay valid; a pinned plain title still publishes under
 a later conventional setting with a warning, and invalid or absent public text
 keeps the generic fallback.
 
+Confirm `request_reviewers` alongside the PR format fields during onboarding.
+Use the recorded reviewers as the recommendation; an explicit empty list turns
+requests off. The autopilot requests those names on first sight of each mapped
+external PR and every new head, excluding the PR author, in every post mode.
+Do not infer consent from an inspection's proposed list.
+
 Confirm `pr_title`, `pr_sections` and `pr_language` through the captain's explicit
 onboarding answers or conventions edits. Per field, CONVENTIONS wins over the
 private `FM_HOME/owners/<owner>.yaml` default, then the engine's `plain`, `[]`,
@@ -1229,6 +1235,14 @@ review and gates for that SHA. A stale local ref is held for synchronization,
 not treated as current because local gates were green. Required review policy
 comes from the project's confirmed conventions; native external reviews require
 every named reviewer's latest approval for the verified commit/patch, with no unresolved review threads.
+
+When an external reviewer wake arrives, read the private evidence with the shell
+function `fm_external collect --format prompt`, using the task, PR and project
+context. This is the shell function; `bin/fm-external.sh` has no `--format` flag.
+Brief the next round with each finding and its file:line. If a finding changes
+agreed behaviour, amend the spec and obtain the approved repin before dispatch.
+Report which findings were addressed. The wake and board contain metadata only;
+read the private findings before deciding the next round's scope.
 
 `fm-autopilot.sh` passes that SHA to `fm-decide.sh --expected-head <sha>`. A manually
 raised tracked merge card needs the same flag and a signed readiness record.

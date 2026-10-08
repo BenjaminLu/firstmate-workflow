@@ -187,6 +187,43 @@ class FormatTests(unittest.TestCase):
             result = onboard.approve(self.home, evidence, dict(POLICY, **FORMAT), answers)
             self.assertFalse(set(FORMAT) & set(result))
 
+    def test_request_reviewers_validation_and_captain_confirmation(self):
+        for value in ('Rev', ['Rev', 'Rev'], ['Rev', 'rev'], ['bad/login'],
+                      ['r' + str(i) for i in range(16)], [3]):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'request_reviewers'):
+                conventions.validate(dict(POLICY, request_reviewers=value))
+        policy = dict(POLICY, reviewers=['Rev'])
+        self.assertEqual(conventions.request_reviewers(policy), ['Rev'])
+        for names in ([], ['Rev', 'helper[bot]']):
+            approved = conventions.validate(dict(policy, request_reviewers=names))
+            self.assertEqual(conventions.request_reviewers(approved), names)
+        evidence = dict(source='github', repository='fixture/app', base='main', commits=['a'])
+        questions = onboard.questions(evidence, dict(policy, request_reviewers=['Inferred']))
+        self.assertEqual(len(questions), 3)
+        question = next(q for q in questions if q['id'] == 'policy')
+        self.assertEqual(question['evidence']['request_reviewers'], ['Rev'])
+        self.assertIn('request_reviewers', question['recommendation'])
+        answers = dict(confirmed=True, policy_confirmed=True, contract={'check':'true'})
+        with patch.object(onboard, 'infer', return_value={'available_merge_methods':['squash']}):
+            result = onboard.approve(self.home, evidence, dict(policy, request_reviewers=['Inferred']), answers)
+            self.assertNotIn('request_reviewers', result)
+            result = onboard.approve(self.home, evidence, policy, dict(answers, request_reviewers=['Chosen']))
+            self.assertEqual(result['request_reviewers'], ['Chosen'])
+        path = self.home / 'CONVENTIONS.md'
+        path.write_text(policy_text(policy))
+        onboard.edit(self.home, {'request_reviewers':[]}, 'fixture', 'Disable requests')
+        self.assertEqual(conventions.read_policy(path)['request_reviewers'], [])
+
+    def test_external_reviewer_firstmate_instruction_contract(self):
+        # Structural coverage only; a passing check cannot prove model compliance.
+        instructions = (ROOT / 'skills/firstmate/SKILL.md').read_text()
+        for required in ('Confirm `request_reviewers` alongside the PR format fields',
+                         '`fm_external collect --format prompt`',
+                         'Brief the next round with each finding and its file:line.',
+                         'agreed behaviour, amend the spec and obtain the approved repin',
+                         'Report which findings were addressed.'):
+            self.assertIn(required, instructions)
+
     def worker(self, spec=SPEC, fmt=FORMAT, prefix=''):
         worker = ROOT / 'bin/fm-worker.sh'
         block = section(worker, 'commit_msg="$TASK:', 'fm_private_stage "$tree"')

@@ -1945,7 +1945,12 @@ open like `/api/state`. It joins that project's spec, pending and answered
 cards (not withdrawn archives), planned unique `test/` and `tests/` paths from
 acceptance then scope, readiness and round metadata. Evidence comes only through
 `fm_evidence.py summary`, which verifies `Store.records()` before projecting
-metadata and the latest brief's first line. No report/verdict body, readiness
+metadata and the latest brief's first line. External tasks also receive the
+latest `external-verdict` summary as `external_review`: ready, bounded blockers,
+reviewer states, reviewed heads and covers flags, plus finding ids, reviewers,
+paths, lines, reviewed heads and resolved flags. Each finding marks whether it
+belongs to the record head. Nested allowlists omit review text and bodies;
+self tasks always return null. No report/verdict body, readiness
 `review`, session data or credentials enter the response. A failed evidence read
 leaves readiness/brief null and event-only rounds with null heads, plus a bounded
 error note. The evidence namespace is the project name, default name, or `self`.
@@ -1955,7 +1960,14 @@ The detail header shows lane, identity, project, PR, checks and the chosen
 source's stored STE status. It then uses `intentBody` in its existing order:
 intent, how, alignment, scope, notes; followed by Spec, Tests with readiness,
 and Progress with round actors/vendors/heads/verdicts, card choices and No-texts,
-and the brief headline. The newest dispatch/repin/merge card with details wins;
+and the brief headline. External review metadata adds a section with reviewer
+state badges, patch coverage, finding locations, current-head and resolution
+labels, without bodies. An external task has a project different from the
+state's default project; only its detail signature includes the current minute.
+An unchanged external panel refreshes at most once a minute on the next state
+event. Evidence writes alone do not change the state stamp or trigger an event.
+Self detail signatures and sections stay unchanged.
+The newest dispatch/repin/merge card with details wins;
 otherwise the spec explain supplies the explanation. Legacy sources without a
 report show no STE badge; absent explanations and records have explicit empty
 notes. The diagram appears only when its locale file exists. Acceptance lines
@@ -5413,9 +5425,16 @@ retains and debounces drift proposals and pushes a bilingual wake to the queue
 served by its owning watcher. It never
 edits confirmed policy automatically. Chat edits report an exact diff and retain
 it privately. Workers and reviewers receive CONVENTIONS.md, and an fm review
-for review: external or both is only a pre-check. The captain's merge double
-check continues to own authenticated review, current-head checks/statuses and
-six-gate evidence.
+for review: external or both is only a pre-check. On mapped external PRs with
+those review policies, the autopilot refreshes existing private external evidence
+when a named reviewer posts a new changes-requested/commented review or comment,
+and queues one wake per endpoint and review/comment id. Edits wake again; old
+seen rows are not backfilled, and pending old reviewer batches flush once.
+Bodies stay in the private store. The autopilot requests `request_reviewers`
+on first sight of each mapped external PR and every new head, in every post
+mode; omission falls back to recorded reviewers and an empty list disables it.
+The captain's merge double check continues to own authenticated review,
+current-head checks/statuses and six-gate evidence.
 
 
 ### 15.3 Private project state and cleanup
@@ -5802,6 +5821,13 @@ are read at round time, not pinned or copied into CONVENTIONS. Onboarding writes
 format fields only from the captain's explicit answers. Firstmate git holds no
 owner default file or real owner name.
 
+T-254 adds optional `request_reviewers`: a JSON list of at most 15 unique GitHub
+logins (case-insensitive uniqueness, with `[bot]` suffix permitted). Omission
+uses the recorded `reviewers`; `[]` disables requests. Onboarding discards
+inferred values and takes this field only from captain answers or explicit
+conventions edits. The existing policy question presents the recorded reviewers
+as the request recommendation, preserving the three-question contract.
+
 Preflight requires a valid `public_title`. With `pr_title: conventional`, it
 also requires a conventional subject such as `fix(api): deduct the fee`, with
 an optional author-supplied `[KEY-123] ` ticket prefix. Firstmate never invents
@@ -5972,8 +5998,13 @@ adding process startup after publishing a lifecycle boundary while the caller
 still holds its task lock. The service subscribes before
 reading durable offsets and reads local inputs only at startup and on pushed
 notifications. Only GitHub is polled, with endpoint ETags, confirmed convention
-cadence and bounded network backoff. Per-reviewer quiet periods batch findings;
-no idle timer invokes a model.
+cadence and bounded network backoff. Per-reviewer quiet periods batch findings,
+except named external reviewers under review `external` or `both`: each review
+or comment id has its own endpoint-qualified batch. A single private evidence
+refresh per pull precedes those wakes, which expose only readiness, short head
+and finding count. Fixed command/json/fields/stale-head failure classes each
+wake once per head, independently of advancement errors, and findings still
+wake with unknown evidence. No idle timer invokes a model.
 
 Self-project mechanical branch updates require an open, non-draft PR observed
 as mergeable and behind; unknown mergeability never authorizes a self update.
@@ -5993,8 +6024,11 @@ expected-head lease checks. Every new
 worker or base-update head runs gates. Gate 6 decides whether an approval
 carries, whether changed pinned inputs require review, or whether a new worker
 change needs a verdict. A current-head REJECT wakes firstmate for a brief and
-never relaunches a worker. Returning
-reviewers can receive policy-permitted re-check requests. Readiness holds for
+never relaunches a worker. Self-project returning reviewers can receive
+policy-permitted re-check requests. External projects request the confirmed
+`request_reviewers` (default: recorded reviewers) on first sight and every new
+head in all post modes, excluding the PR author case-insensitively. Readiness
+holds for
 firstmate's recommendation and evidence (§6); landing remains the captain's
 card or the team's handoff, never an autopilot merge.
 
@@ -6011,7 +6045,10 @@ PR events are decided by the event log alone: an event already in
 0, 1 and 3, then wakes once. Terminal PRs are marked finished immediately;
 `event_pending` retains an unfinished event write until success or the third
 failure, including after the PR leaves the recent-closures list. Reviewer
-re-check requests are recorded per PR head in `rechecked` and completed when
+re-check requests are recorded per PR head in `rechecked`. External records
+carry `rule: external-request`; missing records, old-rule records and changed
+heads start requests for the confirmed list. Each login is requested separately,
+so one refusal does not block the rest. Requests are completed when
 GitHub returns 201 or lists the reviewer as already requested, or the reviewer
 has reviewed that head. A 422 refusal wakes once with GitHub's message without
 retry; other failures retry at offsets 0, 1 and 3, then wake once.

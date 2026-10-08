@@ -329,6 +329,14 @@ def summary(store):
         elif record['kind'] == 'brief':
             lines = record.get('text', '').splitlines()
             row['brief'] = lines[0] if lines else ''
+        elif record['kind'] == 'external-verdict':
+            row.update(ready=record.get('ready'),
+                       blockers=[blocker[:200] for blocker in record.get('blockers', [])],
+                       states={reviewer: {key: state.get(key) for key in ('state', 'reviewed_head', 'covers')}
+                               for reviewer, state in record.get('states', {}).items()},
+                       findings=[{key: finding.get(key) for key in
+                                  ('id', 'reviewer', 'path', 'line', 'reviewed_head', 'resolved')}
+                                 for finding in record.get('findings', [])])
         elif record['kind'] == 'readiness':
             row.update(gate_base=record.get('gate_base'), gates=record.get('gates', []),
                        checks=[{key: check.get(key) for key in ('name', 'conclusion')}
