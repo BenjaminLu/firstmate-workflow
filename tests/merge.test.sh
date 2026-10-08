@@ -466,6 +466,16 @@ carry_fixture() {
   git -C "$d" remote set-url origin "$d-origin"
   jq '.headRefOid="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' "$d/pr.json" > "$d/next"
   mv "$d/next" "$d/pr.json"
+  # PATH survives the immutable engine re-exec. Observe the actual wait
+  # boundary in this fixture only, forwarding unchanged to the real sleeper.
+  real_sleep="$(command -v sleep)"
+  : > "$d/sleepcalls"
+  cat > "$d/stub/sleep" <<SLEEP
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> "$d/sleepcalls"
+exec "$real_sleep" "\$@"
+SLEEP
+  chmod +x "$d/stub/sleep"
   real_git="$(command -v git)"
   cat > "$d/stub/git" <<GIT
 #!/usr/bin/env bash
@@ -490,13 +500,16 @@ rm -rf "$d" "$d-origin"
 for mode in wait refuse; do
   carry_fixture; carry_seconds=2
   printf 'fixture readiness %s\n' "$mode" > "$d/.fixture-carry-$mode"
-  started="$(date +%s)"; out="$(carry_merge 2>&1)"; status=$?
+  out="$(carry_merge 2>&1)"; status=$?
   assert_eq 1 "$status" "carry $mode refuses"
   if [ "$mode" = wait ]; then
     assert_contains "$out" waited 'wait deadline en'; assert_contains "$out" 已等待 'wait deadline tw'
+    assert_ok "test -s '$d/sleepcalls'" 'waiting carry reaches the observed sleep boundary'
+    assert_contains "$(cat "$d/.fixture-carry-calls")" full 'waiting carry evaluates full readiness'
   else
     assert_contains "$out" 'cannot carry' 'lasting refusal en'; assert_contains "$out" 無法沿用 'lasting refusal tw'
-    assert_ok "test $(( $(date +%s) - started )) -lt 2" 'lasting refusal does not consume deadline'
+    assert_eq "" "$(cat "$d/sleepcalls")" 'lasting refusal never invokes wait sleep'
+    assert_eq "$(printf 'pre-sync\nfull')" "$(cat "$d/.fixture-carry-calls")" 'lasting refusal evaluates readiness once without retry'
   fi
   assert_lacks "$(cat "$d/ghcalls")" 'pr merge' 'refusal merges nothing'
   rm -rf "$d" "$d-origin"
@@ -569,9 +582,10 @@ for local_state in divergent dirty; do
     fi
     before="$(git -C "$d" rev-parse main)"
     printf '%s\n' "$reason" > "$d/.fixture-precheck-refuse"
-    started="$(date +%s)"; out="$(carry_merge 2>&1)"; assert_eq 1 "$?" 'lasting precheck wins'
+    out="$(carry_merge 2>&1)"; assert_eq 1 "$?" 'lasting precheck wins'
     assert_contains "$out" "$reason" 'lasting reason preserved'
-    assert_ok "test $(( $(date +%s) - started )) -lt 5" 'lasting refusal prompt'
+    assert_eq "" "$(cat "$d/sleepcalls")" 'lasting precheck refusal never invokes wait sleep'
+    assert_eq pre-sync "$(cat "$d/.fixture-carry-calls")" 'lasting precheck runs once without retry'
     assert_eq "$before" "$(git -C "$d" rev-parse main)" 'lasting refusal writes no base'
     assert_lacks "$(cat "$d/.fixture-carry-calls")" full 'lasting precheck prevents full carry'
     assert_lacks "$(cat "$d/gitcalls" 2>/dev/null)" fetch 'lasting precheck performs no synchronization'
