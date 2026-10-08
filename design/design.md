@@ -2361,16 +2361,28 @@ harmless and unused; no stored records need migration.
 
 ### Interaction
 
-Intent cards show a header with the kind badge, outcome and gate checklist;
-Intent with Why; How it works with the before/after drawing; Alignment; Scope;
-Notes; Options; Questions to confirm; and the confirm button, in that order.
-Before/after node flows include a state legend and the optional change table.
-Read-only sentence chips show kind, word count and rule results from the stored
-`ste` report; the header pill counts passing sentences for the reader's locale.
-The server loads bilingual tooltip text once from `fm_ste.py rules` and serves
-it as `ste_rules`; without that module the chips show rule ids, and without a
-report the sections show no chips. Simplified Chinese uses the existing text
-conversion, including SVG title text.
+Captain intent cards show the kind badge and header STE count, then Intent,
+How it works, Scope and Notes. A done item prefixed `Intent N:` or `意圖 N：`
+(or the ASCII colon) nests beneath visible intent N. Unprefixed items, missing
+parents and parents hidden by the six-intent cap remain plain rows afterward.
+The check glyph means listed, not satisfied. Done items retain their independent
+six-row cap and Show more count. Alignment remains the list's accessible label.
+Scope-in chips are solid; scope-out chips are outlined. How it works retains the
+full-width diagram and adjacent before/after fallback; no change table is shown.
+Explanation, why and outcome sit behind one Why you see this disclosure. Other
+card kinds keep their explanation visible. Every sentence remains available,
+without sentence STE chips on captain cards. Task details retain the Intent,
+How it works, Alignment, Scope, Notes order and stored sentence chips.
+
+The current card's slim decision bar sticks to the viewport bottom; expanded
+strips keep their bars inline. The card reserves at least the bar's height below
+its content. Option buttons, custom text, validation, refusal and confirm stay
+in the bar. Decision details opens a dialog sheet with option pros/cons and
+questions. Escape or Close details closes it and returns focus to the opener.
+Disclosure state is keyed by decision id and survives state and locale changes;
+focus inside an open sheet returns to the same control or its close button.
+Bar and sheet use solid theme colours. Header STE counts still use stored
+reports; server reports and task-detail chips are unchanged.
 
 Each question offers “Yes, correct” and “No, change it”; No opens a bounded
 correction field. Confirm remains disabled until every question has a valid

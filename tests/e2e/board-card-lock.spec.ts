@@ -25,6 +25,7 @@ for (const status of [200, 409]) test(`answer controls lock immediately and sett
     const card = page.locator('#card-D-211');
     await card.locator('[data-c="custom"]').click();
     await card.locator('textarea:not([data-question])').fill('Keep this draft');
+    await card.locator('[data-decision-details]').click();
     await card.locator('[data-question="0"][data-ok="yes"]').click();
     await card.locator('[data-question="1"][data-ok="no"]').click();
     await card.locator('textarea[data-question="1"]').fill('Keep this correction');
@@ -66,15 +67,18 @@ for (const diagram of [false, true]) test(`intent sections keep order, phone wid
     await page.setViewportSize({width:390, height:844});
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('#card-D-211');
-    await expect(card.locator('h4')).toHaveText(['Intent','How it works','Alignment','Scope','Notes','Options','Questions to confirm']);
+    await expect(card.locator('.intent-alignment h4')).toHaveText(['Intent','How it works','Scope','Notes']);
     await expect(card.locator('.meta > .kbadge:first-child')).toHaveCount(1);
-    for (const selector of ['.explanation', '.tradeoffs', '.opt'])
+    await expect(card.locator('.decision-sheet h4')).toHaveText(['Options','Questions to confirm']);
+    for (const selector of ['.explanation', '.decision-sheet .tradeoffs', '.opt'])
       await expect(card.locator(selector).first()).toHaveCSS('font-size', '16px');
-    const alignment = card.locator('section').filter({has:page.getByRole('heading', {name:'Alignment', exact:true})});
+    const alignment = card.locator('.plain-alignment');
     await expect(alignment.locator('li')).toHaveCount(6);
     await card.locator('[data-c="A"]').click();
+    await card.locator('[data-decision-details]').click();
     await card.locator('[data-question="0"][data-ok="no"]').click();
     await card.locator('textarea[data-question="0"]').fill('Preserved answer');
+    await card.locator('[data-decision-close]').click();
     await alignment.getByRole('button', {name:'Show more (1)', exact:true}).click();
     await expect(alignment.locator('li')).toHaveCount(7);
     await expect(card.locator('[data-c="A"]')).toHaveAttribute('aria-pressed','true');

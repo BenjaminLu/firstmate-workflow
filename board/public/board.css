@@ -41,3 +41,29 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 }
 .voyage-full #voyage-stage{height:100%}
 @media(prefers-reduced-motion:reduce){#voyage.voyage-resizing #voyage-stage{transition:none}}
+
+/* Captain card disclosures. Task detail retains its existing presentation. */
+#deck .intent-row{margin-bottom:12px}
+#deck .intent-row ul{margin:8px 0 0 16px}
+#deck .alignment-row{color:var(--fg)}
+#deck .intent-how iframe.dg{width:100%;min-height:320px}
+#deck .intent-scope ul{display:flex;flex-wrap:wrap;gap:8px;list-style:none;padding:0}
+#deck .intent-scope li{border:1px solid var(--line);border-radius:4px;padding:4px 8px;overflow-wrap:anywhere;background:var(--bg3)}
+#deck .intent-scope .scope_out li{background:transparent;border-color:var(--fg2)}
+#deck .why-disclosure{margin:16px 0;color:var(--fg)}
+#deck .why-disclosure summary{cursor:pointer}
+#deck .decision-bar{position:static;background:var(--hull);background-image:none;color:var(--fg);border-top:1px solid var(--line);padding:12px;z-index:5}
+#deck > .dcard > .decision-bar{position:sticky;bottom:0}
+#deck .decision-bar .tradeoffs{display:none}
+#deck .decision-bar .acts{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0;padding:0;border:0}
+#deck .decision-bar .acts .opt{width:auto;flex:1 1 140px;margin:0;padding:8px;font-size:16px}
+#deck .decision-bar .acts label{width:100%}
+#deck .decision-bar .intent-footer{justify-content:flex-end}
+#deck .decision-bar .validation,#deck .decision-bar .refused{flex-basis:100%}
+#deck .decision-sheet{position:fixed;right:16px;bottom:calc(var(--decision-bar-height,240px) + 16px);width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - var(--decision-bar-height,240px) - 100px);overflow:auto;box-sizing:border-box;padding:20px;border:1px solid var(--line);border-radius:8px;background:var(--hull);background-image:none;color:var(--fg);z-index:60;box-shadow:0 8px 30px #0004}
+#deck .decision-sheet[hidden]{display:none}
+#deck .decision-sheet .tradeoffs{font-size:16px;color:var(--fg);line-height:1.6}
+#deck .decision-sheet section{margin:16px 0}
+#deck :is(.decision-bar,.decision-sheet) button{background:var(--bg3);background-image:none;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:8px;cursor:pointer}
+#deck :is(.decision-bar,.decision-sheet) textarea{box-sizing:border-box;max-width:100%;width:100%;background:var(--bg3);color:var(--fg)}
+#deck .decision-bar button[aria-pressed=true]{border-color:var(--accent)}
