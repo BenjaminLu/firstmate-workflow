@@ -68,9 +68,16 @@ pwd() {
   esac
   builtin pwd "$@"
 }
-case "$0:${1-}" in */fm-sandbox.sh:run|*/fm-sandbox.sh:plain)
-  printf '%s\\n' "$@" > "$RECORD/launch";;
-esac
+cursor_test_capture_launch() {
+  case "$0:${1-}" in */fm-sandbox.sh:run|*/fm-sandbox.sh:plain)
+    printf '%s\\n' "$@" > "$RECORD/launch";;
+  esac
+}
+# Bash 3.2 initializes script argv after BASH_ENV. Observe the first script
+# command instead, before it can shift argv. Disarm in the calling shell so
+# allocation hooks and later covers/os/profile commands cannot replace it.
+# Keep this last: no startup command may consume the one-shot DEBUG trap.
+trap 'trap - DEBUG; cursor_test_capture_launch "$@"' DEBUG
 ''')
         cursor = self.tools / 'cursor-agent'
         cursor.write_text('''#!/usr/bin/env python3
