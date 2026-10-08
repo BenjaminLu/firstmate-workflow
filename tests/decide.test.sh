@@ -771,6 +771,25 @@ shown='{"id":"cli:notification:show","result":{"reason":"disabled","shown":false
 # grep -c prints its 0 and exits 1 on no match, so a fallback after it would
 # print a second 0: the missing file is decided first
 calls() { if [ -s "$hlog" ]; then grep -c . "$hlog"; else echo 0; fi; }
+# Source-only use preserves defaults; opt-in disables Herdr before preparation.
+guard="$(mktemp -d)"; mkdir -p "$guard/bin"; : > "$guard/bin/fm-decide.sh"
+env HERDR_ENV=1 HERDR_LOG="$hlog" PATH="$hstub:$PATH" bash -c '
+  ROOT="$1"; before="$(export -p)"
+  . "$ROOT/tests/lib/project-storage.sh"
+  [ "$HERDR_ENV" = 1 ] && [ "$(export -p)" = "$before" ] || exit 1
+' _ "$ROOT"
+assert_eq 0 "$?" 'source-only helper preserves inherited Herdr and exported defaults'
+assert_eq 0 "$(calls)" 'source-only helper sends no notification'
+env HERDR_ENV=1 HERDR_LOG="$hlog" PATH="$hstub:$PATH" bash -c '
+  ROOT="$1"; guard_root="$2"; . "$ROOT/tests/lib/project-storage.sh"
+  command() { printf "%s\n" "$HERDR_ENV" > "$guard_root/first-command-env"; builtin command "$@"; }
+  merge_source_fixture "$2" || exit
+  [ "$HERDR_ENV" = 0 ] && [ -x "$2/bin/fm-decide.sh" ]
+' _ "$ROOT" "$guard"
+assert_eq 0 "$?" 'explicit helper neutralizes inherited Herdr before its first command'
+assert_eq 0 "$(cat "$guard/first-command-env")" 'first fixture preparation command sees disabled Herdr'
+assert_eq 0 "$(calls)" 'explicit fixture preparation sends no notification'
+rm -rf "$guard"
 # FM_PROJECT is taken away so the captain's shell cannot choose a project;
 # a case that means one sets it, after this, by name
 inherdr() { env -u FM_PROJECT HERDR_ENV=1 HERDR_LOG="$hlog" PATH="$hstub:$PATH" "$@"; }

@@ -1,8 +1,5 @@
 # shellcheck shell=bash
 # fm:sourced
-# Disable inherited notifications when loading fixture helpers. Tests that
-# exercise notifications explicitly enable Herdr with their isolated stub later.
-export HERDR_ENV=0
 # shellcheck source=tests/lib/config-modules.sh
 . "$ROOT/tests/lib/config-modules.sh"
 
@@ -35,6 +32,9 @@ project_fixture_state() {
 # Legacy/default module inventories are unchanged. Enriched committed-source
 # tests use their own real repository instead of this synthetic git boundary.
 merge_source_fixture() {
+# Disable inherited notifications only for explicit fixture preparation.
+# Later notification controls deliberately enable their isolated Herdr stub.
+export HERDR_ENV=0
   local root="$1" real_git
   real_git="$(command -v git)"
   mkdir -p "$root/fixture-tools"
