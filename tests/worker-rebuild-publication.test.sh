@@ -33,14 +33,14 @@ rb_published_alone() {   # rb_published_alone <dir> <branch> <old head> <main he
 # V0: the worker changes nothing and says nothing. Already published before
 # T-098; retained as the no-change publication control.
 dV0="$(RB_HOOKS=1 rb_fixture)"; bV0="$(rb_branch "$dV0")"
-rb_replay_conflict "$dV0"; oldV0="$(rb_head "$dV0" "$bV0")"; mainV0="$(rb_head "$dV0" main)"
+rb_replay_conflict "$dV0" || exit 1; oldV0="$(rb_head "$dV0" "$bV0")"; mainV0="$(rb_head "$dV0" main)"
 printf ':\n' > "$dV0/nothing.sh"
 rb_round_two "$dV0" "$dV0/nothing.sh"
 rb_rebuilt "$dV0" "V0"
 rb_published_alone "$dV0" "$bV0" "$oldV0" "$mainV0" "V0"
 # V1: the worker changes nothing and says so in a note
 dV1="$(RB_HOOKS=1 rb_fixture)"; bV1="$(rb_branch "$dV1")"
-rb_replay_conflict "$dV1"; oldV1="$(rb_head "$dV1" "$bV1")"; mainV1="$(rb_head "$dV1" main)"
+rb_replay_conflict "$dV1" || exit 1; oldV1="$(rb_head "$dV1" "$bV1")"; mainV1="$(rb_head "$dV1" main)"
 printf 'printf "Nothing to change: the rebuild is clean.\\n" > .fm-say.md\n' > "$dV1/note.sh"
 rb_round_two "$dV1" "$dV1/note.sh"
 rb_rebuilt "$dV1" "V1"
@@ -49,7 +49,7 @@ assert_contains "$(cat "$dV1/ghcalls")" "pr comment 42 --body-file" "V1: the not
 # V2: the worker only asks. The rebuild is pushed; the round still reports
 # that it asked, and the question is on the pull request.
 dV2="$(RB_HOOKS=1 rb_fixture)"; bV2="$(rb_branch "$dV2")"
-rb_replay_conflict "$dV2"; oldV2="$(rb_head "$dV2" "$bV2")"; mainV2="$(rb_head "$dV2" main)"
+rb_replay_conflict "$dV2" || exit 1; oldV2="$(rb_head "$dV2" "$bV2")"; mainV2="$(rb_head "$dV2" main)"
 printf 'printf "ASK-PASS-CRITERIA:T-Z\\n" > .fm-say.md\n' > "$dV2/ask.sh"
 rb_round_two "$dV2" "$dV2/ask.sh"
 rb_rebuilt "$dV2" "V2"
@@ -62,7 +62,7 @@ assert_eq "1" "$(jq -r 'select(.type=="ask_pass_criteria")|.type' "$dV2/repo/sta
 # V3: the same with no pull request yet. The rebuild opens one, and the
 # question waits for it rather than being kept as premature.
 dV3="$(RB_HOOKS=1 rb_fixture)"; bV3="$(rb_branch "$dV3")"
-rb_replay_conflict "$dV3"; oldV3="$(rb_head "$dV3" "$bV3")"; mainV3="$(rb_head "$dV3" main)"
+rb_replay_conflict "$dV3" || exit 1; oldV3="$(rb_head "$dV3" "$bV3")"; mainV3="$(rb_head "$dV3" main)"
 rb_round_two "$dV3" "$dV2/ask.sh" ''
 rb_rebuilt "$dV3" "V3"
 rb_published_alone "$dV3" "$bV3" "$oldV3" "$mainV3" "V3"
@@ -99,7 +99,7 @@ rb_note_kept_once() {   # rb_note_kept_once <dir> <case>
     "$2: the round is reported as asked"
 }
 dV5="$(RB_HOOKS=1 rb_fixture)"; bV5="$(rb_branch "$dV5")"
-rb_replay_conflict "$dV5"; oldV5="$(rb_head "$dV5" "$bV5")"; mainV5="$(rb_head "$dV5" main)"
+rb_replay_conflict "$dV5" || exit 1; oldV5="$(rb_head "$dV5" "$bV5")"; mainV5="$(rb_head "$dV5" main)"
 rb_refusing_gh "$dV5"
 rb_round_two "$dV5" "$dV2/ask.sh"
 rb_rebuilt "$dV5" "V5"
@@ -113,7 +113,7 @@ assert_eq "$(rb_head "$dV5" "$bV5")" "$(git -C "$dV5/repo" rev-parse "$bV5")" \
 # V5b: the pull request refuses the first post and would take a later one.
 # There is no later one: the round is 73, and the note is in one place.
 dV5b="$(RB_HOOKS=1 rb_fixture)"; bV5b="$(rb_branch "$dV5b")"
-rb_replay_conflict "$dV5b"; mainV5b="$(rb_head "$dV5b" main)"
+rb_replay_conflict "$dV5b" || exit 1; mainV5b="$(rb_head "$dV5b" main)"
 rb_refusing_gh "$dV5b" once
 rb_round_two "$dV5b" "$dV2/ask.sh"
 rb_rebuilt "$dV5b" "V5b"
@@ -123,7 +123,7 @@ assert_eq "$mainV5b" "$(rb_head "$dV5b" "$bV5b^")" "V5b: and the rebuild is push
 # V5c: the note is refused, then so is the push. The note was kept where it
 # was refused, so the failed push neither loses it nor keeps it again.
 dV5c="$(RB_HOOKS=1 rb_fixture)"; bV5c="$(rb_branch "$dV5c")"
-rb_replay_conflict "$dV5c"; oldV5c="$(rb_head "$dV5c" "$bV5c")"
+rb_replay_conflict "$dV5c" || exit 1; oldV5c="$(rb_head "$dV5c" "$bV5c")"
 rb_refusing_gh "$dV5c"
 PATH="$(rb_gitwrap "$dV5c"):$PATH" FM_T_GIT_FAIL=" --force-with-lease=" rb_round_two "$dV5c" "$dV2/ask.sh"
 rb_rebuilt "$dV5c" "V5c"
@@ -134,7 +134,7 @@ assert_eq "$oldV5c" "$(rb_head "$dV5c" "$bV5c")" "V5c: and the branch stays wher
 # T-199: a report beside worker changes survives a rebuilt publication.
 for outcome in published lease-refused; do
   dN="$(RB_HOOKS=1 rb_fixture)"; bN="$(rb_branch "$dN")"
-  rb_replay_conflict "$dN"; oldN="$(rb_head "$dN" "$bN")"; mainN="$(rb_head "$dN" main)"
+  rb_replay_conflict "$dN" || exit 1; oldN="$(rb_head "$dN" "$bN")"; mainN="$(rb_head "$dN" main)"
   cat > "$dN/work-note.sh" <<'S'
 echo work > src/round-two
 printf 'ASK-PASS-CRITERIA:T-Z\n' > .fm-say.md
@@ -169,7 +169,7 @@ done
 # V4: a conflicting rebuild the worker only asks about is still not
 # published: the markers are the worker's to resolve, next round.
 dV4="$(RB_HOOKS=1 rb_fixture)"; bV4="$(rb_branch "$dV4")"; oldV4="$(rb_head "$dV4" "$bV4")"
-rb_conflicting_main "$dV4"; pushedV4="$(rb_pushed "$dV4")"
+rb_conflicting_main "$dV4" || exit 1; pushedV4="$(rb_pushed "$dV4")"
 rb_round_two "$dV4" "$dV2/ask.sh"
 rb_rebuilt "$dV4" "V4"
 assert_eq "0" "$rb_rc" "V4: an asking round on a conflicting rebuild completes"
@@ -182,11 +182,11 @@ assert_eq "$pushedV4" "$(rb_pushed "$dV4")" "V4: and no commit is reported"
 # unresolved like a marker - the check before the commit refuses it as it
 # stands - so an asking round on it publishes nothing, as in V4.
 dV6="$(RB_HOOKS=1 rb_fixture)"; bV6="$(rb_branch "$dV6")"
-rb_replay_conflict "$dV6"
+rb_replay_conflict "$dV6" || exit 1
 cat > "$dV6/main.sh" <<'S'
 jq '.title="main retitled the task"' design/tasks/T-Z.json > n && mv n design/tasks/T-Z.json
 S
-rb_move_main "$dV6" "$dV6/main.sh"
+rb_move_main "$dV6" "$dV6/main.sh" || exit 1
 oldV6="$(rb_head "$dV6" "$bV6")"; pushedV6="$(rb_pushed "$dV6")"
 # Refuse only the restore's file-writing show, not fm_task's pipe read.
 mkdir -p "$dV6/gitwrap"
