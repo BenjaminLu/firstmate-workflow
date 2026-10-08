@@ -264,5 +264,12 @@
   "pagerFirst": "首頁",
   "pagerPrev": "上一頁",
   "pagerNext": "下一頁",
-  "pagerPosition": "第 {page} 頁，共 {total} 頁"
+  "pagerPosition": "第 {page} 頁，共 {total} 頁",
+  "detailExternalReview": "外部審查",
+  "detailCoversPatch": "涵蓋此修補",
+  "detailOlderPatch": "較舊修補",
+  "detailCurrentHead": "目前版本",
+  "detailResolved": "已解決",
+  "detailUnresolved": "未解決",
+  "detailNoCitedLine": "未引用行號"
 }

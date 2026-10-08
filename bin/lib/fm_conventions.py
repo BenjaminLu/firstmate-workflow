@@ -105,10 +105,22 @@ def validate_branch_format(policy):
     if 'ci_pull_request' in policy and type(policy['ci_pull_request']) is not bool:
         raise ValueError('invalid conventions ci_pull_request')
 
+def request_reviewers(policy):
+    """An explicit empty list disables requests; omission uses recorded reviewers."""
+    return policy.get('request_reviewers', policy.get('reviewers', []))
+
 
 def validate(policy, repository=None, base=None):
     validate_pr_format(policy)
     validate_branch_format(policy)
+
+    if 'request_reviewers' in policy:
+        names = policy['request_reviewers']
+        if (not isinstance(names, list) or len(names) > 15
+                or any(not isinstance(n, str) or not re.fullmatch(
+                    r'[A-Za-z0-9][A-Za-z0-9_-]*(?:\[bot\])?', n) for n in names)
+                or len({n.lower() for n in names}) != len(names)):
+            raise ValueError('invalid conventions request_reviewers')
     for key, choices in ENUMS.items():
         if policy.get(key) not in choices:
             raise ValueError('invalid or missing conventions ' + key)

@@ -40,3 +40,27 @@ for external in (False, True):
     store.key_path.unlink()
     result = subprocess.run(cmd, capture_output=True, text=True, env={**os.environ, 'FM_EXTERNAL': '0'})
     assert result.returncode != 0 and 'evidence-signing' not in result.stderr
+
+# A separate authenticated store exercises nested metadata allowlists.
+store = Store(Path(sys.argv[1]) / 'external-review', 'private', 'T-001', external=True)
+store.append('external-verdict', 1, 'github', 'a'*40, 'BEGIN PRIVATE TEXT',
+    ready=False, blockers=['x'*250],
+    states={'rev':dict(state='CHANGES_REQUESTED', reviewed_head='a'*40, covers=True,
+                       review={'body':'BEGIN', 'url':'https://private'})},
+    findings=[dict(id=i, reviewer='rev', path='src/x.py', line=i, reviewed_head='a'*40,
+                   resolved=False, body='BEGIN', url='https://private') for i in (9, 10)],
+    reviews=[{'body':'BEGIN'}], threads=[{'body':'BEGIN'}], comments=[{'body':'BEGIN'}])
+from fm_evidence import summary
+row = summary(store)[0]
+assert row['ready'] is False and row['blockers'] == ['x'*200]
+assert row['states'] == {'rev':dict(state='CHANGES_REQUESTED', reviewed_head='a'*40, covers=True)}
+assert row['findings'] == [dict(id=i, reviewer='rev', path='src/x.py', line=i,
+                               reviewed_head='a'*40, resolved=False) for i in (9, 10)]
+def safe(value):
+    if isinstance(value, dict):
+        assert not set(value) & {'body','url','review','reviews','threads','comments'}
+        for child in value.values(): safe(child)
+    elif isinstance(value, list):
+        for child in value: safe(child)
+safe(row)
+assert 'BEGIN' not in json.dumps(row)

@@ -264,5 +264,12 @@
   "pagerFirst": "First",
   "pagerPrev": "Previous",
   "pagerNext": "Next",
-  "pagerPosition": "Page {page} of {total}"
+  "pagerPosition": "Page {page} of {total}",
+  "detailExternalReview": "External review",
+  "detailCoversPatch": "Covers this patch",
+  "detailOlderPatch": "Older patch",
+  "detailCurrentHead": "Current head",
+  "detailResolved": "Resolved",
+  "detailUnresolved": "Unresolved",
+  "detailNoCitedLine": "No cited line"
 }
