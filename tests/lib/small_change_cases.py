@@ -213,7 +213,9 @@ class GateEngine(Engine):
     def gate(self, script=None, **extra):
         env = clean_env(**self.penv, **extra)
         if script is not None:
-            env['PYTHONPATH'] = str(ROOT / 'bin/lib')
+            # The copy's own lib, never the head's: a head module on the path would
+            # silently turn the baseline back into the head.
+            env['PYTHONPATH'] = str(Path(script).parent)
         return run(sys.executable, script or ROOT / 'bin/lib/fm_spec_pins.py', 'scope', '--task', self.task,
                    '--head', 'work', '--base', 'main', env=env)
 
@@ -234,6 +236,23 @@ class GateEngine(Engine):
             shutil.copytree(ROOT / 'bin', folder / 'bin',
                             ignore=shutil.ignore_patterns('fm_small_change.py', '__pycache__'))
         return folder / 'bin/lib' / name
+
+    def old_code_copy(self):
+        # Frozen pre-T-277 gate code: the head's bin/ without fm_small_change.py and
+        # without the store read in fm_spec_pins.py, so it never consults records.
+        # A git base blob is unavailable in CI's depth-1 checkout.
+        folder = self.tmp / 'old-code'
+        if not folder.exists():
+            shutil.copytree(ROOT / 'bin', folder / 'bin',
+                            ignore=shutil.ignore_patterns('fm_small_change.py', '__pycache__'))
+            pins = folder / 'bin/lib/fm_spec_pins.py'
+            text = pins.read_text()
+            block = ("        if not self.external and os.path.lexists(self.state / 'small-changes' / self.task):\n"
+                     "            import fm_small_change\n"
+                     "            allowed = fm_small_change.allowed_paths(self, chain)\n")
+            self.assertEqual(text.count(block), 1, 'T-277 store read not found exactly once')
+            pins.write_text(text.replace(block, ''))
+        return folder / 'bin/lib/fm_spec_pins.py'
 
     def assert_refused(self, needle, result=None):
         result = result or self.gate()
@@ -652,7 +671,7 @@ class Migration(GateEngine, unittest.TestCase):
         self.assertEqual({p: p.read_bytes() for p in watched}, before)
         self.assertEqual(sorted(p.name for p in (self.state / 'pins/T-X').glob('*.json')), ['1.json'])
         records = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.store.iterdir()}
-        old = self.gate(script=self.base_copy('fm_spec_pins.py'))
+        old = self.gate(script=self.old_code_copy())
         self.assertEqual(old.returncode, 65)
         self.assertIn('out of scope: tests/a.test.sh', old.stderr)
         self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.store.iterdir()}, records)
