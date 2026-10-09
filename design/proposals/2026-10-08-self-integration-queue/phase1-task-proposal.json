@@ -1,0 +1,12 @@
+{
+  "task": "T-260",
+  "normative": false,
+  "strategy": "self-front",
+  "default_enabled": false,
+  "pilot_cohort_size": [2, 3],
+  "depth": 1,
+  "batch": 1,
+  "activation": "Separate captain purpose-decision rollout approval of exact policy digest and cohort",
+  "phase2": "excluded",
+  "verification": "Current-head CI and all six gates remain required"
+}

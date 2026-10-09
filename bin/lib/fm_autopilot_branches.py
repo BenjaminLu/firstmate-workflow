@@ -18,6 +18,8 @@ class BranchUpdates:
                 del self.data['retries'][token]
         for name in ('holds', 'updates', 'advanced', 'rechecked'):
             item = self.data[name].get(number)
+            if (name == 'updates' and 'self_queue' in self.data and not self.ctx['external']):
+                continue  # Retain historical receipts; additive queue evidence reconciles them.
             keep_rebase = (name == 'updates' and self.ctx['external'] and item
                            and item.get('method') == 'rebase' and head is not None)
             if item and not keep_rebase and (head is None or item['head'] != head):
@@ -141,6 +143,9 @@ class BranchUpdates:
 
     def update_branch(self, pr, task):
         number, head = str(pr['number']), pr['head']['sha']
+        if hasattr(self, 'refresh_queue'): self.refresh_queue()
+        if getattr(self, 'queue_mode', 'off') != 'off':
+            return self.update_queue_branch(pr, task)
         token = f'update:{number}:{head}'
         if self.round_live(task) or self.busy(task):
             return
@@ -177,6 +182,43 @@ class BranchUpdates:
         except ERRORS + (KeyError,):
             pass
         self.branch_failure('update', number, head, task, line)
+
+    def update_queue_branch(self, pr, task):
+        if (not getattr(self, '_queue_snapshot_ready', False) or not self.queue_guard(pr)
+                or self.round_live(task) or self.busy(task)):
+            return
+        import fm_autopilot_queue as Q
+        number = str(pr['number']); q = self.data['self_queue']; m = q['members'][number]
+        if m['request'] is not None:
+            return
+        bound = Q.binding(q, m)
+        request_id = Q.hashlib.sha256(Q.json.dumps(dict(bound, number=number), sort_keys=True).encode()).hexdigest()
+        m['request'] = dict(bound, request_id=request_id, kind='update', state='planned', outcome=None)
+        q['counters']['automatic_updates_requested'] += 1
+        Q.transition(q, number, 'updating', 'update-planned', self.clock())
+        self.save()
+        # A crash after intent, even before issuing HTTP, requires outcome
+        # reconciliation. Never infer not-issued from missing response bytes.
+        if not self.queue_guard(pr, update=True):
+            m['request'].update(state='settled', outcome='not-issued-input-race')
+            self.save(); return
+        m['request']['state'] = 'issued'; self.save()
+        try:
+            rc, out, err = self.probe(self.gh('api', '-X', 'PUT',
+                f'repos/{self.ctx["repository"]}/pulls/{number}/update-branch',
+                '-f', 'expected_head_sha=' + pr['head']['sha'], '--include'))
+            match = re.match(r'^HTTP/\S+ ([0-9]{3})', out)
+            if match and match[1] == '202':
+                m['request'].update(state='accepted', outcome='HTTP-202')
+            elif match and match[1] == '422' and 'expected head sha' in out.lower():
+                m['request'].update(state='settled', outcome='expected-head-refused')
+            else:
+                m['request'].update(state='uncertain', outcome='response-unreconciled')
+                Q.transition(q, number, 'uncertain', 'update-outcome-unreconciled', self.clock())
+        except ERRORS:
+            m['request'].update(state='uncertain', outcome='transport-unreconciled')
+            Q.transition(q, number, 'uncertain', 'update-outcome-unreconciled', self.clock())
+        self.save()
 
     def external_behind(self, pr):
         """Use freshly fetched ancestry; REST base.sha can lag the base tip."""
