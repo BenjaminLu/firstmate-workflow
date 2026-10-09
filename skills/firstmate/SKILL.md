@@ -1010,6 +1010,53 @@ Missing/invalid details produce “no captain card created” with the diagnosti
 inspect the actual files and error, rather than fabricating content or captain A.
 The captain's board click remains the only merge authorization.
 
+Self landing coordination can be staged through the default-off T-260 pilot.
+It does not activate when the implementation task is approved. Firstmate must
+prepare a concrete two or three independent self PR cohort, baseline and rollout
+card through stock `fm-decide.sh --kind choice --purpose decision`. Author A with
+effect `hold` and exactly one `details.en.notes` object of kind `note` or `caution`
+whose text is `Queue policy SHA-256: <digest>`. The digest is SHA-256 of UTF-8
+JSON with sorted keys and compact separators, over the fields below excluding
+`captain_authorization`, with the numeric cohort sorted. Only a real captain A,
+its answered record and successful canonical `decision_made` event authorize
+activation; a dispatch card or hand-written answered file does not.
+
+After that approval, stage the exact self-owned
+`<FM_STATE_DIR>/autopilot/queue-policy.json` and use normal autopilot reload:
+
+```json
+{"version":1,"strategy":"self-front","enabled":true,"repository":"owner/self","base":"main","cohort":[101,102],"captain_authorization":"D-firstmate-workflow-T260-2","depth":1,"batch":1}
+```
+
+Use the actual repository, base, cohort and approved id. No ambient environment
+switch or root configuration enables it. External projects reject the self
+strategy and retain their upstream policy. One durable front requests updates
+and gates while feedback and independent workers remain active. Pending captain
+cards retain the front. A task park alone does not cancel its merge card: the
+captain must separately answer that card with a hold effect, recorded successfully
+with the pending file removed. Unknown owners/outcomes hold for reconciliation.
+Disable drains existing owned work before restoring legacy scheduling; never
+delete queue state or start another coordinator to bypass a hold.
+
+Read the bounded status without mutation:
+
+```sh
+python3 <FM_CODE_ROOT>/bin/lib/fm_autopilot_queue.py status --state <absolute-engine-state> --format json
+python3 <FM_CODE_ROOT>/bin/lib/fm_autopilot_queue.py status --state <absolute-engine-state> --format text
+```
+
+JSON includes repository, base, enabled, owner generation, front, ordered members
+and counters. A front example is
+`{"PR":101,"task":"T-101","state":"waiting-ci","H":"<40hex>","B":"<40hex>","generation":1,"reason":"required-checks-pending"}`;
+members also include admission sequence. Exit 0 denotes valid status, 3 a valid
+self store without initialized queue, 64 bad arguments and 65 corrupt, newer,
+external or symlinked state. Status performs no network, process probe, lock or
+write and exposes no paths, operator names or authorization prose. Update counts
+measure persisted request identities; landings require remote merge and canonical
+event reconciliation; invalidated jobs count completed bound jobs whose H/B
+changed. Captain/front seconds account persisted transition intervals once,
+clamped nonnegative. CI runner minutes are unavailable, never estimated.
+
 Publication is **not atomic**: `fm-decide.sh` validates, writes the pending JSON
 with noclobber, attempts the diagram, then attempts the bilingual request event
 and prints the pending path. The generator reads that already-visible pending

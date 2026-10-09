@@ -69,6 +69,24 @@ class Reload(unittest.TestCase):
         path.write_text(path.read_text() + '\n# ' + label + '\n')
         return self.commit()
 
+    def test_queue_helper_import_is_pinned_in_retained_and_updated_snapshots(self):
+        old = self.start()
+        def imported(record):
+            code = Path(record['snapshot'])
+            env = dict(self.env, PYTHONPATH=str(code / 'bin/lib'), FM_CODE_ROOT=str(code))
+            result = subprocess.run([sys.executable, '-c',
+                'import fm_autopilot_queue as q; print(q.__file__)'],
+                env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(Path(result.stdout.strip()), code / 'bin/lib/fm_autopilot_queue.py')
+        imported(old)
+        target = self.changed('queue helper snapshot')
+        self.shell()
+        new = self.reloaded(old, target)
+        imported(old)
+        imported(new)
+        self.assertNotEqual(old['snapshot'], new['snapshot'])
+
     def read(self, name):
         return A.read_json(self.directory / (name + '.json'))
 

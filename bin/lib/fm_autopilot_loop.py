@@ -370,17 +370,21 @@ class MechanicalLoop:
 
     def advance(self, pr, runs, statuses):
         from fm_autopilot import key
+        if hasattr(self, 'refresh_queue'): self.refresh_queue()
+        if getattr(self, 'queue_mode', 'off') != 'off' and not self.queue_guard(pr): return
         self.data['pulls'].get(str(pr['number']), {}).pop('merge_evidence', None)
         if pr['state'] != 'open' or self.policy_error: return
         task = self.task(pr)
         if not task: return
-        if self.landed(task, pr): return
+        if self.landed(task, pr) and not (getattr(self, 'queue_mode', 'off') != 'off'
+                                        and self.queue_carry_active(task, pr)): return
         if self.busy(task): return
         # Do not gate a branch still being written by its worker.
         from fm_concurrent import live_rounds
         if any(r.get('task') == task for r in live_rounds([dict(state=str(self.state), name=self.ctx['project'])])):
             return
-        replacement, hold = self.failed_card_evidence(task, pr)
+        carrying = (getattr(self, 'queue_mode', 'off') != 'off' and self.queue_carry_active(task, pr))
+        replacement, hold = ([], '') if carrying else self.failed_card_evidence(task, pr)
         if hold:
             self.failed_card_hold(task, pr, hold)
             return
@@ -450,7 +454,12 @@ class MechanicalLoop:
         if verdict.get('head') != head: bound = None
         inputs = [pr['number'], head, pr['base']['sha'], checks,
                   bound, details, slot['release']]
-        replacement, hold = self.failed_card_evidence(task, pr)
+        if getattr(self, 'queue_mode', 'off') in ('enabled', 'drain'):
+            import fm_autopilot_queue as Q
+            q = self.data['self_queue']; member = q['members'].get(str(pr['number']))
+            if q['front'] == str(pr['number']) and member:
+                inputs.append(Q.binding(q, member))
+        replacement, hold = ([], '') if carrying else self.failed_card_evidence(task, pr)
         if hold:
             self.failed_card_hold(task, pr, hold)
             return
@@ -487,6 +496,14 @@ class MechanicalLoop:
 
     def start_job(self, kind, task, pr, argv, **extra):
         from fm_autopilot import key
+        if hasattr(self, 'refresh_queue'): self.refresh_queue()
+        if getattr(self, 'queue_mode', 'off') != 'off':
+            if not self.queue_guard(pr): raise ValueError('queue continuation inputs changed')
+            import fm_autopilot_queue as Q
+            q = self.data['self_queue']; m = q['members'][str(pr['number'])]
+            extra['queue_binding'] = Q.binding(q, m)
+            Q.transition(q, str(pr['number']), 'waiting-review' if kind == 'review' else 'verifying',
+                         'owned-' + kind, self.clock())
         identity = key([kind, task, pr, extra, argv, len(self.data.setdefault('jobs', {}))])
         jobs = self.data.setdefault('jobs', {})
         if identity in jobs: return
@@ -496,6 +513,9 @@ class MechanicalLoop:
         save_json(path, packet)
         jobs[identity] = dict(kind=kind, task=task, number=pr['number'], head=pr['head']['sha'],
                               state='running', path=str(path))
+        if 'queue_binding' in extra:
+            jobs[identity]['queue_binding'] = extra['queue_binding']
+            m['jobs'].append(identity)
         self.save()
         with path.with_suffix('.log').open('ab') as log:
             child = life.start([sys.executable, str(BIN / 'lib/fm_autopilot_loop.py'), str(path)],
@@ -514,6 +534,12 @@ class MechanicalLoop:
             if job['state'] != 'running': continue
             receipt = Path(job['path']).with_suffix('.result.json')
             if not receipt.exists(): continue
+            # A complete cohort is also required for retained result packets.
+            # Do not mark consuming while the next authoritative poll is needed.
+            if (getattr(self, 'queue_mode', 'off') in ('enabled', 'drain')
+                    and job.get('queue_binding')
+                    and not getattr(self, '_queue_snapshot_ready', False)):
+                continue
             # Mark before acting; a crash here is reconciliation, never replay.
             job['state'] = 'consuming'; self.save()
             try:
@@ -525,6 +551,7 @@ class MechanicalLoop:
             self.save()
 
     def recover_jobs(self):
+        self.refresh_queue()
         for ident, job in list(self.data.setdefault('jobs', {}).items()):
             if job['state'] == 'consuming' or (job['state'] == 'running' and
                     not Path(job['path']).with_suffix('.result.json').exists()):
@@ -573,9 +600,36 @@ class MechanicalLoop:
             self.save()
 
     def job_completed(self, result):
+        if hasattr(self, 'refresh_queue'): self.refresh_queue()
+        self._queue_continuation = result
+        try:
+            return MechanicalLoop._job_completed(self, result)
+        finally:
+            self._queue_continuation = None
+
+    def _job_completed(self, result):
+        from fm_autopilot import key
         task, pr, code = result['task'], result['pr'], result['code']
         kind, output = result['kind'], result.get('output', '')
-        if kind in ('gate', 'protocol', 'review') and self.landed(task, pr): return
+        if getattr(self, 'queue_mode', 'off') != 'off':
+            if not self.queue_guard(pr, result):
+                bound = result.get('queue_binding')
+                if bound and self.queue_mode in ('enabled', 'drain') and (bound.get('H') != self.api('pulls/' + str(pr['number']))['head']['sha']
+                              or bound.get('B') != self.base_tip()):
+                    q = self.data['self_queue']; ident = 'invalid-job:' + key(result)
+                    if ident not in q['accounted']:
+                        q['accounted'].append(ident); q['counters']['invalidated_gate_jobs'] += 1
+                        self.save()
+                return
+            if (kind == 'gate' and code not in (0, 6)) or (kind == 'protocol' and code):
+                import fm_autopilot_queue as Q
+                q = self.data['self_queue']; number = str(pr['number']); m = q['members'][number]
+                m['failed_fingerprint'] = key([kind, code, m['head'], result.get('queue_binding')])
+                Q.transition(q, number, 'blocked', 'failed-owned-' + kind, self.clock())
+                self.queue_release(number)
+                self.save()
+        if (kind in ('gate', 'protocol', 'review') and self.landed(task, pr)
+                and not (getattr(self, 'queue_mode', 'off') != 'off' and self.queue_carry_active(task, pr))): return
         said = [line for line in output.splitlines() if 'log is at' in line or 'no adapter' in line]
         suffix = ' (' + said[-1] + ')' if said else ''
         if kind == 'protocol':
@@ -621,6 +675,8 @@ class MechanicalLoop:
 
     def merge_card(self, task, pr, gated_base):
         from fm_concurrent import merge_blocker
+        if hasattr(self, 'refresh_queue'): self.refresh_queue()
+        if getattr(self, 'queue_mode', 'off') != 'off' and not self.queue_guard(pr): return
         if self.policy['land'] != 'card':
             self.attention('handoff', task, pr, f'{task} ready: team handoff needed', f'{task} 已就緒：需要交由團隊合併')
             return
@@ -699,6 +755,13 @@ class MechanicalLoop:
             failure = self.data.get('merge_request_failures', {}).get(str(pr['number']))
             if not replacement and failure and not self.retry_due(request_token, variant=variant): return
             try:
+                if getattr(self, 'queue_mode', 'off') != 'off':
+                    if not self.queue_guard(pr): return
+                    import fm_autopilot_queue as Q
+                    q = self.data['self_queue']; m = q['members'][str(pr['number'])]
+                    m['card_id'] = ident
+                    Q.transition(q, str(pr['number']), 'waiting-captain', 'card-request-planned', self.clock())
+                    self.save()
                 self.command(self.script('fm-decide.sh', '--request', ident, '--task', task, '--project', owner,
                     '--kind', 'merge', '--pr', pr['number'], '--expected-head', head, '--details', details))
             except ERRORS as error:
