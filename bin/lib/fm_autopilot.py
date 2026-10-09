@@ -282,6 +282,15 @@ class Pilot(BranchUpdates, MechanicalLoop):
             if identity in q['accounted']: continue
             try:
                 pr = snapshots[number][0] if number in snapshots else self.api('pulls/' + number)
+                if pr.get('state') == 'closed':
+                    # A terminal PR's historical receipt is settled by its outcome,
+                    # not by new-work admission. Merges also need the canonical event.
+                    if pr.get('merged_at') and not any(r.get('type') == 'merged' and str(r.get('pr')) == number
+                                                       for r in self.rows()):
+                        pending = True; continue
+                    q['accounted'].append(identity)
+                    self.save()
+                    continue
                 task, reason = self.queue_eligible(pr)
                 if reason or not task or pr['head']['sha'] == receipt['head']:
                     pending = True; continue

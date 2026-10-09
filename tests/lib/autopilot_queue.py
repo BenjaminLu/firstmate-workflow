@@ -938,6 +938,47 @@ class QueueTests(unittest.TestCase):
                 self.assertFalse(self.stock_calls)
         self.assertEqual(pins, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
 
+    def test_production_legacy_receipt_settles_by_terminal_outcome(self):
+        pilot, state, command, git, pins = self.stock_fixture()
+        head = self.prs[2]['head']['sha']; receipt = dict(head=head, seq=7)
+        pilot.data['updates']['2'] = receipt.copy(); pilot.save()
+        baseline = copy.deepcopy(pilot.data); opened = copy.deepcopy(self.prs[2])
+        policy_path = state / 'autopilot/queue-policy.json'; approved_policy = policy_path.read_bytes()
+        initial_events = (state / 'events.jsonl').read_bytes()
+        identity = 'legacy-update:' + A.key(['2', receipt])
+        for outcome in ('merged', 'merged-without-event', 'closed-unmerged'):
+            for disabled in (False, True):
+                with self.subTest(outcome=outcome, disabled=disabled):
+                    pilot.data = copy.deepcopy(baseline); pilot._poll_rows = None
+                    (state / 'events.jsonl').write_bytes(initial_events)
+                    policy_path.write_bytes(approved_policy)
+                    self.prs[2] = copy.deepcopy(opened)
+                    self.prs[2]['state'] = 'closed'
+                    if outcome.startswith('merged'): self.prs[2]['merged_at'] = '2026-10-09T12:00:00Z'
+                    if outcome == 'merged': self.append_event(state, type='merged', task='T-002', pr=2)
+                    if disabled:
+                        value = json.loads(approved_policy); value['enabled'] = False
+                        policy_path.write_text(json.dumps(value))
+                    snapshots = self.stock_snapshots(pilot)
+                    self.stock_prepare(pilot, snapshots); self.stock_prepare(pilot, snapshots)
+                    accounted = pilot.data['self_queue']['accounted']
+                    settled = outcome != 'merged-without-event'
+                    self.assertEqual(accounted.count(identity), 1 if settled else 0, 'terminal receipts settle exactly once')
+                    pilot.refresh_queue()
+                    if disabled: self.assertEqual(pilot.queue_mode, 'off' if settled else 'drain')
+                    else:
+                        self.assertEqual(pilot.queue_mode, 'enabled')
+                        self.assertEqual(pilot._queue_snapshot_ready, settled)
+                    if settled:
+                        restarted = A.Pilot(pilot.ctx); restarted._queue_service_owned = True
+                        restarted.api = self.api; restarted.refresh_queue()
+                        self.assertEqual(restarted.data['self_queue']['accounted'].count(identity), 1)
+                        if disabled: self.assertEqual(restarted.queue_mode, 'off')
+                    self.assertEqual(pilot.data['updates']['2'], receipt, 'historical receipts are never rewritten')
+                    self.assertFalse(self.stock_calls)
+        self.prs[2] = opened
+        self.assertEqual(pins, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
+
     def test_activation_completed_legacy_result_is_observed_without_stale_continuation(self):
         for pr in self.prs.values(): pr['mergeable_state'] = 'clean'
         path = self.state / 'autopilot/legacy.json'
