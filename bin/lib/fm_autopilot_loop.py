@@ -678,15 +678,14 @@ class MechanicalLoop:
 
         The protocol check is bound to this verdict's signature, in every
         round, and repeated after a restart. Only the notification is
-        deduplicated: the wake identity binds head and verdict signature, so
-        a repeat raises no second wake and a replacement verdict its own.
+        deduplicated, by the existing once-per-head key: a repeat or a
+        replacement verdict on the same head raises no second wake.
         """
         from fm_evidence import Store, Refused, fixes_brief
         head = pr['head']['sha']
-        source = (verdict.get('signature') or 'unsigned')[:16]
 
         def wake(reason, en, tw):
-            self.queue(f'{reason}-{pr["number"]}-{head}-{source}', task, en, tw)
+            self.attention(reason, task, pr, en, tw)
         round_number = verdict.get('round', 1)
         try:
             # An unsigned pre-T-138 verdict has no signature to bind to.

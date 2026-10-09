@@ -1998,8 +1998,9 @@ Git's quoting decoded, so spaced or quoted names and header-like hunk lines
 keep their real paths.
 
 Both autopilot REJECT paths run the bound protocol check first, in every
-round and again after a restart; only the wake is deduplicated, keyed by head
-and verdict signature. A violation raises the protocol-violation wake. Otherwise `fm_evidence
+round and again after a restart; only the wake is deduplicated, by the
+existing once-per-head key (reason, pull request, head), so a replacement
+verdict on the same head raises no second wake. A violation raises the protocol-violation wake. Otherwise `fm_evidence
 fixes-brief --round <next> --head <head>` writes a draft to
 `<project state>/briefs/<task>-r<next>-<head12>-<sig8>-review-fixes.md`: per
 item `<N>. fix: <finding>` with its proposal copied byte for byte and its

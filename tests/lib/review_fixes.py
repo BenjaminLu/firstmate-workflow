@@ -738,11 +738,36 @@ class Autopilot(BranchFixture, unittest.TestCase):
                 trigger(restored)
                 checks = self.protocol_checks()
                 self.assertEqual(checks[-1][checks[-1].index('--signature') + 1], replacement['signature'])
-                self.assertEqual(len(restored.data['wakes']), 2, 'the replacement is judged and woken once')
+                self.assertEqual(len(restored.data['wakes']), 1,
+                                 'a replacement verdict on the same head raises no second wake')
                 again = self.pilot_for()
                 trigger(again)
                 self.assertEqual(len(self.protocol_checks()), 4)
-                self.assertEqual(len(again.data['wakes']), 2)
+                self.assertEqual(len(again.data['wakes']), 1)
+
+    def test_a_wake_saved_before_the_update_still_holds_its_head(self):
+        """REGRESSION item 5: a pre-update wake keyed reason-PR-head stops a second wake."""
+        valid = '1. open helper\n' + block('diff', 1, PATCH) + CLOSE.replace('T-X', 'T-001')
+        invalid = '1. open helper\n' + CLOSE.replace('T-X', 'T-001')
+        paths = {'advance': lambda pilot: pilot.advance(PR, CHECKS, []),
+                 'completed review': lambda pilot: pilot.job_completed(dict(
+                     kind='review', task='T-001', pr=PR, code=0, output='', verdict_before='before'))}
+        for name, trigger in paths.items():
+            for reason, text in (('reject', valid), ('protocol', invalid)):
+                with self.subTest(path=name, reason=reason):
+                    self.setUp()
+                    # The wake as main keyed it before this change.
+                    self.pilot.queue(f'{reason}-{PR["number"]}-{HEAD}', 'T-001', 'saved before', '更新前')
+                    record = self.reject(text)
+                    trigger(self.pilot)
+                    checks = self.protocol_checks()
+                    self.assertEqual(checks[-1][checks[-1].index('--signature') + 1], record['signature'])
+                    self.assertEqual(len(self.pilot.data['wakes']), 1, 'the saved wake holds the head')
+                    replacement = self.reject(text)
+                    trigger(self.pilot)
+                    checks = self.protocol_checks()
+                    self.assertEqual(checks[-1][checks[-1].index('--signature') + 1], replacement['signature'])
+                    self.assertEqual(len(self.pilot.data['wakes']), 1, 'and still holds it for a replacement')
 
     def test_decisions_and_legacy_rejections_still_need_a_brief(self):
         for text, legacy in (('1. open conflict\n   DECISION:T-001 spec or code?\n', False),
