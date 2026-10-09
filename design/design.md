@@ -2940,8 +2940,8 @@ walks show no code walk for this head with a category. Scene-only cards retain
 the animation; walk-only cards retain the fallback and intent jumps. Intents
 without key blocks and changes without mapped blocks cannot jump. Neither field
 preserves T-242 rendering. Task details take the scene from the spec explain,
-even when a card supplies the explanation text, and use a card scene only when
-the spec has none. All authored
+even when a card supplies the explanation text; they never use a card's scene,
+and a spec without a scene shows no animation. All authored
 labels, notes, rows and paths are escaped. Door A still needs only reviewed
 intents and the correct comprehension answer. Existing records, pins and cards
 are never rewritten, and external content stays inside private card details.

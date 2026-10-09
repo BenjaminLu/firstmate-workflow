@@ -226,7 +226,7 @@
         if(e.code==='Space'){e.preventDefault();play();}
       });
       showBlocks();tabs();paint();
-      if(state.highlight.length)showBanner();
+      if(state.banner)showBanner();
       if(reduced()){state.phase=1;state.playing=false;paint();}
       // No timer remains once its DOM owner is replaced.
       if(animation && !reduced() && (fresh || state.playing)){state.playing=false;play();}

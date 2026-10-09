@@ -159,6 +159,23 @@ for (const variant of ['older card without a scene','card with a different scene
 });
 
 
+test('task details show no scene when the spec has none, even if an older card has one',async({page})=>{
+  const root=makeRoot([],false),explain=specExplain(sceneWalkCard());
+  for (const locale of ['en','zh-TW']) delete explain[locale].scene;
+  writeTasks(root,[{id:'T-211',title:'Record walk',depends_on:[],scope:[],acceptance:[],explain}]);
+  mkdirSync(join(root,'state/decisions'),{recursive:true});
+  writeFileSync(join(root,'state/decisions/D-9242.json'),JSON.stringify({...sceneWalkCard('both'),chosen:'A',ts:'2026-10-01T00:00:00Z'}));
+  const board=await startBoard(root);
+  try {
+    await page.goto(board.url+'/?lang=en');await showFleet(page);
+    await page.locator('.card[data-task="T-211"]').first().click();
+    const panel=page.locator('#taskDetail');
+    await expect(panel).toContainText('Keep the saved records.');
+    await expect(panel.locator('.scene-view')).toHaveCount(0);
+    await expect(panel.locator('[data-code-tab]')).toHaveCount(0);
+  } finally {await stopBoard(board);}
+});
+
 test('self-loop and upward edges route outside every node and carry the token',async({page})=>{
   const root=makeRoot([],false),source=sceneWalkCard();
   for (const locale of ['en','zh-TW']) {
@@ -216,6 +233,25 @@ test('a highlighted intent keeps its banner across a state update and a locale s
   } finally {await stopBoard(board);}
 });
 
+
+test('an intent with key blocks but no mapped change keeps its banner across a state update and a locale switch',async({page})=>{
+  const root=makeRoot([],false),source=sceneWalkCard();
+  for (const locale of ['en','zh-TW']) source.details[locale].scene.changes[0].intents=[2];
+  writeTasks(root,[{id:'T-211',title:'Record walk',depends_on:[]}]);
+  writeFileSync(join(root,'state/pending/D-9242.json'),JSON.stringify(source));
+  const board=await startBoard(root);
+  try {
+    await page.goto(board.url+'/?lang=en');const card=page.locator('#card-D-9242');
+    await card.locator('.intent-row').first().locator('.walk-intent-link').click();
+    await expect(card.locator('.scene-banner [data-its-code]')).toBeVisible();
+    await page.evaluate(() => fetch('/api/state').then(r => r.json()).then((window as any).render));
+    await expect(card.locator('.scene-banner [data-its-code]')).toBeVisible();
+    await page.locator('#langs button').filter({hasText:'繁'}).click();
+    await expect(card.locator('.scene-banner [data-its-code]')).toHaveText('導覽此意圖的程式碼');
+    await card.locator('.scene-banner [data-its-code]').click();
+    await expect(card.locator('[data-intent-tab="1"]')).toHaveAttribute('aria-selected','true');
+  } finally {await stopBoard(board);}
+});
 
 test('unmapped change highlights without a code jump',async({page})=>{
   const root=makeRoot([],false),source=sceneWalkCard();
