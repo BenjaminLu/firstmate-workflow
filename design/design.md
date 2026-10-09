@@ -3947,6 +3947,19 @@ trusted local Git binding operations may execute, never manifest argv, network,
 login/model helpers or overlays. Existing sandbox networking is unchanged and
 is not an absolute no-network producer confinement claim.
 
+Linux toolchain compatibility preserves only the fixed host usrmerge aliases
+`/bin → /usr/bin`, `/sbin → /usr/sbin`, `/lib → /usr/lib`,
+`/lib32 → /usr/lib32` and `/lib64 → /usr/lib64`. The profile recreates a link
+only when the host alias is a symlink resolving exactly to that existing
+canonical directory, an existing canonical read grant covers the target, and
+neither side intersects a `never_read` path (ancestor or descendant). These
+fixed symlink operations precede canonical read binds; all later private,
+repository configuration, Git and pinned-state masking remains in force.
+No alias supplies a new read grant, writable bind or caller-selected path.
+Non-usrmerge directories retain the existing canonical-bind behavior. Registry
+canonicalization and policy schema remain unchanged; old frozen snapshots keep
+their original behavior and new snapshots hash the changed ordinary library.
+
 A worker used to inherit the operator's personal CLI settings: on the
 captain's machine that allowed gh-axi, Herdr, a browser, reading any path
 and editing `~/.claude/skills`, and refused bun, npm, python and chmod.

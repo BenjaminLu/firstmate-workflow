@@ -224,6 +224,27 @@ unknown="unterminated shell word
                                               listeners=listeners, pinned=grant):
                                 self.assertEqual(0, before.returncode, before.stderr)
                                 expected = before.stdout
+                                if platform == 'linux':
+                                    # Independent bounded adjustment to the frozen vector.
+                                    # Everything after these eligible fixed operations stays exact.
+                                    pairs = (('/bin', '/usr/bin'), ('/sbin', '/usr/sbin'),
+                                             ('/lib', '/usr/lib'), ('/lib32', '/usr/lib32'),
+                                             ('/lib64', '/usr/lib64'))
+                                    below = lambda x, y: x == y or x.startswith(y.rstrip('/') + '/')
+                                    alias_args = []
+                                    for alias, target in pairs:
+                                        if (os.path.islink(alias) and os.path.realpath(alias) == target
+                                                and os.path.isdir(target)
+                                                and any(below(target, r) for r in document['read'])
+                                                and not any(below(x, n) or below(n, x)
+                                                            for x in (alias, target)
+                                                            for n in document['never_read'])):
+                                            alias_args.extend(['--symlink', target, alias])
+                                    if alias_args:
+                                        vector = expected.decode().splitlines()
+                                        offset = vector.index('--ro-bind-try')
+                                        vector[offset:offset] = alias_args
+                                        expected = ('\n'.join(vector) + '\n').encode()
                                 if role == 'worker' and platform == 'darwin' and listeners == 'unknown':
                                     sub = lambda paths: ' '.join('(subpath "' + str(p) + '")' for p in paths)
                                     deny = '(deny file-read* file-write* ' + sub([home]) + ')\n'

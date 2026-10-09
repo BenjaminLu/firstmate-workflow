@@ -3,6 +3,50 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/sandbox.sh
 . "$ROOT/tests/lib/sandbox.sh"
+# Fixed usrmerge observations are injected only inside this fixture process.
+python3 - "$ROOT" <<'PYALIASES'
+import sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1] + '/bin/lib')
+import fm_sandbox_policy as policy
+
+pairs = [('/bin', '/usr/bin'), ('/sbin', '/usr/sbin'), ('/lib', '/usr/lib'),
+         ('/lib32', '/usr/lib32'), ('/lib64', '/usr/lib64')]
+def profile(reads, denied=(), links=None, dirs=None):
+    links = dict(pairs) if links is None else links
+    dirs = set(dict(pairs).values()) if dirs is None else dirs
+    with patch.object(policy.os.path, 'islink', side_effect=lambda p: p in links), \
+         patch.object(policy.os.path, 'realpath', side_effect=lambda p: links.get(p, p)), \
+         patch.object(policy.os.path, 'isdir', side_effect=lambda p: p in dirs), \
+         patch.object(policy.os.path, 'exists', return_value=False), \
+         patch.object(policy, 'pinned_of', return_value=None), \
+         patch.object(policy, 'own_git', return_value=None):
+        return policy.linux({'never_read': list(denied), 'repo_config': ['.private']},
+                            ['/checkout', '/round'], reads, {}, '').splitlines()
+def aliases(argv):
+    return [(argv[i+1], argv[i+2]) for i, v in enumerate(argv) if v == '--symlink']
+argv = profile(['/usr', '/usr'])
+assert aliases(argv) == [(target, alias) for alias, target in pairs], 'missing-loader-alias: fixed granted usrmerge aliases must exist'
+assert argv.index('--symlink') < argv.index('--ro-bind-try'), 'aliases precede canonical binds'
+assert argv.count('--symlink') == 5, 'duplicate reads do not duplicate aliases'
+for alias, target in pairs:
+    assert aliases(profile([target])) == [(target, alias)], 'exact canonical target grant'
+    for label, links, dirs in [('absent', {}, {target}), ('non-symlink', {}, {alias, target}),
+                               ('wrong target', {alias: '/opt/tools'}, {'/opt/tools'}),
+                               ('private target', {alias: '/private/tools'}, {'/private/tools'}),
+                               ('missing target', {alias: target}, set())]:
+        assert not aliases(profile(['/usr'], links=links, dirs=dirs)), label
+    assert not aliases(profile(['/opt'], links={alias: target}, dirs={target})), 'read grant absent'
+    for denied in (alias, target, '/', '/usr', alias + '/secret', target + '/secret'):
+        assert (target, alias) not in aliases(profile(['/usr'], [denied])), 'never_read intersection: ' + denied
+assert not aliases(profile(['/usr'], links={}, dirs={'/bin', '/lib', '/usr'})), 'non-usrmerge layout'
+assert not aliases(profile(['/usr'], links={'/custom': '/usr/bin'})), 'no arbitrary aliases'
+masked = profile(['/usr'], ['/usr/lib/secret'], dirs=set(dict(pairs).values()) | {'/usr/lib/secret'})
+assert masked.index('--tmpfs', masked.index('--ro-bind-try')) > masked.index('--ro-bind-try'), 'denial masking remains after binds'
+print('fixed usrmerge alias behavioral assertions passed')
+PYALIASES
+assert_eq "0" "$?" "Linux fixed usrmerge alias admission and denial matrix"
+
 # --- fm_policy: one policy per role ------------------------------------------
 pol worker 'vendor: mock
 '
