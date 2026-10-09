@@ -185,6 +185,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
                         m['attempt_generation'] += 1
             self.data['self_queue']['enabled'] = True
         elif q and (q['front'] is not None or self.queue_reservation()
+                    or self.queue_legacy_updates_pending()
                     or any(m['state'] == 'uncertain' for m in q['members'].values())
                     or any(j.get('state') in ('running', 'consuming', 'uncertain')
                            for j in self.data.get('jobs', {}).values())):
@@ -244,6 +245,51 @@ class Pilot(BranchUpdates, MechanicalLoop):
             return task, 'dependencies-unresolved'
         return task, ''
 
+    def queue_verify_update(self, pr, request, task):
+        """Prove a base-only update without mutating its historical receipt."""
+        self.prepare_head(pr)
+        git = ['git', '-C', self.ctx['target']]
+        self.checked([*git, 'merge-base', '--is-ancestor', request['H'], pr['head']['sha']])
+        self.checked([*git, 'merge-base', '--is-ancestor', request['B'], pr['head']['sha']])
+        commits = self.checked([*git, 'rev-list', '--first-parent',
+                               request['H'] + '..' + pr['head']['sha']]).splitlines()
+        if not commits or self.task(pr) != task:
+            raise ValueError('update ancestry unavailable')
+        for commit in commits:
+            parents = self.checked([*git, 'show', '-s', '--format=%P', commit]).split()
+            if len(parents) != 2: raise ValueError('unrelated worker push')
+            self.checked([*git, 'merge-base', '--is-ancestor', parents[1], request['B']])
+        from fm_binding import change
+        ancestor = self.checked([*git, 'merge-base', request['H'], request['B']]).strip()
+        before = change(self.ctx['target'], request['H'], ancestor)
+        after = change(self.ctx['target'], pr['head']['sha'], request['B'])
+        if any(before[k] != after[k] for k in ('patch', 'files')):
+            raise ValueError('update changed task patch')
+
+    def queue_legacy_updates_pending(self):
+        q = self.data.get('self_queue', {})
+        return any('legacy-update:' + key([number, receipt]) not in q.get('accounted', [])
+                   for number, receipt in self.data.get('updates', {}).items())
+
+    def queue_reconcile_legacy_updates(self, snapshots):
+        q = self.data['self_queue']; pending = False
+        for number, receipt in self.data.get('updates', {}).items():
+            identity = 'legacy-update:' + key([number, receipt])
+            if identity in q['accounted']: continue
+            try:
+                pr = snapshots[number][0] if number in snapshots else self.api('pulls/' + number)
+                task, reason = self.queue_eligible(pr)
+                if reason or not task or pr['head']['sha'] == receipt['head']:
+                    pending = True; continue
+                # Historical receipts did not retain B. The complete live base
+                # plus the same patch/ancestry proof is required for settlement.
+                self.queue_verify_update(pr, dict(H=receipt['head'], B=pr['base']['sha']), task)
+                q['accounted'].append(identity)
+                self.save()
+            except (KeyError, TypeError, ValueError, RuntimeError, OSError, subprocess.SubprocessError):
+                pending = True
+        return pending
+
     def queue_snapshot(self, snapshots, base):
         import fm_autopilot_queue as Q
         if not getattr(self, '_queue_service_owned', False):
@@ -257,10 +303,11 @@ class Pilot(BranchUpdates, MechanicalLoop):
         # their original owner, but their results cannot launch a continuation.
         outstanding = any(j.get('state') in ('running', 'consuming', 'uncertain') and not j.get('queue_binding')
                           for j in self.data.get('jobs', {}).values())
+        outstanding = outstanding or self.queue_reconcile_legacy_updates(snapshots)
         if outstanding:
             self._queue_snapshot_ready = False
-            self.queue('queue-activation-drain', '', 'Self queue observes legacy jobs; reconcile owners before activation',
-                       '自身佇列正觀察既有工作；啟用前請核對擁有者')
+            self.queue('queue-activation-drain', '', 'Self queue observes legacy jobs or updates; reconcile outcomes before activation',
+                       '自身佇列正觀察既有工作或更新；啟用前請核對結果')
             return
         if q['front'] is None and self.queue_reservation():
             self._queue_snapshot_ready = False
@@ -338,6 +385,25 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 else:
                     Q.transition(q, number, 'uncertain', 'card-request-outcome-unreconciled', now)
                     continue
+            changed_head = m['head'] != pr['head']['sha']
+            request = m['request']
+            if request and request['state'] != 'settled':
+                # A response lost after PUT is never retried on a timer. The
+                # supervisor must verify the actual update's ancestry first.
+                if changed_head:
+                    try:
+                        self.queue_verify_update(pr, request, m['task'])
+                        request.update(state='settled', outcome='verified-base-update')
+                    except (KeyError, ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+                        if isinstance(error, ValueError) and str(error) in ('unrelated worker push', 'update changed task patch'):
+                            request.update(state='settled', outcome='candidate-invalidated')
+                        else:
+                            Q.transition(q, number, 'uncertain', 'update-ancestry-unreconciled', now)
+                            continue
+                else:
+                    Q.transition(q, number, 'updating' if request['state'] == 'accepted' else 'uncertain',
+                                 'update-outcome-unreconciled', now)
+                    continue
             parks = [r for r in self.rows() if r.get('task') == task and r.get('type') in ('parked', 'unparked')]
             if parks and parks[-1]['type'] == 'parked':
                 if m['card_id'] and not Q.cancelled_card(self.state, self.ctx['project'] or 'firstmate-workflow',
@@ -352,42 +418,6 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 Q.transition(q, number, 'parked', 'captain-parked', now)
                 Q.release(q, number, now)
                 continue
-            changed_head = m['head'] != pr['head']['sha']
-            request = m['request']
-            if request and request['state'] != 'settled':
-                # A response lost after PUT is never retried on a timer. The
-                # supervisor must verify the actual update's ancestry first.
-                if changed_head:
-                    try:
-                        self.prepare_head(pr)
-                        git = ['git', '-C', self.ctx['target']]
-                        self.checked([*git, 'merge-base', '--is-ancestor', request['H'], pr['head']['sha']])
-                        self.checked([*git, 'merge-base', '--is-ancestor', request['B'], pr['head']['sha']])
-                        commits = self.checked([*git, 'rev-list', '--first-parent',
-                                               request['H'] + '..' + pr['head']['sha']]).splitlines()
-                        if not commits or self.task(pr) != m['task']:
-                            raise ValueError('update ancestry unavailable')
-                        for commit in commits:
-                            parents = self.checked([*git, 'show', '-s', '--format=%P', commit]).split()
-                            if len(parents) != 2: raise ValueError('unrelated worker push')
-                            self.checked([*git, 'merge-base', '--is-ancestor', parents[1], request['B']])
-                        from fm_binding import change
-                        ancestor = self.checked([*git, 'merge-base', request['H'], request['B']]).strip()
-                        before = change(self.ctx['target'], request['H'], ancestor)
-                        after = change(self.ctx['target'], pr['head']['sha'], request['B'])
-                        if any(before[k] != after[k] for k in ('patch', 'files')):
-                            raise ValueError('update changed task patch')
-                        request.update(state='settled', outcome='verified-base-update')
-                    except (KeyError, ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
-                        if isinstance(error, ValueError) and str(error) in ('unrelated worker push', 'update changed task patch'):
-                            request.update(state='settled', outcome='candidate-invalidated')
-                        else:
-                            Q.transition(q, number, 'uncertain', 'update-ancestry-unreconciled', now)
-                            continue
-                else:
-                    Q.transition(q, number, 'updating' if request['state'] == 'accepted' else 'uncertain',
-                                 'update-outcome-unreconciled', now)
-                    continue
             if changed_head or m['base_sha'] != base:
                 m.update(head=pr['head']['sha'], base_sha=base, attempt_generation=m['attempt_generation'] + 1,
                          request=None)
@@ -426,6 +456,10 @@ class Pilot(BranchUpdates, MechanicalLoop):
                 Q.transition(q, number, 'queued', 'waiting-for-front', now)
             elif checks is None:
                 Q.transition(q, number, 'waiting-ci', 'required-checks-pending', now)
+            elif m['state'] in ('blocked', 'uncertain', 'updating', 'waiting-ci'):
+                # Every earlier unresolved branch continues before this point.
+                # Reaching here proves the temporary hold has reconciled.
+                Q.transition(q, number, 'front', 'front-reconciled', now)
         if q['front'] is None and self.queue_mode == 'enabled' and not self.queue_reservation():
             eligible = [n for n,m in q['members'].items() if n in snapshots and m['state'] == 'queued'
                         and not m['failed_fingerprint'] and int(n) in self.queue_policy['cohort']]
@@ -450,7 +484,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
         if mode == 'off': return True
         if mode == 'hold': return False
         if not getattr(self, '_queue_service_owned', False): return False
-        if packet is None and not getattr(self, '_queue_snapshot_ready', False): return False
+        if not getattr(self, '_queue_snapshot_ready', False): return False
         import fm_autopilot_queue as Q
         q = self.data['self_queue']; number = str(pr['number'])
         m = q['members'].get(number)

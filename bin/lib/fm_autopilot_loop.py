@@ -454,6 +454,11 @@ class MechanicalLoop:
         if verdict.get('head') != head: bound = None
         inputs = [pr['number'], head, pr['base']['sha'], checks,
                   bound, details, slot['release']]
+        if getattr(self, 'queue_mode', 'off') in ('enabled', 'drain'):
+            import fm_autopilot_queue as Q
+            q = self.data['self_queue']; member = q['members'].get(str(pr['number']))
+            if q['front'] == str(pr['number']) and member:
+                inputs.append(Q.binding(q, member))
         replacement, hold = ([], '') if carrying else self.failed_card_evidence(task, pr)
         if hold:
             self.failed_card_hold(task, pr, hold)
@@ -529,6 +534,12 @@ class MechanicalLoop:
             if job['state'] != 'running': continue
             receipt = Path(job['path']).with_suffix('.result.json')
             if not receipt.exists(): continue
+            # A complete cohort is also required for retained result packets.
+            # Do not mark consuming while the next authoritative poll is needed.
+            if (getattr(self, 'queue_mode', 'off') in ('enabled', 'drain')
+                    and job.get('queue_binding')
+                    and not getattr(self, '_queue_snapshot_ready', False)):
+                continue
             # Mark before acting; a crash here is reconciliation, never replay.
             job['state'] = 'consuming'; self.save()
             try:

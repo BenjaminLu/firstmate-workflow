@@ -18,6 +18,8 @@ class BranchUpdates:
                 del self.data['retries'][token]
         for name in ('holds', 'updates', 'advanced', 'rechecked'):
             item = self.data[name].get(number)
+            if (name == 'updates' and 'self_queue' in self.data and not self.ctx['external']):
+                continue  # Retain historical receipts; additive queue evidence reconciles them.
             keep_rebase = (name == 'updates' and self.ctx['external'] and item
                            and item.get('method') == 'rebase' and head is not None)
             if item and not keep_rebase and (head is None or item['head'] != head):

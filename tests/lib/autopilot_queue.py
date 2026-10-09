@@ -221,6 +221,93 @@ class QueueTests(unittest.TestCase):
         self.pilot.poll()
         self.assertFalse(self.calls, 'unchanged failed checks cannot silently retry')
 
+    def test_incomplete_snapshot_retains_delayed_result_until_complete_poll(self):
+        result = self.prepared_result()
+        path = self.state / 'autopilot/delayed.json'
+        path.with_suffix('.result.json').write_text(json.dumps(result))
+        job = dict(task='T-001', state='running', path=str(path), queue_binding=result['queue_binding'])
+        self.pilot.data['jobs']['delayed'] = job
+        self.pilot.merge_card = lambda *a: self.calls.append(('card', a))
+        old = self.pilot.api
+        def incomplete(endpoint):
+            if endpoint == 'pulls/3': raise ValueError('incomplete cohort')
+            return old(endpoint)
+        self.pilot.api = incomplete
+        self.pilot.poll(); self.pilot.consume_jobs()
+        self.assertFalse(self.calls, 'an incomplete cohort must block a delayed card')
+        self.assertEqual(job['state'], 'running', 'the result must remain reconcilable')
+        self.pilot.api = old
+        self.pilot.poll(); self.calls.clear()
+        self.pilot.consume_jobs(); self.pilot.consume_jobs()
+        self.assertEqual([c[0] for c in self.calls], ['card'])
+        self.assertEqual(job['state'], 'done')
+
+    def test_retained_front_recovers_temporary_worker_draft_and_owned_job_holds(self):
+        self.prepared_result()
+        q = self.pilot.data['self_queue']; m = q['members']['1']
+        for reason in ('live-worker', 'draft', 'approved-pin-unavailable', 'dependencies-unresolved'):
+            self.pilot.queue_eligible = lambda pr: (self.pilot.task(pr), reason if pr['number'] == 1 else '')
+            self.pilot.poll()
+            self.assertEqual(m['state'], 'blocked')
+            self.pilot.queue_eligible = lambda pr: (self.pilot.task(pr), '')
+            self.pilot.poll()
+            self.assertTrue(self.pilot.queue_guard(self.prs[1]), 'cleared eligibility must resume the retained front')
+        import fm_autopilot_queue as Q
+        m['jobs'] = ['e' * 32]; self.pilot.data['jobs']['e' * 32] = dict(state='uncertain', queue_binding=Q.binding(q, m))
+        self.pilot.poll(); self.assertEqual(m['state'], 'uncertain')
+        self.pilot.data['jobs']['e' * 32]['state'] = 'done'
+        self.pilot.poll()
+        self.assertTrue(self.pilot.queue_guard(self.prs[1]), 'reconciled owned job must resume the retained front')
+
+    def test_legacy_update_activation_restart_disable_preserves_receipts(self):
+        for outcome in ('accepted', 'uncertain'):
+            for phase in ('activation', 'restart', 'disable'):
+                with self.subTest(outcome=outcome, phase=phase):
+                    self.pilot.data.pop('self_queue', None); self.authorize(); self.calls.clear()
+                    receipt = dict(head=H, seq=1, state=outcome)
+                    self.pilot.data['updates'] = {'2': receipt.copy()}
+                    self.pilot.save()
+                    if phase == 'restart': self.pilot.data = json.loads(self.pilot.path.read_text())
+                    self.pilot.poll()
+                    if phase == 'disable':
+                        (self.state / 'autopilot/queue-policy.json').write_text(json.dumps(dict(self.policy, enabled=False)))
+                        self.pilot.poll()
+                    self.assertFalse(self.calls, 'legacy update receipts must drain before new mutations')
+                    self.assertIsNone(self.pilot.data['self_queue']['front'])
+                    self.assertEqual(self.pilot.data['updates']['2'], receipt)
+
+    def use_real_advance(self):
+        from fm_autopilot_loop import MechanicalLoop
+        self.pilot.advance = MechanicalLoop.advance.__get__(self.pilot)
+        self.pilot.landed = lambda *a: False
+        self.pilot.start_job = lambda kind, *a, **kw: self.calls.append((kind, kw))
+
+    def test_approved_resume_relaunches_actual_advance_once(self):
+        self.use_real_advance()
+        for pr in self.prs.values(): pr['mergeable_state'] = 'clean'
+        self.pilot.poll()
+        self.assertEqual(len(self.calls), 1)
+        m = self.pilot.data['self_queue']['members']['1']; m['failed_fingerprint'] = 'failed-gate'
+        ident = 'D-firstmate-workflow-T260-3'
+        record = json.loads((self.state / 'decisions' / (self.policy['captain_authorization'] + '.json')).read_text())
+        record['id'] = ident
+        record['details']['en']['notes'] = [dict(kind='note', text=f'Queue resume: PR 1 head {H} failed fingerprint failed-gate')]
+        (self.state / 'decisions' / (ident + '.json')).write_text(json.dumps(record))
+        with (self.state / 'events.jsonl').open('a') as f:
+            f.write(json.dumps(dict(type='decision_made', actor='captain', project='firstmate-workflow', task='T-260',
+                data=dict(decision=ident, chosen='A', effect='hold', outcome='done'))) + '\n')
+        self.pilot.poll(); self.pilot.poll()
+        self.assertEqual(len(self.calls), 2, 'an approved new attempt must launch once despite identical legacy inputs')
+
+    def test_off_advance_fingerprint_retains_exact_legacy_inputs(self):
+        self.use_real_advance()
+        (self.state / 'autopilot/queue-policy.json').unlink()
+        for pr in self.prs.values(): pr['mergeable_state'] = 'clean'
+        self.pilot.poll()
+        expected = A.key([1, H, B, [('ci', 'check', 1, 'success')], None, {}, 0])
+        self.assertEqual(self.pilot.data['advanced']['1']['fingerprint'], expected)
+        self.pilot.poll(); self.assertEqual(len(self.calls), 3)
+
     def test_incomplete_snapshot_has_no_effect(self):
         old = self.pilot.api
         def api(endpoint):
@@ -477,7 +564,7 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.pilot.data['wakes'], before)
         for wake in before.values(): self.assertEqual(set(wake['summary']), {'en', 'zh-TW'})
 
-    def test_stock_rollout_request_answer_and_approved_pin_admission(self):
+    def stock_fixture(self, dependencies=None):
         # Complete stock engine copy: fm-decide.sh, fm-emit.sh, fm-config.sh,
         # fm_spec_pins.py, fm_ste.py, fm_gates.json, fm_lifeline.py,
         # fm_autopilot.py, fm_autopilot_loop.py, fm_autopilot_branches.py,
@@ -491,7 +578,7 @@ class QueueTests(unittest.TestCase):
         tasks = engine / 'design/tasks'; tasks.mkdir(parents=True)
         for task in ('T-001', 'T-002', 'T-003', 'T-260'):
             (tasks / (task + '.json')).write_text(json.dumps(dict(id=task, title='Queue trial',
-                milestone='M2', scope=['src/**'], depends_on=[])))
+                milestone='M2', scope=['src/**'], depends_on=(dependencies or {}).get(task, []))))
         (engine / 'design/design.md').write_text('Queue fixture design\n')
         (engine / 'config.yaml').write_text('project:\n  check: "true"\n')
         def git(*args):
@@ -556,12 +643,379 @@ class QueueTests(unittest.TestCase):
             command('fm-emit.sh', '--actor', 'firstmate', '--type', 'dispatched', '--task', task,
                     '--en', 'Dispatch the task.', '--tw', '派遣任務。')
         before = {p: p.read_bytes() for p in (state / 'pins').rglob('*.json')}
-        pilot.task = self.pilot.task
-        pilot.round_live = lambda task: False
+        # Seed real local immutable head objects; task resolution and worker
+        # ownership readers remain production methods in this fixture.
+        self.remote_base = git('rev-parse', 'HEAD')
+        for pr in self.prs.values():
+            pr['head']['sha'] = self.remote_base
+            pr['base']['sha'] = self.remote_base
         pilot.refresh_queue()
         self.assertEqual(pilot.queue_mode, 'enabled')
-        for pr in self.prs.values(): self.assertEqual(pilot.queue_eligible(pr), (self.pilot.task(pr), ''))
         self.assertEqual(before, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
+        return pilot, state, command, git, before
+
+    def test_stock_rollout_request_answer_and_approved_pin_admission(self):
+        pilot, state, command, git, before = self.stock_fixture()
+        for pr in self.prs.values(): self.assertEqual(pilot.queue_eligible(pr), (self.pilot.task(pr), ''))
+
+    def stock_snapshots(self, pilot):
+        # Real admission, advancement, checks and request reconciliation. Only
+        # remote/process/git transports and the child launcher are fixtures.
+        self.stock_calls = []
+        pilot.api = self.api
+        pilot.start_job = lambda kind, *a, **kw: self.stock_calls.append((kind, kw))
+        snapshots = {}
+        for n, pr in self.prs.items():
+            pr['mergeable_state'] = 'clean'
+            runs = [dict(id=1, name='ci', head_sha=pr['head']['sha'], status='completed', conclusion='success')]
+            snapshots[str(n)] = (copy.deepcopy(pr), [], [], runs, [])
+        return snapshots
+
+    def stock_prepare(self, pilot, snapshots):
+        pilot.refresh_queue(); pilot._queue_snapshot_ready = False
+        pilot.queue_snapshot(snapshots, self.remote_base)
+        pilot.save()
+
+    def append_event(self, state, **row):
+        with (state / 'events.jsonl').open('a') as f: f.write(json.dumps(row) + '\n')
+
+    def test_production_worker_draft_dependency_cycle_eligibility_and_recovery(self):
+        pilot, state, command, git, pins = self.stock_fixture({'T-002':['T-001'], 'T-003':['T-003']})
+        snapshots = self.stock_snapshots(pilot)
+        self.stock_prepare(pilot, snapshots)
+        q = pilot.data['self_queue']; m = q['members']['1']
+        self.assertEqual(q['members']['2']['reason'], 'dependencies-unresolved')
+        self.assertEqual(q['members']['3']['reason'], 'dependencies-unresolved', 'self cycle must remain blocked')
+        # The worker restriction uses the actual stock live-round reader.
+        with patch('fm_concurrent.live_rounds', return_value=[dict(task='T-001')]):
+            self.stock_prepare(pilot, snapshots)
+        self.assertEqual(m['reason'], 'live-worker')
+        self.stock_prepare(pilot, snapshots)
+        self.assertEqual(m['state'], 'front')
+        snapshots['1'][0]['draft'] = True
+        self.stock_prepare(pilot, snapshots); self.assertEqual(m['reason'], 'draft')
+        snapshots['1'][0]['draft'] = False
+        self.stock_prepare(pilot, snapshots)
+        self.assertTrue(pilot.queue_guard(snapshots['1'][0]))
+        snapshots['1'][0]['base']['ref'] = 't-002-task'
+        self.stock_prepare(pilot, snapshots); self.assertEqual(m['reason'], 'stack-on-task')
+        snapshots['1'][0]['base']['ref'] = 'main'
+        self.stock_prepare(pilot, snapshots); self.assertEqual(m['state'], 'front')
+        self.append_event(state, type='merged', task='T-001', pr=1)
+        self.stock_prepare(pilot, snapshots)
+        self.assertEqual(q['members']['2']['state'], 'queued')
+        self.assertEqual(q['members']['3']['state'], 'blocked')
+        self.assertEqual(pins, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
+
+    def stock_update_graph(self, pilot, git):
+        # Actual disposable commit graph proves ancestry and patch equivalence.
+        engine = Path(pilot.ctx['target']); (engine / 'src').mkdir()
+        git('checkout', '-qb', 'fixture-task')
+        (engine / 'src/task').write_text('task patch\n')
+        git('add', 'src'); git('commit', '-qm', 'task patch'); head = git('rev-parse', 'HEAD')
+        git('checkout', '-q', 'main')
+        (engine / 'base.txt').write_text('base advancement\n')
+        git('add', 'base.txt'); git('commit', '-qm', 'base advancement'); base = git('rev-parse', 'HEAD')
+        git('checkout', '-q', 'fixture-task'); git('merge', '--no-ff', '-qm', 'base catchup', 'main')
+        updated = git('rev-parse', 'HEAD')
+        (engine / 'src/task').write_text('unrelated worker patch\n')
+        git('add', 'src'); git('commit', '-qm', 'worker push'); worker = git('rev-parse', 'HEAD')
+        git('checkout', '-q', 'main')
+        self.remote_base = base
+        for pr in self.prs.values(): pr['base']['sha'] = base; pr['head']['sha'] = head
+        # Mock only GitHub fetch/view; all local object/ancestry commands run.
+        def command(argv, **kwargs):
+            if argv[0] == 'git' and 'fetch' in argv:
+                source = argv[-1]
+                if source.startswith('+refs/pull/'):
+                    ref = source.split(':', 1)[1]
+                    git('update-ref', ref, self.prs[int(source.split('/')[2])]['head']['sha'])
+                return ''
+            if argv[0] == 'gh':
+                pr = self.prs[int(argv[argv.index('view') + 1])]
+                return json.dumps(dict(headRefOid=pr['head']['sha'], baseRefOid=base, state='OPEN'))
+            if argv[0] == 'bash': return self.prs[1]['head']['sha']
+            result = subprocess.run(argv, check=True, capture_output=True, text=True)
+            return result.stdout
+        pilot.command = command
+        return head, base, updated, worker
+
+    def test_production_update_ancestry_recovery_unrelated_push_and_park_during_update(self):
+        pilot, state, command, git, pins = self.stock_fixture()
+        head, base, updated, worker = self.stock_update_graph(pilot, git)
+        snapshots = self.stock_snapshots(pilot); self.stock_prepare(pilot, snapshots)
+        # Issue through the real update entry point, with only HTTP mocked.
+        snapshots['1'][0]['mergeable_state'] = 'behind'; self.prs[1]['mergeable_state'] = 'behind'
+        pilot.probe = lambda argv: (self.stock_calls.append(argv) or (0, 'HTTP/2.0 202 Accepted\n', ''))
+        pilot.update_branch(snapshots['1'][0], 'T-001')
+        m = pilot.data['self_queue']['members']['1']; request = m['request']
+        self.assertEqual(request['state'], 'accepted')
+        # Restore real git probe. Missing fetched proof holds; retry can settle.
+        pilot.probe = A.Pilot.probe.__get__(pilot)
+        self.prs[1]['head']['sha'] = updated
+        snapshots = self.stock_snapshots(pilot)
+        real_command = pilot.command
+        def unavailable(argv, **kwargs): raise ValueError('temporary fetch unavailable')
+        pilot.command = unavailable
+        self.stock_prepare(pilot, snapshots)
+        self.assertEqual(m['reason'], 'update-ancestry-unreconciled')
+        pilot.command = real_command
+        self.stock_prepare(pilot, snapshots)
+        self.assertEqual(request['outcome'], 'verified-base-update')
+        self.assertTrue(pilot.queue_guard(self.prs[1]), 'recovered update proof resumes its front')
+        # An accepted request may reconcile before an explicit park releases it.
+        m.update(head=head, request=dict(request, state='accepted', outcome=None))
+        self.append_event(state, type='parked', task='T-001')
+        self.stock_prepare(pilot, snapshots)
+        self.assertEqual(m['request']['state'], 'settled', 'park must not prevent update reconciliation')
+        self.assertEqual(m['state'], 'parked')
+        # Unrelated worker commit invalidates readiness, never counts as an update.
+        self.append_event(state, type='unparked', task='T-001')
+        q = pilot.data['self_queue']; q['front'] = '1'
+        for n, member in q['members'].items():
+            if n != '1' and member['state'] == 'front': member.update(state='queued', reason='waiting-for-front')
+        m.update(head=head, state='updating', request=dict(request, state='accepted', outcome=None))
+        self.prs[1]['head']['sha'] = worker; snapshots = self.stock_snapshots(pilot)
+        old_request = m['request']; self.stock_prepare(pilot, snapshots)
+        self.assertEqual(old_request['outcome'], 'candidate-invalidated')
+        self.assertEqual(m['head'], worker)
+        self.assertEqual(pins, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
+
+    def stock_card(self, state, *, pending=True, chosen='B', outcome=None, effect='hold', event=True):
+        ident = 'D-firstmate-workflow-T001-8'
+        # Stock legacy self records omit project; readers retain that provenance.
+        record = dict(id=ident, task='T-001', kind='merge', pr=1,
+                      expected_head=self.prs[1]['head']['sha'], binding=dict(signature='bound'),
+                      chosen=chosen, effect=effect, effect_outcome='done', details=dict(effect={chosen:effect}))
+        if outcome: record['merge'] = outcome
+        folder = state / ('pending' if pending else 'decisions'); folder.mkdir(exist_ok=True)
+        path = folder / (ident + '.json'); path.write_text(json.dumps(record))
+        if event:
+            self.append_event(state, type='decision_made', actor='captain', task='T-001', project='firstmate-workflow',
+                              data=dict(decision=ident, chosen=chosen, effect=effect, outcome='done'))
+        return ident, path
+
+    def test_production_captain_park_separate_cancellation_race_matrix(self):
+        pilot, state, command, git, pins = self.stock_fixture()
+        snapshots = self.stock_snapshots(pilot); self.stock_prepare(pilot, snapshots)
+        baseline = copy.deepcopy(pilot.data)
+        for case in ('parking-alone', 'B-hold', 'C-hold', 'custom-merge', 'missing-event', 'pending-race', 'competing-owner'):
+            with self.subTest(case=case):
+                pilot.data = copy.deepcopy(baseline)
+                for folder in ('pending', 'merging'):
+                    shutil.rmtree(state / folder, ignore_errors=True)
+                path = state / 'decisions/D-firstmate-workflow-T001-8.json'; path.unlink(missing_ok=True)
+                events = [r for r in (state / 'events.jsonl').read_text().splitlines()
+                          if json.loads(r).get('task') != 'T-001' or json.loads(r).get('type') not in ('parked','decision_made')]
+                (state / 'events.jsonl').write_text('\n'.join(events) + '\n')
+                self.append_event(state, type='parked', task='T-001')
+                ident, path = self.stock_card(state, pending=case in ('parking-alone','pending-race'),
+                    chosen='C' if case == 'C-hold' else 'B', effect='merge' if case == 'custom-merge' else 'hold',
+                    event=case != 'missing-event')
+                if case == 'pending-race':
+                    (state / 'decisions' / path.name).write_bytes(path.read_bytes())
+                if case == 'competing-owner':
+                    (state / 'merging').mkdir(); (state / 'merging/other.json').write_text('{}')
+                m = pilot.data['self_queue']['members']['1']; m['card_id'] = ident
+                retained = path.read_bytes()
+                self.stock_prepare(pilot, snapshots)
+                if case in ('B-hold','C-hold'):
+                    self.assertEqual(m['state'], 'parked'); self.assertNotEqual(pilot.data['self_queue']['front'], '1')
+                else:
+                    self.assertEqual(pilot.data['self_queue']['front'], '1', 'unreconciled card cannot release reservation')
+                self.assertEqual(path.read_bytes(), retained)
+        self.assertEqual(pins, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
+
+    def test_production_upgrade_drain_cards_jobs_owner_receipts_restart_and_disable(self):
+        pilot, state, command, git, pins = self.stock_fixture()
+        snapshots = self.stock_snapshots(pilot); baseline = copy.deepcopy(pilot.data)
+        initial_events = (state / 'events.jsonl').read_bytes()
+        for case in ('pending-card', 'held-card', 'running-answer', 'uncertain-answer', 'owner-receipt', 'legacy-running', 'legacy-consuming', 'legacy-uncertain'):
+            for disabled in (False, True):
+                with self.subTest(case=case, disabled=disabled):
+                    pilot.data = copy.deepcopy(baseline)
+                    for folder in ('pending','merging'): shutil.rmtree(state / folder, ignore_errors=True)
+                    (state / 'decisions/D-firstmate-workflow-T001-8.json').unlink(missing_ok=True)
+                    (state / 'events.jsonl').write_bytes(initial_events)
+                    if case == 'owner-receipt':
+                        (state / 'merging').mkdir()
+                        (state / 'merging/_default.json').write_text(json.dumps(dict(
+                            decision='D-firstmate-workflow-T001-8', owner='retained-owner', pid=12345)))
+                        owner_bytes = (state / 'merging/_default.json').read_bytes()
+                    elif case.startswith('legacy-'):
+                        pilot.data['jobs']['d' * 32] = dict(kind='gate', task='T-001', state=case.removeprefix('legacy-'), path='')
+                    else:
+                        ident, path = self.stock_card(state, pending=case == 'pending-card',
+                            chosen='B' if case == 'held-card' else 'A', effect='hold' if case == 'held-card' else 'merge',
+                            outcome='running' if case == 'running-answer' else None)
+                        retained = path.read_bytes()
+                        if case == 'running-answer':
+                            (state / 'merging').mkdir(); (state / 'merging/_default.json').write_text('{}')
+                    self.stock_prepare(pilot, snapshots)
+                    if case == 'held-card': self.assertEqual(pilot.data['self_queue']['front'], '1')
+                    else: self.assertIsNone(pilot.data['self_queue']['front'], 'unresolved upgrade must stay observation-only')
+                    pilot.save()
+                    restarted = A.Pilot(pilot.ctx); restarted._queue_service_owned = True
+                    restarted.api = self.api
+                    self.assertEqual(restarted.data['self_queue'], pilot.data['self_queue'])
+                    if case == 'owner-receipt':
+                        self.assertEqual((state / 'merging/_default.json').read_bytes(), owner_bytes)
+                    if disabled:
+                        (state / 'autopilot/queue-policy.json').write_text(json.dumps(dict(self.policy, enabled=False)))
+                        # Stock fixture has a stock-allocated id rather than self.policy's id;
+                        # off policy needs no activation authorization.
+                        restarted.refresh_queue()
+                        self.assertIn(restarted.queue_mode, ('drain','off'))
+                    if case != 'held-card':
+                        self.assertFalse(self.stock_calls)
+                        if case == 'owner-receipt': shutil.rmtree(state / 'merging')
+                        elif case.startswith('legacy-'): restarted.data['jobs']['d' * 32]['state'] = 'done'
+                        else:
+                            self.assertEqual(path.read_bytes(), retained)
+                            if path.parent.name == 'pending':
+                                answer = json.loads(path.read_text()); path.unlink()
+                                answer.update(chosen='B', effect='hold', details=dict(effect=dict(B='hold')))
+                                (state / 'decisions' / path.name).write_text(json.dumps(answer))
+                                self.append_event(state, type='decision_made', actor='captain', task='T-001',
+                                    project='firstmate-workflow', data=dict(decision=ident, chosen='B', effect='hold', outcome='done'))
+                            else:
+                                answer = json.loads(path.read_text()); answer.update(merge='failed')
+                                path.write_text(json.dumps(answer))
+                                self.append_event(state, type='decision_made', actor='captain', task='T-001',
+                                    project='firstmate-workflow', data=dict(decision=ident, chosen='A', effect='merge', merge='failed', outcome='failed'))
+                            shutil.rmtree(state / 'merging', ignore_errors=True)
+                        restarted.refresh_queue()
+                        restarted.queue_snapshot(snapshots, self.remote_base)
+                        if disabled:
+                            restarted.refresh_queue(); self.assertEqual(restarted.queue_mode, 'off')
+                        else: self.assertEqual(restarted.data['self_queue']['front'], '1')
+                    self.assertEqual(pins, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
+                    self.assertTrue((state / 'events.jsonl').read_bytes().startswith(initial_events))
+                    # Restore the genuine stock-approved policy for the next case.
+                    policy_path = state / 'autopilot/queue-policy.json'
+                    actual = json.loads(policy_path.read_text()); actual['enabled'] = True
+                    actual['captain_authorization'] = next(p.stem for p in (state / 'decisions').glob('*T260-*.json'))
+                    policy_path.write_text(json.dumps(actual))
+
+    def test_production_legacy_update_receipts_reconcile_ancestry_restart_and_disable(self):
+        pilot, state, command, git, pins = self.stock_fixture()
+        head, base, updated, worker = self.stock_update_graph(pilot, git)
+        snapshots = self.stock_snapshots(pilot)
+        receipt = dict(head=head, seq=7)
+        pilot.data['updates']['2'] = receipt.copy()
+        self.stock_prepare(pilot, snapshots)
+        self.assertIsNone(pilot.data['self_queue']['front'])
+        pilot.save(); baseline = copy.deepcopy(pilot.data)
+        policy_path = state / 'autopilot/queue-policy.json'; approved_policy = policy_path.read_bytes()
+        for disabled in (False, True):
+            with self.subTest(disabled=disabled):
+                pilot.data = copy.deepcopy(baseline)
+                policy_path.write_bytes(approved_policy)
+                pilot.save()
+                # Reload from durable state, retaining the real stock methods.
+                restarted = A.Pilot(pilot.ctx); restarted._queue_service_owned = True
+                restarted.command = pilot.command; restarted.api = self.api
+                if disabled:
+                    value = json.loads(approved_policy); value['enabled'] = False
+                    policy_path.write_text(json.dumps(value))
+                restarted.refresh_queue()
+                self.assertIn(restarted.queue_mode, ('enabled','drain'))
+                # Same-H polls and unrelated pushes cannot settle the legacy receipt.
+                self.prs[2]['head']['sha'] = worker
+                changed = self.stock_snapshots(restarted)
+                self.stock_prepare(restarted, changed)
+                self.assertIsNone(restarted.data['self_queue']['front'])
+                self.prs[2]['head']['sha'] = updated
+                changed = self.stock_snapshots(restarted)
+                self.stock_prepare(restarted, changed)
+                self.assertEqual(restarted.data['updates']['2'], receipt)
+                self.assertIn('legacy-update:' + A.key(['2',receipt]), restarted.data['self_queue']['accounted'])
+                if disabled:
+                    restarted.refresh_queue(); self.assertEqual(restarted.queue_mode, 'off')
+                    prior = copy.deepcopy(restarted.data['self_queue'])
+                    restarted.refresh_queue(); self.assertEqual(restarted.data['self_queue'], prior)
+                else: self.assertEqual(restarted.data['self_queue']['front'], '1')
+                self.assertFalse(self.stock_calls)
+        self.assertEqual(pins, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
+
+    def test_activation_completed_legacy_result_is_observed_without_stale_continuation(self):
+        for pr in self.prs.values(): pr['mergeable_state'] = 'clean'
+        path = self.state / 'autopilot/legacy.json'
+        path.with_suffix('.result.json').write_text(json.dumps(dict(kind='gate', task='T-002',
+            pr=self.prs[2], code=0, base=B, round=1)))
+        job = dict(kind='gate', task='T-002', state='running', path=str(path))
+        self.pilot.data['jobs']['f' * 32] = job
+        self.pilot.merge_card = lambda *a: self.calls.append(('card', a))
+        self.pilot.poll(); self.pilot.consume_jobs()
+        self.assertEqual(job['state'], 'done', 'known legacy results must drain even before queue admission')
+        self.assertFalse(self.calls, 'legacy drain cannot publish a stale nonfront card')
+        self.pilot.poll()
+        self.assertEqual(self.pilot.data['self_queue']['front'], '1')
+
+    def test_production_live_t220_keeper_retains_front_and_can_advance(self):
+        pilot, state, command, git, pins = self.stock_fixture()
+        snapshots = self.stock_snapshots(pilot); self.stock_prepare(pilot, snapshots)
+        ident, path = self.stock_card(state, pending=False, chosen='A', effect='merge', outcome='running')
+        retained = path.read_bytes()
+        m = pilot.data['self_queue']['members']['1']; m['card_id'] = ident
+        (state / 'merging').mkdir()
+        marker = dict(decision=ident, task='T-001', pr=1, pid=12345, started='fixture start')
+        (state / 'merging/_default.json').write_text(json.dumps(marker))
+        def process_transport(argv):
+            if argv[0] == 'ps':
+                if argv[-1] == 'lstart=': return 'fixture start'
+                return ('python /engine/bin/lib/fm_lifeline.py keep --pid 23456 -- '
+                        '/engine/bin/fm-merge.sh --pr 1 --task T-001 --expected-head ' + self.prs[1]['head']['sha'] + ' --bound-signature bound')
+            return ''
+        pilot.checked = process_transport
+        pilot.command = lambda argv, **kw: self.prs[1]['head']['sha'] if argv[0] == 'bash' else self.remote_base
+        with patch('fm_autopilot.life.ProcessExit') as owner:
+            self.stock_prepare(pilot, snapshots)
+            self.assertTrue(pilot.queue_carry_active('T-001', self.prs[1]))
+            self.assertEqual(m['state'], 'merging')
+            marker['task'] = 'T-002'
+            (state / 'merging/_default.json').write_text(json.dumps(marker))
+            self.stock_prepare(pilot, snapshots)
+            self.assertEqual(m['reason'], 'merge-helper-owner-unreconciled')
+            marker['task'] = 'T-001'
+            (state / 'merging/_default.json').write_text(json.dumps(marker))
+            self.stock_prepare(pilot, snapshots)
+            self.assertEqual(m['state'], 'merging', 'recovered bound merge ownership resumes the retained front')
+            self.assertTrue(pilot.queue_guard(self.prs[1]))
+            from fm_concurrent import merge_blocker
+            self.assertTrue(merge_blocker(state, pilot.ctx['project']), 'the carry test must exercise an occupied merge slot')
+            pilot.advance(self.prs[1], snapshots['1'][3], [])
+            self.assertEqual([c[0] for c in self.stock_calls], ['gate'], 'same-front carry must not deadlock behind the merge slot')
+            owner.assert_called_with(23456)
+        marker['task'] = 'T-002'
+        (state / 'merging/_default.json').write_text(json.dumps(marker))
+        self.assertFalse(pilot.queue_carry_active('T-001', self.prs[1]), 'a competing owner never grants front carry')
+        self.assertEqual(path.read_bytes(), retained)
+
+    def test_production_wrong_task_project_purpose_and_replaced_authorization(self):
+        pilot, state, command, git, pins = self.stock_fixture()
+        snapshots = self.stock_snapshots(pilot); self.stock_prepare(pilot, snapshots)
+        import fm_autopilot_queue as Q
+        q = pilot.data['self_queue']; result = dict(kind='gate', task='T-001', pr=self.prs[1], code=0,
+                                                  base=B, round=1, queue_binding=Q.binding(q,q['members']['1']))
+        policy_path = state / 'autopilot/queue-policy.json'
+        authority = json.loads(policy_path.read_text())['captain_authorization']
+        path = state / 'decisions' / (authority + '.json'); original = path.read_bytes()
+        events = (state / 'events.jsonl').read_bytes()
+        pilot.merge_card = lambda *a: self.stock_calls.append(('card', a))
+        for field, value in (('task','T-001'), ('project','external'), ('purpose','dispatch'), ('chosen','B')):
+            record = json.loads(original); record[field] = value; path.write_text(json.dumps(record))
+            pilot.job_completed(result)
+            self.assertFalse(self.stock_calls, 'changed rollout record cannot authorize delayed continuation')
+        path.write_bytes(original)
+        self.append_event(state, type='decision_made', actor='captain', task='T-260', project='firstmate-workflow',
+                          data=dict(decision=authority, chosen='B', effect='hold', outcome='done'))
+        pilot.job_completed(result)
+        self.assertFalse(self.stock_calls, 'a replaced canonical answer revokes the retained authority')
+        (state / 'events.jsonl').write_bytes(events)
+        pilot.refresh_queue(); pilot.job_completed(result)
+        self.assertEqual([c[0] for c in self.stock_calls], ['card'])
+        self.assertEqual(pins, {p:p.read_bytes() for p in (state / 'pins').rglob('*.json')})
 
 
 if __name__ == '__main__': unittest.main()
