@@ -22,6 +22,7 @@ real_sandbox_ok() {
   esac
 }
 if real_sandbox_ok; then
+  PATH="$suite_original_path"; export PATH
   rt="$(safe_tmpdir)"
   # a real git worktree, exactly what fm-worker.sh gives a worker round
   # (git worktree add): its .git is a file pointing elsewhere, which is the
@@ -51,7 +52,7 @@ if real_sandbox_ok; then
     -- bash -c "
       set -e
       d1=\"\$($mt $fd)\" && [ -w \"\$d1\" ] || exit 1
-      d2=\"\$($mt $ft fmtest)\" && [ -w \"\$d2\" ] || exit 1
+      d2=\"\$($mt $ft fmtest.XXXXXX)\" && [ -w \"\$d2\" ] || exit 1
       mkdir -p \"\$HOME/.cache\" && echo x > \"\$HOME/.cache/probe\" || exit 1
       python3 -c 'import tempfile; open(tempfile.mkdtemp()+\"/x\",\"w\").close()' || exit 1
       case \"\$d1\" in \"\$TMPDIR\"/*) ;; *) exit 1 ;; esac
