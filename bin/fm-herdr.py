@@ -873,7 +873,7 @@ def follow_probe():
 
 
 def follow_all(root):
-    """`fm.sh follow --all`: every live round of the routed record root."""
+    """The `follow --all` dashboard: every live round of the routed record root."""
     view = follow_view()
     if view is None: raise ValueError('follow --all needs bin/lib/fm_follow_view.py')
     return view.dashboard(record_root(root) / 'state/runs', follow_probe(), engine=Path(root))

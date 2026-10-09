@@ -1,5 +1,5 @@
 """What a round's window shows (T-271): the run's log made readable, and
-`fm.sh follow --all`, one line per live round.
+the `follow --all` dashboard, one line per live round.
 
 bin/fm-herdr.py loads this file lazily inside `follow`, with bytecode off,
 and keeps its raw byte-for-byte copy of the log when the file is missing or
@@ -765,12 +765,27 @@ def table(rows, style):
              say('col_silence')]
     cells = [heads + ['']] + [[cell[:60] for cell in row] for row in rows]
     widths = [max(len(row[column]) for row in cells) for column in range(len(heads))]
-    plain = ['  '.join(cell.ljust(widths[n]) for n, cell in enumerate(row[:len(heads)])).rstrip()
-             + ('  ' + row[-1] if row[-1] else '') for row in cells]
+
+    def lay(widths):
+        def fit(cell, width):
+            return cell if len(cell) <= width else cell[:width - 1] + '…'
+        return ['  '.join(fit(cell, widths[n]).ljust(widths[n]) for n, cell in enumerate(row[:len(heads)])).rstrip()
+                + ('  ' + row[-1] if row[-1] else '') for row in cells]
+    plain = lay(widths)
 
     def styled(columns):
-        out = [style('1', plain[0][:columns])]
-        for text, row in zip(plain[1:], rows):
+        # The stuck label is the word this view exists to show: when a stuck
+        # row would run past the screen, the NOW column gives way first, and
+        # on a screen too narrow even then the label leads the row.
+        lines, now = plain, 3
+        over = max([len(text) for text, row in zip(plain[1:], rows) if row[-1]] or [0]) - columns
+        if over > 0:
+            narrow = list(widths)
+            narrow[now] = max(len(heads[now]), widths[now] - over)
+            lines = lay(narrow)
+        out = [style('1', lines[0][:columns])]
+        for text, row in zip(lines[1:], rows):
+            if row[-1] and len(text) > columns: text = row[-1] + '  ' + text[:-len(row[-1]) - 2].rstrip()
             out.append(style(RED if row[-1] else '', text[:columns]))
         return out
     return plain, styled

@@ -27,6 +27,8 @@ import termios
 import time
 import unittest
 
+# Never notify a live Herdr from a fixture that runs fm.sh.
+os.environ['HERDR_ENV'] = '0'
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1)).resolve()
 HERDR = ROOT / 'bin/fm-herdr.py'
@@ -48,6 +50,11 @@ def pty_available():
 
 PTY = pty_available()
 PTY_SKIP = 'setup: no pseudo-terminal on this host; terminal cases not run (not behavioural)'
+
+
+def visible(text):
+    """The screen lines a terminal shows, with escape sequences removed."""
+    return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[78]', '\n', text).replace('\r', '\n').split('\n')
 
 
 def jline(value):
@@ -149,7 +156,8 @@ class Fixture(unittest.TestCase):
                     if not k.startswith(drop) and k not in ('NO_COLOR', 'COLUMNS', 'LINES')}
         self.env.update(HOME=str(self.tmp / 'home'), XDG_CACHE_HOME=str(self.tmp / 'home/.cache'),
                         FM_IN_ROUND='1', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(self.tmp / 'gitconfig'),
-                        TERM='xterm', PYTHONDONTWRITEBYTECODE='1', GIT_CEILING_DIRECTORIES=str(self.tmp))
+                        TERM='xterm', PYTHONDONTWRITEBYTECODE='1', GIT_CEILING_DIRECTORIES=str(self.tmp),
+                        HERDR_ENV='0')
 
     def remove_tmp(self):
         for path in [self.tmp, *self.tmp.rglob('*')]:
@@ -566,7 +574,8 @@ class LiveRounds(Fixture):
                 self.eventually(lambda: 'vendor silence:' in shown.read_text(), why='header')
                 self.assertIn('vendor silence: unknown', shown.read_text())
                 end = time.monotonic() + WAIT
-                while 'waiting for claude' not in shown.read_text() and time.monotonic() < end:
+                # the header already says `now: waiting for claude`; wait for the body line itself
+                while 'waiting for claude: it sends' not in shown.read_text() and time.monotonic() < end:
                     if beats: self.append(attempt / 'run.log', heartbeat(30) + '\n')
                     time.sleep(.3)
                 self.assertRegex(shown.read_text(), r'waiting for claude: it sends its output when it finishes \([0-9]+s\)')
@@ -668,7 +677,7 @@ class Raw(Fixture):
         self.assertEqual(0, done.returncode, done.stderr)
         self.assertEqual(self.LOG, done.stdout)
 
-    def test_regression_raw_copy_is_byte_for_byte(self):
+    def test_raw_option_and_env_copy_byte_for_byte(self):
         attempt = self.attempt(self.LOG)
         self.assertEqual(self.LOG, self.follow(attempt, '--raw').stdout)
         self.assertEqual(self.LOG, self.follow(attempt, env=dict(self.env, FM_FOLLOW_RAW='1')).stdout)
@@ -737,7 +746,9 @@ class Dashboard(Fixture):
         session = self.in_pty(['/bin/bash', str(FM), 'follow', '--all', '--repo', str(self.root)], env)
         session.until(lambda text: 'worker-ada-t1-r1' in text)
         self.assertNotIn('possibly stuck', session.text())
-        session.until(lambda text: 'possibly stuck' in text)
+        # an 80-column screen still shows the label on the row it marks
+        session.until(lambda text: any('worker-ada-t1-r1' in line and 'possibly stuck' in line and len(line) <= 80
+                                       for line in visible(text)))
         self.assertGreaterEqual(session.text().count('\x1b[H'), 2)
         os.write(session.fd, b'\x03')
         self.assertEqual(0, session.wait())
@@ -866,5 +877,39 @@ class Language(Fixture):
         self.assertIn(labels['hidden'].format(count=20), shown)
 
 
+class NamedTestResult(unittest.TextTestResult):
+    """Expose behavioral outcomes in the fail-first collector's line format."""
+    def startTest(self, test):
+        self._fm_failed = False
+        self._fm_skipped = False
+        super().startTest(test)
+
+    def addFailure(self, test, err):
+        self._fm_failed = True
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self._fm_failed = True
+        super().addError(test, err)
+
+    def addSubTest(self, test, subtest, err):
+        if err is not None:
+            self._fm_failed = True
+        super().addSubTest(test, subtest, err)
+
+    def addSkip(self, test, reason):
+        self._fm_skipped = True
+        super().addSkip(test, reason)
+
+    def stopTest(self, test):
+        super().stopTest(test)
+        if not self._fm_skipped:
+            name = '%s.%s' % (type(test).__name__, test._testMethodName)
+            sys.stdout.write('    %-52s %s\n' % (name, 'FAIL' if self._fm_failed else 'ok'))
+            sys.stdout.flush()
+
+
 if __name__ == '__main__':
-    unittest.main(argv=[sys.argv[0], '-v'])
+    suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
+    result = unittest.TextTestRunner(verbosity=2, resultclass=NamedTestResult).run(suite)
+    sys.exit(0 if result.wasSuccessful() else 1)
