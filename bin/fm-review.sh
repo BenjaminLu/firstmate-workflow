@@ -1371,7 +1371,8 @@ if [ -r "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_walk.py" ]; then
 fi
 # Only fixed checker categories enter public events; never notes or paths.
 walk_summary="$(jq -r '.status + (if .reason then ": " + .reason else "" end)' <<<"$walk_status")"
-FM_CREW_STATUS_SECS=0 emit_status "Code walk: $walk_summary" "程式碼導覽：$walk_summary"
+walk_summary_tw="$(jq -r --argjson reasons '{"walk helper missing": "導覽工具缺少", "no local review": "沒有本機審查", "no local approval": "沒有本機核准", "verdict has no source binding": "裁決沒有來源綁定", "no walk": "沒有導覽", "duplicate walk": "導覽重複", "invalid JSON": "JSON 無效", "invalid walk fields": "導覽欄位無效", "diff unavailable": "無法取得 diff", "invalid intent fields": "意圖欄位無效", "intent out of range": "意圖超出範圍", "duplicate intent": "意圖重複", "too many key blocks per intent": "每條意圖的重點區塊過多", "too many key blocks": "重點區塊過多", "invalid block fields": "區塊欄位無效", "unknown hunk id": "未知 hunk id", "duplicate key hunk": "重點 hunk 重複", "nontext key hunk": "重點 hunk 不是文字", "invalid block kind": "區塊種類無效", "invalid note fields": "註解欄位無效", "note fails STE": "註解未通過 STE", "invalid line note fields": "逐行註解欄位無效", "line note fails STE": "逐行註解未通過 STE", "line note outside block": "逐行註解超出區塊", "missing or invalid step": "步驟缺少或無效", "unknown step id": "未知步驟 id", "empty step": "步驟為空", "step without scene": "步驟沒有場景", "invalid block changes": "區塊變更無效", "proves on code block": "程式碼區塊帶有 proves", "invalid proves target": "proves 目標無效", "walk check failed": "導覽檢查失敗"}' '({valid:"有效",absent:"缺少",invalid:"無效",stale:"過期",unavailable:"無法使用"}[.status] // "無效") + (if .reason then "：" + ($reasons[.reason] // "導覽檢查失敗") else "" end)' <<<"$walk_status")"
+FM_CREW_STATUS_SECS=0 emit_status "Code walk: $walk_summary" "程式碼導覽：$walk_summary_tw"
 printf '%s\n' "$verdict"
 # A round that ran without the OS sandbox keeps its log whatever its
 # verdict: the line it opens with is the record that the hatch was used.

@@ -396,6 +396,8 @@ class StockRequests(unittest.TestCase):
         self.assertFalse((self.root/'bin/lib/fm_card_refs.py').exists())
         result=self.request(); self.assertEqual(0,result.returncode,result.stderr)
         doc=json.loads(self.pending().read_text())
+        walk=doc['details'].pop('walk')
+        self.assertEqual(dict(status='absent',head=self.head,reason='no local review'),walk)
         self.assertEqual(self.details,doc['details'])
         self.assertNotIn('check_answer',doc)
         calls=(self.root/'ghcalls').read_text()

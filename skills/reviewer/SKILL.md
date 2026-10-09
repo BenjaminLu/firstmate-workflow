@@ -43,6 +43,32 @@ recorded reversibility and privacy. The narrow approved unsealed-legacy envelope
 grants no scope-gate authority. Existing/human/adopted metadata is preserved.
 
 
+## Code walk in the final verdict (T-244)
+
+For a task PR code review, include at most one fenced `walk` JSON block in the
+final verdict. Spec preflight does not produce a walk. Copy hunk ids from the
+prompt's `## Hunk ids`; never compute them or annotate the raw diff. Choose up
+to five key blocks per intent and at most forty overall. Do not list the other
+hunks: the trusted producer computes their complement by file.
+
+The JSON has only `intents`, an array of `{intent: N, key: [...]}` entries,
+with unique 1-based intent numbers. A key block has `hunk`, `kind` (`code` or
+`test`), and `note` with exactly `en` and `zh-TW`, each one STE fact sentence.
+Use each hunk at most once. Optional `line_note` has exactly `line`, `en`,
+`zh-TW`; choose a line on the hunk's R or L side. Optional `proves` appears
+only on test blocks and names code key blocks in this walk. Optional `changes`
+names scene change ids mapped to this intent. If the pinned spec has a scene,
+every block requires `step: {nodes: [...], edges: [...]}` with at least one
+existing scene id. Without a scene, omit `step`.
+
+```walk
+{"intents":[{"intent":1,"key":[{"hunk":"src/flow.py#R1-4","kind":"code","note":{"en":"The path keeps the input.","zh-TW":"路徑保留輸入。"}}]}]}
+```
+
+The retained verdict binds this walk to its reviewed head, base and patch.
+Walk validation never changes your verdict or standing list. Public comment
+projection replaces the fence with a retention notice; notes stay in evidence.
+
 ## Your job
 
 **Find the reason to reject.** Sign only when you cannot find one. A review

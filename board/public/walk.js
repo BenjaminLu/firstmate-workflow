@@ -5,14 +5,17 @@
   function mount(root, {t, esc, words, lang}) {
     root.querySelectorAll('[data-walk-host]').forEach(host => {
       const raw = host.dataset.walkHost;
-      if (host.dataset.walkMounted === raw + lang) return;
+      if (host.dataset.walkMounted === raw + lang && host.firstElementChild) return;
       host.dataset.walkMounted = raw + lang;
       let data; try { data = JSON.parse(raw); } catch { return; }
       const card = host.closest('.intent-alignment') || host.parentElement;
       const locale = value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || value?.en || '');
-      const scene = data.scene, walk = data.walk;
+      let scene = data.scene;
+      const walk = data.walk;
       const valid = walk?.status === 'valid';
+      const fresh = !states.has(data.id);
       const state = states.get(data.id) || {phase: reduced() ? 1 : 0, playing: false, intent:1, block:0, opened:false, other:false, highlight:[]};
+      state.dispose?.();
       states.set(data.id, state);
       const link = (url, label) => typeof url === 'string' && url.startsWith('https://github.com/') ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${label}</a>` : label;
       const keyFor = n => valid ? walk.intents.find(i => i.intent === n)?.key || [] : [];
@@ -25,7 +28,14 @@
       let animation = '', positions = new Map(), paths = new Map();
       try {
         if (scene) {
-          if (!scene.lanes.length || !scene.nodes.length) throw Error('layout');
+          if (!Array.isArray(scene.lanes) || !scene.lanes.length || !Array.isArray(scene.nodes) || !scene.nodes.length || !Array.isArray(scene.edges) || !Array.isArray(scene.changes)) throw Error('layout');
+          const safeId = id => typeof id === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(id);
+          if (![...scene.nodes,...scene.edges].every(item=>safeId(item.id))) throw Error('layout');
+          for (const phase of ['before','after']) {
+            const tokens=scene.tokens?.[phase];
+            if (!Array.isArray(tokens) || !tokens.length || !tokens.every(id=>scene.edges.some(edge=>edge.id===id))) throw Error('layout');
+          }
+          if (!scene.changes.every(change=>Array.isArray(change.intents))) throw Error('layout');
           const slots = scene.lanes.map(() => 0), width = scene.lanes.length * 240;
           for (const node of scene.nodes) {
             if (!Number.isInteger(node.lane) || !slots.hasOwnProperty(node.lane)) throw Error('layout');
@@ -51,19 +61,52 @@
           }).join('');
           animation = `<section class="scene-view"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("howHeading"))}">${lanes}${edges}${nodes}<circle class="scene-token" r="6"/></svg><div class="scene-controls"><button data-play>${esc(label.play)}</button><input data-scrub type="range" min="0" max="2" step="0.01" value="${state.phase}" aria-label="${esc(label.scrub)}">${[label.before,label.change,label.after].map((text,i)=>`<button data-phase="${i}">${esc(text)}</button>`).join('')}</div><div class="scene-badges">${scene.changes.map(c=>`<button data-badge="${esc(c.id)}">${esc(c.id)} · ${esc(words(c.text))}</button>`).join('')}</div>${scene.counter ? `<p class="scene-counter">${esc(words(scene.counter.label))}: <span data-counter></span></p>` : ''}<div class="scene-banner" hidden></div></section>`;
         }
-      } catch { animation=''; positions.clear(); paths.clear(); }
-      const message = walk?.status === 'stale' ? `${esc(label.stale)} · ${esc(label.head)} <code>${esc((walk.reviewed_head || '').slice(0,7))}</code>` : `${esc(label.absent)}${walk?.reason ? ' · '+esc(walk.reason) : ''}`;
-      host.innerHTML = animation + (!data.detailOnly ? `<section class="diff-walk"><h4>${esc(label.diff)}</h4><div role="tablist"><button data-check-tab role="tab" aria-selected="${!state.opened}">${esc(label.check)}</button><button data-code-tab role="tab" aria-selected="${state.opened}">${esc(label.code)}</button></div><div data-check-panel></div><div data-code-panel${state.opened ? '' : ' hidden'}>${valid ? `<p class="walk-head">${esc(label.head)} <code>${esc(walk.head.slice(0,7))}</code></p><div class="walk-tabs" role="tablist">${(data.intents || []).map((intent,i)=>`<button data-intent-tab="${i+1}" role="tab">${esc(t("intentHeading"))} ${i+1}</button>`).join('')}<button data-other-tab role="tab">${esc(label.other)}</button></div><div data-blocks tabindex="0"></div>` : `<p role="status">${message}</p>`}</div></section>` : '');
-      if (animation) {
-        const fallback = host.parentElement.querySelector('.change-fallback');
-        if (fallback) fallback.hidden = true;
-      }
+      } catch { animation=''; scene=null; positions.clear(); paths.clear(); }
+      const reasons = {
+        "walk helper missing":t("walkReasonWalkHelperMissing"),
+        "no local review":t("walkReasonNoLocalReview"),
+        "no local approval":t("walkReasonNoLocalApproval"),
+        "verdict has no source binding":t("walkReasonVerdictHasNoSourceBinding"),
+        "no walk":t("walkReasonNoWalk"),
+        "duplicate walk":t("walkReasonDuplicateWalk"),
+        "invalid JSON":t("walkReasonInvalidJson"),
+        "invalid walk fields":t("walkReasonInvalidWalkFields"),
+        "diff unavailable":t("walkReasonDiffUnavailable"),
+        "invalid intent fields":t("walkReasonInvalidIntentFields"),
+        "intent out of range":t("walkReasonIntentOutOfRange"),
+        "duplicate intent":t("walkReasonDuplicateIntent"),
+        "too many key blocks per intent":t("walkReasonTooManyKeyBlocksPerIntent"),
+        "too many key blocks":t("walkReasonTooManyKeyBlocks"),
+        "invalid block fields":t("walkReasonInvalidBlockFields"),
+        "unknown hunk id":t("walkReasonUnknownHunkId"),
+        "duplicate key hunk":t("walkReasonDuplicateKeyHunk"),
+        "nontext key hunk":t("walkReasonNontextKeyHunk"),
+        "invalid block kind":t("walkReasonInvalidBlockKind"),
+        "invalid note fields":t("walkReasonInvalidNoteFields"),
+        "note fails STE":t("walkReasonNoteFailsSte"),
+        "invalid line note fields":t("walkReasonInvalidLineNoteFields"),
+        "line note fails STE":t("walkReasonLineNoteFailsSte"),
+        "line note outside block":t("walkReasonLineNoteOutsideBlock"),
+        "missing or invalid step":t("walkReasonMissingOrInvalidStep"),
+        "unknown step id":t("walkReasonUnknownStepId"),
+        "empty step":t("walkReasonEmptyStep"),
+        "step without scene":t("walkReasonStepWithoutScene"),
+        "invalid block changes":t("walkReasonInvalidBlockChanges"),
+        "proves on code block":t("walkReasonProvesOnCodeBlock"),
+        "invalid proves target":t("walkReasonInvalidProvesTarget"),
+        "walk check failed":t("walkReasonWalkCheckFailed"),
+      };
+      const message = walk?.status === 'stale' ? `${esc(label.stale)} · ${esc(label.head)} <code>${esc((walk.reviewed_head || '').slice(0,7))}</code>` : `${esc(label.absent)}${walk?.reason ? ' · '+esc(reasons[walk.reason] || reasons['walk check failed']) : ''}`;
+      host.innerHTML = animation + (!data.detailOnly ? `<section class="diff-walk"><h4>${esc(label.diff)}</h4><div role="tablist"><button data-check-tab role="tab" aria-selected="${!state.opened}">${esc(label.check)}</button><button data-code-tab role="tab" aria-selected="${state.opened}">${esc(label.code)}</button></div><div data-check-panel></div><div data-code-panel${state.opened ? '' : ' hidden'}>${valid ? `<p class="walk-head">${esc(label.head)} <code>${esc(walk.head.slice(0,7))}</code></p><div class="walk-tabs" role="tablist">${(data.intents || []).map((intent,i)=>`<button data-intent-tab="${i+1}" role="tab">${esc(t("intentHeading"))} ${i+1}</button>`).join('')}<button data-other-tab role="tab">${esc(label.other)}</button></div><div class="walk-navigation"><button data-previous>${esc(label.previous)}</button><button data-next>${esc(label.next)}</button></div><div data-blocks tabindex="0"></div>` : `<p role="status">${message}</p>`}</div></section>` : '');
+      const fallback = host.parentElement.querySelector('.change-fallback');
+      if (fallback) fallback.hidden = Boolean(animation);
       const checkPanel=host.querySelector('[data-check-panel]');
       if (checkPanel) {
         const check=card.querySelector('.door-check');
         if (check) checkPanel.append(check);
       }
       let frame, last;
+      state.dispose = () => { if (frame) cancelAnimationFrame(frame); frame = null; };
       function stop() { state.playing=false; if(frame) cancelAnimationFrame(frame); frame=null; paint(); }
       function paint() {
         if (!animation) return;
@@ -72,7 +115,11 @@
         host.querySelector('.scene-view').dataset.phase=state.phase < .67 ? 'before' : state.phase < 1.34 ? 'change' : 'after';
         host.querySelectorAll('[data-scene-id]').forEach(el => {
           const mode=el.dataset.state;
-          el.style.opacity=mode==='new' ? String(Math.min(1, Math.max(0, (state.phase-.6)/.7))) : mode==='gone' ? String(Math.max(.15, 1-state.phase*.5)) : '1';
+          el.style.opacity=mode==='new' ? String(Math.min(1, Math.max(0, (state.phase-.6)/.7))) : mode==='gone' ? String(Math.max(.15, .65-state.phase*.25)) : '1';
+          if (mode === 'new' && el.classList.contains('scene-edge')) {
+            const path=el.querySelector('path'), length=path.getTotalLength();
+            path.style.strokeDasharray=String(length);path.style.strokeDashoffset=String(length*(1-Math.min(1,Math.max(0,(state.phase-.6)/.7))));
+          }
           el.classList.toggle('scene-dim',state.highlight.length>0 && el.dataset.change && !state.highlight.includes(el.dataset.change));
         });
         host.querySelectorAll('[data-phase]').forEach(el=>el.setAttribute('aria-pressed',String(Number(el.dataset.phase)===Math.round(state.phase))));
@@ -95,7 +142,12 @@
         host.querySelectorAll('[data-intent-tab]').forEach(el=>el.setAttribute('aria-selected',String(!state.other && Number(el.dataset.intentTab)===state.intent)));
         host.querySelector('[data-other-tab]').setAttribute('aria-selected',String(state.other));
         if(state.other) {
-          panel.innerHTML=`<ul class="walk-other">${walk.other.map(file=>`<li>${link(`https://github.com/${(walk.intents.flatMap(i=>i.key)[0]?.url || '').split('/')[3] || 'owner'}/${(walk.intents.flatMap(i=>i.key)[0]?.url || '').split('/')[4] || 'repo'}/pull/${data.pr}/files#diff-${''}`,esc(file.file))} · ${esc(file.hunks)}${file.kinds ? ' · '+esc(file.kinds.join(', ')) : ''}</li>`).join('')}</ul>`;
+          panel.innerHTML=`<ul class="walk-other">${walk.other.map(file=>`<li>${link(file.url || (walk.intents.flatMap(i=>i.key)[0]?.url || (data.diffUrl ? data.diffUrl + '/files' : '')).split('#')[0],esc(file.file))} · ${esc(file.hunks)}${file.kinds ? ' · '+esc(file.kinds.join(', ')) : ''}</li>`).join('')}</ul>`;
+          panel.querySelectorAll('.walk-other a').forEach(async (a, i) => {
+            const bytes = new TextEncoder().encode(walk.other[i].file);
+            const digest = await crypto.subtle.digest('SHA-256', bytes);
+            if (a.isConnected) a.href = a.href.split('#')[0] + '#diff-' + Array.from(new Uint8Array(digest), b=>b.toString(16).padStart(2,'0')).join('');
+          });
           return;
         }
         const keys=keyFor(state.intent); state.block=Math.min(state.block,Math.max(0,keys.length-1));
@@ -114,12 +166,12 @@
         host.querySelector('[data-code-tab]')?.setAttribute('aria-selected',String(state.opened));
         host.querySelector('[data-check-tab]')?.setAttribute('aria-selected',String(!state.opened));
       }
-      function highlight(n, changes) {
+      function highlight(n, changes, badgeJump = null) {
         state.highlight=changes;paint();
         const banner=host.querySelector('.scene-banner');
         if (banner) {
           banner.hidden=false;
-          banner.innerHTML=`<button data-show-all>${esc(label.all)}</button>`+(keyFor(n).length ? `<button data-its-code>${esc(label.its)}</button>` : !valid ? `<button disabled>${esc(label.its)}</button><span>${esc(label.absent)}</span>` : '');
+          banner.innerHTML=`<button data-show-all>${esc(label.all)}</button>`+(badgeJump === false ? `<button disabled>${esc(label.its)}</button>` : keyFor(n).length ? `<button data-its-code>${esc(label.its)}</button>` : !valid ? `<button disabled>${esc(label.its)}</button><span>${esc(label.absent)}</span>` : '');
           banner.querySelector('[data-show-all]').onclick=()=>{state.highlight=[];banner.hidden=true;paint();};
           const jump=banner.querySelector('[data-its-code]');if(jump)jump.onclick=()=>openIntent(n);
         } else if(keyFor(n).length)openIntent(n);
@@ -139,14 +191,17 @@
       host.querySelectorAll('[data-phase]').forEach(el=>el.onclick=()=>{stop();state.phase=Number(el.dataset.phase);paint();});
       host.querySelectorAll('[data-badge]').forEach(el=>el.onclick=()=>{
         const id=el.dataset.badge, change=scene.changes.find(c=>c.id===id);
-        highlight(change.intents[0],[id]);
         const target=valid && walk.intents.find(i=>i.key.some(b=>b.changes?.includes(id)));
+        highlight(change.intents[0],[id],Boolean(target));
         if(target){openIntent(target.intent);state.block=target.key.findIndex(b=>b.changes?.includes(id));showBlocks();}
       });
       host.querySelector('[data-code-tab]')?.addEventListener('click',()=>{state.opened=true;tabs();showBlocks();});
       host.querySelector('[data-check-tab]')?.addEventListener('click',()=>{state.opened=false;tabs();});
       host.querySelectorAll('[data-intent-tab]').forEach(el=>el.onclick=()=>openIntent(Number(el.dataset.intentTab)));
       host.querySelector('[data-other-tab]')?.addEventListener('click',()=>{state.other=true;showBlocks();});
+      const move = delta => { state.block=Math.max(0,Math.min(keyFor(state.intent).length-1,state.block+delta));showBlocks(); };
+      host.querySelector('[data-previous]')?.addEventListener('click',()=>move(-1));
+      host.querySelector('[data-next]')?.addEventListener('click',()=>move(1));
       host.querySelector('[data-blocks]')?.addEventListener('keydown',e=>{
         if(e.key==='ArrowUp' || e.key==='ArrowDown'){e.preventDefault();state.block=Math.max(0,Math.min(keyFor(state.intent).length-1,state.block+(e.key==='ArrowDown'?1:-1)));showBlocks();}
         if(e.code==='Space'){e.preventDefault();play();}
@@ -154,7 +209,7 @@
       showBlocks();tabs();paint();
       if(reduced()){state.phase=1;state.playing=false;paint();}
       // No timer remains once its DOM owner is replaced.
-      if(state.playing){state.playing=false;play();}
+      if(animation && !reduced() && (fresh || state.playing)){state.playing=false;play();}
     });
   }
   window.WALK={mount};

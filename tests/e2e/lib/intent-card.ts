@@ -42,3 +42,38 @@ export function changePointCard(kind: 'one-way' | 'two-way' = 'one-way', id = 'D
   card.details.refs = {spec_url:'https://github.com/owner/repo/blob/' + 'a'.repeat(40) + '/design/tasks/T-211.json',acceptance:['Keep the saved records.','Show the records.'],points:[0,1].map(i=>({acceptance:[i],code:[{file:'src/a.py',start:i+1,end:i+1,url:'https://github.com/owner/repo/pull/9242/files#diff-abcR'+(i+1),snippet:'saved_records()'}],tests:[{file:'tests/a.py',line:i+1,name:'test_saved_'+i,url:'https://github.com/owner/repo/blob/'+'a'.repeat(40)+'/tests/a.py#L'+(i+1)}]}))};
   return card;
 }
+
+export function sceneWalkCard(mode: 'both' | 'scene' | 'walk' | 'stale' = 'both') {
+  const card: any = changePointCard();
+  const head = 'a'.repeat(40);
+  card.expected_head = head;
+  for (const locale of ['en', 'zh-TW']) {
+    const en = locale === 'en';
+    card.details[locale].done=[{kind:'fact',text:en ? 'Intent 1: The path keeps the records.' : '意圖 1：路徑保留記錄。'},{kind:'fact',text:en ? 'Intent 2: The path shows the records.' : '意圖 2：路徑顯示記錄。'}];
+    card.details[locale].before_nodes=[{state:'same',label:en ? 'Input' : '輸入'}];
+    card.details[locale].after_nodes=[{state:'same',label:en ? 'Input' : '輸入'}];
+    if (mode !== 'walk') card.details[locale].scene = {
+      lanes: [{label: en ? 'Records' : '記錄'}, {label: en ? 'Output' : '輸出'}],
+      nodes: [
+        {id:'input',label:en ? 'Input' : '輸入',lane:0,kind:'input',state:'same'},
+        {id:'old',label:en ? 'Old path' : '舊路徑',lane:1,kind:'step',state:'gone',change:'c1'},
+        {id:'saved',label:en ? 'Saved path' : '已存路徑',lane:1,kind:'store',state:'new',change:'c1'},
+      ],
+      edges: [{id:'old-path',from:'input',to:'old',state:'gone',change:'c1'}, {id:'saved-path',from:'input',to:'saved',state:'new',change:'c1'}],
+      tokens: {before:['old-path'],after:['saved-path']},
+      counter:{label:en ? 'Count' : '數量',before:'0',after:'1'},
+      changes:[{id:'c1',text:en ? 'The path saves the input.' : '路徑儲存輸入。',intents:[1]}],
+    };
+  }
+  if (mode !== 'scene') card.details.walk = mode === 'stale' ? {status:'stale',reviewed_head:'b'.repeat(40)} : {
+    status:'valid',head,base:'c'.repeat(40),patch:'d'.repeat(64),
+    intents:[{intent:1,key:[0,1].map(i=>({hunk:`src/a.py#R${i+1}-${i+1}`,kind:'code',file:'src/a.py',side:'R',start:i+1,end:i+1,
+      url:`https://github.com/owner/repo/pull/9242/files#diff-abcR${i+1}`,
+      rows:[{type:'del',old:i+1,new:null,text:'old()'},{type:'add',old:null,new:i+1,text:'<script>bad()</script>'}],
+      note:{en:'The path keeps <b>input</b>.','zh-TW':'路徑保留輸入。'},
+      line_note:{line:i+1,en:'The input stays.','zh-TW':'輸入保留。'},
+      ...(mode !== 'walk' ? {changes:['c1'],step:{nodes:['saved'],edges:['saved-path']}} : {}),
+    }))}],other:[{file:'other.py',hunks:3},{file:'image.bin',hunks:1,kinds:['binary']}],
+  };
+  return card;
+}

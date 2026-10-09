@@ -61,7 +61,11 @@ M
       printf '\n---\n\n# The diff under review\n\n```diff\n'
       git diff --no-ext-diff --no-color --no-renames main work
       printf '```\n\n## Hunk ids\n\n'
-      python3 bin/lib/fm_walk.py ids --root "$rd" --base "$(git merge-base main work)" --head "$hd"
+      if [ -r bin/lib/fm_walk.py ]; then
+        python3 bin/lib/fm_walk.py ids --root "$rd" --base "$(git merge-base main work)" --head "$hd"
+      else
+        echo 'setup: fm_walk.py absent; helper ids are unavailable on base' >&2
+      fi
     } ) > "$dd/golden.md"
   assert_eq "$(shasum < "$dd/golden.md")" "$(shasum < "$dd/prompt.md" 2>/dev/null)" \
     "a diff round's prompt ($declared declared) is byte for byte today's: the skill, the task, the round, the head's evidence and the diff"

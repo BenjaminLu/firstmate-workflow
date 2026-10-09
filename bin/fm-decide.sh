@@ -426,9 +426,9 @@ if [ "$MODE" = request ]; then
       ste_error="$(mktemp)" || exit 70
       # Validate authored legacy prose first; spec matching owns walk errors.
       ste_details="$DETAILS"; ste_legacy=''
-      if [ "$KIND" = merge ] && jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
+      if [ "$KIND" = merge ] && jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check") or has("scene"))' "$DETAILS" >/dev/null; then
         ste_legacy="$(mktemp)" || exit 70
-        jq 'del(.en.change_points,.en.door,.en.check,."zh-TW".change_points,."zh-TW".door,."zh-TW".check)' "$DETAILS" > "$ste_legacy" || exit 65
+        jq 'del(.en.change_points,.en.door,.en.check,.en.scene,."zh-TW".change_points,."zh-TW".door,."zh-TW".check,."zh-TW".scene)' "$DETAILS" > "$ste_legacy" || exit 65
         ste_details="$ste_legacy"
       fi
       # Missing intents on enriched specs need the authoritative authoring
@@ -555,6 +555,11 @@ PYWALK
       mv "$walk_refs.details" "$DETAILS"
     fi
     if [ "$KIND" = merge ]; then
+      # Registry identity is read-only and does not discover a repository for
+      # legacy cards; their selection can succeed without the refs helper.
+      if [ -z "${walk_repo:-}" ] && [ -n "$RECORD" ]; then
+        walk_repo="$(fm_project_get "$RECORD" github "$REPO/config.yaml" 2>/dev/null)" || walk_repo=''
+      fi
       walk_attached="$(mktemp)" || exit 70
       if [ ! -r "$HERE/lib/fm_walk.py" ]; then
         jq '. + {walk:{status:"unavailable",reason:"walk helper missing"}}' "$DETAILS" > "$walk_attached"

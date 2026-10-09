@@ -9,7 +9,6 @@ from pathlib import Path
 import sys
 
 import fm_ste
-from fm_card_refs import parse_diff
 
 
 def fences(text):
@@ -30,6 +29,8 @@ def fences(text):
 
 
 def hunks(diff, repo='owner/repo', pr=0):
+    # Selection and absent walks do not require the optional refs helper.
+    from fm_card_refs import parse_diff
     result = {}
     for entry in parse_diff(diff, repo, pr, typed_rows=True):
         for item in entry['code']:
@@ -68,7 +69,7 @@ def check(text, spec, diff, repo='owner/repo', pr=0):
     used, seen, result = {}, set(), []
     total = 0
     def ids(value, allowed):
-        return isinstance(value, list) and all(isinstance(n, str) and n in allowed for n in value) and len(set(value)) == len(value)
+        return isinstance(value, list) and all(isinstance(n, str) and n in allowed for n in value)
     for intent in value['intents']:
         if not isinstance(intent, dict) or set(intent) != {'intent', 'key'}: return invalid('invalid intent fields')
         number = intent['intent']
