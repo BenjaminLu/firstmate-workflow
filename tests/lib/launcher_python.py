@@ -236,6 +236,7 @@ unknown="unterminated shell word
                                         if (os.path.islink(alias) and os.path.realpath(alias) == target
                                                 and os.path.isdir(target)
                                                 and any(below(target, r) for r in document['read'])
+                                                and not any(below(r, alias) for r in document['read'])
                                                 and not any(below(x, n) or below(n, x)
                                                             for x in (alias, target)
                                                             for n in document['never_read'])):

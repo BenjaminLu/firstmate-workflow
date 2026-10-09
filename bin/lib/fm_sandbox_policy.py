@@ -294,6 +294,10 @@ def linux_toolchain_aliases(reads, denied):
             continue
         if not any(beneath(target, grant) for grant in reads):
             continue
+        # A bind at or below the alias supplies its layout already; creating
+        # an absolute symlink first would obstruct bwrap's destination mount.
+        if any(beneath(grant, alias) for grant in reads):
+            continue
         if any(beneath(path, denial) or beneath(denial, path)
                for path in (alias, target) for denial in denied):
             continue

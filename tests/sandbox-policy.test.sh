@@ -30,6 +30,14 @@ assert aliases(argv) == [(target, alias) for alias, target in pairs], 'missing-l
 assert argv.index('--symlink') < argv.index('--ro-bind-try'), 'aliases precede canonical binds'
 assert argv.count('--symlink') == 5, 'duplicate reads do not duplicate aliases'
 for alias, target in pairs:
+    for grant in (alias, alias + '/tool'):
+        bound = profile(['/usr', grant])
+        assert (target, alias) not in aliases(bound), 'bound-alias-conflict: read grants at or below an alias must suppress its symlink'
+        assert any(bound[i:i+3] == ['--ro-bind-try', grant, grant]
+                   for i in range(len(bound))), 'existing alias read bind remains'
+        assert aliases(bound) == [(other_target, other_alias)
+                                 for other_alias, other_target in pairs if other_alias != alias], 'unbound toolchain aliases remain'
+for alias, target in pairs:
     assert aliases(profile([target])) == [(target, alias)], 'exact canonical target grant'
     for label, links, dirs in [('absent', {}, {target}), ('non-symlink', {}, {alias, target}),
                                ('wrong target', {alias: '/opt/tools'}, {'/opt/tools'}),
