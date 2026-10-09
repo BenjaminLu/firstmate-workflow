@@ -690,32 +690,32 @@ class SyntheticMergeSource(unittest.TestCase):
 class NamedTestResult(unittest.TextTestResult):
     """Expose behavioral outcomes in the fail-first collector's line format."""
     def startTest(self, test):
-        self.failed = False
-        self.skipped = False
+        self._fm_failed = False
+        self._fm_skipped = False
         super().startTest(test)
 
     def addFailure(self, test, err):
-        self.failed = True
+        self._fm_failed = True
         super().addFailure(test, err)
 
     def addError(self, test, err):
-        self.failed = True
+        self._fm_failed = True
         super().addError(test, err)
 
     def addSubTest(self, test, subtest, err):
         if err is not None:
-            self.failed = True
+            self._fm_failed = True
         super().addSubTest(test, subtest, err)
 
     def addSkip(self, test, reason):
-        self.skipped = True
+        self._fm_skipped = True
         super().addSkip(test, reason)
 
     def stopTest(self, test):
         super().stopTest(test)
-        if not self.skipped:
+        if not self._fm_skipped:
             name = '%s.%s' % (type(test).__name__, test._testMethodName)
-            sys.stdout.write('    %-52s%s\n' % (name, 'FAIL' if self.failed else 'ok'))
+            sys.stdout.write('    %-52s %s\n' % (name, 'FAIL' if self._fm_failed else 'ok'))
             sys.stdout.flush()
 
 
