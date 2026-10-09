@@ -34,7 +34,8 @@ if [ "$FM_ROLE" = worker ]; then
 else
   cp "$2" "$FM_CAPTURE"
   if [ "$FM_TEST_VERDICT" = reject ]; then
-    printf '1. open fix src/feature:1\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z\n' > "$3/verdict.txt"
+    # T-272: every open item of a new REJECT carries one fix proposal.
+    printf '1. open fix src/feature:1\n```text fix-1\nfile: src/feature:1\nchange: keep the feature line\nfixes: the feature check\nfail-first: the feature check fails without the line\n```\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z\n' > "$3/verdict.txt"
   else
     printf '1. done fix src/feature:1\nCRITERIA-COMPLETE:T-Z\nAPPROVE:T-Z\n' > "$3/verdict.txt"
   fi

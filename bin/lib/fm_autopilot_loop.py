@@ -390,7 +390,7 @@ class MechanicalLoop:
         verdict = self.verdict(task)
         head = pr['head']['sha']
         if verdict.get('verdict') == 'REJECT' and verdict.get('head') == head:
-            self.attention('reject', task, pr, f'{task} REJECT: brief needed', f'{task} 審查拒絕：需要 firstmate 撰寫工作簡報')
+            self.reject_wake(task, pr, verdict)
             return
         from fm_evidence import Store
         records = Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external']).records()
@@ -616,8 +616,46 @@ class MechanicalLoop:
                 self.attention('review', task, pr, f'{task}: {reason}' + suffix,
                                f'{task}：審查未完成，需要 firstmate 檢查紀錄' + suffix)
             elif verdict.get('verdict') == 'REJECT':
-                self.attention('reject', task, pr, f'{task} REJECT: brief needed', f'{task} 審查拒絕：需要 firstmate 撰寫工作簡報')
+                self.reject_wake(task, pr, verdict)
             self.data['next_poll'] = 0
+
+    def reject_wake(self, task, pr, verdict):
+        """T-272: judge the triggering REJECT first, then name its fix draft.
+
+        The protocol check is bound to this verdict's signature, in every
+        round. Once either wake exists for the head, nothing runs again.
+        """
+        from fm_autopilot import key
+        from fm_evidence import Store, Refused, fixes_brief
+        number, head = pr['number'], pr['head']['sha']
+        if any('autopilot-' + key([self.ctx['project'], f'{reason}-{number}-{head}']) in self.data['wakes']
+               for reason in ('protocol', 'reject')):
+            return
+        round_number = verdict.get('round', 1)
+        try:
+            # An unsigned pre-T-138 verdict has no signature to bind to.
+            bound = ['--signature', verdict['signature']] if verdict.get('signature') else []
+            self.command(self.script('fm-protocol.sh', 'check', '--task', task, '--pr', number,
+                                     '--round', round_number, *bound))
+        except ERRORS:
+            self.attention('protocol', task, pr, f'{task}: protocol violation in round {round_number}',
+                           f'{task}：審查協定違規，需要 firstmate 處理')
+            return
+        try:
+            store = Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external'])
+            path, decision = fixes_brief(store, int(round_number) + 1, head)
+        except (Refused, ValueError, OSError, KeyError, TypeError):
+            path, decision = None, True
+        if decision:
+            self.attention('reject', task, pr, f'{task} REJECT: brief needed', f'{task} 審查拒絕：需要 firstmate 撰寫工作簡報')
+        elif self.ctx['external']:
+            # Private paths and proposal text never reach a wake.
+            self.attention('reject', task, pr, f'{task} REJECT: review fixes ready in the private project state; record the brief',
+                           f'{task} 審查拒絕：審查修正草稿已備好於私有專案狀態；請記錄工作簡報')
+        else:
+            where = Path(path).relative_to(self.state)
+            self.attention('reject', task, pr, f'{task} REJECT: review fixes ready at {where}; record the brief',
+                           f'{task} 審查拒絕：審查修正草稿已備好於 {where}；請記錄工作簡報')
 
     def merge_card(self, task, pr, gated_base):
         from fm_concurrent import merge_blocker

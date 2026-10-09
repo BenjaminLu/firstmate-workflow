@@ -37,6 +37,8 @@ M
       printf '\n---\n\n# The task\n\n```json\n%s\n```\n' \
         "$(git show work:design/tasks/T-Z.json | jq .)"
       printf '\n# Round %s\n' 1
+      # T-272 added one line, every round: a fix proposal per open item
+      printf '\nEach open item of a REJECT'"'"'s standing list carries exactly one fix proposal - a fenced `diff fix-<N>` unified diff against the reviewed head, or a fenced `text fix-<N>` block with non-empty file:, change:, fixes: and fail-first: lines - or, for a decision only the captain can make, one indented line DECISION:%s <question> inside that item. Do not edit, commit or push files: propose the fix in your answer.\n' T-Z
       # given --pr, today's round carries the head's evidence (T-088); this
       # gh answers nothing and state/gates/ is empty, so all of it is unknown
       hd="$(git rev-parse work)"
