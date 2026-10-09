@@ -795,7 +795,7 @@ rm -rf "$guard"
 inherdr() { env -u FM_PROJECT HERDR_ENV=1 HERDR_LOG="$hlog" PATH="$hstub:$PATH" "$@"; }
 # shellcheck source=tests/lib/config-modules.sh
 . "$ROOT/tests/lib/config-modules.sh"
-nfix() { local n; n="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$n/bin/"; config_modules_fixture "$n/bin/"; printf '%s' "$n"; }
+nfix() { local n; n="$(fixture)"; mv "$n/bin/fm-decide-real.sh" "$n/bin/fm-decide.sh"; cp "$ROOT/bin/fm-config.sh" "$n/bin/"; config_modules_fixture "$n/bin/"; printf '%s' "$n"; }
 # ask [NAME=value ...] <fixture> <id> <task> [fm-decide args]: request a card
 # inside Herdr and keep its exit code, stdout and stderr
 ask() {

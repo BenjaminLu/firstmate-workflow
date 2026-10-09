@@ -618,10 +618,76 @@ sys.exit(subprocess.call([str(root/'gh-real'),*sys.argv[1:]]))
         self.assertEqual(old,old_path.read_bytes())
 
 
+class SyntheticMergeSource(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        (self.root / 'bin').mkdir()
+        (self.root / 'bin/fm-decide.sh').write_text('exit 23\n')
+        script = '. "$1/tests/lib/project-storage.sh"; merge_source_fixture "$2"'
+        subprocess.run(['bash', '-c', 'ROOT="$1"; ' + script, '_', str(ROOT), str(self.root)],
+                       env=dict(os.environ, HERDR_ENV='1'), check=True, capture_output=True)
+        self.real_git = shutil.which('git')
+        self.git = str(self.root / 'fixture-tools/git')
+        self.source = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:design/tasks/T-242.json'
+
+    def test_exact_synthetic_read_and_authored_source(self):
+        result = subprocess.run([self.git, '-C', str(self.root), 'show', self.source], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('T-242', json.loads(result.stdout)['id'])
+        self.assertEqual(['-C', str(self.root), 'show', self.source],
+                         (self.root / '.fixture-git-argv').read_bytes().decode().split('\0')[:-1])
+        authored = '{"id":"T-242","acceptance":["Authored source."]}\n'
+        (self.root / '.fixture-source.json').write_text(authored)
+        result = subprocess.run([self.git, '-C', str(self.root), 'show', self.source], capture_output=True, text=True)
+        self.assertEqual(authored, result.stdout)
+
+    def test_nonmatching_requests_delegate_exactly_to_real_git(self):
+        other = self.root / 'other' / self.root.name
+        other.mkdir(parents=True)
+        cases = [('-C', str(other), 'show', self.source),
+                 ('-C', str(self.root), 'show', self.source.replace('T-242', '../T-242')),
+                 ('-C', str(self.root), 'show', self.source.replace('T-242', 'T-x')),
+                 ('-C', str(self.root), 'show', self.source, 'extra'),
+                 ('-C', str(self.root), 'show', self.source.replace('aaaa', 'bbbb', 1)),
+                 ('-C', str(self.root), 'rev-parse', '--is-inside-work-tree'),
+                 ('show', self.source)]
+        for args in cases:
+            with self.subTest(args=args):
+                got = subprocess.run([self.git, *args], cwd=self.root, capture_output=True)
+                want = subprocess.run([self.real_git, *args], cwd=self.root, capture_output=True)
+                self.assertEqual((want.returncode, want.stdout, want.stderr),
+                                 (got.returncode, got.stdout, got.stderr))
+
+    def test_external_preparation_preserves_existing_and_authored_source(self):
+        tasks = self.root / 'private-tasks'
+        (self.root / 'bin/fm-config.sh').write_text(
+            'fm_storage_init() { FM_EXTERNAL=1; FM_TASKS_DIR=' + shlex.quote(str(tasks)) + '; }\n')
+        authored = '{"id":"T-242","acceptance":["Private authored source."]}\n'
+        (self.root / '.fixture-source.json').write_text(authored)
+        args = ['bash', str(self.root / 'bin/fm-decide.sh'), '--request', 'D-123',
+                '--task', 'T-242', '--kind', 'merge', '--project', 'private']
+        result = subprocess.run(args, capture_output=True)
+        self.assertEqual(23, result.returncode)
+        self.assertEqual(authored, (tasks / 'T-242.json').read_text())
+        (tasks / 'T-242.json').write_text('Existing private source.\n')
+        subprocess.run(args, capture_output=True)
+        self.assertEqual('Existing private source.\n', (tasks / 'T-242.json').read_text())
+
+    def test_wrapper_preserves_exit_and_disables_inherited_notifications(self):
+        (self.root / 'bin/fm-decide-real.sh').write_text(
+            'printf "%s\\n" "$HERDR_ENV" "$@"; printf "fixture stderr\\n" >&2; exit 23\n')
+        result = subprocess.run(['bash', str(self.root / 'bin/fm-decide.sh'), '--sentinel', 'value'],
+                                env=dict(os.environ, HERDR_ENV='1'), capture_output=True, text=True)
+        self.assertEqual(23, result.returncode)
+        self.assertEqual('0\n--sentinel\nvalue\n', result.stdout)
+        self.assertEqual('fixture stderr\n', result.stderr)
+
+
 if __name__ == '__main__':
     producer = '--producer' in sys.argv
     if producer: sys.argv.remove('--producer')
-    cases = (StockRequests,) if producer else (CardRefs, ExecutableRefs)
+    cases = (StockRequests, SyntheticMergeSource) if producer else (CardRefs, ExecutableRefs, SyntheticMergeSource)
     loader = unittest.TestLoader()
     suite = unittest.TestSuite(loader.loadTestsFromTestCase(case) for case in cases)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
