@@ -281,6 +281,30 @@ def darwin(p, roots, reads, own, port, listening, *, root):
     return '\n'.join(lines) + '\n'
 
 
+def linux_toolchain_aliases(reads, denied):
+    """Recreate only granted standard usrmerge links; grant no new reads."""
+    pairs = (('/bin', '/usr/bin'), ('/sbin', '/usr/sbin'), ('/lib', '/usr/lib'),
+             ('/lib32', '/usr/lib32'), ('/lib64', '/usr/lib64'))
+    def beneath(path, parent):
+        return path == parent or path.startswith(parent.rstrip('/') + '/')
+    args = []
+    for alias, target in pairs:
+        if not (os.path.islink(alias) and os.path.realpath(alias) == target
+                and os.path.isdir(target)):
+            continue
+        if not any(beneath(target, grant) for grant in reads):
+            continue
+        # A bind at or below the alias supplies its layout already; creating
+        # an absolute symlink first would obstruct bwrap's destination mount.
+        if any(beneath(grant, alias) for grant in reads):
+            continue
+        if any(beneath(path, denial) or beneath(denial, path)
+               for path in (alias, target) for denial in denied):
+            continue
+        args += ['--symlink', target, alias]
+    return args
+
+
 def linux(p, roots, reads, own, sock):
     # /tmp is a fresh tmpfs of the round's own: what another round leaves
     # there is not in it, and a vendor's own directory under /tmp (own's
@@ -291,7 +315,12 @@ def linux(p, roots, reads, own, sock):
     # loopback by FWD_PY.
     a = ['--die-with-parent', '--new-session', '--unshare-pid', '--unshare-ipc', '--unshare-uts',
          '--unshare-net', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp']
+    a += linux_toolchain_aliases(reads, p['never_read'])
     for r in reads:
+        # Keep bwrap's native mounts: host read binds are nodev and would
+        # replace working devices (including /dev/null) or process metadata.
+        if any(r == mount or r.startswith(mount + '/') for mount in ('/dev', '/proc')):
+            continue
         a += ['--ro-bind-try', r, r]
     for r in own.get('auth', []):
         a += ['--ro-bind-try', r, r]
