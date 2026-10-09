@@ -426,9 +426,9 @@ if [ "$MODE" = request ]; then
       ste_error="$(mktemp)" || exit 70
       # Validate authored legacy prose first; spec matching owns walk errors.
       ste_details="$DETAILS"; ste_legacy=''
-      if [ "$KIND" = merge ] && jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
+      if [ "$KIND" = merge ] && jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check") or has("scene"))' "$DETAILS" >/dev/null; then
         ste_legacy="$(mktemp)" || exit 70
-        jq 'del(.en.change_points,.en.door,.en.check,."zh-TW".change_points,."zh-TW".door,."zh-TW".check)' "$DETAILS" > "$ste_legacy" || exit 65
+        jq 'del(.en.change_points,.en.door,.en.check,.en.scene,."zh-TW".change_points,."zh-TW".door,."zh-TW".check,."zh-TW".scene)' "$DETAILS" > "$ste_legacy" || exit 65
         ste_details="$ste_legacy"
       fi
       # Missing intents on enriched specs need the authoritative authoring
@@ -478,6 +478,9 @@ PYTITLE
     fi
     walk_spec=''; walk_details=''; walk_refs=''; walk_enriched=false
     if [ "$KIND" = merge ]; then
+      walk_details="$(mktemp)" || exit 70
+      cp "$DETAILS" "$walk_details" || exit 70
+      DETAILS="$walk_details"
       walk_spec="$(mktemp)" || exit 70
       trap 'rm -f "$walk_spec" "${walk_details:-}" "${walk_refs:-}"' EXIT
       walk_enriched="$(python3 - "$HERE/lib" "$TASK" "$EXPECTED_HEAD" "$REPO" "$DETAILS" "$walk_spec" <<'PYWALK'
@@ -507,6 +510,13 @@ try:
     fields = ('change_points','door','check')
     enriched = any(field in explain.get(lang,{}) for lang in ('en','zh-TW') for field in fields) or any(field in spec for field in ('change_refs','check_answer'))
     details = json.loads(Path(authored).read_text())
+    for lang in ('en', 'zh-TW'):
+        loc = details.setdefault(lang, {})
+        source = explain.get(lang, {})
+        if 'scene' in loc and loc['scene'] != source.get('scene'):
+            raise ValueError(lang + '.scene mismatch with spec')
+        if 'scene' in source: loc['scene'] = source['scene']
+    Path(authored).write_text(json.dumps(details, ensure_ascii=False))
     if not enriched and any(field in details.get(lang,{}) for lang in ('en','zh-TW') for field in fields):
         raise ValueError('details walk fields mismatch: spec has no change_points')
     Path(output).write_text(raw)
@@ -518,9 +528,10 @@ PYWALK
 )" || exit 65
       if [ "$walk_enriched" = true ]; then
         [ -r "$HERE/lib/fm_card_refs.py" ] || { echo 'fm-decide: enrichment helper missing; nothing was written' >&2; exit 65; }
-        walk_details="$(mktemp)" || exit 70
+        walk_prepared="$(mktemp)" || exit 70
         python3 "$HERE/lib/fm_card_refs.py" --prepare --spec "$walk_spec" --details "$DETAILS" \
-          --root "$REPO" --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" > "$walk_details" || exit 65
+          --root "$REPO" --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" > "$walk_prepared" || exit 65
+        mv "$walk_prepared" "$walk_details"
         DETAILS="$walk_details"
       fi
     fi
@@ -542,6 +553,25 @@ PYWALK
         --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" ${walk_external[@]+"${walk_external[@]}"} > "$walk_refs" || exit 65
       jq --slurpfile refs "$walk_refs" '. + {refs:$refs[0]}' "$DETAILS" > "$walk_refs.details" || exit 65
       mv "$walk_refs.details" "$DETAILS"
+    fi
+    if [ "$KIND" = merge ]; then
+      # Registry identity is read-only and does not discover a repository for
+      # legacy cards; their selection can succeed without the refs helper.
+      if [ -z "${walk_repo:-}" ] && [ -n "$RECORD" ]; then
+        walk_repo="$(fm_project_get "$RECORD" github "$REPO/config.yaml" 2>/dev/null)" || walk_repo=''
+      fi
+      walk_attached="$(mktemp)" || exit 70
+      if [ ! -r "$HERE/lib/fm_walk.py" ]; then
+        jq '. + {walk:{status:"unavailable",reason:"walk helper missing"}}' "$DETAILS" > "$walk_attached"
+      elif ! python3 "$HERE/lib/fm_walk.py" attach --spec "$walk_spec" --details "$DETAILS" \
+        --root "${FM_TARGET_ROOT:-$REPO}" --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" \
+        --task "$TASK" --head "$EXPECTED_HEAD" --repo "${walk_repo:-owner/repo}" --pr "$PR" > "$walk_attached"; then
+        jq '. + {walk:{status:"invalid",reason:"walk check failed"}}' "$DETAILS" > "$walk_attached"
+      fi
+      if ! jq -e 'type == "object" and (.walk | type == "object")' "$walk_attached" >/dev/null 2>&1; then
+        jq '. + {walk:{status:"invalid",reason:"walk check failed"}}' "$DETAILS" > "$walk_attached"
+      fi
+      mv "$walk_attached" "$DETAILS"
     fi
     payload="$(jq -cn --arg expected_head "$EXPECTED_HEAD" --argjson binding "$binding" --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
       --slurpfile gate_list "$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json" \

@@ -171,6 +171,45 @@ assert_contains "$(cat "$dc/sent-down.md")" "The required check for head $head3 
   "and that the required check could not be read either"
 assert_contains "$outd" "REJECT:T-Z" "and the verdict still comes back"
 rm -f "$GHSTATE/down"
+# T-244: a malformed private walk is retained, redacted from projection and
+# represented in events only by a fixed checker category.
+cat > "$rc/bin/adapters/mock.sh" <<'M_WALK'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cat > "$3/verdict.txt" <<'FINAL_WALK'
+1. open fix the helper
+CRITERIA-COMPLETE:T-Z
+REJECT:T-Z
+```walk
+{"intents":[{"intent":1,"key":[{"hunk":"unknown","kind":"code","note":{"en":"PRIVATE_WALK_PATH/customer/file. The path works.","zh-TW":"路徑有效。"}}]}]}
+```
+FINAL_WALK
+M_WALK
+review_c "$dc/sent-walk.md" --round 2 --pr "$prh" >/dev/null
+assert_eq 0 "$?" 'invalid walks do not change the review exit status'
+projected="$(tail -1 "$GHSTATE/comments.$prh" | tr '\r' '\n')"
+assert_contains "$projected" 'Code walk retained with the evidence (1 key blocks).' 'comment keeps a retention notice'
+assert_lacks "$projected" '```walk' 'comment never projects the walk fence'
+assert_lacks "$projected" PRIVATE_WALK_PATH 'comment never projects private notes'
+walk_events="$(jq -c 'select(.type=="crew_status")' "$rc/state/events.jsonl")"
+assert_contains "$walk_events" 'Code walk: invalid' 'walk status is emitted separately'
+assert_lacks "$walk_events" PRIVATE_WALK_PATH 'walk event uses only a fixed category'
+python3 - "$ROOT" "$rc/state" <<'PY_WALK_EVIDENCE'
+import json,sys
+from pathlib import Path
+root,state=map(Path,sys.argv[1:]);sys.path.insert(0,str(root/'bin/lib'))
+from fm_evidence import Store
+records=[json.loads(p.read_text()) for p in (state/'evidence').rglob('[0-9]*.json')]
+record=next(r for r in reversed(records) if r.get('kind')=='verdict' and 'PRIVATE_WALK_PATH' in r['text'])
+assert record['verdict']=='REJECT'
+assert 'CRITERIA-COMPLETE:T-Z' in record['text']
+assert '```walk' in record['text']
+assert all(record[k] for k in ['head','base','patch','signature'])
+# Reader verifies the unchanged signature before exposing the retained text.
+assert record in Store(state,record['project'],'T-Z').verdicts()
+print('retained walk preserves verdict, standing list and signed source fields')
+PY_WALK_EVIDENCE
+assert_eq 0 "$?" 'retained walk keeps the verdict signature and source binding'
 unset GHSTATE
 rm -rf "$dc"
 

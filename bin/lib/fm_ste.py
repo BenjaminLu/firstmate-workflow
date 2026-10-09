@@ -33,7 +33,7 @@ LIMITS = {'en': {'step': 20, 'fact': 25, 'label': 6}, 'zh-TW': {'step': 25, 'fac
 NEW_FIELDS = ('intent', 'why', 'scope_in', 'scope_out', 'done', 'notes', 'questions', 'before_nodes', 'after_nodes', 'change_table')
 WALK_FIELDS = ('change_points', 'door', 'check')
 LEGACY_FIELDS = NEW_FIELDS
-NEW_FIELDS += WALK_FIELDS
+NEW_FIELDS += WALK_FIELDS + ('scene',)
 LOCALES = ('en', 'zh-TW')
 
 
@@ -193,6 +193,103 @@ def _walk(details):
         raise ValueError('check: locale about and option counts must match')
 
 
+def _scene(details):
+    if not any('scene' in details[lang] for lang in LOCALES):
+        return
+    if not all('scene' in details[lang] for lang in LOCALES):
+        raise ValueError('scene: required in both locales')
+    structures = []
+    for lang in LOCALES:
+        scene = details[lang]['scene']
+        prefix = lang + '.scene.'
+        def fail(field, reason):
+            raise ValueError(prefix + field + ': ' + reason)
+        def obj(value, required, optional, field):
+            if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
+                fail(field, 'invalid fields')
+        def items(field, low, high):
+            value = scene.get(field)
+            if not isinstance(value, list) or not low <= len(value) <= high:
+                fail(field, 'expected %s-%s items' % (low, high))
+            return value
+        def prose(value, field, is_label=False):
+            _text(value, prefix + field)
+            if not is_label and len(split(value)) != 1:
+                fail(field, 'expected one fact sentence')
+            result = label(value) if is_label else check(value, 'fact')
+            if any(i['severity'] == 'fail' for i in result['issues']):
+                fail(field, 'fails STE')
+        obj(scene, {'lanes', 'nodes', 'edges', 'tokens', 'changes'}, {'counter'}, 'scene')
+        lanes = items('lanes', 1, 6)
+        nodes = items('nodes', 1, 24)
+        edges = items('edges', 0, 40)
+        changes = items('changes', 1, 9)
+        for lane in lanes:
+            obj(lane, {'label'}, set(), 'lanes')
+            prose(lane['label'], 'lanes.label', True)
+        change_ids = set()
+        for i, change in enumerate(changes):
+            obj(change, {'id', 'text', 'intents'}, set(), 'changes')
+            if change['id'] != 'c' + str(i + 1):
+                fail('changes.id', 'expected c1..cN in order')
+            change_ids.add(change['id'])
+            intents = change['intents']
+            if not isinstance(intents, list) or not intents or any(not _integer(n, 1, len(details[lang]['intent'])) for n in intents) or len(set(intents)) != len(intents):
+                fail('changes.intents', 'invalid intent indexes')
+            prose(change['text'], 'changes.text')
+        ids = set()
+        for field, values in (('nodes', nodes), ('edges', edges)):
+            for value in values:
+                required = {'id', 'label', 'lane', 'kind', 'state'} if field == 'nodes' else {'id', 'from', 'to', 'state'}
+                obj(value, required, {'change'} if field == 'nodes' else {'change', 'label'}, field)
+                identifier = value['id']
+                if not isinstance(identifier, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,23}', identifier) or identifier in ids:
+                    fail(field + '.id', 'invalid or duplicate id')
+                ids.add(identifier)
+                if value['state'] not in ('same', 'gone', 'new'):
+                    fail(field + '.state', 'invalid state')
+                if value['state'] == 'same':
+                    if 'change' in value: fail(field + '.change', 'forbidden on same')
+                elif not isinstance(value.get('change'), str) or value['change'] not in change_ids:
+                    fail(field + '.change', 'required change id')
+                if 'label' in value: prose(value['label'], field + '.label', True)
+                if field == 'nodes':
+                    if not _integer(value['lane'], 0, len(lanes) - 1): fail('nodes.lane', 'out of range')
+                    if value['kind'] not in ('input', 'step', 'decision', 'store', 'focal', 'oneway'): fail('nodes.kind', 'invalid kind')
+        by_node = {n['id']: n for n in nodes}
+        by_edge = {e['id']: e for e in edges}
+        for edge in edges:
+            for endpoint in ('from', 'to'):
+                # Type before membership: an unhashable reference is a field error.
+                if not isinstance(edge[endpoint], str) or edge[endpoint] not in by_node: fail('edges.' + endpoint, 'unknown node')
+            states = {by_node[edge[k]]['state'] for k in ('from', 'to')}
+            if {'gone', 'new'} <= states: fail('edges.state', 'cannot join gone and new nodes')
+            for state in ('gone', 'new'):
+                if state in states and edge['state'] != state: fail('edges.state', 'edge touching ' + state + ' node must be ' + state)
+        obj(scene['tokens'], {'before', 'after'}, set(), 'tokens')
+        for phase, allowed in (('before', ('same', 'gone')), ('after', ('same', 'new'))):
+            path = scene['tokens'][phase]
+            if not isinstance(path, list) or not 1 <= len(path) <= 24: fail('tokens.' + phase, 'expected 1-24 edge ids')
+            previous = None
+            for identifier in path:
+                if not isinstance(identifier, str) or identifier not in by_edge: fail('tokens.' + phase, 'unknown edge id')
+                edge = by_edge[identifier]
+                if edge['state'] not in allowed: fail('tokens.' + phase, 'invalid edge state')
+                if previous is not None and previous != edge['from']: fail('tokens.' + phase, 'discontinuous path')
+                previous = edge['to']
+        if 'counter' in scene:
+            obj(scene['counter'], {'label', 'before', 'after'}, set(), 'counter')
+            prose(scene['counter']['label'], 'counter.label', True)
+            for phase in ('before', 'after'): _text(scene['counter'][phase], prefix + 'counter.' + phase, 12)
+        def structural(value):
+            if isinstance(value, dict): return {k: structural(v) for k, v in value.items() if k not in ('label', 'text')}
+            if isinstance(value, list): return [structural(v) for v in value]
+            return value
+        structures.append(structural(scene))
+    if structures[0] != structures[1]:
+        raise ValueError('scene: locale structure must match (ids, lanes, states, tokens, counter and intents)')
+
+
 def _validate(details):
     if not isinstance(details, dict):
         raise ValueError('details must be an object')
@@ -202,6 +299,7 @@ def _validate(details):
         if not isinstance(details.get(lang), dict) or 'intent' not in details[lang]:
             raise ValueError('intent is required in both locales')
     _walk(details)
+    _scene(details)
     for key in LEGACY_FIELDS:
         if (key in details['en']) != (key in details['zh-TW']):
             raise ValueError(key + ': required in both locales or neither')
