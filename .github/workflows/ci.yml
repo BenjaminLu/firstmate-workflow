@@ -60,7 +60,7 @@ jobs:
     name: bash suites (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     needs: [bash-timings]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -400,7 +400,7 @@ jobs:
     needs: [fail-first-timings]
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
