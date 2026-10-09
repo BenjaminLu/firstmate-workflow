@@ -3,6 +3,8 @@ import copy
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -296,6 +298,67 @@ class Walk(unittest.TestCase):
         self.assertNotIn('```walk',projected)
         self.assertNotIn('The path works.',projected)
 
+    def test_comment_projection_uses_reader_fences(self):
+        nested='Prose before.\n```text\nquoted:\n```walk\n{}\n```\nProse after.\nAPPROVE:T-001'
+        self.assertEqual([],self.walk.fences(nested))
+        self.assertEqual(nested,self.walk.project_comment(nested))
+        longer='Prose.\n````walk\n{"intents":[]}\n```\nSECRET\n````\nAPPROVE:T-001'
+        self.assertEqual(1,len(self.walk.fences(longer)))
+        self.assertEqual('Prose.\nCode walk retained with the evidence (0 key blocks).\nAPPROVE:T-001',self.walk.project_comment(longer))
+
+
+# External comments projection runs the unchanged fm-review.sh block through
+# tests/lib/crew_blocks.py (section/function/shell, FM_EXTERNAL=1).
+class ExternalCommentProjection(unittest.TestCase):
+    VERDICT=('1. done PROSE_ITEM\nCRITERIA-COMPLETE:T-Z\n'
+             '```walk\n{"intents":[{"intent":1,"key":[{"hunk":"a#R1-1","kind":"code","note":{"en":"PRIVATE_NOTE.","zh-TW":"私密。"}}]}]}\n```\n'
+             'APPROVE:T-Z\nREVIEWER_COMPLETE:T-Z')
+    NESTED='Prose kept.\n```text\nquoted:\n```walk\n{}\n```\nAPPROVE:T-Z\nREVIEWER_COMPLETE:T-Z'
+
+    def project(self,verdict,code_root):
+        from crew_blocks import section, function, shell
+        reviewer=ROOT/'bin/fm-review.sh'
+        try:fallback=function(reviewer,'project_without_walk')
+        except AssertionError:fallback=''
+        block=section(reviewer,'project_review=fm\nif [ "$FM_EXTERNAL" = 1 ]; then',
+                      'if [ "$FM_EXTERNAL" = 1 ] && [ -n "$PR" ] && [ "$projection" != comments ]; then')
+        with tempfile.TemporaryDirectory() as home:
+            home=Path(home)
+            (home/'verdict.txt').write_text(verdict)
+            prefix=('verdict="$(cat "$work/verdict.txt")"; decided=APPROVE; evidence_ref=sig; projection=comments;\n'
+                    'FM_CODE_ROOT='+shlex.quote(str(code_root))+'\n'
+                    'fm_private_note() { cp "$3" "$work/private"; }; fm_conventions() { echo fm; };\n'
+                    'fm_comment_projection() { printf "%s\\n" "$3" > "$work/comment"; };\n'+fallback)
+            result=shell(ROOT,home,block,prefix)
+            self.assertEqual(0,result.returncode,result.stderr)
+            self.assertIn('PRIVATE_NOTE' if 'PRIVATE_NOTE' in verdict else 'Prose kept.',(home/'private').read_text(),
+                          'the private record keeps the full verdict')
+            return (home/'comment').read_text()
+
+    def roots(self):
+        work=Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree,work)
+        (work/'missing/bin/lib').mkdir(parents=True)
+        (work/'failing/bin/lib').mkdir(parents=True)
+        (work/'failing/bin/lib/fm_walk.py').write_text('import sys\nprint("PRIVATE_NOTE leaked by a failing helper")\nsys.exit(1)\n')
+        return [('present',ROOT),('unreadable',work/'missing'),('failing',work/'failing')]
+
+    def test_walk_is_never_posted_and_prose_is_kept(self):
+        for name,root in self.roots():
+            if name=='present' and not (ROOT/'bin/lib/fm_walk.py').is_file():continue
+            with self.subTest(helper=name):
+                posted=self.project(self.VERDICT,root)
+                self.assertNotIn('PRIVATE_NOTE',posted)
+                self.assertNotIn('```walk',posted)
+                self.assertIn('Code walk retained with the evidence',posted)
+                for line in ['1. done PROSE_ITEM','CRITERIA-COMPLETE:T-Z','APPROVE:T-Z','REVIEWER_COMPLETE:T-Z','EVIDENCE:T-Z sig']:
+                    self.assertIn(line,posted)
+
+    def test_nested_walk_example_is_not_cut(self):
+        for name,root in self.roots():
+            if name=='present' and not (ROOT/'bin/lib/fm_walk.py').is_file():continue
+            with self.subTest(helper=name):
+                self.assertIn(self.NESTED,self.project(self.NESTED,root))
+
 
 # Shared producer fixture: tests/lib/card_refs.py, tests/lib/ste_cases.py,
 # tests/decide.test.sh, tests/lib/project-storage.sh.
@@ -456,6 +519,94 @@ class MergeRequests(unittest.TestCase):
         self.assertEqual(dict(status='stale',reviewed_head=reviewed),self.stored())
         self.assertEqual(original,first.read_bytes())
 
+
+    def pin(self,value):
+        """Approved pin of the committed spec, as dispatch creates it (fm_spec_pins.Pins)."""
+        from fm_spec_pins import Pins
+        event=dict(ts='2026-10-01T00:00:00Z',actor='captain',type='greenlit',task='T-242')
+        self.write('state/events.jsonl',json.dumps(event)+'\n')
+        self.commit_spec(value)
+        self.assertIsNotNone(Pins(self.pin_env,'T-242').create())
+        return sorted((self.root/'state/pins/T-242').glob('*.json'))
+
+    def clear_store(self):
+        for path in self.store().directory.glob('[0-9]*.json'):path.unlink()
+
+    def unsigned(self,head,text='APPROVE:T-242'):
+        store=self.store();store.directory.mkdir(parents=True,exist_ok=True)
+        number=len(list(store.directory.glob('[0-9]*.json')))+1
+        record=dict(kind='verdict',project=store.project,task='T-242',round=1,actor='reviewer',time='2026-01-01T00:00:00Z',head=head,base=self.base,patch='d'*64,verdict='APPROVE',text=text,provenance={'level':'legacy'})
+        (store.directory/('%08d-history.json'%number)).write_text(json.dumps(record))
+
+    def walk_text(self):
+        return 'APPROVE:T-242\n```walk\n'+json.dumps({'intents':[{'intent':1,'key':[{'hunk':'src/a.py#R1-1','kind':'code','note':{'en':'The path works.','zh-TW':'路徑有效。'}}]}]})+'\n```'
+
+    def test_scene_comes_from_the_approved_pin(self):
+        pinned=spec();pinned['id']='T-242'
+        for loc in pinned['explain'].values():loc['scene']['lanes'][0]['label']='Pinned flow'
+        committed=spec();committed['id']='T-242'
+        self.pin(pinned);self.commit_spec(committed)
+        result=self.request();self.assertEqual(0,result.returncode,result.stderr)
+        card=json.loads(self.pending().read_text())
+        for lang in ['en','zh-TW']:
+            self.assertIn('scene',card['details'][lang],'authored details receive the pinned scene')
+            self.assertEqual(pinned['explain'][lang]['scene'],card['details'][lang]['scene'])
+        from fm_merge_details import build
+        dispatch=copy.deepcopy(self.details)
+        dispatch['en']['title']='Dispatch T-242: The check passes.'
+        dispatch['zh-TW']['title']='派工 T-242：檢查通過。'
+        for lang in ['en','zh-TW']:dispatch[lang].update(pinned['explain'][lang])
+        self.write('state/decisions/D-firstmate-workflow-T242-1.json',json.dumps(dict(task='T-242',project='firstmate-workflow',purpose='dispatch',chosen='A',details=dispatch)))
+        built=build(self.root/'state','firstmate-workflow','T-242',7)
+        result=self.request(details=built);self.assertEqual(0,result.returncode,result.stderr)
+        card=json.loads(self.pending().read_text())
+        for lang in ['en','zh-TW']:
+            self.assertEqual(pinned['explain'][lang]['scene'],card['details'][lang].get('scene'),'built details receive the pinned scene')
+        # The committed spec's scene is not the authority once a pin exists.
+        details=copy.deepcopy(self.details)
+        for lang in ['en','zh-TW']:details[lang]['scene']=committed['explain'][lang]['scene']
+        result=self.request(details=details)
+        self.assertNotEqual(0,result.returncode)
+        self.assertIn('scene mismatch with spec',result.stderr)
+        for lang in ['en','zh-TW']:details[lang]['scene']=pinned['explain'][lang]['scene']
+        result=self.request(details=details);self.assertEqual(0,result.returncode,result.stderr)
+
+    @unittest.skipUnless((ROOT/'bin/lib/fm_walk.py').is_file(),'setup: fm_walk.py absent; bound helper records need the new helper')
+    def test_pin_and_existing_cards_are_byte_identical(self):
+        value=spec();value['id']='T-242'
+        for loc in value['explain'].values():loc.pop('scene')
+        pins=self.pin(value)
+        old=dict(id='D-924100',task='T-242',kind='merge',expected_head=self.base,details=self.details)
+        self.write('state/pending/D-924100.json',json.dumps(old)+'\n')
+        self.write('state/decisions/D-924101.json',json.dumps(dict(old,id='D-924101',chosen='A'))+'\n')
+        self.approval(text=self.walk_text())
+        history=pins+[self.root/'state/pending/D-924100.json',self.root/'state/decisions/D-924101.json']
+        history+=sorted(self.store().directory.glob('[0-9]*.json'))
+        before={path:path.read_bytes() for path in history}
+        self.assertEqual('valid',self.stored()['status'])
+        for path,data in before.items():
+            with self.subTest(path=path.name):self.assertEqual(data,path.read_bytes())
+        self.assertEqual(pins,sorted((self.root/'state/pins/T-242').glob('*.json')),'attach creates no pin')
+
+    def test_producer_eligibility_matrix(self):
+        self.commit_spec(self.legacy)
+        older=self.base
+        for field,value in [('base',None),('base',''),('patch',None),('patch','')]:
+            with self.subTest(defect=field,value=value,beside='nothing'):
+                self.clear_store();self.approval(**{field:value})
+                self.assertEqual(dict(status='absent',head=self.head,reason='verdict has no source binding'),self.stored())
+            with self.subTest(defect=field,value=value,beside='eligible older approval'):
+                self.clear_store();self.approval(head=older);self.approval(**{field:value})
+                self.assertEqual(dict(status='stale',reviewed_head=older),self.stored())
+        with self.subTest(case='unsigned history carrying a walk'):
+            self.clear_store();self.unsigned(self.head,self.walk_text())
+            self.assertEqual(dict(status='absent',head=self.head,reason='verdict has no source binding'),self.stored())
+        with self.subTest(case='unsigned history at the head beside an eligible older approval'):
+            self.clear_store();self.approval(head=older);self.unsigned(self.head,self.walk_text())
+            self.assertEqual(dict(status='stale',reviewed_head=older),self.stored())
+        with self.subTest(case='eligible current approval beside unsigned history carrying a walk'):
+            self.clear_store();self.unsigned(self.head,self.walk_text());self.approval()
+            self.assertEqual(dict(status='absent',head=self.head,reason='no walk'),self.stored())
 
     def test_external_walk_is_private_and_uses_target_diff(self):
         from fm_evidence import Store

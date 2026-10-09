@@ -11,21 +11,32 @@ import sys
 import fm_ste
 
 
-def fences(text):
-    """Recognize walk fences without treating nested fences as new blocks."""
-    found, active, body, walk = [], None, [], False
+def segments(text):
+    """One fence tokenizer for reading and projection: nested fences never open a walk.
+
+    Yields ('line', text) for every line outside a walk fence, including other
+    fences, and ('walk', body) for each walk fence opened at the top level.
+    """
+    active, body, walk = None, [], False
     for line in text.splitlines():
         match = re.match(r'^\s*(`{3,}|~{3,})(.*)$', line)
         if active:
-            if match and match[1][0] == active[0] and len(match[1]) >= len(active) and not match[2].strip():
-                if walk: found.append('\n'.join(body))
-                active, body, walk = None, [], False
-            elif walk:
-                body.append(line)
+            closing = match and match[1][0] == active[0] and len(match[1]) >= len(active) and not match[2].strip()
+            if walk:
+                if closing: yield 'walk', '\n'.join(body)
+                else: body.append(line)
+            else: yield 'line', line
+            if closing: active, body, walk = None, [], False
         elif match:
             active, walk = match[1], match[2].strip() == 'walk'
-    if active and walk: found.append('\n'.join(body))
-    return found
+            if not walk: yield 'line', line
+        else: yield 'line', line
+    if active and walk: yield 'walk', '\n'.join(body)
+
+
+def fences(text):
+    """Recognize walk fences without treating nested fences as new blocks."""
+    return [body for kind, body in segments(text) if kind == 'walk']
 
 
 def hunks(diff, repo='owner/repo', pr=0):
@@ -162,21 +173,15 @@ def attach(records, head, spec, root, repo='owner/repo', pr=0):
 
 
 def project_comment(text):
-    """Remove walk text even when its JSON is invalid."""
-    output, active, body = [], None, []
-    for line in text.splitlines():
-        match = re.match(r'^\s*(`{3,}|~{3,})\s*walk\s*$', line)
-        if active:
-            close = re.match(r'^\s*(' + re.escape(active[0]) + r'{'+str(len(active))+r',})\s*$', line)
-            if close:
-                try: count = sum(len(i['key']) for i in json.loads('\n'.join(body))['intents'])
-                except (ValueError, TypeError, KeyError): count = 0
-                output.append('Code walk retained with the evidence (%s key blocks).' % count)
-                active, body = None, []
-            else: body.append(line)
-        elif match: active = match[1]
-        else: output.append(line)
-    if active: output.append('Code walk retained with the evidence (0 key blocks).')
+    """Remove walk text even when its JSON is invalid; keep every other line."""
+    output = []
+    for kind, body in segments(text):
+        if kind == 'line':
+            output.append(body)
+            continue
+        try: count = sum(len(i['key']) for i in json.loads(body)['intents'])
+        except (ValueError, TypeError, KeyError): count = 0
+        output.append('Code walk retained with the evidence (%s key blocks).' % count)
     return '\n'.join(output)
 
 

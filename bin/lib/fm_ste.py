@@ -250,7 +250,7 @@ def _scene(details):
                     fail(field + '.state', 'invalid state')
                 if value['state'] == 'same':
                     if 'change' in value: fail(field + '.change', 'forbidden on same')
-                elif value.get('change') not in change_ids:
+                elif not isinstance(value.get('change'), str) or value['change'] not in change_ids:
                     fail(field + '.change', 'required change id')
                 if 'label' in value: prose(value['label'], field + '.label', True)
                 if field == 'nodes':
@@ -260,7 +260,8 @@ def _scene(details):
         by_edge = {e['id']: e for e in edges}
         for edge in edges:
             for endpoint in ('from', 'to'):
-                if edge[endpoint] not in by_node: fail('edges.' + endpoint, 'unknown node')
+                # Type before membership: an unhashable reference is a field error.
+                if not isinstance(edge[endpoint], str) or edge[endpoint] not in by_node: fail('edges.' + endpoint, 'unknown node')
             states = {by_node[edge[k]]['state'] for k in ('from', 'to')}
             if {'gone', 'new'} <= states: fail('edges.state', 'cannot join gone and new nodes')
             for state in ('gone', 'new'):

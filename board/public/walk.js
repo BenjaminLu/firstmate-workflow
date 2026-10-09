@@ -46,14 +46,27 @@
           const edges = scene.edges.map(edge => {
             const a=positions.get(edge.from), b=positions.get(edge.to);
             if (!a || !b) throw Error('layout');
-            const across = a.x !== b.x;
-            const x1 = across ? a.x + (b.x > a.x ? 190 : 0) : a.x + 95;
-            const y1 = across ? a.y + 25 : a.y + 50;
-            const x2 = across ? b.x + (b.x > a.x ? 0 : 190) : b.x + 95;
-            const y2 = across ? b.y + 25 : b.y;
-            const d = across ? `M${x1},${y1} H${(x1+x2)/2} V${y2} H${x2}` : `M${x1},${y1} V${(y1+y2)/2} H${x2} V${y2}`;
+            // Every segment runs in a lane gap, a row gap or along a node side,
+            // never through a node rectangle (nodes 190x50, lanes 240, rows 100).
+            let d, mx, my;
+            if (a.x !== b.x) {
+              const right = b.x > a.x, x1 = a.x + (right ? 190 : 0), y1 = a.y + 25, x2 = b.x + (right ? 0 : 190), y2 = b.y + 25;
+              if (Math.abs(b.x - a.x) === 240) { d = `M${x1},${y1} H${(x1+x2)/2} V${y2} H${x2}`; mx = (x1+x2)/2; my = (y1+y2)/2; }
+              else {
+                const out = x1 + (right ? 25 : -25), into = x2 + (right ? -25 : 25), row = a.y + 75;
+                d = `M${x1},${y1} H${out} V${row} H${into} V${y2} H${x2}`; mx = (out+into)/2; my = row;
+              }
+            } else if (a === b) {
+              d = `M${a.x+190},${a.y+15} h20 v20 h-20`; mx = a.x + 210; my = a.y + 25;
+            } else if (b.y === a.y + 100) {
+              const x1 = a.x + 95, y1 = a.y + 50, y2 = b.y;
+              d = `M${x1},${y1} V${(y1+y2)/2} H${x1} V${y2}`; mx = x1; my = (y1+y2)/2;
+            } else {
+              // Upward, or downward past another node: around the lane's right side.
+              d = `M${a.x+190},${a.y+25} H${a.x+210} V${b.y+25} H${b.x+190}`; mx = a.x + 210; my = (a.y+b.y)/2 + 25;
+            }
             paths.set(edge.id, d);
-            return `<g data-scene-id="${esc(edge.id)}" data-state="${esc(edge.state)}" data-change="${esc(edge.change || '')}" class="scene-edge"><path d="${d}"/>${edge.label ? `<text x="${(x1+x2)/2+5}" y="${(y1+y2)/2-5}">${esc(words(edge.label))}</text>` : ''}${edge.state === 'gone' ? `<path class="scene-strike" d="M${(x1+x2)/2-7},${(y1+y2)/2-7} l14,14"/>` : ''}</g>`;
+            return `<g data-scene-id="${esc(edge.id)}" data-state="${esc(edge.state)}" data-change="${esc(edge.change || '')}" class="scene-edge"><path d="${d}"/>${edge.label ? `<text x="${mx+5}" y="${my-5}">${esc(words(edge.label))}</text>` : ''}${edge.state === 'gone' ? `<path class="scene-strike" d="M${mx-7},${my-7} l14,14"/>` : ''}</g>`;
           }).join('');
           const nodes = scene.nodes.map(node => {
             const p=positions.get(node.id);
@@ -166,15 +179,21 @@
         host.querySelector('[data-code-tab]')?.setAttribute('aria-selected',String(state.opened));
         host.querySelector('[data-check-tab]')?.setAttribute('aria-selected',String(!state.opened));
       }
-      function highlight(n, changes, badgeJump = null) {
-        state.highlight=changes;paint();
+      // The banner's inputs live in the card state, so a remount (an update or
+      // a locale switch) rebuilds it in the current locale with the same target.
+      function showBanner() {
         const banner=host.querySelector('.scene-banner');
-        if (banner) {
-          banner.hidden=false;
-          banner.innerHTML=`<button data-show-all>${esc(label.all)}</button>`+(badgeJump === false ? `<button disabled>${esc(label.its)}</button>` : keyFor(n).length ? `<button data-its-code>${esc(label.its)}</button>` : !valid ? `<button disabled>${esc(label.its)}</button><span>${esc(label.absent)}</span>` : '');
-          banner.querySelector('[data-show-all]').onclick=()=>{state.highlight=[];banner.hidden=true;paint();};
-          const jump=banner.querySelector('[data-its-code]');if(jump)jump.onclick=()=>openIntent(n);
-        } else if(keyFor(n).length)openIntent(n);
+        if (!banner || !state.banner) return false;
+        const {intent:n, badgeJump}=state.banner;
+        banner.hidden=false;
+        banner.innerHTML=`<button data-show-all>${esc(label.all)}</button>`+(badgeJump === false ? `<button disabled>${esc(label.its)}</button>` : keyFor(n).length ? `<button data-its-code>${esc(label.its)}</button>` : !valid ? `<button disabled>${esc(label.its)}</button><span>${esc(label.absent)}</span>` : '');
+        banner.querySelector('[data-show-all]').onclick=()=>{state.highlight=[];state.banner=null;banner.hidden=true;paint();};
+        const jump=banner.querySelector('[data-its-code]');if(jump)jump.onclick=()=>openIntent(n);
+        return true;
+      }
+      function highlight(n, changes, badgeJump = null) {
+        state.highlight=changes;state.banner={intent:n,badgeJump};paint();
+        if(!showBanner() && keyFor(n).length)openIntent(n);
         if(!state.playing)play();
       }
       card.querySelectorAll('.intent-row').forEach((row,i) => {
@@ -207,6 +226,7 @@
         if(e.code==='Space'){e.preventDefault();play();}
       });
       showBlocks();tabs();paint();
+      if(state.highlight.length)showBanner();
       if(reduced()){state.phase=1;state.playing=false;paint();}
       // No timer remains once its DOM owner is replaced.
       if(animation && !reduced() && (fresh || state.playing)){state.playing=false;play();}

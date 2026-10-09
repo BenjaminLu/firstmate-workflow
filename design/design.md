@@ -1688,8 +1688,13 @@ instead yields stale. Missing review/approval/binding/fence is absent; malformed
 walks and unavailable diffs are invalid. Missing helpers are unavailable. All
 walk failures remain presentation only. Review emits one bilingual category-only
 crew_status immediately after its verdict status; public comments replace the
-walk fence with `Code walk retained with the evidence (N key blocks).` No note
-text, path or excerpt enters events or wakes.
+walk fence with `Code walk retained with the evidence (N key blocks).` Reading
+and projection share one fence rule: only a top-level fence with info string
+`walk` is a walk, so a walk quoted inside another fence is left as prose. If the
+helper is unreadable or fails, fm-review drops each walk fence by the same rule
+and posts `Code walk retained with the evidence.` in its place; the prose and
+markers are always kept and walk text is never posted. No note text, path or
+excerpt enters events or wakes.
 
 ## 7. The standing list
 
@@ -2895,13 +2900,16 @@ any 3D follow-up requires its own approved scope.
 T-244 cards remain evidence first. The reading order is intent key points,
 How it works, Walk the diff, then the decision bar. Optional walk.js is loaded
 only for a scene or walk. Browser layout uses lane columns, array-ordered nodes
-and right-angle edges. Playback runs before → change → after, with token paths,
+and right-angle edges that never cross a node: adjacent lanes and the next node
+down join directly, while self-loops, upward edges and longer jumps route through
+lane and row gaps. Playback runs before → change → after, with token paths,
 play/pause, a scrubber and phase buttons. Reduced motion uses a static change
 view. Locale changes redraw translated labels. Layout failure uses the legacy
 before/after fallback; authored diagrams remain unchanged.
 
 Intent rows highlight their scene changes and offer a jump to the first key
-block. Show all clears highlights; change badges jump only when mapped blocks
+block. A highlight and its banner survive board updates and locale switches
+until Show all clears them; change badges jump only when mapped blocks
 exist. Intent check remains the default tab. Walk the code stays closed until
 opened, with intent tabs and Other changes listing remaining files and counts,
 without notes or a total block count. Arrow keys move between blocks and Space
@@ -2913,7 +2921,9 @@ Stale walks show the reviewed short sha and no notes or steps. Absent/invalid
 walks show no code walk for this head with a category. Scene-only cards retain
 the animation; walk-only cards retain the fallback and intent jumps. Intents
 without key blocks and changes without mapped blocks cannot jump. Neither field
-preserves T-242 rendering. Task details show only the spec scene. All authored
+preserves T-242 rendering. Task details take the scene from the spec explain,
+even when a card supplies the explanation text, and use a card scene only when
+the spec has none. All authored
 labels, notes, rows and paths are escaped. Door A still needs only reviewed
 intents and the correct comprehension answer. Existing records, pins and cards
 are never rewritten, and external content stays inside private card details.

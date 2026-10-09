@@ -135,6 +135,87 @@ test('task details animate the spec without a code walk',async({page})=>{
 });
 
 
+function specExplain(source:any) {
+  const fields=['intent','why','scope_in','scope_out','done','notes','before_nodes','after_nodes','scene'];
+  return Object.fromEntries(['en','zh-TW'].map(lang=>[lang,Object.fromEntries(fields.filter(k=>k in source.details[lang]).map(k=>[k,source.details[lang][k]]))]));
+}
+
+for (const variant of ['older card without a scene','card with a different scene'] as const) test(`task details take the scene from the spec over an ${variant}`,async({page})=>{
+  const root=makeRoot([],false);
+  writeTasks(root,[{id:'T-211',title:'Record walk',depends_on:[],scope:[],acceptance:[],explain:specExplain(sceneWalkCard())}]);
+  const card=sceneWalkCard(variant==='older card without a scene' ? 'walk' : 'both');
+  if (variant==='card with a different scene') for (const locale of ['en','zh-TW']) card.details[locale].scene.nodes[2].label=locale==='en' ? 'Card path' : '卡片路徑';
+  writeFileSync(join(root,'state/decisions/D-9242.json'),JSON.stringify({...card,chosen:'A',ts:'2026-10-01T00:00:00Z'}));
+  const board=await startBoard(root);
+  try {
+    await page.goto(board.url+'/?lang=en');await showFleet(page);
+    await page.locator('.card[data-task="T-211"]').first().click();
+    const panel=page.locator('#taskDetail');
+    await expect(panel.locator('.scene-view svg')).toContainText('Saved path');
+    await expect(panel.locator('.scene-view svg')).not.toContainText('Card path');
+    await expect(panel.locator('[data-code-tab]')).toHaveCount(0);
+  } finally {await stopBoard(board);}
+});
+
+
+test('self-loop and upward edges route outside every node and carry the token',async({page})=>{
+  const root=makeRoot([],false),source=sceneWalkCard();
+  for (const locale of ['en','zh-TW']) {
+    const scene=source.details[locale].scene;
+    scene.nodes.push({id:'retry',label:locale==='en' ? 'Retry' : '重試',lane:1,kind:'step',state:'same'});
+    scene.edges.push({id:'loop',from:'input',to:'input',state:'same'},
+      {id:'back',from:'retry',to:'saved',state:'new',change:'c1'},
+      {id:'skip',from:'retry',to:'old',state:'gone',change:'c1'});
+    scene.tokens.after=['loop','saved-path'];
+  }
+  writeTasks(root,[{id:'T-211',title:'Record walk',depends_on:[]}]);
+  writeFileSync(join(root,'state/pending/D-9242.json'),JSON.stringify(source));
+  const board=await startBoard(root);
+  try {
+    await page.goto(board.url+'/?lang=en');const card=page.locator('#card-D-9242');
+    await expect(card.locator('[data-scene-id="loop"] path').first()).toBeAttached();
+    const inside=()=>card.locator('.scene-view svg').evaluate((svg:SVGSVGElement)=>{
+      const rects=[...svg.querySelectorAll('.scene-node')].map(g=>{const m=/translate\(([-\d.]+),([-\d.]+)\)/.exec(g.getAttribute('transform')||'')!;return {id:g.getAttribute('data-scene-id'),x:Number(m[1]),y:Number(m[2])};});
+      const hit=(x:number,y:number)=>rects.filter(r=>x>r.x+1 && x<r.x+189 && y>r.y+1 && y<r.y+49).map(r=>r.id);
+      const edges:Record<string,string[]>={};
+      for (const g of svg.querySelectorAll('.scene-edge')) {
+        const path=g.querySelector('path') as SVGPathElement, length=path.getTotalLength(), found=new Set<string>();
+        for (let i=0;i<=40;i++){const p=path.getPointAtLength(length*i/40);for(const id of hit(p.x,p.y))found.add(id);}
+        edges[g.getAttribute('data-scene-id')!]=[...found];
+      }
+      const token=svg.querySelector('.scene-token') as SVGCircleElement;
+      return {edges,token:hit(Number(token.getAttribute('cx')),Number(token.getAttribute('cy'))),shown:token.style.display!=='none'};
+    });
+    for (const [id,nodes] of Object.entries((await inside()).edges)) expect(nodes,`edge ${id} passes through a node`).toEqual([]);
+    await card.locator('[data-scrub]').evaluate((el: HTMLInputElement)=>{el.value='1.2';el.dispatchEvent(new Event('input',{bubbles:true}));});
+    const playback=await inside();
+    expect(playback.shown).toBe(true);
+    expect(playback.token,'the token on the loop is visible outside its node').toEqual([]);
+  } finally {await stopBoard(board);}
+});
+
+
+test('a highlighted intent keeps its banner across a state update and a locale switch',async({page})=>{
+  const {board,card}=await setup(page);
+  try {
+    await card.locator('.walk-intent-link').first().click();
+    await expect(card.locator('.scene-banner [data-show-all]')).toBeVisible();
+    await expect(card.locator('.scene-banner [data-its-code]')).toHaveText('Walk its code');
+    await page.evaluate(() => fetch('/api/state').then(r => r.json()).then((window as any).render));
+    await expect(card.locator('.scene-banner [data-show-all]')).toBeVisible();
+    await expect(card.locator('.scene-banner [data-its-code]')).toBeVisible();
+    await page.locator('#langs button').filter({hasText:'繁'}).click();
+    await expect(card.locator('.scene-banner [data-show-all]')).toHaveText('顯示全部');
+    await expect(card.locator('.scene-banner [data-its-code]')).toHaveText('導覽此意圖的程式碼');
+    await card.locator('.scene-banner [data-its-code]').click();
+    await expect(card.locator('[data-intent-tab="1"]')).toHaveAttribute('aria-selected','true');
+    await card.locator('.scene-banner [data-show-all]').click();
+    await expect(card.locator('.scene-banner')).toBeHidden();
+    await expect(card.locator('.scene-dim')).toHaveCount(0);
+  } finally {await stopBoard(board);}
+});
+
+
 test('unmapped change highlights without a code jump',async({page})=>{
   const root=makeRoot([],false),source=sceneWalkCard();
   for(const locale of ['en','zh-TW']) source.details[locale].scene.changes.push({id:'c2',text:locale==='en'?'The output stays.':'輸出保留。',intents:[2]});

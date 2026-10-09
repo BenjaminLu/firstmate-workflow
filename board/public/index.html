@@ -1130,7 +1130,10 @@ function drawTaskDetail() {
   const authored = source ? { ...source } : task.explain ? {
     id: openTaskKey, details: task.explain, ste: task.explain_ste, diagram: task.diagram, diagram_name: task.diagram_name,
   } : null;
-  const content = authored && localized(authored);
+  // The card keeps the explanation text; the spec's scene is the authority for
+  // the animation, and a card scene is shown only when the spec has none.
+  const specScene = localized({details: task.explain})?.scene;
+  const content = authored && localized(authored) && (specScene ? {...localized(authored), scene: specScene} : localized(authored));
   const steOk = source ? source.ste_ok : task.explain_ste?.ok;
   const section = (key, html) => `<section data-detail-section="${key}"><h4>${esc(t(key))}</h4>${html}</section>`;
   const list = items => `<ul>${items.map(item => `<li>${esc(item)}</li>`).join('')}</ul>`;
