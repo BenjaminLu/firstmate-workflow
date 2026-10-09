@@ -1,0 +1,7 @@
+default_project: firstmate-workflow
+projects:
+  firstmate-workflow:
+    repo: .
+    github: BenjaminLu/firstmate-workflow
+    base: main
+    required_check: ci
