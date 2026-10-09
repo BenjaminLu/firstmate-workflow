@@ -55,6 +55,27 @@ print('fixed usrmerge alias behavioral assertions passed')
 PYALIASES
 assert_eq "0" "$?" "Linux fixed usrmerge alias admission and denial matrix"
 
+# Linux supplies device and process mounts itself; host read binds must not
+# replace them with nodev mounts. Prefix siblings remain ordinary reads.
+python3 - "$ROOT" <<'PYMOUNTS'
+import sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1] + '/bin/lib')
+import fm_sandbox_policy as policy
+reads = ['/dev', '/dev/null', '/dev/pts/0', '/proc', '/proc/self/status',
+         '/device-tools', '/process-tools', '/usr']
+with patch.object(policy, 'pinned_of', return_value=None), \
+     patch.object(policy, 'own_git', return_value=None):
+    argv = policy.linux({'never_read': [], 'repo_config': []},
+                        ['/checkout', '/round'], reads, {}, '').splitlines()
+assert argv.count('--dev') == 1 and argv[argv.index('--dev') + 1] == '/dev'
+assert argv.count('--proc') == 1 and argv[argv.index('--proc') + 1] == '/proc'
+binds = [(argv[i+1], argv[i+2]) for i, arg in enumerate(argv) if arg == '--ro-bind-try']
+assert binds == [(r, r) for r in ['/device-tools', '/process-tools', '/usr']], \
+    'native-device-process-mounts: no host read bind may replace /dev or /proc or their descendants'
+PYMOUNTS
+assert_eq "0" "$?" "Linux native device and process mounts survive toolchain reads"
+
 # --- fm_policy: one policy per role ------------------------------------------
 pol worker 'vendor: mock
 '

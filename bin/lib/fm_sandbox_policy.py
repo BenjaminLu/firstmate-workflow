@@ -317,6 +317,10 @@ def linux(p, roots, reads, own, sock):
          '--unshare-net', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp']
     a += linux_toolchain_aliases(reads, p['never_read'])
     for r in reads:
+        # Keep bwrap's native mounts: host read binds are nodev and would
+        # replace working devices (including /dev/null) or process metadata.
+        if any(r == mount or r.startswith(mount + '/') for mount in ('/dev', '/proc')):
+            continue
         a += ['--ro-bind-try', r, r]
     for r in own.get('auth', []):
         a += ['--ro-bind-try', r, r]

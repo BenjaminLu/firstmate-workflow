@@ -3972,6 +3972,12 @@ Non-usrmerge directories retain the existing canonical-bind behavior. Registry
 canonicalization and policy schema remain unchanged; old frozen snapshots keep
 their original behavior and new snapshots hash the changed ordinary library.
 
+Linux also retains bubblewrap's native `--dev /dev` and `--proc /proc`
+mounts: canonical read binds equal to or beneath `/dev` or `/proc` are
+omitted so nodev host binds cannot replace them. Grants, denial ordering,
+usrmerge alias rules and Darwin output remain unchanged; later masking still
+applies. This narrows read binds without granting another path.
+
 A worker used to inherit the operator's personal CLI settings: on the
 captain's machine that allowed gh-axi, Herdr, a browser, reading any path
 and editing `~/.claude/skills`, and refused bun, npm, python and chmod.

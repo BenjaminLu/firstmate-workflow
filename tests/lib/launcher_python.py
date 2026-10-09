@@ -241,11 +241,25 @@ unknown="unterminated shell word
                                                             for x in (alias, target)
                                                             for n in document['never_read'])):
                                             alias_args.extend(['--symlink', target, alias])
+                                    vector = expected.decode().splitlines()
                                     if alias_args:
-                                        vector = expected.decode().splitlines()
                                         offset = vector.index('--ro-bind-try')
                                         vector[offset:offset] = alias_args
-                                        expected = ('\n'.join(vector) + '\n').encode()
+                                    # Remove only host read binds covered by bwrap's
+                                    # native device/process mounts; preserve all other
+                                    # operations and their exact order.
+                                    adjusted = []
+                                    index = 0
+                                    while index < len(vector):
+                                        if (vector[index] == '--ro-bind-try'
+                                                and vector[index + 1] == vector[index + 2]
+                                                and any(below(vector[index + 1], mount)
+                                                        for mount in ('/dev', '/proc'))):
+                                            index += 3
+                                            continue
+                                        adjusted.append(vector[index])
+                                        index += 1
+                                    expected = ('\n'.join(adjusted) + '\n').encode()
                                 if role == 'worker' and platform == 'darwin' and listeners == 'unknown':
                                     sub = lambda paths: ' '.join('(subpath "' + str(p) + '")' for p in paths)
                                     deny = '(deny file-read* file-write* ' + sub([home]) + ')\n'
