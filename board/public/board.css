@@ -126,3 +126,15 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 @media(min-width:1100px){
   #crewSheet .roster :is(.rhead,li.rrow){grid-template-columns:8px minmax(0,1fr) minmax(0,.7fr) minmax(min-content,1.6fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,.7fr) minmax(0,.5fr) minmax(0,2.6fr)}
 }
+
+.change-walk > ol { padding: 0; list-style: none; }
+.change-intent { margin-block: 1rem; }
+.change-point { margin-block: .75rem; padding-inline-start: 1rem; border-inline-start: 2px solid var(--kelp); }
+.change-point pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.change-code summary { cursor: pointer; }
+.intent-reviewed { display: flex; align-items: center; gap: .5rem; }
+.door-badge { display: inline-block; padding: .2rem .6rem; border-radius: .3rem; }
+.door-badge.one-way { color: var(--flag-red); border: 1px solid var(--flag-red); }
+.door-badge.two-way { color: var(--kelp); border: 1px solid var(--kelp); }
+.door-check button { margin: .3rem; }
+.door-check button[aria-pressed="true"] { outline: 2px solid var(--kelp); }

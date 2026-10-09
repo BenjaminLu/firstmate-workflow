@@ -633,6 +633,122 @@ assert_matches "$_bind_src" 'hostname:[[:space:]]*"127\.0\.0\.1"' \
 assert_lacks "$_bind_src" '0.0.0.0' \
   "no code binds 0.0.0.0"
 
+# T-242: confirmation validates before writes, and a check never records.
+mkdir -p "$d/state/pending"
+cp -R "$ROOT/i18n" "$d/"
+jq -n '{id:"D-9242",task:"T-B",kind:"merge",pr:9242,check_answer:0,
+ details:{en:{intent:[{text:"Read this"},{text:"Read that"}],door:{kind:"one-way"},check:{options:["Keep","Lose"],why:"Read each intent and choose Keep."}},
+ "zh-TW":{check:{why:"確認每條意圖並選擇保留。"}}},effect:{A:"hold"}}' > "$d/door-template"
+# The explicit effect is in details, as in a real card. A is nonmerge here.
+jq '.details.effect={A:"hold",B:"merge"} | del(.effect)' "$d/door-template" > "$d/state/pending/D-9242.json"
+door_post() {
+  wcurl "$PORT" -s -o "$d/door-result" -w '%{http_code}' -H 'Content-Type: application/json' \
+    -d "$2" "http://127.0.0.1:$PORT$1"
+}
+assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"id":"D-9242"}' "http://127.0.0.1:$PORT/decisions/check-door")" 'door check uses captain guard'
+door_events_before="$(cat "$d/state/events.jsonl")"
+for origin in '' https://evil.test; do
+  door_body='{"id":"D-9242","reviewed_intents":[1,2],"check_answer":0}'
+  assert_eq 403 "$(curl -s -o "$d/door-result" -w '%{http_code}' -H "Authorization: Bearer $(secret_of "$PORT")" -H "Origin: $origin" -H 'Content-Type: application/json' -d "$door_body" "http://127.0.0.1:$PORT/decisions/check-door")" 'check rejects absent or foreign origin'
+  assert_eq writeOrigin "$(jq -r .code "$d/door-result")" 'check shares origin guard'
+done
+assert_eq 403 "$(wcurl "$PORT" -s -o "$d/door-result" -w '%{http_code}' -H 'Content-Type: text/plain' -d '{}' "http://127.0.0.1:$PORT/decisions/check-door")" 'check shares JSON guard'
+assert_eq writeJson "$(jq -r .code "$d/door-result")" 'check JSON refusal code'
+for malformed in '{' null '[]' '{}' '{"id":true}' '{"id":"../D-9242"}'; do
+  assert_eq 400 "$(door_post /decisions/check-door "$malformed")" 'malformed check envelope'
+  assert_eq doorUnconfirmed "$(jq -r .code "$d/door-result")" 'malformed check envelope is JSON'
+done
+door_body='{"id":"D-999242","reviewed_intents":[1,2],"check_answer":0}'
+assert_eq 404 "$(door_post /decisions/check-door "$door_body")" 'unknown check id'
+assert_eq decisionMissing "$(jq -r .code "$d/door-result")" 'unknown check id code'
+for route in /decisions/check-door /decisions; do
+  suffix=''; [ "$route" = /decisions ] && suffix=',"chosen":"B"'
+  for fields in '' ',"reviewed_intents":[1,2]' ',"reviewed_intents":[1,1],"check_answer":0' ',"reviewed_intents":[true],"check_answer":0' ',"reviewed_intents":[3],"check_answer":0' ',"reviewed_intents":[1.5],"check_answer":0' ',"reviewed_intents":null,"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":true' ',"reviewed_intents":[1,2],"check_answer":2' ',"reviewed_intents":[1,2],"check_answer":0,"locale":"xx"' ',"reviewed_intents":{},"check_answer":0' ',"reviewed_intents":[0],"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":null' ',"reviewed_intents":[1,2],"check_answer":1.5' ',"reviewed_intents":[1,2],"check_answer":-1' ',"reviewed_intents":[1,2],"check_answer":0,"locale":null' ',"reviewed_intents":[1,2],"check_answer":"0"' ',"reviewed_intents":[1,2],"check_answer":0,"locale":true' ',"reviewed_intents":[1,2],"check_answer":0,"locale":[]' ',"reviewed_intents":["1",2],"check_answer":0' ',"reviewed_intents":true,"check_answer":0'; do
+    door_body="{\"id\":\"D-9242\"$suffix$fields}"
+    assert_eq 400 "$(door_post "$route" "$door_body")" "$route malformed confirmation: $fields"
+    assert_eq doorUnconfirmed "$(jq -r .code "$d/door-result")" 'malformed door refusal code'
+  done
+  for fields in ',"reviewed_intents":[1],"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":1'; do
+    door_body="{\"id\":\"D-9242\"$suffix$fields}"
+    assert_eq 409 "$(door_post "$route" "$door_body")" "$route incomplete or wrong confirmation"
+  done
+  for stored in missing null true false '"0"' 1.5 -1 9; do
+    if [ "$stored" = missing ]; then jq 'del(.check_answer)' "$d/door-template" > "$d/state/pending/D-9242.json"
+    else jq --argjson answer "$stored" '.check_answer=$answer' "$d/door-template" > "$d/state/pending/D-9242.json"; fi
+    jq '.details.effect={A:"hold",B:"merge"}' "$d/state/pending/D-9242.json" > "$d/fixed-door"
+    mv "$d/fixed-door" "$d/state/pending/D-9242.json"
+    door_body="{\"id\":\"D-9242\"$suffix,\"reviewed_intents\":[1,2],\"check_answer\":0}"
+    assert_eq 409 "$(door_post "$route" "$door_body")" "$route invalid stored answer: $stored"
+    door_body="{\"id\":\"D-9242\"$suffix,\"reviewed_intents\":[1,2]}"
+    assert_eq 400 "$(door_post "$route" "$door_body")" "$route omitted submitted answer with stored $stored"
+  done
+  jq '.details.effect={A:"hold",B:"merge"} | del(.effect)' "$d/door-template" > "$d/state/pending/D-9242.json"
+done
+assert_ok "[ ! -f '$d/state/decisions/D-9242.json' ]" 'door refusals write no decision'
+door_body='{"id":"D-9242","reviewed_intents":[2,1],"check_answer":0}'
+assert_eq 200 "$(door_post /decisions/check-door "$door_body")" 'reordered complete check succeeds'
+assert_eq '{"ok":true,"id":"D-9242"}' "$(jq -c . "$d/door-result")" 'check exposes no answer'
+assert_ok "[ ! -f '$d/state/decisions/D-9242.json' ]" 'successful check records nothing'
+assert_eq "$door_events_before" "$(cat "$d/state/events.jsonl")" 'checks and refusals emit no event'
+door_stream="$(curl -s --max-time 1 "http://127.0.0.1:$PORT/events" || true)"
+assert_contains "$door_stream" 'D-9242' 'SSE snapshot includes pending door'
+assert_lacks "$door_stream" check_answer 'SSE strips stored answer'
+assert_lacks "$door_stream" door_confirmation_fingerprint 'SSE strips fingerprint'
+assert_lacks "$(curl -sf "http://127.0.0.1:$PORT/api/state")" check_answer 'pending state strips answer'
+for locale in en zh-TW zh-CN; do
+  door_body="{\"id\":\"D-9242\",\"reviewed_intents\":[1,2],\"check_answer\":1,\"locale\":\"$locale\"}"
+  assert_eq 409 "$(door_post /decisions/check-door "$door_body")" "$locale wrong answer"
+  case "$locale" in en) why='Read each intent and choose Keep.';; zh-TW) why='確認每條意圖並選擇保留。';; zh-CN) why='确认每条意图并选择保留。';; esac
+  assert_eq "$why" "$(jq -r .why "$d/door-result")" "$locale feedback"
+done
+door_body='{"id":"D-9242","reviewed_intents":[1,2],"check_answer":1}'
+assert_eq 409 "$(door_post /decisions/check-door "$door_body")" 'omitted locale uses configured English default'
+assert_eq 'Read each intent and choose Keep.' "$(jq -r .why "$d/door-result")" 'default locale feedback'
+jq '.id="D-9244" | .details.effect={A:"hold",B:"merge"}' "$d/door-template" > "$d/state/pending/D-9244.json"
+door_body='{"id":"D-9244","chosen":"A"}'
+assert_eq 200 "$(door_post /decisions "$door_body")" 'A with nonmerge effect needs no confirmation'
+assert_eq false "$(jq 'has("check_ok")' "$d/state/decisions/D-9244.json")" 'nonmerge answer has no door confirmation'
+jq '.id="D-9245" | .details.effect={A:"hold",B:"merge"} | .details.en.questions=[{kind:"fact",text:"The scope is correct."}]' "$d/door-template" > "$d/state/pending/D-9245.json"
+door_body='{"id":"D-9245","chosen":"B","answers":[{"index":0,"ok":false,"text":"Change the scope."}]}'
+assert_eq 200 "$(door_post /decisions "$door_body")" 'No changes a merge choice without confirmation'
+assert_eq change "$(jq -r .chosen "$d/state/decisions/D-9245.json")" 'No records change'
+assert_eq false "$(jq 'has("check_ok")' "$d/state/decisions/D-9245.json")" 'No answer has no confirmation fingerprint'
+# Successful merge-effect confirmation is private and idempotent after pending removal.
+cat > "$d/bin/fm-merge.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'merge\n' >> "$FM_ROOT/door-effects"
+SH
+chmod +x "$d/bin/fm-merge.sh"
+door_body='{"id":"D-9242","chosen":"B","reviewed_intents":[2,1],"check_answer":0}'
+assert_eq 200 "$(door_post /decisions "$door_body")" 'non-A merge effect requires and records confirmation'
+assert_eq '[1,2]' "$(jq -c .reviewed_intents "$d/state/decisions/D-9242.json")" 'record normalizes reviewed intents'
+assert_eq true "$(jq .check_ok "$d/state/decisions/D-9242.json")" 'record retains successful check'
+assert_eq 64 "$(jq '.door_confirmation_fingerprint|length' "$d/state/decisions/D-9242.json")" 'record has private fingerprint'
+assert_lacks "$(cat "$d/door-result")" door_confirmation_fingerprint 'public final omits fingerprint'
+door_body='{"id":"D-9242","chosen":"B","reviewed_intents":[1,2],"check_answer":0}'
+assert_eq 200 "$(door_post /decisions "$door_body")" 'reordered identical retry succeeds'
+assert_eq true "$(jq .already "$d/door-result")" 'retry returns already success'
+rm -f "$d/state/pending/D-9242.json"
+for reviewed in '[1,2]' '[2,1]'; do
+  door_body="{\"id\":\"D-9242\",\"chosen\":\"B\",\"reviewed_intents\":$reviewed,\"check_answer\":0}"
+  assert_eq 200 "$(door_post /decisions "$door_body")" 'identical and reordered retries need no pending record'
+  assert_eq true "$(jq .already "$d/door-result")" 'no-pending retry is already success'
+  assert_lacks "$(cat "$d/door-result")" door_confirmation_fingerprint 'no-pending retry strips fingerprint'
+done
+for fields in '' ',"reviewed_intents":[1],"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":1' ',"reviewed_intents":[1,1],"check_answer":0' ',"reviewed_intents":[1,2],"check_answer":true'; do
+  door_body="{\"id\":\"D-9242\",\"chosen\":\"B\"$fields}"
+  assert_eq 409 "$(door_post /decisions "$door_body")" 'changed or absent replay confirmation refuses'
+  assert_eq doorUnconfirmed "$(jq -r .code "$d/door-result")" 'replay has door refusal code'
+done
+door_body='{"id":"D-9242","reviewed_intents":[1,2],"check_answer":0}'
+assert_eq 409 "$(door_post /decisions/check-door "$door_body")" 'check on recorded id refuses'
+assert_eq decisionAlreadyRecorded "$(jq -r .code "$d/door-result")" 'recorded check refusal code'
+assert_lacks "$(curl -sf "http://127.0.0.1:$PORT/api/state")" door_confirmation_fingerprint 'state omits private fingerprint'
+assert_lacks "$(curl -sf "http://127.0.0.1:$PORT/api/task?id=T-B")" check_answer 'task detail omits private answer'
+assert_lacks "$(curl -sf "http://127.0.0.1:$PORT/api/task?id=T-B")" door_confirmation_fingerprint 'task detail omits private fingerprint'
+assert_ok "wait_for 10 test -f '$d/door-effects'" 'merge helper runs once'
+assert_eq 1 "$(wc -l < "$d/door-effects" | tr -d ' ')" 'retries never repeat the merge effect'
+
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true
 

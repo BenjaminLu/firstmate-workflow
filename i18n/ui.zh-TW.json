@@ -271,5 +271,16 @@
   "detailCurrentHead": "目前版本",
   "detailResolved": "已解決",
   "detailUnresolved": "未解決",
-  "detailNoCitedLine": "未引用行號"
+  "detailNoCitedLine": "未引用行號",
+  "doorOneWay": "單向門",
+  "doorTwoWay": "雙向門",
+  "doorRollback": "回復方式",
+  "showCode": "顯示程式碼",
+  "intentReviewed": "我已確認這條意圖",
+  "specAcceptance": "Spec 驗收條目",
+  "codeMore": "Pull request 還有 {n} 個修改",
+  "doorConfirmed": "每條意圖及答案都已確認。",
+  "doorUnconfirmed": "請在主卡片確認每條意圖並回答確認題。",
+  "decisionMissing": "這個決策已不在待確認列表。",
+  "decisionAlreadyRecorded": "這個決策已記錄。"
 }

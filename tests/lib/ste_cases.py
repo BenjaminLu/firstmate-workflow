@@ -21,6 +21,17 @@ def card():
     return result
 
 
+def walk_card(kind='one-way'):
+    d = card()
+    for lang, loc in d.items():
+        text = 'The check passes.' if lang == 'en' else '檢查通過。'
+        loc['change_points'] = [dict(intent=1, how=text)]
+        loc['door'] = dict(kind=kind, reason=text, rollback=text)
+        if kind == 'one-way':
+            loc['check'] = dict(q=text, options=[text, 'No.'], why=text, about=dict(intent=1))
+    return d
+
+
 def fixture(mode):
     d = card()
     if mode.startswith('merge-'):
@@ -142,6 +153,41 @@ def observations(module):
             emit(name, True)
         else:
             emit(name, False)
+
+    for kind in ('one-way', 'two-way'):
+        emit('valid change points ' + kind, module.check_details(walk_card(kind))['ok'])
+    mutations = [
+        ('missing door', lambda d: d['en'].pop('door')),
+        ('empty reason', lambda d: d['en']['door'].update(reason='')),
+        ('empty rollback', lambda d: d['en']['door'].update(rollback='')),
+        ('invalid kind', lambda d: d['en']['door'].update(kind='unknown')),
+        ('multiple how sentences', lambda d: d['en']['change_points'][0].update(how='The check passes. The card stays.')),
+        ('empty how', lambda d: d['en']['change_points'][0].update(how='')),
+        ('zero intent', lambda d: d['en']['change_points'][0].update(intent=0)),
+        ('noninteger intent', lambda d: d['en']['change_points'][0].update(intent=1.5)),
+        ('empty option', lambda d: d['en']['check']['options'].__setitem__(0,'')),
+        ('too many options', lambda d: d['en']['check'].update(options=['One.']*5)),
+        ('empty question', lambda d: d['en']['check'].update(q='')),
+        ('empty why', lambda d: d['en']['check'].update(why='')),
+        ('bool intent', lambda d: d['en']['change_points'][0].update(intent=True)),
+        ('out of range intent', lambda d: d['en']['change_points'][0].update(intent=2)),
+        ('missing coverage', lambda d: d['en']['intent'].append(dict(kind='fact', text='Another fact.'))),
+        ('mismatched kind', lambda d: d['zh-TW']['door'].update(kind='two-way')),
+        ('missing check', lambda d: d['en'].pop('check')),
+        ('missing rollback', lambda d: d['en']['door'].pop('rollback')),
+        ('missing about', lambda d: d['en']['check'].pop('about')),
+        ('bad options', lambda d: d['en']['check'].update(options=['Only.'])),
+        ('bool about', lambda d: d['en']['check'].update(about=dict(intent=True))),
+        ('empty points', lambda d: d['en'].update(change_points=[])),
+        ('orphan door', lambda d: d['en'].pop('change_points')),
+        ('different about', lambda d: d['zh-TW']['check'].update(about=dict(intent=2))),
+        ('mismatched options', lambda d: d['zh-TW']['check']['options'].append('Third.')),
+    ]
+    for name, mutate in mutations:
+        d = walk_card(); mutate(d)
+        malformed('reject walk ' + name, d)
+    d = walk_card('two-way'); d['en']['check'] = walk_card()['en']['check']
+    malformed('reject check on two-way', d)
 
     for field in ('intent', 'why', 'done', 'notes', 'questions', 'before_nodes', 'after_nodes', 'change_table'):
         for value in (None, {}, [], [None]):

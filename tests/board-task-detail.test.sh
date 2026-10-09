@@ -16,6 +16,13 @@ cp "$ROOT/board/public/index.html" "$g/board/public/"
 cp -R "$ROOT/i18n" "$g/"
 cp "$ROOT/bin/fm-diagram.sh" "$g/bin/"
 python3 "$ROOT/tests/lib/task_detail_fixture.py" "$g" "$g/state" self
+# T-242: private confirmation fields in card records never reach detail.
+for private_record in "$g"/state/pending/*.json "$g"/state/decisions/*.json; do
+  [ -f "$private_record" ] || continue
+  jq '. + {check_answer:0,door_confirmation_fingerprint:"private-confirmation-fingerprint"}' "$private_record" > "$g/private-record"
+  mv "$g/private-record" "$private_record"
+done
+jq '.id="T-9242" | . + {check_answer:0}' "$g/design/tasks/T-003.json" > "$g/design/tasks/T-9242.json"
 FM_ROOT="$g" FM_PORT=0 python3 "$ROOT/bin/lib/fm_lifeline.py" keep --pid "$$" --name task-detail-board -- bun run "$g/board/server.ts" > "$g/out" 2>&1 &
 pid=$!
 port="$(board_port "$g/out" "$pid")"
@@ -25,6 +32,9 @@ assert_eq Plan "$(jq -r '.task.headline' "$g/detail")" 'ready task detail splits
 assert_eq ready "$(jq -r '.task.stage' "$g/detail")" 'undispatched task is ready'
 assert_eq T-003 "$(curl -s "$url/api/task?project=&id=T-003" | jq -r '.task.id')" 'empty project selects the default'
 assert_eq array "$(jq -r '.task.acceptance|type' "$g/detail")" 'acceptance is an array'
+assert_lacks "$(cat "$g/detail")" check_answer 'detail contains no answer'
+assert_lacks "$(cat "$g/detail")" door_confirmation_fingerprint 'detail omits private fingerprint'
+assert_lacks "$(curl -s "$url/api/task?id=T-9242")" check_answer 'detail omits stored spec answer'
 assert_eq object "$(jq -r '.task.explain|type' "$g/detail")" 'task explain is returned'
 assert_eq 'The task works.' "$(jq -r '.task.detail' "$g/detail")" 'detail retains the rest of the title'
 assert_eq true "$(jq '.task.explain_ste.ok' "$g/detail")" 'spec explain has an STE report'
@@ -34,6 +44,8 @@ assert_eq 404 "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/task?id=T-999"
 assert_eq 404 "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/task?project=missing&id=T-001")" 'unknown project refuses'
 assert_eq SK-001 "$(curl -s "$url/api/task?id=SK-001" | jq -r '.task.id')" 'SK tasks resolve'
 curl -s "$url/api/task?id=T-002" > "$g/merged"
+assert_lacks "$(cat "$g/merged")" check_answer 'detail omits card answer'
+assert_lacks "$(cat "$g/merged")" door_confirmation_fingerprint 'detail omits recorded fingerprint'
 assert_eq 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$(jq -r '.rounds[0].head' "$g/merged")" 'review evidence supplies head in nameless self namespace'
 assert_eq null "$(jq -r '.rounds[1].head' "$g/merged")" 'push events never supply heads'
 assert_eq 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$(jq -r '.rounds[0].worker_head' "$g/merged")" 'worker report supplies its own head'

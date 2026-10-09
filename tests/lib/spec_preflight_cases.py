@@ -19,6 +19,72 @@ managed = importlib.util.module_from_spec(loader)
 loader.loader.exec_module(managed)
 
 
+class ChangePointSchema(unittest.TestCase):
+    def test_legacy_prompt_without_optional_ste(self):
+        # Isolated public-text consumers intentionally do not install STE.
+        with patch.dict(sys.modules, {'fm_ste': None}):
+            spec = dict(id='T-X', scope=['src/**'], acceptance=['works'])
+            self.assertIn('T-X', prompt('T-X', json.dumps(spec).encode('utf-8'), 'a' * 40))
+            for field in ('change_refs', 'check_answer'):
+                with self.subTest(field=field):
+                    with self.assertRaisesRegex(ValueError, 'orphan'):
+                        prompt('T-X', json.dumps(dict(spec, **{field: []})).encode('utf-8'), 'a' * 40)
+            from fm_spec_preflight import validate_change_refs
+            with self.assertRaises(ImportError):
+                validate_change_refs(dict(explain={'en': {'change_points': []}}))
+
+    def test_evidence_and_indices(self):
+        from copy import deepcopy
+        from fm_spec_preflight import validate_change_refs
+        loader = importlib.util.spec_from_file_location('ste_cases', ROOT / 'tests/lib/ste_cases.py')
+        cases = importlib.util.module_from_spec(loader); loader.loader.exec_module(cases)
+        spec = dict(explain=cases.walk_card(), acceptance=['The check passes.'],
+                    change_refs=[dict(files=['src/a.py'], tests=[dict(file='tests/a.py', name='test_a')], acceptance=[0])],
+                    check_answer=0)
+        validate_change_refs(spec)
+        duplicate = deepcopy(spec)
+        for locale in ('en','zh-TW'):
+            duplicate['explain'][locale]['change_points'].append(dict(duplicate['explain'][locale]['change_points'][0]))
+        duplicate['change_refs'].append(deepcopy(duplicate['change_refs'][0]))
+        validate_change_refs(duplicate)
+        for name, mutate in [
+            ('missing refs', lambda d: d.pop('change_refs')),
+            ('null refs', lambda d: d.update(change_refs=None)),
+            ('empty files', lambda d: d['change_refs'][0].update(files=[])),
+            ('empty tests', lambda d: d['change_refs'][0].update(tests=[])),
+            ('empty acceptance', lambda d: d['change_refs'][0].update(acceptance=[])),
+            ('negative acceptance', lambda d: d['change_refs'][0].update(acceptance=[-1])),
+            ('noninteger acceptance', lambda d: d['change_refs'][0].update(acceptance=[0.5])),
+            ('duplicate acceptance', lambda d: d['change_refs'][0].update(acceptance=[0,0])),
+            ('duplicate tests', lambda d: d['change_refs'][0]['tests'].append(dict(d['change_refs'][0]['tests'][0]))),
+            ('null answer', lambda d: d.update(check_answer=None)),
+            ('negative answer', lambda d: d.update(check_answer=-1)),
+            ('noninteger answer', lambda d: d.update(check_answer=0.5)),
+            ('missing about', lambda d: d['explain']['en']['check'].pop('about')),
+            ('why-only evidence', lambda d: (d['explain']['en']['check']['options'].__setitem__(0,'Feedback only.'),d['explain']['en']['check'].update(why='Feedback only.'))),
+            ('wrong answer evidence', lambda d: d.update(check_answer=1)),
+            ('bool answer', lambda d: d.update(check_answer=True)),
+            ('out of range answer', lambda d: d.update(check_answer=2)),
+            ('length mismatch', lambda d: d.update(change_refs=[])),
+            ('acceptance range', lambda d: d['change_refs'][0].update(acceptance=[1])),
+            ('bool acceptance', lambda d: d['change_refs'][0].update(acceptance=[True])),
+            ('traversal', lambda d: d['change_refs'][0].update(files=['../a'])),
+            ('duplicate files', lambda d: d['change_refs'][0].update(files=['a', 'a'])),
+            ('missing answer', lambda d: d.pop('check_answer')),
+            ('invalid about', lambda d: d['explain']['en']['check'].update(about=dict(intent=2))),
+            ('absent evidence', lambda d: d['explain']['zh-TW']['check']['options'].__setitem__(0, '不存在。')),
+        ]:
+            with self.subTest(name=name):
+                bad = deepcopy(spec); mutate(bad)
+                with self.assertRaises(ValueError): validate_change_refs(bad)
+        two = deepcopy(spec); two['explain'] = cases.walk_card('two-way'); two.pop('check_answer')
+        validate_change_refs(two)
+        two['check_answer'] = 0
+        with self.assertRaises(ValueError): validate_change_refs(two)
+        validate_change_refs(dict(acceptance=['legacy']))
+        with self.assertRaises(ValueError): validate_change_refs(dict(change_refs=[]))
+
+
 class Preflight(unittest.TestCase):
     def setUp(self):
         clean = patch.dict(os.environ, {'HERDR_ENV': '0'}, clear=True)

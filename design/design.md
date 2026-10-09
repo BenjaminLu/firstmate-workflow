@@ -421,7 +421,18 @@ Unknown locale keys remain forward compatible.
 
 A task spec may also carry an optional bilingual `explain` block (T-230), with
 `intent`, `why`, `scope_in`, `scope_out`, `done`, `notes`, `before_nodes` and
-`after_nodes`. It excludes decision questions and change tables. Both locales
+`after_nodes`. It excludes decision questions and change tables. Optional
+`change_points` maps each point to a 1-based intent and a STE `how` fact.
+Every intent has a point; both locales have matching intent sequences. A walk
+requires a `door` with kind `one-way` or `two-way`, reason and rollback. One-way
+rollback states what cannot be undone; two-way rollback names the concrete
+recovery. One-way requires a bilingual `check` (question, 2–4 options, feedback,
+and `about.intent`) and top-level integer `check_answer`. Two-way forbids them.
+Top-level `change_refs` aligns with the points and names normalized repository
+files, named tests and 0-based acceptance indices. Orphan fields and invalid
+indices refuse preflight. The correct option must occur verbatim in its intent,
+its points' how text or the door reason/rollback in both locales; feedback alone
+is not evidence. Bilingual meaning and truthful comprehension need review. Both locales
 need intent, aligned done items and both node lists. `fm_ste.py check-explain
 <spec.json>` shares the field, sentence and node-label rules above; structural
 errors exit 64 and STE failures exit 65. No explain prints `{"explain": false}`
@@ -442,6 +453,15 @@ limits and word lists. With `--kind merge` or `--kind merge-untracked`, an inten
 card must carry `intent`, `why`, `scope_in`, `scope_out`, `done`, `questions`,
 `before_nodes`, `after_nodes`, and `change_table` in both locales; `notes` is
 optional. The title starts with `MERGE CARD — ` in en and `【合併卡】` in zh-TW.
+The walk fields are optional additions, never new required fields for legacy
+merge cards. Only tracked merge cards may carry them. The producer takes them
+from the authoritative pin, else the committed self spec at expected head or
+the external private spec. Authored intents must match that source exactly;
+authored walk fields must match too. Refusal exits 65 before pending publication.
+After STE validation, the producer attaches locale-free `details.refs` from
+head/diff/head GitHub reads at the expected SHA, with spec acceptance, PR hunks
+and named test lines. External spec links are null. The stored answer stays
+outside details. Corrupt pins never fall back to mutable data.
 Missing fields or labels exit 64. Legacy details without any intent-card fields
 bypass this check and receive no `ste` key. Already-pending and decided records
 are never re-checked; no records are migrated. These rules apply at the next
@@ -1467,6 +1487,18 @@ started inside a run holding the same lock (it inherits
 `FM_GATE_LOCK_HELD`) is refused with exit 70 rather than waiting for ever or
 running unlocked, so every suite that runs the real gate sets its own
 `FM_GATE_LOCK`, and `tests/gate.test.sh` checks that each one does.
+
+Failed-card recovery distinguishes normal optional writer fields from merge
+contradictions (T-1003). Ordinary choice records and kindless dispatch records
+may retain missing or explicit JSON null merge metadata, including `merge` and
+`binding`; matching nonmerge `decision_made` events have the same compatibility.
+Every non-null merge key, including false, zero and empty strings or containers,
+and `purpose=merge` or `effect=merge` still refuses the nonmerge exemption.
+This is schema compatibility only: a failed A remains final. A different head
+requires verified owned failed history, signed old settlement/readiness, fresh
+current-head review, CI, six gates, signed readiness and a new captain answer.
+Load new code through normal reload draining; old snapshots finish unchanged,
+and retained records, events, signatures and pins are never rewritten.
 
 Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-autopilot.sh` requests a card after gate success, but `fm-review.sh`
@@ -2550,6 +2582,24 @@ Explanation, why and outcome sit behind one Why you see this disclosure. Other
 card kinds keep their explanation visible. Every sentence remains available,
 without sentence STE chips on captain cards. Task details retain the Intent,
 How it works, Alignment, Scope, Notes order and stored sentence chips.
+
+A merge card with change points instead leads with one evidence step per intent:
+its how facts, spec acceptance links or text, named test links, CI/review status
+and door reason/rollback are visible first. Every code section starts closed
+and opens on click. Task detail shows this walk read-only; a spec-only walk
+shows how facts without fabricated code/test links.
+For one-way merge effects, each intent needs a tick and the comprehension
+answer must be correct. The authenticated `/decisions/check-door` validates
+current inputs without recording, emitting events or running effects. The page
+binds success to the current inputs and keeps merge controls locked otherwise.
+Final `/decisions` independently rechecks before writes; No-to-change and
+nonmerge effects bypass the door. Malformed confirmation returns 400; incomplete,
+wrong or invalid stored answers return 409 `doorUnconfirmed`, with localized
+feedback. A final refusal retains inputs and the pending card. Successful merge
+confirmation stores sorted reviewed intents, check_ok and a private SHA256
+fingerprint. Identical/reordered retries succeed without repeating effects;
+missing or changed confirmation refuses. State/SSE/task/public decision views
+omit the answer and fingerprint. Legacy/no-door cards retain their behavior.
 
 The current card's slim decision bar sticks to the viewport bottom; expanded
 strips keep their bars inline. The card reserves at least the bar's height below
