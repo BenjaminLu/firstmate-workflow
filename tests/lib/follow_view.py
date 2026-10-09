@@ -59,8 +59,9 @@ PTY_SKIP = 'setup: no pseudo-terminal on this host; terminal cases not run (not 
 # waits, before it execs, for the reaper's go. An owner that dies before
 # the go leaves a child that reads EOF and exits without running anything.
 # The reaper waits on the kernel alone, the lifeline and the child's exit,
-# and leaves as soon as the child is gone, so it never signals a group id
-# the system has given to someone else.
+# and when either fires ends the child's whole group, descendants too, with
+# one signal: an unreaped child or a living descendant keeps the group id
+# its own, and an empty group refuses it (ESRCH).
 REAPER = (
     "import os, select, signal, sys\n"
     "sys.path.insert(0, sys.argv[1])\n"
@@ -69,24 +70,36 @@ REAPER = (
     "line = sys.stdin.buffer.readline()\n"
     "if not line.strip(): sys.exit(0)\n"  # the owner died before it made the child
     "pgid = int(line)\n"
+    "def end():\n    try: os.killpg(pgid, signal.SIGKILL)\n"
+    "    except OSError: pass\n"
+    "    sys.exit(0)\n"
     "try: exit_of = fm_lifeline.ProcessExit(pgid)\n"
-    "except fm_lifeline.OwnerGone: sys.exit(0)\n"
+    "except fm_lifeline.OwnerGone: end()\n"
     "os.set_blocking(fd, False)\n"  # one look: is the owner already gone?
     "try: owner_gone = os.read(fd, 1) == b''\n"
     "except BlockingIOError: owner_gone = False\n"
-    "if owner_gone:\n"
-    "    try: os.killpg(pgid, signal.SIGKILL)\n"
-    "    except OSError: pass\n"
-    "    sys.exit(0)\n"
+    "if owner_gone: end()\n"
     "os.set_blocking(fd, True)\n"
     "os.write(1, b'1'); os.close(1)\n"
     "while True:\n"
     "    ready, _, _ = select.select([fd, exit_of], [], [])\n"
-    "    if exit_of in ready and exit_of.gone(): sys.exit(0)\n"
-    "    if fd in ready and os.read(fd, 4096) == b'':\n"
-    "        try: os.killpg(pgid, signal.SIGKILL)\n"
-    "        except OSError: pass\n"
+    "    if exit_of in ready and exit_of.gone(): end()\n"
+    "    if fd in ready and os.read(fd, 4096) == b'': end()\n")
+
+
+# For the one case whose group outlives its leader: it keeps the group, watching the
+# survivor the leader named before it exited, and ends it if the owner dies first.
+SURVIVOR_REAPER = REAPER.replace(
+    "    if exit_of in ready and exit_of.gone(): end()\n",
+    "    if exit_of in ready and exit_of.gone():\n"
+    "        try: exit_of = fm_lifeline.ProcessExit(int(open(%r).read()))\n"
+    "        except (OSError, ValueError, fm_lifeline.OwnerGone): end()\n"
+    "        ready, _, _ = select.select([fd, exit_of], [], [])\n"
+    "        if fd in ready: end()\n"
     "        sys.exit(0)\n")
+
+# A shell that leaves a descendant in its group, immune to the pty's hangup.
+LEAVE = 'trap "" HUP; /bin/sleep 300 & echo $! > "$0"; '
 
 
 class Owned:
@@ -132,6 +145,14 @@ def launch(argv, lib=None, reaper=None, **popen):
     finally: owned.made()
 
 
+def stop(proc):
+    """Forced cleanup of a launch() child: its group, while it holds the id."""
+    if proc.poll() is None:
+        try: os.killpg(proc.pid, signal.SIGKILL)
+        except OSError: pass
+        proc.wait()
+
+
 def visible(text):
     """The screen lines a terminal shows, with escape sequences removed."""
     return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[78]', '\n', text).replace('\r', '\n').split('\n')
@@ -173,9 +194,9 @@ def tree_state(*roots):
 class Pty:
     """A command on a pseudo-terminal of a set size; its output as bytes."""
 
-    def __init__(self, argv, env, columns=80, rows=24, inherit_ignored_int=False):
+    def __init__(self, argv, env, columns=80, rows=24, inherit_ignored_int=False, reaper=None):
         import pty
-        owned = Owned()  # the pty child leads its own session
+        owned = Owned(reaper=reaper)  # the pty child leads its own session and group
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             try:
@@ -224,10 +245,12 @@ class Pty:
         return self.status
 
     def close(self):
-        if self.status is None:
-            try: os.kill(self.pid, signal.SIGKILL); os.waitpid(self.pid, 0)
+        if self.status is None:  # unreaped, so its group id is still its own
+            try: os.killpg(self.pid, signal.SIGKILL)
             except OSError: pass
-        os.close(self.fd)
+            try: self.status = os.waitstatus_to_exitcode(os.waitpid(self.pid, 0)[1])
+            except OSError: pass
+        if self.fd >= 0: os.close(self.fd); self.fd = -1
 
 
 class Fixture(unittest.TestCase):
@@ -289,7 +312,7 @@ class Fixture(unittest.TestCase):
         """A live process the liveness check takes for a round's runner."""
         proc = launch([sys.executable, '-c', 'import time; time.sleep(300)', 'fm-herdr.py'],
                       stdin=subprocess.DEVNULL)
-        self.addCleanup(lambda: proc.poll() is None and (proc.kill(), proc.wait()))
+        self.addCleanup(stop, proc)
         return proc
 
     def live(self, log='', **kw):
@@ -306,7 +329,7 @@ class Fixture(unittest.TestCase):
         self.addCleanup(out.close)
         proc = launch([sys.executable, str(HERDR), 'follow', str(attempt)], env=env or self.env,
                       stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
-        self.addCleanup(lambda: proc.poll() is None and (proc.kill(), proc.wait()))
+        self.addCleanup(stop, proc)
         return proc, Path(out.name)
 
     def eventually(self, predicate, timeout=WAIT, why=''):
@@ -721,11 +744,10 @@ class LiveRounds(Fixture):
         self.assertEqual(0, self.follow(attempt, env=dict(self.env, FM_FOLLOW_GRACE='1')).returncode)
         self.assertGreaterEqual(time.monotonic() - started, 1)  # the start grace, then over
         # a killed runner whose group survives is still the round
-        # The survivor reads this process's pipe, so it ends with this process.
-        leader = launch([sys.executable, '-c', 'import subprocess, sys; '
-                         'subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"])'],
-                        stdin=subprocess.PIPE)
-        self.addCleanup(leader.stdin.close)
+        survivor = self.tmp / 'survivor.pid'
+        leader = launch([sys.executable, '-c', 'import subprocess, sys; p = subprocess.Popen(["/bin/sleep", "300"])\n'
+                         'with open(sys.argv[1], "w") as f: f.write(str(p.pid))', str(survivor)],
+                        reaper=SURVIVOR_REAPER % str(survivor), stdin=subprocess.DEVNULL)
         leader.wait()
         self.addCleanup(self.end_group, leader.pid)
         attempt = self.attempt('x\n', finished=False)
@@ -797,13 +819,58 @@ class LiveRounds(Fixture):
         self.assertEqual([], [str(m) for m in markers if m.exists()], 'a child ran after its owner died')
 
     def test_fixture_reaper_waits_on_the_kernel_not_a_poll(self):
-        tree = ast.parse(REAPER)
-        selects = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == 'select.select']
-        self.assertTrue(selects)
-        self.assertEqual([3] * len(selects), [len(n.args) + len(n.keywords) for n in selects], 'select with a timeout')
-        self.assertNotIn('killpg(pgid, 0)', REAPER)
-        self.assertNotIn('sleep', REAPER)
-        self.assertIn('ProcessExit(pgid)', REAPER)
+        for reaper in (REAPER, SURVIVOR_REAPER % 'file'):
+            tree = ast.parse(reaper)
+            selects = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == 'select.select']
+            self.assertTrue(selects)
+            self.assertEqual([3] * len(selects), [len(n.args) + len(n.keywords) for n in selects], 'select with a timeout')
+            self.assertNotIn('killpg(pgid, 0)', reaper)
+            self.assertNotIn('sleep', reaper)
+            self.assertIn('ProcessExit(pgid)', reaper)
+        self.assertNotEqual(REAPER, SURVIVOR_REAPER % 'file')
+
+    def assert_exits(self, pid, why):
+        """The kernel reports pid's exit within WAIT; else it is killed and this fails."""
+        import fm_lifeline
+        try: watch = fm_lifeline.ProcessExit(pid)
+        except fm_lifeline.OwnerGone: return
+        try: ready, _, _ = select.select([watch], [], [], WAIT)
+        finally: watch.close()
+        if not ready: os.kill(pid, signal.SIGKILL); self.fail(why)
+
+    def descendant_of_an_exited_leader(self, how):
+        # The leader leaves a descendant in its group and exits; then its owner is killed.
+        leave = ['/bin/sh', '-c', LEAVE + 'exit 0', str(self.tmp / ('descendant-%s.pid' % how))]
+        script = self.owner_source() + "argv = sys.argv[2:]\n" + (
+            "leader = launch(argv, lib=lib, stdin=subprocess.DEVNULL); leader.wait()\n" if how == 'launch' else
+            "owned = Owned(lib); pid, fd = pty.fork()\n"
+            "if pid == 0: owned.ready(); os.execv(argv[0], argv)\n"
+            "owned.made(); os.waitpid(pid, 0)\n") + "print('exited', flush=True)\ntime.sleep(300)\n"
+        owner = launch([sys.executable, '-c', script, str(ROOT / 'bin/lib'), *leave], stdout=subprocess.PIPE)
+        self.addCleanup(owner.stdout.close)
+        self.assertEqual(b'exited\n', owner.stdout.readline())
+        descendant = int(Path(leave[-1]).read_text())
+        os.kill(owner.pid, signal.SIGKILL); owner.wait()
+        self.assert_exits(descendant, f'a descendant outlived its {how} leader and owner')
+
+    def test_fixture_descendants_end_when_a_launched_leader_exits_first(self):
+        self.descendant_of_an_exited_leader('launch')
+
+    @unittest.skipUnless(PTY, PTY_SKIP)
+    def test_fixture_descendants_end_when_a_pty_leader_exits_first(self):
+        self.descendant_of_an_exited_leader('pty')
+
+    @unittest.skipUnless(PTY, PTY_SKIP)
+    def test_forced_pty_close_ends_the_leaders_descendants(self):
+        # This reaper never signals, so only close() can end the descendant.
+        inert = ("import os, select, sys\nif sys.stdin.readline().strip(): os.write(1, b'1')\n"
+                 "os.close(1); select.select([int(os.environ['FM_LIFELINE_FD'])], [], [])\n")
+        mark = self.tmp / 'kept.pid'
+        session = Pty(['/bin/sh', '-c', LEAVE + 'exec /bin/sleep 300', str(mark)], self.env, reaper=inert)
+        self.addCleanup(session.close)
+        session.until(lambda _: mark.exists() and mark.read_text().strip().isdigit())
+        session.close()
+        self.assert_exits(int(mark.read_text()), 'a descendant outlived a forced close()')
 
     def test_read_only_with_a_missing_lock_file(self):
         code = self.tmp / 'code'
@@ -1101,8 +1168,7 @@ class Language(Fixture):
 class NamedTestResult(unittest.TextTestResult):
     """Expose behavioral outcomes in the fail-first collector's line format."""
     def startTest(self, test):
-        self._fm_failed = False
-        self._fm_skipped = False
+        self._fm_failed = self._fm_skipped = False
         super().startTest(test)
 
     def addFailure(self, test, err):
@@ -1114,8 +1180,7 @@ class NamedTestResult(unittest.TextTestResult):
         super().addError(test, err)
 
     def addSubTest(self, test, subtest, err):
-        if err is not None:
-            self._fm_failed = True
+        if err is not None: self._fm_failed = True
         super().addSubTest(test, subtest, err)
 
     def addSkip(self, test, reason):
@@ -1126,8 +1191,7 @@ class NamedTestResult(unittest.TextTestResult):
         super().stopTest(test)
         if not self._fm_skipped:
             name = '%s.%s' % (type(test).__name__, test._testMethodName)
-            sys.stdout.write('    %-52s %s\n' % (name, 'FAIL' if self._fm_failed else 'ok'))
-            sys.stdout.flush()
+            sys.stdout.write('    %-52s %s\n' % (name, 'FAIL' if self._fm_failed else 'ok')); sys.stdout.flush()
 
 
 if __name__ == '__main__':
