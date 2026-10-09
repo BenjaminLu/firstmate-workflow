@@ -12,17 +12,12 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-
 ROOT = Path(sys.argv.pop()).resolve()
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 from fm_evidence import Store
-
-
 def digest(data):
     return hashlib.sha256(data).hexdigest()
-
-
 class ExperimentFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -62,28 +57,23 @@ class ExperimentFixture(unittest.TestCase):
                             'FM_EXTERNAL': '0', 'GH_REPO': 'fixture/project'})
         self.env.start()
         self.addCleanup(self.env.stop)
-
     def crew_environments(self):
         for marker in ({'FM_ROLE': 'worker'}, {'FM_ROLE': 'reviewer'},
                        {'FM_IN_ROUND': '1'}, {'FM_RUN_DIR': '/private/round'}):
             for host in ('', '1'):
                 yield dict(marker, HERDR_ENV=host)
-
     def git(self, *args):
         return subprocess.run(['git', '-C', str(self.repo), *args], check=True,
                               capture_output=True).stdout
-
     def artifact(self, name, data):
         (self.bundle / name).write_bytes(data)
         return dict(name=name, path=name, sha256=digest(data), media_type='text/plain', truncated=False)
-
     def experiment(self):
         return dict(id='mutation', classification='current', source_sha=self.head,
                     argv=['producer-that-must-never-start', '--private'],
                     claimed_result=dict(exit_code=1, signal=None, timeout=False),
                     expectation='expected unlocked-reader assertion failure',
                     artifacts=[self.artifact('log', b'ASSERTION FAILED: unlocked reader\n')])
-
     def historical(self, source=None):
         e = self.experiment()
         e.update(classification='historical', source_sha=source or self.old)
@@ -99,14 +89,12 @@ class ExperimentFixture(unittest.TestCase):
             dict(target_path='probe.py', operation='add', input=dict(state='absent'),
                  overlay=dict(artifact=probe['name'], sha256=probe['sha256']))])
         return e
-
     def validate(self, manifest=None):
         value = manifest or self.manifest
         path = self.bundle / 'manifest.json'
         path.write_text(json.dumps(value))
         return self.module.validate_manifest(path, 'self', 'T-264', self.head, self.base,
                                              'fixture/project', 2, self.repo)
-
     def frozen_contract(self):
         from fm_spec_pins import Pins
         shutil.copytree(ROOT/'bin', self.repo/'bin')
@@ -127,13 +115,11 @@ class ExperimentFixture(unittest.TestCase):
         self.code = engine.snapshot(self.repo)
         self.store = Store(state, 'self', 'T-264')
         return self.store
-
     def retained(self):
         path = self.bundle/'manifest.json'
         path.write_text(json.dumps(self.manifest))
         return self.module.retain(self.store, argparse.Namespace(file=str(path), head=self.head,
                                   base=self.base, code=str(self.code), round=1))
-
     def checkout(self, name='checkout'):
         tree = self.root/name
         subprocess.run(['git', 'clone', '-q', '--no-hardlinks', str(self.repo), str(tree)], check=True,
@@ -143,14 +129,59 @@ class ExperimentFixture(unittest.TestCase):
         for ref, sha in (('refs/fm/head', self.head), ('refs/fm/base', self.base)):
             subprocess.run(['git', '-C', str(tree), 'update-ref', ref, sha], check=True)
         return tree
-
+API = hasattr(Store, "experiments") and (ROOT/"bin/lib/fm_experimental_evidence.py").is_file()
+class ExperimentAPI(unittest.TestCase):
+    def test_experiment_api_exists(self):
+        self.assertTrue(API, "separate experiment collection API required")
+@unittest.skipUnless(API, "setup: experiment API unavailable; not behavioral")
 class Experiments(ExperimentFixture):
     def setUp(self):
-        # Keep the separate API fail-first assertion before the lazy import.
-        self.assertTrue(hasattr(Store, 'experiments'), 'Store must collect exact-bound experiments separately')
         self.module = importlib.import_module('fm_experimental_evidence')
         super().setUp()
-
+    def test_retention_digest_rejects_same_length_content_change(self):
+        (self.bundle/'log').write_bytes(b'X' * (self.bundle/'log').stat().st_size)
+        with self.assertRaises(ValueError):
+            self.validate()
+    def corrupt_stored_content(self, record):
+        path = self.store.directory/record['experiments'][0]['artifacts'][0]['path']
+        mode = path.stat().st_mode
+        os.chmod(path, 0o600)
+        path.write_bytes(b'X' * path.stat().st_size)
+        os.chmod(path, mode)
+    def test_collection_digest_rejects_same_length_content_change(self):
+        self.frozen_contract()
+        self.corrupt_stored_content(self.retained())
+        # Distinguish this boundary from the later manifest revalidation digest.
+        with self.assertRaisesRegex(ValueError, 'retained experimental artifact integrity failure'):
+            self.store.experiments(self.head, self.base, self.code)
+    def test_attachment_digest_rejects_same_length_content_change(self):
+        self.frozen_contract()
+        record = self.retained()
+        records, _ = self.store.experiments(self.head, self.base, self.code)
+        self.corrupt_stored_content(record)
+        with self.assertRaises(ValueError):
+            self.module.attach(self.store, records, [], 'run', self.checkout())
+    def test_promisor_lazy_fetch_never_runs_transport_helper(self):
+        self.git('config', 'uploadpack.allowFilter', 'true')
+        self.git('config', 'uploadpack.allowAnySHA1InWant', 'true')
+        clone = self.root/'partial'
+        subprocess.run(['git', 'clone', '-q', '--no-checkout', '--filter=blob:none',
+                        self.repo.as_uri(), str(clone)], check=True, capture_output=True)
+        sentinel = self.root/'transport-helper-started'
+        helper = self.root/'transport-helper'
+        helper.write_text('#!/bin/sh\ntouch "'+str(sentinel)+'"\nexec git-upload-pack "'+str(self.repo)+'"\n')
+        helper.chmod(0o755)
+        for key, value in (('protocol.ext.allow', 'always'), ('remote.origin.url', 'ext::'+str(helper))):
+            subprocess.run(['git', '-C', str(clone), 'config', key, value], check=True)
+        blob = self.git('rev-parse', self.head+':feature').decode().strip()
+        for name, args in [('size', ['cat-file', '-s', blob]), ('blob', ['cat-file', 'blob', blob]),
+                           ('verify', ['rev-parse', '--verify', blob+'^{blob}']),
+                           ('show', ['show', self.head+':feature']),
+                           ('patch', ['diff-tree', '-r', '-p', '--no-renames', self.base, self.head])]:
+            with self.subTest(operation=name):
+                with self.assertRaises(ValueError):
+                    self.module.LocalGit().bytes(clone, *args)
+                self.assertFalse(sentinel.exists(), 'local object read must never start transport')
     def test_real_pin_signed_retention_and_readonly_copies(self):
         self.frozen_contract()
         record = self.retained()
@@ -172,7 +203,6 @@ class Experiments(ExperimentFixture):
         (self.bundle/'log').write_text('producer changed source')
         self.assertEqual(original, self.store.records()[0])
         self.assertNotIn('operator-attested', self.store.history(True))
-
     def test_pin_and_snapshot_refusals_before_storage(self):
         self.frozen_contract()
         pinpath = self.repo/'state/pins/T-264/1.json'
@@ -202,7 +232,6 @@ class Experiments(ExperimentFixture):
         with self.assertRaises(ValueError):
             self.retained()
         self.assertFalse(self.store.key_path.exists())
-
     def test_exact_identity_and_signed_corruption_matrix(self):
         self.frozen_contract()
         record = self.retained()
@@ -232,7 +261,6 @@ class Experiments(ExperimentFixture):
         path.write_text(json.dumps(candidate))
         with self.assertRaises(ValueError):
             self.store.experiments(self.head, self.base, self.code)
-
     def test_signed_forged_execution_receipts_rejected(self):
         self.frozen_contract()
         record = self.retained()
@@ -245,7 +273,6 @@ class Experiments(ExperimentFixture):
             path.write_text(json.dumps(candidate))
             with self.assertRaises(ValueError):
                 self.store.experiments(self.head, self.base, self.code)
-
     def test_migration_unchanged_pin_old_new_sessions_and_verdict_authority(self):
         self.frozen_contract()
         pinpath = self.repo/'state/pins/T-264/1.json'
@@ -286,7 +313,6 @@ class Experiments(ExperimentFixture):
         self.assertTrue(missing)
         self.assertEqual(record, self.store.records()[0])
         self.assertEqual(oldcopy, Path(index).read_bytes())
-
     def test_historical_migration_preserves_negative_and_locked_comparison(self):
         self.frozen_contract()
         negative = self.historical()
@@ -311,7 +337,6 @@ class Experiments(ExperimentFixture):
         self.assertEqual(record['experiments'][0]['historical']['historical_base_sha'], self.old)
         self.assertIn(b'assert reader_is_locked\n', [(Path(index).parent/a['sha256']).read_bytes()
                       for a in record['experiments'][0]['artifacts']])
-
     def test_changed_frozen_engine_and_authorized_pin_exclude_old_receipts(self):
         from fm_spec_pins import Pins
         self.frozen_contract()
@@ -349,7 +374,6 @@ class Experiments(ExperimentFixture):
         self.assertTrue(unavailable)
         self.assertEqual(before, (self.repo/'state/pins/T-264/1.json').read_bytes())
         self.assertEqual(record, self.store.records()[0])
-
     def test_small_large_context_and_rebuilt_copy_paths(self):
         import fm_review_context as context
         self.frozen_contract()
@@ -388,7 +412,6 @@ class Experiments(ExperimentFixture):
         self.assertEqual(index, '')
         self.assertIn('files inaccessible', text)
         self.assertNotIn('readonly_path', text)
-
     def test_summary_privacy_and_precise_unsigned_migration(self):
         from fm_evidence import summary
         self.frozen_contract()
@@ -410,9 +433,9 @@ class Experiments(ExperimentFixture):
             path.write_text(json.dumps(value))
             with self.subTest(kind=kind), self.assertRaises(ValueError):
                 self.store.records()
-
-    def adapter_fixture(self):
-        self.frozen_contract()
+    def adapter_fixture(self, prepared=False):
+        if not prepared:
+            self.frozen_contract()
         self.retained()
         tree = self.checkout()
         records, _ = self.store.experiments(self.head, self.base, self.code)
@@ -429,7 +452,7 @@ artifact = pathlib.Path(ARTIFACT)
 assert artifact.read_bytes() == b'ASSERTION FAILED: unlocked reader\\n'
 denied = []
 for action in (lambda: artifact.chmod(0o600), lambda: artifact.write_text('altered'), lambda: artifact.unlink(),
-               lambda: pathlib.Path(KEY).read_bytes(), lambda: pathlib.Path(PRIVATE).read_bytes(),
+               lambda: pathlib.Path(KEY).read_bytes(), lambda: [pathlib.Path(p).read_bytes() for p in PRIVATE],
                lambda: pathlib.Path(PARENT).read_bytes()):
     try:
         action()
@@ -448,7 +471,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         private = self.store.state/'private-session'
         private.write_text('private session sentinel')
         for placeholder, value in (('ARTIFACT', str(artifact)), ('KEY', str(self.store.key_path)),
-                                   ('PRIVATE', str(private)), ('PARENT', str(parent))):
+                                   ('PRIVATE', [str(private)] + ([str(self.store.state.parent/'CONVENTIONS.md')] if prepared else [])), ('PARENT', str(parent))):
             probe = probe.replace(placeholder, repr(value))
         vendor.write_text(probe)
         vendor.chmod(0o755)
@@ -470,7 +493,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
                    FM_REVIEW_CHECKOUT=str(tree), FM_REVIEW_HEAD=self.head, FM_REVIEW_BASE=self.base,
                    FM_REVIEW_PATCH=records[0]['binding']['patch'], FM_POLICY=str(policyfile),
                    FM_REVIEW_EXPERIMENT_INDEX=index, FM_MODEL='fixture-model',
-                   FM_ENGINE_ROOT=str(self.repo), FM_TRANSPORT='direct')
+                   FM_ENGINE_ROOT=os.environ['FM_ENGINE_ROOT'], FM_TRANSPORT='direct')
         spec = importlib.util.spec_from_file_location('adapter_managed', self.code/'bin/fm-herdr.py')
         engine = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(engine)
@@ -481,7 +504,6 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
             return subprocess.run(['bash', str(adapter), 'run', str(prompt), str(tree), str(self.root/'adapter.log')],
                                   env=dict(env, **extra), capture_output=True, text=True, timeout=120)
         return run, tree, policyfile, document, env
-
     def test_actual_codex_adapter_real_os_reads_and_refuses_metadata_writes(self):
         run, tree, _, _, _ = self.adapter_fixture()
         tool = 'sandbox-exec' if sys.platform == 'darwin' else 'bwrap'
@@ -492,7 +514,45 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         self.assertEqual(observed, dict(denied=6, artifact_read=True))
         self.assertEqual(self.module.PROVENANCE, self.store.records()[0]['provenance'])
         self.assertEqual(1, self.store.records()[0]['experiments'][0]['claimed_result']['exit_code'])
-
+    def test_actual_external_collector_retains_collects_and_confines_reviewer(self):
+        from fm_spec_pins import Pins
+        private = self.root/'home/projects/example-app'
+        (private/'state').mkdir(parents=True)
+        (private/'tasks').mkdir()
+        shutil.copyfile(self.repo/'design/tasks/T-264.json', private/'tasks/T-264.json')
+        (private/'CONVENTIONS.md').write_text('Private external conventions\n')
+        (private/'design.md').write_text('External approved design\n')
+        shutil.copyfile(self.repo/'config.yaml', private/'state/config.yaml')
+        (private/'state/events.jsonl').write_text(json.dumps(dict(type='greenlit', actor='captain',
+            task='T-264', project='example-app', ts='2026-10-01T00:00:00Z'))+'\n')
+        engine_root = self.root/'engine'
+        engine_root.mkdir()
+        for directory in ('bin', 'skills'):
+            shutil.copytree(ROOT/directory, engine_root/directory)
+        for args in (['init', '-q', '-b', 'main'], ['config', 'user.email', 'fixture@example.invalid'],
+                     ['config', 'user.name', 'fixture'], ['add', '.'], ['commit', '-qm', 'engine']):
+            subprocess.run(['git', '-C', str(engine_root), *args], check=True, capture_output=True)
+        os.environ.update(FM_EXTERNAL='1', FM_PROJECT='example-app', FM_EVIDENCE_PROJECT='example-app',
+            FM_ENGINE_ROOT=str(engine_root), FM_STATE_DIR=str(private/'state'), FM_TASKS_DIR=str(private/'tasks'),
+            FM_DESIGN=str(private/'design.md'), FM_BASE='main', FM_TASK='T-264')
+        self.pin = Pins(dict(os.environ), 'T-264').create()
+        spec = importlib.util.spec_from_file_location('external_snapshot', ROOT/'bin/fm-herdr.py')
+        engine = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(engine)
+        self.code = engine.snapshot(engine_root)
+        self.store = Store(private/'state', 'example-app', 'T-264', external=True)
+        self.manifest['project'] = 'example-app'
+        run, tree, _, _, _ = self.adapter_fixture(prepared=True)
+        self.assertEqual(self.store.directory, private/'state/evidence/T-264')
+        self.assertFalse((self.repo/'state').exists())
+        tool = 'sandbox-exec' if sys.platform == 'darwin' else 'bwrap'
+        self.assertTrue(shutil.which(tool, path=os.defpath), 'real OS confinement required')
+        result = run()
+        self.assertEqual(result.returncode, 0, result.stderr + (self.root/'adapter.log').read_text())
+        self.assertEqual(json.loads((tree/'model-started.json').read_text()), dict(denied=6, artifact_read=True))
+        record = self.store.records()[0]
+        self.assertEqual(record['provenance'], self.module.PROVENANCE)
+        self.assertEqual(record['experiments'][0]['claimed_result'], self.manifest['experiments'][0]['claimed_result'])
     def test_actual_adapter_unsupported_policy_marker_and_missing_verifier_refuse_model(self):
         run, tree, policyfile, document, env = self.adapter_fixture()
         cases = [dict(FM_ROUND_UNSANDBOXED='1'), dict(FM_REVIEW_EXPERIMENT_INDEX=str(self.root/'index.json')),
@@ -513,7 +573,6 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         self.assertNotEqual(run().returncode, 0)
         self.assertFalse((tree/'model-entered').exists())
         self.assertFalse((tree/'model-started.json').exists())
-
     def test_actual_adapter_final_launch_and_policy_tampering_refuse_before_cli(self):
         run, tree, _, _, _ = self.adapter_fixture()
         library = self.code/'bin/adapters/_lib.sh'
@@ -531,7 +590,6 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
             self.assertNotEqual(result.returncode, 0, result.stderr)
             self.assertFalse((tree/'model-entered').exists(), mutation)
         library.write_text(original)
-
     def test_final_policy_and_actual_launch_vector_matrix(self):
         import fm_review_context as context
         self.frozen_contract()
@@ -1014,6 +1072,32 @@ assert 'fm_experimental_evidence' not in sys.modules
         with self.assertRaises(ValueError):
             store.records()
 
+@unittest.skipUnless(API, 'setup: experiment API unavailable; not behavioral')
+class ControlledMutations(unittest.TestCase):
+    def test_each_digest_site_and_worker_reasoning_mutation_fails_named_assertion(self):
+        sites = [('experimental artifact digest mismatch', 'retention'),
+                 ('retained experimental artifact integrity failure', 'collection'),
+                 ('experimental attachment digest mismatch', 'attachment')]
+        cases = [('bin/lib/fm_experimental_evidence.py',
+                  "if digest(data) != artifact['sha256']:\n" + ' ' * (16 if stage == 'retention' else 24) +
+                  "raise ValueError('"+message+"')", "if False:\n" + ' ' * (16 if stage == 'retention' else 24) +
+                  "raise ValueError('"+message+"')", 'test_'+stage+'_digest_rejects_same_length_content_change')
+                 for message, stage in sites]
+        cases.append(('bin/lib/fm_evidence.py', "elif record['kind'] == 'ask':",
+                      "elif record['kind'] == 'worker-report':\n                output.append(record['text'])\n            elif record['kind'] == 'ask':",
+                      'test_unsigned_allowlist_and_history_unchanged'))
+        for filename, before, after, test in cases:
+            with self.subTest(assertion=test), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for directory in ('bin', 'skills', 'tests'):
+                    shutil.copytree(ROOT/directory, root/directory)
+                path = root/filename
+                source = path.read_text()
+                self.assertEqual(source.count(before), 1, 'mutation anchor must identify exactly one site')
+                path.write_text(source.replace(before, after))
+                result = subprocess.run([sys.executable, str(root/'tests/lib/review_experiment_evidence.py'),
+                    '-k', test, str(root)], capture_output=True, text=True, timeout=120)
+                self.assertIn('    __main__.Experiments.'+test+' FAIL', result.stdout+result.stderr)
 
 class StockRetentionCLI(ExperimentFixture):
     """Reach the real command on old runtimes without any new API prerequisite."""
@@ -1059,7 +1143,6 @@ class StockRetentionCLI(ExperimentFixture):
         self.assertEqual(data, b'ASSERTION FAILED: unlocked reader\n')
         self.assertEqual(digest(data), artifact['sha256'])
 
-
 class NamedResult(unittest.TextTestResult):
     """Stock scanner lines reflect unittest outcomes, never inferred log text."""
     def __init__(self, *args, **kwargs):
@@ -1104,7 +1187,6 @@ class NamedResult(unittest.TextTestResult):
     def addUnexpectedSuccess(self, test):
         super().addUnexpectedSuccess(test)
         self.report(test, 'UNEXPECTED_SUCCESS')
-
 
 if __name__ == '__main__':
     unittest.main(testRunner=unittest.TextTestRunner(resultclass=NamedResult, verbosity=0))

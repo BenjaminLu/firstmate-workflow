@@ -138,6 +138,8 @@ class LocalGit:
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                    GIT_TERMINAL_PROMPT='0', GIT_NO_REPLACE_OBJECTS='1', GIT_OPTIONAL_LOCKS='0')
+        # Missing objects never fetch: prohibit promisor lazy fetch and every transport protocol.
+        env.update(GIT_NO_LAZY_FETCH='1', GIT_ALLOW_PROTOCOL='')
         kwargs.update(env=env, timeout=min(120, remaining))
         try:
             return subprocess.run([self.executable, '-c', 'core.hooksPath=/dev/null',
