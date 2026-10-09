@@ -853,6 +853,10 @@ rm -rf "$n"
 # else, as the board reads a card that records none, the default project,
 # else the self project - and never whatever FM_PROJECT says beside it.
 o="$(owned)"; : > "$hlog"
+# Use the unwrapped notification producer; prepare its external task source here.
+mv "$o/bin/fm-decide-real.sh" "$o/bin/fm-decide.sh"
+( . "$o/bin/fm-config.sh"; fm_storage_init "$o" example-app && mkdir -p "$FM_TASKS_DIR" &&
+  printf '{"id":"T-047","scope":["src/**"],"acceptance":["The check passes."]}\n' > "$FM_TASKS_DIR/T-047.json" )
 oid="$(alloc --task T-047 --project example-app)"
 pr_is "$o" 12 t-047-app 'T-047: the app side'
 ask FM_PROJECT=firstmate-workflow FM_GH="$o/gh" "$o" "$oid" T-047 --project example-app --kind merge --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --pr 12 --details "$d/details.json"
