@@ -4,9 +4,10 @@ Fail-first cases plant records by hand and drive entry points that exist on
 the base: `fm_spec_pins.py scope`, `fm_prompt_context.py pin` and the
 autopilot merge path. Classes named *Interface exercise the new command and
 module; they are interface tests, not fail-first evidence. Classes named
-*Regression pin behaviour the base already has; they compare against a copy
-of the head's `bin/` tree without `bin/lib/fm_small_change.py`, which every
-module treats as "no records", not against a git base commit.
+*Regression pin behaviour the base already has; with no store they compare
+the head against a copy of the head's `bin/` tree without
+`bin/lib/fm_small_change.py`, as the copy fixtures run it. Only the migration
+case runs the base commit's own `bin/`, read from git.
 """
 import copy
 import hashlib
@@ -30,6 +31,7 @@ import autopilot_loop as fixture  # pops the root argument
 import autopilot_merge_path as merge_path
 from ste_cases import card
 from fm_spec_pins import Pins
+import fm_lifeline
 
 A, PR, HEAD, BASE, CHECKS = fixture.A, fixture.PR, fixture.HEAD, fixture.BASE, fixture.CHECKS
 REASON = {'en': 'The suite needs one more case.', 'zh-TW': '測試套件需要多一個案例。'}
@@ -62,6 +64,37 @@ def sha(data):
 
 def pin_sha(pin):
     return hashlib.sha256(json.dumps(pin, sort_keys=True).encode('utf-8')).hexdigest()
+
+
+# The approved T-277 pin's target base: the newest main commit before T-277.
+# Used only once the resolved base already carries T-277, after it merges.
+PRE_T277 = 'a118b065d7931b2e72b34b0a0907f5c37bc806aa'
+
+
+def fetched(sha):
+    if run('git', '-C', ROOT, 'cat-file', '-e', sha + '^{commit}').returncode:
+        git(ROOT, 'fetch', '--no-tags', '--depth=1', 'origin', sha)
+    return sha
+
+
+def base_commit():
+    """The commit this branch merges onto, fetched when the checkout lacks it."""
+    merged = run('git', '-C', ROOT, 'merge-base', 'HEAD', 'origin/main')
+    if merged.returncode == 0:
+        sha = merged.stdout.strip()
+    else:
+        # CI's depth-1 checkout is GitHub's pull request merge commit, without
+        # origin/main. Its first parent is the base; the raw object names that
+        # parent even when the parent itself was not fetched.
+        header = git(ROOT, 'cat-file', '-p', 'HEAD').split('\n\n', 1)[0]
+        parents = [line.split()[1] for line in header.splitlines() if line.startswith('parent ')]
+        if len(parents) != 2:
+            raise AssertionError('no base commit: origin/main is missing and HEAD is not a merge commit')
+        sha = parents[0]
+    fetched(sha)
+    if run('git', '-C', ROOT, 'cat-file', '-e', sha + ':bin/lib/fm_small_change.py').returncode == 0:
+        sha = fetched(PRE_T277)
+    return sha
 
 
 class Engine:
@@ -230,7 +263,9 @@ class GateEngine(Engine):
                    input=pin.stdout, env=env)
 
     def base_copy(self, name):
-        # The head's bin/ without fm_small_change.py: the no-T-277 baseline.
+        # Not the git base: the head's own bin/ without fm_small_change.py, as
+        # the copy fixtures run it. Equal output shows the head never needs the
+        # new module when no store exists.
         folder = self.tmp / 'no-small-change'
         if not folder.exists():
             shutil.copytree(ROOT / 'bin', folder / 'bin',
@@ -238,20 +273,21 @@ class GateEngine(Engine):
         return folder / 'bin/lib' / name
 
     def old_code_copy(self):
-        # Frozen pre-T-277 gate code: the head's bin/ without fm_small_change.py and
-        # without the store read in fm_spec_pins.py, so it never consults records.
-        # A git base blob is unavailable in CI's depth-1 checkout.
+        # The base commit's bin/ (git archive), with its fm_spec_pins.py read by
+        # git show: frozen pre-T-277 gate code, and the code a revert restores.
+        sha = base_commit()
         folder = self.tmp / 'old-code'
         if not folder.exists():
-            shutil.copytree(ROOT / 'bin', folder / 'bin',
-                            ignore=shutil.ignore_patterns('fm_small_change.py', '__pycache__'))
-            pins = folder / 'bin/lib/fm_spec_pins.py'
-            text = pins.read_text()
-            block = ("        if not self.external and os.path.lexists(self.state / 'small-changes' / self.task):\n"
-                     "            import fm_small_change\n"
-                     "            allowed = fm_small_change.allowed_paths(self, chain)\n")
-            self.assertEqual(text.count(block), 1, 'T-277 store read not found exactly once')
-            pins.write_text(text.replace(block, ''))
+            folder.mkdir()
+            archive = subprocess.run(['git', '-C', str(ROOT), 'archive', sha, 'bin'], capture_output=True)
+            self.assertEqual(archive.returncode, 0, archive.stderr)
+            tar = subprocess.run(['tar', '-x', '-C', str(folder)], input=archive.stdout, capture_output=True)
+            self.assertEqual(tar.returncode, 0, tar.stderr)
+            shown = subprocess.run(['git', '-C', str(ROOT), 'show', sha + ':bin/lib/fm_spec_pins.py'],
+                                   capture_output=True)
+            self.assertEqual(shown.returncode, 0, shown.stderr)
+            (folder / 'bin/lib/fm_spec_pins.py').write_bytes(shown.stdout)
+            self.assertFalse((folder / 'bin/lib/fm_small_change.py').exists(), 'base must predate T-277')
         return folder / 'bin/lib/fm_spec_pins.py'
 
     def assert_refused(self, needle, result=None):
@@ -488,7 +524,8 @@ class Prompts(GateEngine, unittest.TestCase):
 
 
 class PromptRegression(GateEngine, unittest.TestCase):
-    """Regression: without records the prompt is byte-for-byte the base prompt."""
+    """Regression: without records the prompt is byte-for-byte the prompt of the head's
+    bin/ copied without fm_small_change.py (base_copy), so no record code runs."""
 
     def test_no_store_and_empty_store_match_base_output(self):
         base = self.base_copy('fm_prompt_context.py')
@@ -501,7 +538,8 @@ class PromptRegression(GateEngine, unittest.TestCase):
 
 
 class GateRegression(GateEngine, unittest.TestCase):
-    """Regression: gate 3 without a record store behaves exactly as on the base."""
+    """Regression: gate 3 without a record store gives exactly the output of the head's
+    bin/ copied without fm_small_change.py (base_copy), and today's refusal text."""
 
     def test_without_store_matches_base(self):
         base = self.base_copy('fm_spec_pins.py')
@@ -581,6 +619,21 @@ class CommandInterface(GateEngine, unittest.TestCase):
         result = run('bash', ROOT / 'bin/fm-project.sh', 'small-change', '--repo', self.root,
                      *good, '--path', 'tests/x.sh', env=clean_env())
         self.assertEqual(result.returncode, 64, 'missing --task')
+        # The shell picks storage from exact option names; Python must refuse
+        # every form the shell would read differently, before storage init.
+        task = ['--task', self.task]
+        for name, argv in {
+                'missing project': task + good + ['--path', 'tests/a.test.sh'],
+                'abbreviated project': ['--proj', 'alpha'] + task + good + ['--path', 'tests/a.test.sh'],
+                'abbreviated reason-en': ['--project', 'alpha'] + task + good[:4] + ['--reason-e', 'x']
+                + good[6:] + ['--path', 'tests/a.test.sh'],
+                'abbreviated path': ['--project', 'alpha'] + task + good + ['--pa', 'tests/a.test.sh'],
+                'joined value': ['--project=alpha'] + task + good + ['--path', 'tests/a.test.sh']}.items():
+            with self.subTest(name=name):
+                result = run('bash', ROOT / 'bin/fm-project.sh', 'small-change', '--repo', self.root, *argv,
+                             env=clean_env())
+                self.assertEqual(result.returncode, 64, result.stderr)
+                self.assertFalse(self.store.exists())
         result = self.create('--path', 'tests/x.sh', FM_EXTERNAL='1')
         self.assertEqual(result.returncode, 64)
         self.assertIn('small-change tier is self-project only; use the full process', result.stderr)
@@ -702,6 +755,34 @@ class ExternalIsolation(GateEngine, unittest.TestCase):
                          FM_TASKS_DIR=str(home / 'tasks'), FM_DESIGN=str(home / 'design.md'))
         Pins(self.xenv, 'T-X').create()
 
+    def external_records(self):
+        # Valid for the external pin: its real digest and a previous_sha256 chain.
+        digest = pin_sha(json.loads((self.xstate / 'pins/T-X/1.json').read_text()))
+        records, previous = [], None
+        for n, path in enumerate(('tests/a.test.sh', 'docs/b.md'), 1):
+            data = (json.dumps(dict(
+                schema=1, project='client', task='T-X', number=n, pin_version=1, pin_sha256=digest,
+                kind='paths', reason=dict(en=self.SENTINEL, **{'zh-TW': self.SENTINEL}),
+                origin=dict(kind='firstmate', ref=self.SENTINEL), author='firstmate',
+                created='2026-10-09T16:00:00Z', previous_sha256=previous, paths=[path]),
+                indent=2) + '\n').encode()
+            records.append(data)
+            previous = sha(data)
+        return records
+
+    def test_external_fixture_records_are_valid_for_their_pin(self):
+        # The fixture's valid form passes every store check against the
+        # external pin chain, called directly; no reader ever does this.
+        self.external_pin()
+        store = self.xstate / 'small-changes/T-X'
+        store.mkdir(parents=True)
+        for n, data in enumerate(self.external_records(), 1):
+            (store / f'{n}.json').write_bytes(data)
+        import fm_small_change
+        chain = Pins(self.xenv, 'T-X').chain()
+        entries = fm_small_change.bound(fm_small_change.load(self.xstate, 'client', 'T-X', chain), chain[-1])
+        self.assertEqual([r['paths'] for r, _ in entries], [['tests/a.test.sh'], ['docs/b.md']])
+
     def snapshot(self, root):
         found = {}
         for path in sorted(Path(root).rglob('*')):
@@ -713,10 +794,7 @@ class ExternalIsolation(GateEngine, unittest.TestCase):
         self.external_pin()
         store = self.xstate / 'small-changes/T-X'
         private = self.tmp / 'private-elsewhere'
-        valid = json.dumps(dict(schema=1, project='client', task='T-X', number=1, pin_version=1,
-                                pin_sha256='0' * 64, kind='paths', reason=dict(en=self.SENTINEL, **{'zh-TW': self.SENTINEL}),
-                                origin=dict(kind='firstmate', ref=self.SENTINEL), author='firstmate',
-                                created='2026-10-09T16:00:00Z', previous_sha256=None, paths=['tests/a.test.sh']))
+        valid = self.external_records()
         self.change({'tests/a.test.sh': self.grow('tests/a.test.sh', 1)})
         for form in ('valid', 'corrupt', 'symlink'):
             with self.subTest(form=form):
@@ -726,7 +804,11 @@ class ExternalIsolation(GateEngine, unittest.TestCase):
                 shutil.rmtree(private, ignore_errors=True)
                 target = private if form == 'symlink' else store
                 target.mkdir(parents=True)
-                (target / '1.json').write_text(valid if form != 'corrupt' else '{' + self.SENTINEL)
+                if form == 'corrupt':
+                    (target / '1.json').write_text('{' + self.SENTINEL)
+                else:
+                    for n, data in enumerate(valid, 1):
+                        (target / f'{n}.json').write_bytes(data)
                 if form == 'symlink':
                     store.parent.mkdir(exist_ok=True)
                     store.symlink_to(private, target_is_directory=True)
@@ -901,12 +983,16 @@ class MergeCard(Engine, unittest.TestCase):
 
         def request_while_command_waits(argv, **kwargs):
             if '--request' in argv and not waiting:
-                proc = subprocess.Popen(['bash', str(ROOT / 'bin/fm-project.sh'), 'small-change', '--repo',
-                                         str(self.root), '--project', 'alpha', '--task', 'T-001',
-                                         '--origin', 'worker-ask', '--ref', 'r', '--reason-en', REASON['en'],
-                                         '--reason-tw', REASON['zh-TW'], '--path', 'tests/a.test.sh'],
-                                        env=clean_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                self.addCleanup(lambda: proc.poll() is None and proc.kill())
+                # Owned by this process through a lifeline keeper (T-151): the
+                # keeper ends the command if this test process dies, and returns
+                # the command's exit code.
+                proc = fm_lifeline.start(['bash', str(ROOT / 'bin/fm-project.sh'), 'small-change', '--repo',
+                                          str(self.root), '--project', 'alpha', '--task', 'T-001',
+                                          '--origin', 'worker-ask', '--ref', 'r', '--reason-en', REASON['en'],
+                                          '--reason-tw', REASON['zh-TW'], '--path', 'tests/a.test.sh'],
+                                         env=clean_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.addCleanup(proc.wait)
+                self.addCleanup(proc.terminate)
                 waiting.append(proc)
                 with self.assertRaises(subprocess.TimeoutExpired, msg='the command must wait for merge-turn.lock'):
                     proc.wait(timeout=3)
@@ -999,13 +1085,39 @@ class MergeCard(Engine, unittest.TestCase):
         self.pilot.advance(PR, CHECKS, [])
         self.assertEqual(len(self.gates()), 2)
 
-    def test_external_merge_path_never_reads_store(self):
-        sentinel = 'PRIVATE-T277-MERGE-SENTINEL'
+    def test_fingerprint_element_is_digest_of_record_bytes_in_number_order(self):
+        self.plant(self.paths_record(), self.paths_record(paths=['docs/b.md']))
+        first, second = ((self.store / f'{n}.json').read_bytes() for n in (1, 2))
+        self.pilot.advance(PR, CHECKS, [])
+        details = {p.name: json.loads(p.read_text())
+                   for p in (self.state / 'decision-details').glob('D-alpha-T001-*.json')}
+        expected = A.key([12, HEAD, BASE, self.pilot.settled_checks(PR, CHECKS, []), None, details, 0,
+                          hashlib.sha256(first + second).hexdigest()])
+        self.assertEqual(self.pilot.data['advanced']['12']['fingerprint'], expected)
+
+    MERGE_SENTINEL = 'PRIVATE-T277-MERGE-SENTINEL'
+
+    def external_merge(self, form):
+        sentinel = self.MERGE_SENTINEL
         self.ctx['external'] = True
         self.pilot.task = lambda pr: 'T-001'
-        self.store.mkdir(parents=True)
-        (self.store / '1.json').write_text('{' + sentinel)
-        before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.store.iterdir()}
+        elsewhere = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, elsewhere, True)
+        private = elsewhere / 'store'
+        if form == 'corrupt':
+            self.store.mkdir(parents=True)
+            (self.store / '1.json').write_text('{' + sentinel)
+        else:
+            # Valid for the current pin: real digest and previous_sha256 chain.
+            reason = dict(en=sentinel, **{'zh-TW': sentinel})
+            self.plant(self.paths_record(reason=reason, origin=dict(kind='firstmate', ref=sentinel)),
+                       self.paths_record(paths=['docs/b.md'], reason=reason))
+            if form == 'symlink':
+                shutil.move(self.store, private)
+                self.store.symlink_to(private, target_is_directory=True)
+        watched = [self.store, *self.store.iterdir()] + ([private, *private.iterdir()] if form == 'symlink' else [])
+        snapshot = lambda: {str(p): (os.lstat(p).st_mtime_ns, p.read_bytes() if p.is_file() and not p.is_symlink()
+                                     else None) for p in watched}
+        before = snapshot()
         authored = self.merge_details()
         with patch.dict(sys.modules, {'fm_small_change': None}):
             self.pilot.advance(PR, CHECKS, [])
@@ -1015,7 +1127,16 @@ class MergeCard(Engine, unittest.TestCase):
         for text in (json.dumps(self.pilot.data), json.dumps([c for c in self.calls if c[0] in ('command', 'emit')]),
                      *(p.read_text() for p in (self.state / 'pending').glob('*.json'))):
             self.assertNotIn(sentinel, text)
-        self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.store.iterdir()}, before)
+        self.assertEqual(snapshot(), before)
+
+    def test_external_merge_path_never_reads_valid_store(self):
+        self.external_merge('valid')
+
+    def test_external_merge_path_never_reads_corrupt_store(self):
+        self.external_merge('corrupt')
+
+    def test_external_merge_path_never_reads_symlinked_store(self):
+        self.external_merge('symlink')
 
 
 class NamedTestResult(unittest.TextTestResult):

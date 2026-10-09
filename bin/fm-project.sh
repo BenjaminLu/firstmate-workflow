@@ -86,7 +86,7 @@ if [ "${1:-}" = small-change ]; then
     case "$1" in
       --repo) fm_need "fm-project" "$@"; REPO="${2-}"; shift 2 ;;
       --project) fm_need "fm-project" "$@"; SMALL_PROJECT="${2-}"; shift 2 ;;
-      # check-args accepted only options that take one value
+      # check-args accepted only exact option names, each with one value
       *) fm_need "fm-project" "$@"; shift 2 ;;
     esac
   done

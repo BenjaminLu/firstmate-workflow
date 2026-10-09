@@ -368,7 +368,7 @@ def store_digest(state, task):
         for path in names:
             if path.is_symlink():
                 return 'invalid-store'
-            hasher.update(path.name.encode() + b'\0' + path.read_bytes() + b'\0')
+            hasher.update(path.read_bytes())
     except OSError:
         return 'unreadable-store'
     return hasher.hexdigest()
@@ -493,9 +493,20 @@ class Parser(argparse.ArgumentParser):
         raise Usage(message)
 
 
+OPTIONS = ('--project', '--repo', '--task', '--origin', '--ref', '--reason-en', '--reason-tw',
+           '--path', '--erratum', '--after')
+
+
 def arguments(argv):
-    parser = Parser(prog='fm-project.sh small-change', add_help=False)
-    parser.add_argument('--project')
+    # fm-project.sh picks storage from the same words, as exact option/value
+    # pairs; refuse abbreviations and --opt=value so both read one project.
+    for index in range(0, len(argv), 2):
+        if argv[index] not in OPTIONS:
+            raise Usage('unknown option: ' + argv[index])
+        if index + 1 == len(argv):
+            raise Usage(argv[index] + ' needs a value')
+    parser = Parser(prog='fm-project.sh small-change', add_help=False, allow_abbrev=False)
+    parser.add_argument('--project', required=True)
     parser.add_argument('--repo')
     parser.add_argument('--task', required=True)
     parser.add_argument('--origin', required=True)
@@ -557,7 +568,7 @@ def create(env, args):
     pins = Pins(env, args.task)
     if pins.external:
         raise Usage(EXTERNAL)
-    if args.project and args.project != pins.project:
+    if args.project != pins.project:
         raise ValueError('project does not match the resolved project')
     for lang, value in (('en', args.reason_en), ('zh-TW', args.reason_tw)):
         if not check_text(value, REASON_LIMITS[lang]):
