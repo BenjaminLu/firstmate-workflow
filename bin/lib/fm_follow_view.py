@@ -708,12 +708,18 @@ class Round:
         over, alive = self.state(unseen, grace)
         # Read what the log already holds before the first header, so the
         # header's activity is the round's, not a guess; what that reading
-        # prints is held and written after the header, in order.
+        # prints is held and written after the header, in order. All of it,
+        # up to its size at attach time, chunk by chunk; what is written
+        # after that belongs to the loop below.
         held = Held(screen)
         self.screen = held
         try:
-            data = self.read_log()
-            if data: self.feed(data)
+            try: size = self.log.stat().st_size
+            except OSError: size = 0
+            while self.at < size:
+                data = self.read_log()
+                if not data: break
+                self.feed(data)
         finally:
             self.screen = screen
         screen.start_header(self.header(alive, False))

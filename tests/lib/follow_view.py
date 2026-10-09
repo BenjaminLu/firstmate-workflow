@@ -55,37 +55,81 @@ PTY_SKIP = 'setup: no pseudo-terminal on this host; terminal cases not run (not 
 # Every fixture process runs in a session of its own and is owned by the
 # process that started it (T-151): a reaper started through the lifeline
 # ends that group when the owner dies, even by SIGKILL, when addCleanup
-# never runs. The reaper leaves as soon as the group is gone, so it never
-# signals a group id the system has given to someone else.
+# never runs. The reaper is started first; the child sends it its pid and
+# waits, before it execs, for the reaper's go. An owner that dies before
+# the go leaves a child that reads EOF and exits without running anything.
+# The reaper waits on the kernel alone, the lifeline and the child's exit,
+# and leaves as soon as the child is gone, so it never signals a group id
+# the system has given to someone else.
 REAPER = (
     "import os, select, signal, sys\n"
-    "fd, pgid = int(os.environ['FM_LIFELINE_FD']), int(sys.argv[1])\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "import fm_lifeline\n"
+    "fd = int(os.environ['FM_LIFELINE_FD'])\n"
+    "line = sys.stdin.buffer.readline()\n"
+    "if not line.strip(): sys.exit(0)\n"  # the owner died before it made the child
+    "pgid = int(line)\n"
+    "try: exit_of = fm_lifeline.ProcessExit(pgid)\n"
+    "except fm_lifeline.OwnerGone: sys.exit(0)\n"
+    "os.set_blocking(fd, False)\n"  # one look: is the owner already gone?
+    "try: owner_gone = os.read(fd, 1) == b''\n"
+    "except BlockingIOError: owner_gone = False\n"
+    "if owner_gone:\n"
+    "    try: os.killpg(pgid, signal.SIGKILL)\n"
+    "    except OSError: pass\n"
+    "    sys.exit(0)\n"
+    "os.set_blocking(fd, True)\n"
+    "os.write(1, b'1'); os.close(1)\n"
     "while True:\n"
-    "    ready, _, _ = select.select([fd], [], [], .2)\n"
-    "    try: os.killpg(pgid, 0)\n"
-    "    except ProcessLookupError: sys.exit(0)\n"
-    "    except PermissionError: pass\n"
-    "    if ready and os.read(fd, 4096) == b'':\n"
+    "    ready, _, _ = select.select([fd, exit_of], [], [])\n"
+    "    if exit_of in ready and exit_of.gone(): sys.exit(0)\n"
+    "    if fd in ready and os.read(fd, 4096) == b'':\n"
     "        try: os.killpg(pgid, signal.SIGKILL)\n"
     "        except OSError: pass\n"
     "        sys.exit(0)\n")
 
 
-def reap(pgid, lib=None):
-    """Tie the process group pgid to this process's life."""
-    lib = str(lib or ROOT / 'bin/lib')
-    if lib not in sys.path: sys.path.insert(0, lib)
-    import fm_lifeline
-    fm_lifeline.start([sys.executable, '-c', REAPER, str(pgid)], direct=True, stdin=subprocess.DEVNULL,
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+class Owned:
+    """A reaper, started before the child it will own. Call ready() in the
+    child before it execs and made() in this process once it exists."""
+
+    def __init__(self, lib=None, reaper=None):
+        lib = str(lib or ROOT / 'bin/lib')
+        if lib not in sys.path: sys.path.insert(0, lib)
+        import fm_lifeline
+        pid_read, self.pid_write = os.pipe()
+        self.go_read, go_write = os.pipe()
+        try:
+            fm_lifeline.start([sys.executable, '-c', reaper or REAPER, lib], direct=True, stdin=pid_read,
+                              stdout=go_write, stderr=subprocess.DEVNULL)
+        except BaseException:
+            self.made(); raise
+        finally:
+            os.close(pid_read); os.close(go_write)
+
+    def ready(self):
+        """In the child: name itself to the reaper, then wait for its go.
+        It first drops the lifelines it inherited from this process, so its
+        own reaper, like every other, reads EOF when this process dies."""
+        lifeline = sys.modules.get('fm_lifeline')
+        for fd in (lifeline._held if lifeline else ()):
+            try: os.close(fd)
+            except OSError: pass
+        os.write(self.pid_write, b'%d\n' % os.getpid()); os.close(self.pid_write)
+        if os.read(self.go_read, 1) != b'1': os._exit(1)
+        os.close(self.go_read)
+
+    def made(self):
+        for fd in (self.pid_write, self.go_read):
+            try: os.close(fd)
+            except OSError: pass
 
 
-def launch(argv, lib=None, **popen):
+def launch(argv, lib=None, reaper=None, **popen):
     """A fixture process in a session of its own, owned by this process."""
-    proc = subprocess.Popen(argv, start_new_session=True, **popen)
-    reap(proc.pid, lib)
-    return proc
-
+    owned = Owned(lib, reaper)
+    try: return subprocess.Popen(argv, start_new_session=True, preexec_fn=owned.ready, **popen)
+    finally: owned.made()
 
 
 def visible(text):
@@ -131,9 +175,11 @@ class Pty:
 
     def __init__(self, argv, env, columns=80, rows=24, inherit_ignored_int=False):
         import pty
+        owned = Owned()  # the pty child leads its own session
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             try:
+                owned.ready()
                 fcntl.ioctl(1, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
                 # A suite run in the background of bin/ci.sh inherits SIGINT
                 # ignored; a program started from a real terminal does not.
@@ -142,7 +188,7 @@ class Pty:
                 if inherit_ignored_int: signal.signal(signal.SIGINT, signal.SIG_IGN)
                 os.execve(argv[0], argv, env)
             finally: os._exit(127)
-        reap(self.pid)  # the pty child leads its own session
+        owned.made()
         self.out, self.status = b'', None
 
     def pump(self, timeout=.1):
@@ -436,6 +482,14 @@ class Header(Fixture):
         _, now = self.head(self.attempt(running + '\n'))
         self.assertTrue(now.startswith('now: running a command: long command'), now)
 
+    def test_header_activity_comes_from_beyond_the_first_mib_of_the_log(self):
+        earlier = ''.join(f'earlier line {n:06d} ' + 'x' * 100 + '\n' for n in range(12000))
+        self.assertGreater(len(earlier), 1 << 20)
+        running = jline({'type': 'item.started', 'item': {'id': 'i', 'type': 'command_execution',
+                                                          'command': 'late command', 'status': 'in_progress'}})
+        _, now = self.head(self.attempt(earlier + running + '\n'))
+        self.assertTrue(now.startswith('now: running a command: late command'), now)
+
     def test_header_pr_with_same_task_in_two_projects(self):
         attempt = self.attempt(self.fixture('mock'), vendor='mock', task='T-9')
         self.events(dict(actor='x', type='pr_opened', project='alpha', task='T-9', pr=41),
@@ -667,7 +721,11 @@ class LiveRounds(Fixture):
         self.assertEqual(0, self.follow(attempt, env=dict(self.env, FM_FOLLOW_GRACE='1')).returncode)
         self.assertGreaterEqual(time.monotonic() - started, 1)  # the start grace, then over
         # a killed runner whose group survives is still the round
-        leader = launch([sys.executable, '-c', 'import subprocess; subprocess.Popen(["sleep", "120"])'])
+        # The survivor reads this process's pipe, so it ends with this process.
+        leader = launch([sys.executable, '-c', 'import subprocess, sys; '
+                         'subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"])'],
+                        stdin=subprocess.PIPE)
+        self.addCleanup(leader.stdin.close)
         leader.wait()
         self.addCleanup(self.end_group, leader.pid)
         attempt = self.attempt('x\n', finished=False)
@@ -682,28 +740,70 @@ class LiveRounds(Fixture):
         try: os.killpg(pgid, signal.SIGKILL)
         except OSError: pass
 
+    def owner_source(self):
+        return ('ROOT = None\nREAPER = %r\n' % REAPER + inspect.getsource(Owned) + inspect.getsource(launch)
+                + 'import os, pty, subprocess, sys, time\nlib = sys.argv[1]\n')
+
+    def group_gone(self, pgid):
+        try: os.killpg(pgid, 0)
+        except ProcessLookupError: return True
+        except PermissionError: return False
+        return False
+
     def test_fixture_processes_end_when_their_owner_dies(self):
-        source = 'ROOT = None\nREAPER = %r\n' % REAPER + inspect.getsource(reap) + inspect.getsource(launch)
-        script = source + (
-            "import os, pty, subprocess, sys, time\n"
-            "lib = sys.argv[1]\n"
+        script = self.owner_source() + (
             "sleeper = launch([sys.executable, '-c', 'import time; time.sleep(300)'], lib=lib, stdin=subprocess.DEVNULL)\n"
+            "owned = Owned(lib)\n"
             "pid, fd = pty.fork()\n"
-            "if pid == 0: os.execv('/bin/sleep', ['sleep', '300'])\n"
-            "reap(pid, lib)\n"
+            "if pid == 0:\n"
+            "    owned.ready(); os.execv('/bin/sleep', ['sleep', '300'])\n"
+            "owned.made()\n"
             "print(sleeper.pid, pid, flush=True)\n"
             "time.sleep(300)\n")
         owner = launch([sys.executable, '-c', script, str(ROOT / 'bin/lib')], stdout=subprocess.PIPE)
+        self.addCleanup(owner.stdout.close)
         groups = [int(n) for n in owner.stdout.readline().split()]
         self.assertEqual(2, len(groups))
         os.kill(owner.pid, signal.SIGKILL); owner.wait()
+        self.eventually(lambda: all(self.group_gone(g) for g in groups), why='fixture groups outlived their owner')
 
-        def gone(pgid):
-            try: os.killpg(pgid, 0)
-            except ProcessLookupError: return True
-            except PermissionError: return False
-            return False
-        self.eventually(lambda: all(gone(g) for g in groups), why='fixture groups outlived their owner')
+    def test_fixture_children_never_run_when_their_owner_dies_during_startup(self):
+        # A reaper that is never ready: it names the child it was given and
+        # holds its lifeline, but never says go.
+        stall = ("import os, select, sys\n"
+                 "fd = int(os.environ['FM_LIFELINE_FD'])\n"
+                 "with open(os.environ['STALL_FILE'], 'w') as named: named.write(sys.stdin.readline())\n"
+                 "select.select([fd], [], [])\n")
+        stalls = [self.tmp / 'stall-pty', self.tmp / 'stall-popen']
+        markers = [self.tmp / 'ran-pty', self.tmp / 'ran-popen']
+        script = self.owner_source() + (
+            "stall, stalls, markers = sys.argv[2], sys.argv[3:5], sys.argv[5:7]\n"
+            "os.environ['STALL_FILE'] = stalls[0]\n"
+            "owned = Owned(lib, stall)\n"
+            "pid, fd = pty.fork()\n"
+            "if pid == 0:\n"
+            "    owned.ready(); os.execv('/usr/bin/touch', ['touch', markers[0]])\n"
+            "owned.made()\n"
+            "os.environ['STALL_FILE'] = stalls[1]\n"
+            "launch(['/usr/bin/touch', markers[1]], lib=lib, reaper=stall, stdin=subprocess.DEVNULL)\n"
+            "time.sleep(300)\n")
+        owner = launch([sys.executable, '-c', script, str(ROOT / 'bin/lib'), stall,
+                        *map(str, stalls), *map(str, markers)], stdin=subprocess.DEVNULL)
+        named = lambda path: path.exists() and path.read_text().strip().isdigit()
+        self.eventually(lambda: all(named(path) for path in stalls), why='the children were not made')
+        children = [int(path.read_text()) for path in stalls]
+        os.kill(owner.pid, signal.SIGKILL); owner.wait()
+        self.eventually(lambda: all(self.group_gone(c) for c in children), why='a child outlived its dead owner')
+        self.assertEqual([], [str(m) for m in markers if m.exists()], 'a child ran after its owner died')
+
+    def test_fixture_reaper_waits_on_the_kernel_not_a_poll(self):
+        tree = ast.parse(REAPER)
+        selects = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == 'select.select']
+        self.assertTrue(selects)
+        self.assertEqual([3] * len(selects), [len(n.args) + len(n.keywords) for n in selects], 'select with a timeout')
+        self.assertNotIn('killpg(pgid, 0)', REAPER)
+        self.assertNotIn('sleep', REAPER)
+        self.assertIn('ProcessExit(pgid)', REAPER)
 
     def test_read_only_with_a_missing_lock_file(self):
         code = self.tmp / 'code'
