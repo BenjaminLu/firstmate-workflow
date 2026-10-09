@@ -122,7 +122,7 @@
           }
           el.classList.toggle('scene-dim',state.highlight.length>0 && el.dataset.change && !state.highlight.includes(el.dataset.change));
         });
-        host.querySelectorAll('[data-phase]').forEach(el=>el.setAttribute('aria-pressed',String(Number(el.dataset.phase)===Math.round(state.phase))));
+        host.querySelectorAll('.scene-controls [data-phase]').forEach(el=>el.setAttribute('aria-pressed',String(Number(el.dataset.phase)===Math.round(state.phase))));
         const token=host.querySelector('.scene-token');
         const ids=state.phase < 1 ? scene.tokens.before : scene.tokens.after;
         const progress=state.phase < 1 ? state.phase : state.phase-1;
@@ -187,8 +187,8 @@
         button.onclick=()=>highlight(number,changes.map(c=>c.id));row.append(button);
       });
       host.querySelector('[data-play]')?.addEventListener('click',play);
-      host.querySelector('[data-scrub]')?.addEventListener('input',e=>{stop();state.phase=Number(e.target.value);paint();});
-      host.querySelectorAll('[data-phase]').forEach(el=>el.onclick=()=>{stop();state.phase=Number(el.dataset.phase);paint();});
+      host.querySelector('[data-scrub]')?.addEventListener('input',e=>{const value=Number(e.target.value);stop();state.phase=value;paint();});
+      host.querySelectorAll('.scene-controls [data-phase]').forEach(el=>el.onclick=()=>{stop();state.phase=Number(el.dataset.phase);paint();});
       host.querySelectorAll('[data-badge]').forEach(el=>el.onclick=()=>{
         const id=el.dataset.badge, change=scene.changes.find(c=>c.id===id);
         const target=valid && walk.intents.find(i=>i.key.some(b=>b.changes?.includes(id)));

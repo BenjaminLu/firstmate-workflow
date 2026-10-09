@@ -472,8 +472,11 @@ class MergeRequests(unittest.TestCase):
         store.append('verdict',1,'reviewer',self.head,text,verdict='APPROVE',base=self.base,patch='d'*64,provenance={'level':'legacy'})
         snapshots={p:p.read_bytes() for p in store.directory.glob('*.json')}
         self.env['FM_PROJECT']='beta'
-        result=self.request('D-beta-T242-1');self.assertEqual(0,result.returncode,result.stderr)
-        card=json.loads((workspace/'state/pending/D-beta-T242-1.json').read_text())
+        allocated=subprocess.run(['bash',str(self.root/'bin/fm-decide.sh'),'--allocate','--task','T-242','--kind','merge'],cwd=self.root,env=self.env,capture_output=True,text=True)
+        self.assertEqual(0,allocated.returncode,allocated.stderr)
+        ident=allocated.stdout.strip();self.assertEqual('D-beta-T242-1',ident)
+        result=self.request(ident);self.assertEqual(0,result.returncode,result.stderr)
+        card=json.loads((workspace/'state/pending/'+ident+'.json').read_text())
         self.assertIn('walk',card['details'],'external merge requests attach privately')
         self.assertEqual('valid',card['details']['walk']['status'])
         self.assertIn('owner/private',card['details']['walk']['intents'][0]['key'][0]['url'])
