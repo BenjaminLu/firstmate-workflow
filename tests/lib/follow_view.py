@@ -11,6 +11,7 @@ sandbox can refuse it), they are skipped as setup, never passed.
 """
 import ast
 import fcntl
+import inspect
 import json
 import os
 from pathlib import Path
@@ -50,6 +51,41 @@ def pty_available():
 
 PTY = pty_available()
 PTY_SKIP = 'setup: no pseudo-terminal on this host; terminal cases not run (not behavioural)'
+
+# Every fixture process runs in a session of its own and is owned by the
+# process that started it (T-151): a reaper started through the lifeline
+# ends that group when the owner dies, even by SIGKILL, when addCleanup
+# never runs. The reaper leaves as soon as the group is gone, so it never
+# signals a group id the system has given to someone else.
+REAPER = (
+    "import os, select, signal, sys\n"
+    "fd, pgid = int(os.environ['FM_LIFELINE_FD']), int(sys.argv[1])\n"
+    "while True:\n"
+    "    ready, _, _ = select.select([fd], [], [], .2)\n"
+    "    try: os.killpg(pgid, 0)\n"
+    "    except ProcessLookupError: sys.exit(0)\n"
+    "    except PermissionError: pass\n"
+    "    if ready and os.read(fd, 4096) == b'':\n"
+    "        try: os.killpg(pgid, signal.SIGKILL)\n"
+    "        except OSError: pass\n"
+    "        sys.exit(0)\n")
+
+
+def reap(pgid, lib=None):
+    """Tie the process group pgid to this process's life."""
+    lib = str(lib or ROOT / 'bin/lib')
+    if lib not in sys.path: sys.path.insert(0, lib)
+    import fm_lifeline
+    fm_lifeline.start([sys.executable, '-c', REAPER, str(pgid)], direct=True, stdin=subprocess.DEVNULL,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def launch(argv, lib=None, **popen):
+    """A fixture process in a session of its own, owned by this process."""
+    proc = subprocess.Popen(argv, start_new_session=True, **popen)
+    reap(proc.pid, lib)
+    return proc
+
 
 
 def visible(text):
@@ -106,6 +142,7 @@ class Pty:
                 if inherit_ignored_int: signal.signal(signal.SIGINT, signal.SIG_IGN)
                 os.execve(argv[0], argv, env)
             finally: os._exit(127)
+        reap(self.pid)  # the pty child leads its own session
         self.out, self.status = b'', None
 
     def pump(self, timeout=.1):
@@ -204,8 +241,8 @@ class Fixture(unittest.TestCase):
 
     def runner(self):
         """A live process the liveness check takes for a round's runner."""
-        proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)', 'fm-herdr.py'],
-                                stdin=subprocess.DEVNULL)
+        proc = launch([sys.executable, '-c', 'import time; time.sleep(300)', 'fm-herdr.py'],
+                      stdin=subprocess.DEVNULL)
         self.addCleanup(lambda: proc.poll() is None and (proc.kill(), proc.wait()))
         return proc
 
@@ -221,8 +258,8 @@ class Fixture(unittest.TestCase):
     def start(self, attempt, env=None):
         out = open(self.tmp / ('follow-%d.out' % time.monotonic_ns()), 'w+b')
         self.addCleanup(out.close)
-        proc = subprocess.Popen([sys.executable, str(HERDR), 'follow', str(attempt)], env=env or self.env,
-                                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+        proc = launch([sys.executable, str(HERDR), 'follow', str(attempt)], env=env or self.env,
+                      stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         self.addCleanup(lambda: proc.poll() is None and (proc.kill(), proc.wait()))
         return proc, Path(out.name)
 
@@ -393,6 +430,12 @@ class Header(Fixture):
         self.assertTrue(now.startswith('now: '), now)
         self.assertIn('vendor silence: unknown', now)
 
+    def test_header_activity_comes_from_the_log_already_there(self):
+        running = jline({'type': 'item.started', 'item': {'id': 'i', 'type': 'command_execution',
+                                                          'command': 'long command', 'status': 'in_progress'}})
+        _, now = self.head(self.attempt(running + '\n'))
+        self.assertTrue(now.startswith('now: running a command: long command'), now)
+
     def test_header_pr_with_same_task_in_two_projects(self):
         attempt = self.attempt(self.fixture('mock'), vendor='mock', task='T-9')
         self.events(dict(actor='x', type='pr_opened', project='alpha', task='T-9', pr=41),
@@ -457,6 +500,20 @@ class Diffs(Fixture):
         self.repo()
         body = self.section(self.view('gone.txt'), 'gone.txt')
         self.assertIn('-gone line', body); self.assertIn('+++ /dev/null', body)
+
+    def test_diff_large_files_are_shown_whole(self):
+        tree = self.repo()
+        (tree / 'big_gone.txt').write_text(''.join(f'old{n}\n' for n in range(500)))
+        self.git(tree, 'add', 'big_gone.txt'); self.git(tree, 'commit', '-qm', 'big')
+        (tree / 'big_gone.txt').unlink()
+        (tree / 'big_new.txt').write_text(''.join(f'line{n}\n' for n in range(500)))
+        out = self.view(str(tree / 'big_new.txt'), 'big_gone.txt')
+        added = self.section(out, 'big_new.txt')
+        removed = self.section(out, 'big_gone.txt')
+        self.assertIn('+line250', added); self.assertIn('-old250', removed)
+        self.assertEqual(500, len([l for l in added if l.startswith('+line')]))
+        self.assertEqual(500, len([l for l in removed if l.startswith('-old')]))
+        self.assertNotIn('hidden', '\n'.join(added + removed))
 
     def test_diff_rename_is_a_deletion_plus_an_addition(self):
         tree = self.repo()
@@ -610,8 +667,7 @@ class LiveRounds(Fixture):
         self.assertEqual(0, self.follow(attempt, env=dict(self.env, FM_FOLLOW_GRACE='1')).returncode)
         self.assertGreaterEqual(time.monotonic() - started, 1)  # the start grace, then over
         # a killed runner whose group survives is still the round
-        leader = subprocess.Popen([sys.executable, '-c', 'import subprocess; subprocess.Popen(["sleep", "120"])'],
-                                  start_new_session=True)
+        leader = launch([sys.executable, '-c', 'import subprocess; subprocess.Popen(["sleep", "120"])'])
         leader.wait()
         self.addCleanup(self.end_group, leader.pid)
         attempt = self.attempt('x\n', finished=False)
@@ -625,6 +681,29 @@ class LiveRounds(Fixture):
     def end_group(self, pgid):
         try: os.killpg(pgid, signal.SIGKILL)
         except OSError: pass
+
+    def test_fixture_processes_end_when_their_owner_dies(self):
+        source = 'ROOT = None\nREAPER = %r\n' % REAPER + inspect.getsource(reap) + inspect.getsource(launch)
+        script = source + (
+            "import os, pty, subprocess, sys, time\n"
+            "lib = sys.argv[1]\n"
+            "sleeper = launch([sys.executable, '-c', 'import time; time.sleep(300)'], lib=lib, stdin=subprocess.DEVNULL)\n"
+            "pid, fd = pty.fork()\n"
+            "if pid == 0: os.execv('/bin/sleep', ['sleep', '300'])\n"
+            "reap(pid, lib)\n"
+            "print(sleeper.pid, pid, flush=True)\n"
+            "time.sleep(300)\n")
+        owner = launch([sys.executable, '-c', script, str(ROOT / 'bin/lib')], stdout=subprocess.PIPE)
+        groups = [int(n) for n in owner.stdout.readline().split()]
+        self.assertEqual(2, len(groups))
+        os.kill(owner.pid, signal.SIGKILL); owner.wait()
+
+        def gone(pgid):
+            try: os.killpg(pgid, 0)
+            except ProcessLookupError: return True
+            except PermissionError: return False
+            return False
+        self.eventually(lambda: all(gone(g) for g in groups), why='fixture groups outlived their owner')
 
     def test_read_only_with_a_missing_lock_file(self):
         code = self.tmp / 'code'
@@ -743,6 +822,31 @@ class Dashboard(Fixture):
         self.assertEqual(['no live rounds'], self.lines(self.shown(self.fm('--all'))))
         for wrong in (('--all', ACTOR), ('--all', '--raw')):
             self.assertEqual(64, self.fm(*wrong).returncode)
+
+    def test_dashboard_shows_only_the_selected_project(self):
+        self.live('x\n', actor='worker-ada-t1-r1', task='T-1', project='alpha')
+        self.live('x\n', actor='worker-bea-t2-r1', task='T-2', project='beta')
+        self.live('x\n', actor='worker-cora-t3-r1', task='T-3', identity=False)  # legacy: the default project
+        default = '\n'.join(self.lines(self.shown(self.fm('--all'))))
+        self.assertIn('worker-ada-t1-r1', default); self.assertNotIn('worker-bea-t2-r1', default)
+        self.assertIn('worker-cora-t3-r1', default)
+        beta = '\n'.join(self.lines(self.shown(self.fm('--all', '--project', 'beta'))))
+        self.assertIn('worker-bea-t2-r1', beta)
+        self.assertNotIn('worker-ada-t1-r1', beta); self.assertNotIn('worker-cora-t3-r1', beta)
+        self.assertEqual(['no live rounds'], self.lines(self.shown(self.fm('--all', '--project', 'gamma'))))
+
+    @unittest.skipUnless(PTY, PTY_SKIP)
+    def test_dashboard_without_colour_keeps_watching_on_a_terminal(self):
+        self.live(heartbeat(15) + '\n', actor='worker-ada-t1-r1', task='T-1')
+        for setting in ('1', ''):  # NO_COLOR counts when set, even empty
+            env = dict(self.env, FM_FOLLOW_STUCK='1', FM_FOLLOW_QUIET='0', NO_COLOR=setting)
+            session = self.in_pty(['/bin/bash', str(FM), 'follow', '--all', '--repo', str(self.root)], env)
+            session.until(lambda text: 'possibly stuck' in text)
+            self.assertIsNone(session.status, 'the dashboard ended before Ctrl-C')
+            self.assertGreaterEqual(session.text().count('worker-ada-t1-r1'), 2)
+            self.assertNotIn('\x1b', session.text())
+            os.write(session.fd, b'\x03')
+            self.assertEqual(0, session.wait())
 
     @unittest.skipUnless(PTY, PTY_SKIP)
     def test_dashboard_refreshes_marks_stuck_and_ctrl_c_ends_it(self):

@@ -286,7 +286,8 @@ class Screen:
         self.out = stream if stream is not None else sys.stdout.buffer
         try: self.tty = os.isatty(self.out.fileno())
         except (AttributeError, OSError, ValueError): self.tty = False
-        self.fancy = self.tty and not os.environ.get('NO_COLOR')
+        # NO_COLOR set, even to an empty value, turns colour and screen control off.
+        self.fancy = self.tty and 'NO_COLOR' not in os.environ
         self.style = Style(self.fancy)
         self.header = 0
         self.beat = False
@@ -374,6 +375,24 @@ class Screen:
 
 
 # --- one round -----------------------------------------------------------
+
+class Held:
+    """A screen that keeps what is written to it and writes it later."""
+
+    def __init__(self, screen):
+        self.screen, self.calls = screen, []
+
+    def __getattr__(self, name):
+        return getattr(self.screen, name)
+
+    def line(self, text): self.calls.append(('line', text))
+
+    def heartbeat(self, text): self.calls.append(('heartbeat', text))
+
+    def replay(self):
+        for name, text in self.calls: getattr(self.screen, name)(text)
+        self.calls = []
+
 
 class Round:
     """One attempt's log, parsed; rendered when it has a screen. Without one
@@ -630,9 +649,9 @@ class Round:
         _, name, lines = found
         language = LANGUAGES.get(Path(name).suffix.lower())
         self.put(style('1', say('diff', path=name)))
-        for text, hidden in collapse(lines, 200):
-            if hidden: self.put(style(GREY, text))
-            elif GIT_HEADER.match(text): self.put(style('1', text))
+        # A file change is shown whole; only command output is collapsed.
+        for text in lines:
+            if GIT_HEADER.match(text): self.put(style('1', text))
             elif text.startswith('@@'): self.put(style(CYAN, text))
             elif text.startswith('+'): self.put(style(GREEN, '+') + highlight(style, language, text[1:], GREEN))
             elif text.startswith('-'): self.put(style(RED, text))
@@ -687,7 +706,18 @@ class Round:
         unseen = time.monotonic()
         self.pending.extend(self.poll_events())
         over, alive = self.state(unseen, grace)
+        # Read what the log already holds before the first header, so the
+        # header's activity is the round's, not a guess; what that reading
+        # prints is held and written after the header, in order.
+        held = Held(screen)
+        self.screen = held
+        try:
+            data = self.read_log()
+            if data: self.feed(data)
+        finally:
+            self.screen = screen
         screen.start_header(self.header(alive, False))
+        held.replay()
         if self.bad_keep: self.put(self.style(YELLOW, say('notice') + say('lines_invalid')))
         due, events = [time.monotonic() + 1], time.monotonic() + 1
         while True:
@@ -809,9 +839,11 @@ def table(rows, style):
     return plain, styled
 
 
-def dashboard(runs, probe, engine=None, refresh=2.0, stream=None):
+def dashboard(runs, probe, engine=None, refresh=2.0, stream=None, project=None):
     """One line per live round of the selected project. On a terminal it
-    refreshes until Ctrl-C; otherwise it prints one snapshot and exits 0."""
+    refreshes until Ctrl-C, with or without colour; otherwise it prints one
+    snapshot and exits 0. A round's project is its identity's, or the
+    default project for a record that names none."""
     screen = Screen(stream)
     grace = setting('FM_FOLLOW_GRACE', 120.0)
     stuck = setting('FM_FOLLOW_STUCK', 300.0)
@@ -822,16 +854,21 @@ def dashboard(runs, probe, engine=None, refresh=2.0, stream=None):
             rows, seen = [], {}
             for attempt, starting in live_attempts(runs, probe, grace):
                 view = tracked.get(attempt) or Round(attempt, probe, None, engine)
+                if project is not None and view.project != project: continue
                 seen[attempt] = view
                 if not starting: view.feed(view.read_log(tail=262144))
-                rows.append(view.row(starting, screen.fancy, stuck))
+                rows.append(view.row(starting, screen.tty, stuck))
             tracked = seen
-            if not screen.fancy:
-                if not rows: screen.line(say('no_rounds'))
-                else:
-                    for text in table(rows, screen.style)[0]: screen.line(text)
+            plain = table(rows, screen.style)[0] if rows else [say('no_rounds')]
+            if not screen.tty:
+                for text in plain: screen.line(text)
                 return 0
-            if rows: screen.frame(table(rows, screen.style)[1])
+            # A terminal keeps watching until Ctrl-C; colour and screen
+            # control are only how it draws, never whether it watches.
+            if not screen.fancy:
+                for text in plain: screen.line(text)
+                screen.line('')
+            elif rows: screen.frame(table(rows, screen.style)[1])
             else: screen.frame(lambda columns: [say('no_rounds')[:columns]])
             time.sleep(refresh)
     except KeyboardInterrupt:
