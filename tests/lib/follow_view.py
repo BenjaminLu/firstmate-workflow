@@ -93,12 +93,17 @@ def tree_state(*roots):
 class Pty:
     """A command on a pseudo-terminal of a set size; its output as bytes."""
 
-    def __init__(self, argv, env, columns=80, rows=24):
+    def __init__(self, argv, env, columns=80, rows=24, inherit_ignored_int=False):
         import pty
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             try:
                 fcntl.ioctl(1, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
+                # A suite run in the background of bin/ci.sh inherits SIGINT
+                # ignored; a program started from a real terminal does not.
+                for number in (signal.SIGINT, signal.SIGQUIT):
+                    signal.signal(number, signal.SIG_DFL)
+                if inherit_ignored_int: signal.signal(signal.SIGINT, signal.SIG_IGN)
                 os.execve(argv[0], argv, env)
             finally: os._exit(127)
         self.out, self.status = b'', None
@@ -256,8 +261,8 @@ class Fixture(unittest.TestCase):
         (tree / 'image.bin').write_bytes(b'\x00\x03\x04binary')
         return tree
 
-    def in_pty(self, argv, env=None, columns=80, rows=24):
-        session = Pty(argv, env or self.env, columns, rows)
+    def in_pty(self, argv, env=None, columns=80, rows=24, inherit_ignored_int=False):
+        session = Pty(argv, env or self.env, columns, rows, inherit_ignored_int)
         self.addCleanup(session.close)
         return session
 
@@ -750,6 +755,18 @@ class Dashboard(Fixture):
         session.until(lambda text: any('worker-ada-t1-r1' in line and 'possibly stuck' in line and len(line) <= 80
                                        for line in visible(text)))
         self.assertGreaterEqual(session.text().count('\x1b[H'), 2)
+        os.write(session.fd, b'\x03')
+        self.assertEqual(0, session.wait())
+        self.assertNotIn('Traceback', session.text())
+
+    @unittest.skipUnless(PTY, PTY_SKIP)
+    def test_dashboard_ctrl_c_ends_it_when_started_with_sigint_ignored(self):
+        # A parent that ignores SIGINT (a script, a backgrounded job) passes
+        # that on; the terminal dashboard still stops on Ctrl-C.
+        self.live('x\n', actor='worker-ada-t1-r1', task='T-1')
+        session = self.in_pty(['/bin/bash', str(FM), 'follow', '--all', '--repo', str(self.root)], self.env,
+                              inherit_ignored_int=True)
+        session.until(lambda text: 'worker-ada-t1-r1' in text)
         os.write(session.fd, b'\x03')
         self.assertEqual(0, session.wait())
         self.assertNotIn('Traceback', session.text())

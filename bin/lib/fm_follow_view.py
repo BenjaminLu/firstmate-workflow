@@ -722,16 +722,34 @@ class Round:
                 say('stuck') if stuck else '']
 
 
+def interruptible(screen):
+    """On a terminal, let Ctrl-C stop the view even when a parent started it
+    with SIGINT ignored (a script, or a job backgrounded in a shell without
+    job control); Python leaves an inherited ignore in place. Returns the
+    handler to put back, or None when nothing changed."""
+    if not screen.tty: return None
+    try: return signal.signal(signal.SIGINT, signal.default_int_handler)
+    except (ValueError, OSError): return None
+
+
+def restore_interrupt(previous):
+    if previous is None: return
+    try: signal.signal(signal.SIGINT, previous)
+    except (ValueError, OSError, TypeError): pass
+
+
 def follow(attempt, poll=0.2, probe=None, engine=None, stream=None):
     """The formatted view of one round, ending when fm-herdr.py's raw
     follower would: a result or exit file, nothing of the round left
     running, or the start grace passed with no round started."""
     screen = Screen(stream)
     view = Round(attempt, probe, screen, engine)
+    previous = interruptible(screen)
     try: return view.run(poll)
     except KeyboardInterrupt: return 130
     except BrokenPipeError: return 0  # the window went away; that stops nothing
     finally:
+        restore_interrupt(previous)
         try: screen.close()
         except OSError: pass
 
@@ -798,6 +816,7 @@ def dashboard(runs, probe, engine=None, refresh=2.0, stream=None):
     grace = setting('FM_FOLLOW_GRACE', 120.0)
     stuck = setting('FM_FOLLOW_STUCK', 300.0)
     tracked = {}
+    previous = interruptible(screen)
     try:
         while True:
             rows, seen = [], {}
@@ -820,5 +839,6 @@ def dashboard(runs, probe, engine=None, refresh=2.0, stream=None):
     except BrokenPipeError:
         return 0
     finally:
+        restore_interrupt(previous)
         try: screen.close()
         except OSError: pass
