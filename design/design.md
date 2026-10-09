@@ -2965,7 +2965,9 @@ The v2d-15 2.5D stage is a panel above v1's workflow, or the same iframe enlarge
 with the existing workflow DOM in a drawer. F toggles size; Esc returns to the
 panel. Mode uses sessionStorage. A double Esc within 400 ms, including from the
 iframe, removes the iframe entirely. The browser-wide hidden preference uses
-localStorage. No stage animation or audio survives that document's removal.
+localStorage. No stage animation or audio survives that document's removal. The
+stage's box is reserved at its final height before the iframe loads, so loading
+the ship never moves the counts, the tabs or anything below them.
 
 `BoardSource` consumes the host's existing `/api/state` and `/events` snapshots
 through a same-origin subscription. It does not open a second subscription or

@@ -11,9 +11,10 @@ You are firstmate unless explicitly dispatched as a worker or reviewer. Plan,
 dispatch, monitor and coordinate through repository scripts; delegate production
 implementation to [workers](../worker/SKILL.md) and assessment to
 [reviewers](../reviewer/SKILL.md). Never implement production code or run git
-yourself; the only `gh` command firstmate runs itself is `gh pr update-branch`,
-and only on a pull request GitHub reports as both BEHIND and MERGEABLE (see
-Process rules, below). Read the [design](../../design/design.md) and
+yourself. Firstmate runs only two `gh` commands itself: `gh pr update-branch`,
+only on a pull request GitHub reports as both BEHIND and MERGEABLE, and
+`gh run rerun <run> --failed`, only for a CI failure shown to be flaky (see
+Process rule 2, below). Read the [design](../../design/design.md) and
 [task DAG](../../design/tasks/) (one file per task; `bin/fm.sh tasks` prints the
 table) for scope, gates and captain decisions.
 
@@ -524,10 +525,36 @@ set by the captain.
 2. `gh pr update-branch` exists to bring a branch up to date with its base;
    run it before or after an `APPROVE` or during a review round, since an
    update that brings no new conflict needs no re-review (the approval rule
-   above; captain, 2026-09-29). It
-   is the only `gh` command firstmate runs itself, and only on a pull request
-   GitHub reports as both BEHIND and MERGEABLE; on any other state, leave it
-   alone and coordinate instead.
+   above; captain, 2026-09-29). It and `gh run rerun <run> --failed` are the
+   only two `gh` commands firstmate runs itself. `gh pr update-branch` runs
+   only on a pull request GitHub reports as both BEHIND and MERGEABLE; on any
+   other state, leave it alone and coordinate instead. `gh run rerun <run>
+   --failed` reruns only the failed jobs of a CI run, and only when the
+   failure is shown to be flaky: the same code passed that job before, or
+   nothing the pull request changed can reach the failing test (captain,
+   2026-09-30). Never rerun a whole run, or a failure not shown to be flaky.
+   Each flaky failure is a hit in the flaky ledger, `state/flaky-ledger.json`
+   under the project's state root, kept only by `bin/lib/fm_flaky.py`: `hit`
+   (with `--rerun` once rerun), `investigate`, `link`, `fixed` and `show`,
+   each with `--project <name>`. A flaky signature is the GitHub owner/name,
+   the test file, the test title without a trailing parameter in parentheses,
+   and the error class. Recurring flakes are root-caused (captain,
+   2026-10-09): the second hit of one flaky signature in its current cycle,
+   counting the hits already in the ledger, starts a root-cause
+   investigation by a separate researcher, a stock read-only research round
+   or a delegated agent, which reproduces the failure, proves the cause with
+   a controlled experiment and writes a fix task spec for the captain. Record
+   it with `investigate`, its fix task with `link` and the merged fix with
+   `fixed`. A rerun may still unblock the pull request meanwhile. An active
+   investigation, open or fix task, is never started twice for one
+   signature; `investigate` refuses it. When the project's projection allows
+   pull request comments, a rerun gets a comment naming the job, the evidence
+   and, from the second hit on, the open investigation. On an external
+   project (`FM_EXTERNAL=1`) follow that project's projection and conventions
+   and never publish private project text, spec text or research findings;
+   the evidence stays in the private ledger. This rule applies from T-274's
+   merge onward, for every firstmate session that has reloaded the merged
+   skills; hits seeded from earlier notes count toward the second hit.
 3. A test stub answers exactly as the vendor does, in output shape, exit code
    and a literal `null`, never as our own code expects. A stub written from
    our code has twice hidden the very bug it was written to catch.
