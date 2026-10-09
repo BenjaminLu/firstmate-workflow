@@ -84,6 +84,10 @@ export async function showFleet(page: Page) {
   const sheet = page.locator('.board-sheet[open]');
   if (await sheet.count()) await sheet.locator('[data-sheet-close]').click();
   await page.locator('#tabFleet').click();
+  // T-274: a lost click fails here, not later on an invisible card. Never
+  // click again: a retry would hide the bug.
+  await expect(page.locator('#tabFleet'), 'the Fleet tab click was lost').toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#fleetPanel'), 'the Fleet panel did not open').toBeVisible();
 }
 export async function openCrewSheet(page: Page) {
   await expect(page.locator("#rosterBtn")).not.toHaveText("");

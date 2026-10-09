@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "x_ledger_note": "kept by every rewrite",
+  "signatures": [
+    {
+      "repository": "BenjaminLu/firstmate-workflow",
+      "project": "firstmate-workflow",
+      "file": "tests/e2e/board-task-detail.spec.ts",
+      "title": "external review locations and minute refresh stay private",
+      "error_class": "locator.click timeout: element is not visible",
+      "first_seen": "2026-10-09T09:57:35Z",
+      "x_entry_note": "kept on the entry",
+      "hits": [
+        {"pr": 254, "head": "c0e9d5ac", "run": 37914100220, "job": 113765977729, "attempt": 1, "at": "2026-10-09T09:57:35Z", "rerun": true, "x_hit_note": "kept on the hit"},
+        {"pr": 250, "head": "f850ca5e", "run": 37940259051, "job": 113852530788, "attempt": 1, "at": "2026-10-09T13:59:31Z", "rerun": true}
+      ],
+      "investigation": {"status": "open", "owner": "firstmate", "task": null, "merged_pr": null, "merge_commit": null, "fixed_at": null, "x_investigation_note": "kept on the investigation"}
+    },
+    {
+      "repository": "BenjaminLu/firstmate-workflow",
+      "project": "firstmate-workflow",
+      "file": "tests/e2e/game.spec.ts",
+      "title": "voyage is one live stage, persists its size, and Esc Esc unloads it",
+      "error_class": "expect toHaveCount timeout",
+      "first_seen": "2026-10-09T10:13:07Z",
+      "hits": [
+        {"pr": 254, "head": "394dde1d", "run": 37914880158, "job": 113768525915, "attempt": 1, "at": "2026-10-09T10:13:07Z", "rerun": true}
+      ],
+      "investigation": {"status": "none", "owner": null, "task": null, "merged_pr": null, "merge_commit": null, "fixed_at": null}
+    }
+  ]
+}
