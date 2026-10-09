@@ -166,6 +166,10 @@ class Pilot(BranchUpdates, MechanicalLoop):
             self.queue_mode = 'hold'
             return
         self.queue_policy = policy
+        if policy and policy['enabled'] and not getattr(self, '_queue_service_owned', False):
+            # Only the owned resident service may acquire or mutate the queue.
+            self.queue_mode = 'hold'
+            return
         if policy and policy['enabled']:
             self.queue_mode = 'enabled'
             if q is None:
@@ -242,13 +246,13 @@ class Pilot(BranchUpdates, MechanicalLoop):
 
     def queue_snapshot(self, snapshots, base):
         import fm_autopilot_queue as Q
-        q = self.data['self_queue']; now = self.clock()
-        if self.queue_mode == 'hold': return
         if not getattr(self, '_queue_service_owned', False):
             self.queue_mode = 'hold'
             self.queue('queue-owner-unverified', '', 'Self queue owner is unverified; use the owned resident service',
                        '自身佇列擁有者無法驗證；請使用受管理的常駐服務')
             return
+        if self.queue_mode == 'hold': return
+        q = self.data['self_queue']; now = self.clock()
         # Legacy jobs are never adopted by an activation. They finish under
         # their original owner, but their results cannot launch a continuation.
         outstanding = any(j.get('state') in ('running', 'consuming', 'uncertain') and not j.get('queue_binding')

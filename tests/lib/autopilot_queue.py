@@ -253,8 +253,17 @@ class QueueTests(unittest.TestCase):
         self.pilot.poll()
         self.assertFalse(self.calls)
         self.assertEqual(self.pilot.queue_mode, 'hold')
+        self.assertNotIn('self_queue', self.pilot.data)
         self.pilot._queue_service_owned = True
         self.pilot.poll()
+        retained = copy.deepcopy(self.pilot.data['self_queue'])
+        self.pilot._queue_service_owned = False
+        self.pilot.refresh_queue()
+        self.assertEqual(self.pilot.queue_mode, 'hold')
+        self.assertEqual(self.pilot.data['self_queue'], retained)
+        self.pilot.queue_snapshot({}, B)
+        self.assertEqual(self.pilot.queue_mode, 'hold')
+        self.pilot._queue_service_owned = True
         self.pilot.clock = lambda: 10 ** 12
         self.pilot.poll()
         self.assertEqual(self.pilot.data['self_queue']['front'], '1')
@@ -495,7 +504,8 @@ class QueueTests(unittest.TestCase):
         env.update(HERDR_ENV='0', FM_ROOT=str(engine), FM_ENGINE_ROOT=str(engine), FM_CODE_ROOT=str(engine),
                    FIRSTMATE_CI_SESSION=str(os.getpid()), FM_PORT='0', XDG_CONFIG_HOME=str(self.root / 'credentials'))
         def command(name, *args):
-            result = subprocess.run(['bash', str(engine / 'bin' / name), *args, '--repo', str(engine)],
+            repo = ['--repo', str(engine)] if name == 'fm-decide.sh' else []
+            result = subprocess.run(['bash', str(engine / 'bin' / name), *args, *repo],
                                     env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout.strip()

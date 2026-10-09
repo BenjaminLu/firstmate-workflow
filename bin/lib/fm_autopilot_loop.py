@@ -591,7 +591,7 @@ class MechanicalLoop:
         if hasattr(self, 'refresh_queue'): self.refresh_queue()
         self._queue_continuation = result
         try:
-            return self._job_completed(result)
+            return MechanicalLoop._job_completed(self, result)
         finally:
             self._queue_continuation = None
 
