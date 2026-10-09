@@ -80,6 +80,26 @@ The captain's own rules, restated here where they are easy to find:
 
 ## Start with evidence
 
+For factual experiments produced independently, use the outside-round
+`bin/lib/fm-evidence.sh experiment-retain --file <manifest.json> --head <sha>
+--base <sha> --code <frozen-snapshot> --task <task>` with the resolved project.
+The strict version 1 operator-attested-existing manifest selects its canonical
+parent as bundle root. Stock never executes its argv or applies historical
+overlays. Its signed receipt authenticates retention, immutable artifact bytes
+and exact approved pin/source/frozen engine bindings; execution stays
+unverified-by-stock. Claimed failures remain failures. Historical controls
+retain old source/input/overlay identities and an explicit current acceptance
+association, never current-head pass evidence or proof of accepted-base approval.
+No missing pin, changed head, changed approved inputs or changed engine may be
+carried or relabeled. Obtain a new honest retention when bindings change.
+Updated frozen review rounds may attach matching evidence without rewriting
+old pins or injecting anything into running reviewers. Only supported Codex
+run-mode attempts with verified effective outer OS readonly ownGit policy get
+files; diff reviewers get an inaccessible-files disclosure. Experimental
+external review bodies remain private even for review=fm; optional comments
+carry fixed status and an opaque reference. Neither a signed attestation nor
+transport success replaces CI, independent review, gates or captain approval.
+
 Run `bin/fm-doctor.sh --repo <root>` at top-level startup (T-121). It says, for
 every dependency firstmate itself needs and every vendor login, whether it
 works here and the one command that fixes it, so a captain finds out up front

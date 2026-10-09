@@ -96,6 +96,10 @@ with open(sys.argv[2], 'w') as f: json.dump(p, f)
 PY
   FM_POLICY="$FM_ROUND_CTL/review-policy.json"
 fi
+experiment_policy_sha256=''
+if [ -n "${FM_REVIEW_EXPERIMENT_INDEX:-}" ]; then
+  experiment_policy_sha256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FM_POLICY")" || exit 65
+fi
 if [ "${FM_OUTER_OS:-}" = darwin ]; then
   # sandbox-exec around codex confines every command it runs
   policy_args=(--sandbox danger-full-access)
@@ -143,6 +147,17 @@ model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
   < <(fm_adapter_model_args -m)
 read -r -a native <<<"$(codex_native)"
 fm_adapter_confine codex "$tree" "${native[@]}"
+if [ -n "${FM_REVIEW_EXPERIMENT_INDEX:-}" ]; then
+  if [ ! -f "$_fm_engine/bin/lib/fm_review_context.py" ] ||
+     ! python3 "$_fm_engine/bin/lib/fm_review_context.py" verify-effective-experiment-policy \
+       --policy "$FM_POLICY" --policy-sha256 "$experiment_policy_sha256" \
+       --outer-os "$FM_OUTER_OS" --unsandboxed "$FM_UNSANDBOXED" \
+       --tree "$tree" --tmp "$FM_ROUND_TMP" --ctl "$FM_ROUND_CTL" \
+       --index "$FM_REVIEW_EXPERIMENT_INDEX" -- "${FM_LAUNCH[@]}"; then
+    echo 'codex: experimental evidence effective confinement refused; 實驗證據的實際隔離政策已拒絕' >&2
+    exit 65
+  fi
+fi
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
   ( cd "$tree" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} codex exec --skip-git-repo-check "${policy_args[@]}" \
     ${final_args[@]+"${final_args[@]}"} ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) 2>&1 | tee -a "$log"
