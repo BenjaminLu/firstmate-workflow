@@ -226,7 +226,7 @@ class QueueTests(unittest.TestCase):
         path = self.state / 'autopilot/delayed.json'
         path.with_suffix('.result.json').write_text(json.dumps(result))
         job = dict(task='T-001', state='running', path=str(path), queue_binding=result['queue_binding'])
-        self.pilot.data['jobs']['delayed'] = job
+        self.pilot.data.setdefault('jobs', {})['delayed'] = job
         self.pilot.merge_card = lambda *a: self.calls.append(('card', a))
         old = self.pilot.api
         def incomplete(endpoint):
@@ -253,7 +253,7 @@ class QueueTests(unittest.TestCase):
             self.pilot.poll()
             self.assertTrue(self.pilot.queue_guard(self.prs[1]), 'cleared eligibility must resume the retained front')
         import fm_autopilot_queue as Q
-        m['jobs'] = ['e' * 32]; self.pilot.data['jobs']['e' * 32] = dict(state='uncertain', queue_binding=Q.binding(q, m))
+        m['jobs'] = ['e' * 32]; self.pilot.data.setdefault('jobs', {})['e' * 32] = dict(state='uncertain', queue_binding=Q.binding(q, m))
         self.pilot.poll(); self.assertEqual(m['state'], 'uncertain')
         self.pilot.data['jobs']['e' * 32]['state'] = 'done'
         self.pilot.poll()
@@ -843,7 +843,7 @@ class QueueTests(unittest.TestCase):
                             decision='D-firstmate-workflow-T001-8', owner='retained-owner', pid=12345)))
                         owner_bytes = (state / 'merging/_default.json').read_bytes()
                     elif case.startswith('legacy-'):
-                        pilot.data['jobs']['d' * 32] = dict(kind='gate', task='T-001', state=case.removeprefix('legacy-'), path='')
+                        pilot.data.setdefault('jobs', {})['d' * 32] = dict(kind='gate', task='T-001', state=case.removeprefix('legacy-'), path='')
                     else:
                         ident, path = self.stock_card(state, pending=case == 'pending-card',
                             chosen='B' if case == 'held-card' else 'A', effect='hold' if case == 'held-card' else 'merge',
@@ -944,7 +944,7 @@ class QueueTests(unittest.TestCase):
         path.with_suffix('.result.json').write_text(json.dumps(dict(kind='gate', task='T-002',
             pr=self.prs[2], code=0, base=B, round=1)))
         job = dict(kind='gate', task='T-002', state='running', path=str(path))
-        self.pilot.data['jobs']['f' * 32] = job
+        self.pilot.data.setdefault('jobs', {})['f' * 32] = job
         self.pilot.merge_card = lambda *a: self.calls.append(('card', a))
         self.pilot.poll(); self.pilot.consume_jobs()
         self.assertEqual(job['state'], 'done', 'known legacy results must drain even before queue admission')

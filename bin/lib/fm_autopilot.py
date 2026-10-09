@@ -184,8 +184,11 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     for m in q['members'].values():
                         m['attempt_generation'] += 1
             self.data['self_queue']['enabled'] = True
+            self.data.pop('self_queue_settled_off', None)
         elif q and (q['front'] is not None or self.queue_reservation()
-                    or self.queue_legacy_updates_pending()
+                    # Once disable has fully settled, receipts the legacy updater writes
+                    # afterwards are its own and never pull the queue back into drain.
+                    or (not self.data.get('self_queue_settled_off') and self.queue_legacy_updates_pending())
                     or any(m['state'] == 'uncertain' for m in q['members'].values())
                     or any(j.get('state') in ('running', 'consuming', 'uncertain')
                            for j in self.data.get('jobs', {}).values())):
@@ -193,6 +196,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
             self.queue_mode = 'drain'
         elif q:
             q['enabled'] = False
+            self.data['self_queue_settled_off'] = True
         self.save()
 
     def queue_reservation(self):
