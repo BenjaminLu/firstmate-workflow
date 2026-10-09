@@ -58,6 +58,143 @@ def workspace_row(name='demo', workspace_id='w-demo', number=2):
                 label=name, number=number, pane_count=1, tab_count=1, workspace_id=workspace_id)
 
 
+# Embedded in the fake vendor itself; no extra module is needed by selective
+# fixture copies. O_EXCL gives each publisher its own sibling; 0666 retains
+# Path.write_text's umask-derived mode for a newly created marker.
+MODEL_PID_PUBLISHER = r'''
+import os, pathlib, uuid
+def publish_model_pid(marker):
+ marker=pathlib.Path(marker)
+ temporary=marker.with_name(marker.name+'.'+uuid.uuid4().hex+'.tmp')
+ try:
+  mode=marker.stat().st_mode & 0o777 if marker.exists() else None
+  fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o666)
+  with os.fdopen(fd,'w') as stream:
+   if mode is not None: os.fchmod(stream.fileno(),mode)
+   stream.write(str(os.getpid()))
+  os.replace(temporary,marker)
+ except BaseException:
+  marker.unlink(missing_ok=True)
+  raise
+ finally:
+  temporary.unlink(missing_ok=True)
+'''
+
+
+class ModelPidPublication(unittest.TestCase):
+    """Exercise the exact source embedded in the genuine fake model."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.marker = Path(self.tmp.name)/'model.pid'
+        namespace = {}
+        exec(MODEL_PID_PUBLISHER, namespace)
+        self.publish = namespace['publish_model_pid']
+
+    def test_model_pid_reader_before_create(self):
+        self.assertFalse(self.marker.exists())
+
+    def test_model_pid_historical_truncate_reader_control(self):
+        original = Path.open
+        marker = self.marker
+        case = self
+        class PausedWrite:
+            def __init__(self, stream): self.stream = stream
+            def __enter__(self):
+                case.assertTrue(marker.exists())
+                case.assertEqual('', marker.read_text())
+                with case.assertRaisesRegex(ValueError, "invalid literal for int.*''"):
+                    int(marker.read_text())  # Unchanged existence-only reader.
+                return self.stream
+            def __exit__(self, *args): self.stream.close()
+        def paused(path, mode='r', *args, **kwargs):
+            stream = original(path, mode, *args, **kwargs)
+            return PausedWrite(stream) if path == marker and mode == 'w' else stream
+        with patch.object(Path, 'open', paused):
+            marker.write_text(str(os.getpid()))  # Genuine historical publication.
+        self.assertEqual(os.getpid(), int(marker.read_text()))
+
+    def test_model_pid_partial_staging_window(self):
+        original = os.fdopen
+        case = self
+        class PartialWrite:
+            def __init__(self, fd, mode): self.stream = original(fd, mode)
+            def __enter__(self): return self
+            def write(self, value):
+                self.stream.write(value[:1]); self.stream.flush()
+                case.assertFalse(case.marker.exists(), 'partial PID must remain private')
+                self.stream.write(value[1:])
+            def __exit__(self, *args): self.stream.close()
+        with patch.object(os, 'fdopen', PartialWrite):
+            self.publish(self.marker)
+        self.assertEqual(os.getpid(), int(self.marker.read_text()))
+
+    def test_model_pid_atomic_reader_window(self):
+        replace = os.replace
+        publications = []
+        def paused(source, target):
+            publications.append((source, target))
+            self.assertFalse(self.marker.exists(), 'reader must not see an empty model.pid')
+            self.assertEqual(str(os.getpid()), Path(source).read_text())
+            self.assertEqual(self.marker.parent, Path(source).parent)
+            replace(source, target)
+        with patch.object(os, 'replace', paused):
+            self.publish(self.marker)
+        self.assertEqual(1, len(publications), 'PID publication must use atomic replace')
+        self.assertEqual(os.getpid(), int(self.marker.read_text()))
+        self.assertGreater(int(self.marker.read_text()), 0)
+        self.assertEqual([self.marker], list(self.marker.parent.iterdir()))
+
+    def test_model_pid_existing_marker_atomic_replacement(self):
+        self.marker.write_text('123'); self.marker.chmod(0o640)
+        replace = os.replace
+        def paused(source, target):
+            self.assertEqual('123', self.marker.read_text())
+            replace(source, target)
+        with patch.object(os, 'replace', paused):
+            self.publish(self.marker)
+        self.assertEqual(os.getpid(), int(self.marker.read_text()))
+        self.assertEqual(0o640, self.marker.stat().st_mode & 0o777)
+
+    def test_model_pid_write_and_replace_failure_cleanup(self):
+        for operation in ('fdopen', 'replace'):
+            with self.subTest(operation=operation):
+                self.marker.write_text('123')
+                if operation == 'fdopen':
+                    original = os.fdopen
+                    class BrokenStream:
+                        def __init__(self, fd, mode): self.stream = original(fd, mode)
+                        def __enter__(self): return self
+                        def fileno(self): return self.stream.fileno()
+                        def write(self, value):
+                            self.stream.write(value[:1]); self.stream.flush()
+                            self.assert_complete()
+                            raise OSError('injected partial write')
+                        def assert_complete(self):
+                            # The old complete marker remains readable during staging.
+                            if self_marker.read_text() != '123': raise AssertionError('partial marker')
+                        def __exit__(self, *args): self.stream.close()
+                    self_marker = self.marker
+                    replacement = BrokenStream
+                else:
+                    replacement = unittest.mock.Mock(side_effect=OSError('injected replace failure'))
+                with patch.object(os, operation, replacement):
+                    with self.assertRaises(OSError): self.publish(self.marker)
+                self.assertEqual([], list(self.marker.parent.iterdir()))
+
+    def test_model_pid_unique_sibling_isolation(self):
+        sources = []
+        replace = os.replace
+        def retained(source, target):
+            sources.append(Path(source))
+            replace(source, target)
+        with patch.object(os, 'replace', retained):
+            self.publish(self.marker); self.publish(self.marker)
+        self.assertNotEqual(*sources)
+        self.assertTrue(all(p.parent == self.marker.parent for p in sources))
+        self.assertTrue(all(not p.exists() for p in sources))
+
+
 class ProjectWorkspaceControl:
     """Scripted Herdr server; unwrap result exactly as Herdr.__call__ does."""
     def __init__(self, rows=(), failure=None, created_label='demo'):
@@ -405,7 +542,7 @@ elif a[:2]==['pane','close']:
 else: raise SystemExit('unsupported fake Herdr command '+str(a))
 print(json.dumps({'result':result}))
 ''')
-        self.executable('codex', r'''
+        self.executable('codex', MODEL_PID_PUBLISHER + r'''
 import json,os,pathlib,sys,time
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); prompt=sys.stdin.read()
 actor=os.environ['FM_ACTOR']; role=os.environ['FM_ROLE']; task=os.environ['FM_TASK']
@@ -415,7 +552,7 @@ assert actor in prompt and ('explicitly dispatched '+role) in prompt
 if os.environ.get('FM_TEST_ASYNC')=='1':
  pathlib.Path('surviving-work').write_text(actor)
  pathlib.Path('.fm-say.md').write_text('retained evidence')
- (r/'model.pid').write_text(str(os.getpid()))
+ publish_model_pid(r/'model.pid')
  while not (r/'release-model').exists(): time.sleep(.02)
 # held until the test says so, rather than for a number of seconds a loaded
 # machine can spend before the test has looked; T-089's same-name retirement
