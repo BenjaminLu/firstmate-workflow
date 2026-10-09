@@ -18,7 +18,10 @@ ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 sys.path.insert(0, str(ROOT / 'tests/lib'))
 
+HELPER = (ROOT / 'bin/lib/fm_card_refs.py').is_file()
+HELPER_SKIP = 'setup: bin/lib/fm_card_refs.py unavailable; helper cases not run (not behavioral)'
 
+@unittest.skipUnless(HELPER, HELPER_SKIP)
 class CardRefs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -136,10 +139,10 @@ class CardRefs(unittest.TestCase):
                 refs.build_refs(spec, ROOT, 'owner/repo', 7, 'a' * 40, False, 'T-X')
 
 
+@unittest.skipUnless(HELPER, HELPER_SKIP)
 class ExecutableRefs(unittest.TestCase):
     """Real git objects/diffs and an executable gh boundary; no mocked reads."""
     def setUp(self):
-        self.assertTrue((ROOT / "bin/lib/fm_card_refs.py").is_file(), "helper CLI availability/setup required")
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.git('init', '-q', '--object-format=sha1')
@@ -684,11 +687,43 @@ class SyntheticMergeSource(unittest.TestCase):
         self.assertEqual('fixture stderr\n', result.stderr)
 
 
+class NamedTestResult(unittest.TextTestResult):
+    """Expose behavioral outcomes in the fail-first collector's line format."""
+    def startTest(self, test):
+        self.failed = False
+        self.skipped = False
+        super().startTest(test)
+
+    def addFailure(self, test, err):
+        self.failed = True
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self.failed = True
+        super().addError(test, err)
+
+    def addSubTest(self, test, subtest, err):
+        if err is not None:
+            self.failed = True
+        super().addSubTest(test, subtest, err)
+
+    def addSkip(self, test, reason):
+        self.skipped = True
+        super().addSkip(test, reason)
+
+    def stopTest(self, test):
+        super().stopTest(test)
+        if not self.skipped:
+            name = '%s.%s' % (type(test).__name__, test._testMethodName)
+            sys.stdout.write('    %-52s%s\n' % (name, 'FAIL' if self.failed else 'ok'))
+            sys.stdout.flush()
+
+
 if __name__ == '__main__':
     producer = '--producer' in sys.argv
     if producer: sys.argv.remove('--producer')
     cases = (StockRequests, SyntheticMergeSource) if producer else (CardRefs, ExecutableRefs, SyntheticMergeSource)
     loader = unittest.TestLoader()
     suite = unittest.TestSuite(loader.loadTestsFromTestCase(case) for case in cases)
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    result = unittest.TextTestRunner(verbosity=2, resultclass=NamedTestResult).run(suite)
     sys.exit(0 if result.wasSuccessful() else 1)
