@@ -419,6 +419,27 @@ enforced, while the claim needs manual review. Other done items remain allowed.
 The other fields are optional except on merge intent cards, as below.
 Unknown locale keys remain forward compatible.
 
+T-244 adds optional bilingual `explain.scene`. Both locales must carry it.
+It has 1–6 `lanes` ({label}), 1–24 `nodes` ({id,label,lane,kind,state,change?}),
+0–40 `edges` ({id,from,to,state,change?,label?}), `tokens` ({before,after}),
+optional `counter` ({label,before,after}) and 1–9 `changes` ({id,text,intents}).
+Lane indexes are 0-based. Node and edge ids are unique across both lists and
+match `[a-z][a-z0-9-]{0,23}`. Kinds are input, step, decision, store, focal,
+oneway. States are same, gone, new; gone/new require a change id and same
+forbids it. Changes are c1..cN in order and carry unique nonempty 1-based intent
+indexes. Edge endpoints exist: gone/new endpoints require matching edge states,
+and an edge cannot join gone to new. Each token path contains 1–24 edge ids,
+is continuous (loops may repeat), and uses same/gone before or same/new after.
+Counter values are 1–12 code points. Labels use the existing label checker;
+change text is one STE fact sentence. Locales share lane counts and every
+structural value in order; only labels and text differ. No coordinates or
+layout files are authored. Both legacy node lists remain required.
+
+The merge producer injects the scene from the approved pin even without
+change_points; authored scenes may be absent but mismatches refuse with
+`scene mismatch with spec`. Built dispatch details do not supply scenes.
+
+
 A task spec may also carry an optional bilingual `explain` block (T-230), with
 `intent`, `why`, `scope_in`, `scope_out`, `done`, `notes`, `before_nodes` and
 `after_nodes`. It excludes decision questions and change tables. Optional
@@ -1650,6 +1671,31 @@ Missing or untested migration in a rule-changing diff is a REJECT finding.
 
 ---
 
+Task PR review prompts carry the canonical `git diff --no-ext-diff --no-color
+--no-renames <base> <head>` unchanged, followed by `## Hunk ids`. Text ids use
+`<path>#R<start>-<end>`, or L for deletion-only hunks; binary, mode-only and
+empty files use #binary, #mode and #empty and cannot be key blocks. The
+reviewer's final text may contain one `walk` fence with JSON intents and up to
+five bilingual STE-noted key blocks per intent (forty overall). Line notes
+bind to the hunk side; test `proves` references code key blocks. Scene steps
+are required only when the pinned spec has a scene. Other hunks are computed.
+
+The walk lives in existing retained verdict text, with unchanged signature,
+verdict and source binding. Selection ignores unsigned approvals and approvals
+without nonempty head, base and patch before matching the card head. The newest
+eligible exact-head approval supplies the walk; an eligible older approval
+instead yields stale. Missing review/approval/binding/fence is absent; malformed
+walks and unavailable diffs are invalid. Missing helpers are unavailable. All
+walk failures remain presentation only. Review emits one bilingual category-only
+crew_status immediately after its verdict status; public comments replace the
+walk fence with `Code walk retained with the evidence (N key blocks).` Reading
+and projection share one fence rule: only a top-level fence with info string
+`walk` is a walk, so a walk quoted inside another fence is left as prose. If the
+helper is unreadable or fails, fm-review drops each walk fence by the same rule
+and posts `Code walk retained with the evidence.` in its place; the prose and
+markers are always kept and walk text is never posted. No note text, path or
+excerpt enters events or wakes.
+
 ## 7. The standing list
 
 **Factual experimental evidence (T-264).** Review history still contains only
@@ -2868,6 +2914,37 @@ below the top bar and above the counts. The frozen 3D application stays outside 
 any 3D follow-up requires its own approved scope.
 
 ---
+
+T-244 cards remain evidence first. The reading order is intent key points,
+How it works, Walk the diff, then the decision bar. Optional walk.js is loaded
+only for a scene or walk. Browser layout uses lane columns, array-ordered nodes
+and right-angle edges that never cross a node: adjacent lanes and the next node
+down join directly, while self-loops, upward edges and longer jumps route through
+lane and row gaps. Playback runs before → change → after, with token paths,
+play/pause, a scrubber and phase buttons. Reduced motion uses a static change
+view. Locale changes redraw translated labels. Layout failure uses the legacy
+before/after fallback; authored diagrams remain unchanged.
+
+Intent rows highlight their scene changes and offer a jump to the first key
+block. A highlight and its banner survive board updates and locale switches
+until Show all clears them; change badges jump only when mapped blocks
+exist. Intent check remains the default tab. Walk the code stays closed until
+opened, with intent tabs and Other changes listing remaining files and counts,
+without notes or a total block count. Arrow keys move between blocks and Space
+plays/pauses their highlighted scene step. Long hunks show eighty trusted rows,
+centred around a line note where present, and explicit omitted-row counts.
+
+Freshness means the card's expected_head at attachment, never a live PR head.
+Stale walks show the reviewed short sha and no notes or steps. Absent/invalid
+walks show no code walk for this head with a category. Scene-only cards retain
+the animation; walk-only cards retain the fallback and intent jumps. Intents
+without key blocks and changes without mapped blocks cannot jump. Neither field
+preserves T-242 rendering. Task details take the scene from the spec explain,
+even when a card supplies the explanation text; they never use a card's scene,
+and a spec without a scene shows no animation. All authored
+labels, notes, rows and paths are escaped. Door A still needs only reviewed
+intents and the correct comprehension answer. Existing records, pins and cards
+are never rewritten, and external content stays inside private card details.
 
 ## 9. Three languages
 
