@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "signatures": [
+    {
+      "repository": "BenjaminLu/firstmate-workflow",
+      "project": "firstmate-workflow",
+      "file": "tests/e2e/board.spec.ts",
+      "title": "a fix recorded without its merge time",
+      "error_class": "expect toBeVisible timeout",
+      "first_seen": "2026-10-01T08:00:00Z",
+      "hits": [
+        {"pr": 240, "head": "0123abcd", "run": 37000000001, "job": 113000000001, "attempt": 1, "at": "2026-10-01T08:00:00Z", "rerun": true}
+      ],
+      "investigation": {"status": "fixed", "owner": "firstmate", "task": "T-240", "merged_pr": 241, "merge_commit": "4567cdef", "fixed_at": null}
+    }
+  ]
+}
