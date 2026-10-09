@@ -915,6 +915,20 @@ function render(s) {
       .catch(() => open(a.href, '_blank'));
   });
   SHIP.portrait(document.getElementById('capstage'), pend.length > 0, t);
+  deck.querySelectorAll('[data-review-intent]').forEach(input => input.onchange = () => {
+    if (sent.has(input.dataset.id) || readOnly()) return;
+    const value = doorInput(input.dataset.id), number = Number(input.dataset.reviewIntent);
+    doorInputs.set(input.dataset.id,{...value,reviewed:input.checked ? [...new Set([...value.reviewed,number])].sort((a,b)=>a-b) : value.reviewed.filter(n=>n!==number)});
+    verifyDoor(input.dataset.id);
+  });
+  deck.querySelectorAll('[data-door-answer]').forEach(button => button.onclick = () => {
+    if (sent.has(button.dataset.id) || readOnly()) return;
+    doorInputs.set(button.dataset.id,{...doorInput(button.dataset.id),answer:Number(button.dataset.doorAnswer)});
+    verifyDoor(button.dataset.id);
+  });
+  deck.querySelectorAll('[data-change-code]').forEach(section => section.ontoggle = () => {
+    if (section.open) openChangeCode.add(section.dataset.changeCode); else openChangeCode.delete(section.dataset.changeCode);
+  });
   deck.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
     if (sent.has(b.dataset.id) || answered.has(b.dataset.id) || readOnly()) return;
     picks.set(b.dataset.id, b.dataset.c); render(latest);
@@ -1202,6 +1216,57 @@ function sectionItems(d, section, items, draw, wrap = html => html) {
   return wrap(shown.map(draw).join('')) + (shown.length < items.length
     ? `<button type="button" class="show-more" data-reveal="${esc(key)}">${esc(t('showMore').replace('{n}', items.length - shown.length))}</button>` : '');
 }
+const doorInputs = new Map(), doorVerified = new Map(), doorMessages = new Map(), doorRequests = new Map(), openChangeCode = new Set();
+function doorInput(id) { return doorInputs.get(id) || {reviewed:[], answer:null}; }
+function doorKey(d) { return JSON.stringify([d.id,d.expected_head,d.details?.en?.intent,d.details?.en?.door,d.details?.en?.check,doorInput(d.id),lang]); }
+function mergeDoorNeeded(d, chosen) {
+  if (d?.details?.en?.door?.kind !== 'one-way') return false;
+  if (questionAnswers(d)?.some(a => a.ok === false)) return false;
+  return (d.details?.effect?.[chosen] ?? ((d.kind === 'merge' || d.kind === 'merge-untracked') ? (chosen === 'A' ? 'merge' : 'hold') : null)) === 'merge';
+}
+function doorReady(d) { return doorVerified.get(d.id) === doorKey(d); }
+async function verifyDoor(id) {
+  const d = latest?.pending?.find(card => card.id === id);
+  if (!d) return;
+  doorVerified.delete(id);
+  const key = doorKey(d), request = {};
+  doorRequests.set(id, request);
+  const input = doorInput(id);
+  doorMessages.delete(id);
+  render(latest);
+  if (!Number.isInteger(input.answer)) return;
+  const result = await fetch("/decisions/check-door", {
+    method:'POST',headers:credential({'content-type':'application/json'}),
+    body:JSON.stringify({id,reviewed_intents:input.reviewed,check_answer:input.answer,locale:lang}),
+  }).then(response => response.status === 403 ? refusedFor(response) : response.json())
+    .catch(()=>({ok:false,why:t("unreachable")}));
+  const current = latest?.pending?.find(card=>card.id===id);
+  if (!current || doorRequests.get(id) !== request || doorKey(current) !== key) return;
+  if (result.ok === true) doorVerified.set(id,key);
+  else doorMessages.set(id,result.why || t("doorUnconfirmed"));
+  render(latest);
+}
+function changeWalk(d, content, locked, detailOnly) {
+  const refs = d.details?.refs, input = doorInput(d.id);
+  const link = (url, text) => typeof url === 'string' && url.startsWith('https://github.com/')
+    ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${text}</a>` : text;
+  const door = content.door;
+  const badge = door ? `<aside class="door-evidence"><b class="door-badge ${door.kind === 'one-way' ? 'one-way' : 'two-way'}">${esc(door.kind === 'one-way' ? t("doorOneWay") : t("doorTwoWay"))}</b><p>${esc(words(door.reason))}</p><p><b>${esc(t("doorRollback"))}</b> ${esc(words(door.rollback))}</p></aside>` : '';
+  const rows = (content.intent || []).map((intent, index) => {
+    const number = index + 1;
+    const points = content.change_points.map((point,i)=>({point,i})).filter(({point})=>point.intent===number);
+    return `<li class="intent-row change-intent"><b>${esc(t("intentHeading"))} ${number}</b> · ${esc(words(intent.text))}` + points.map(({point,i})=>{
+      const ref = refs?.points?.[i], key = JSON.stringify([d.id,i,detailOnly]);
+      return `<section class="change-point"><p class="change-how">${esc(words(point.how))}</p>` +
+        (ref ? `<ul class="change-acceptance">${(ref.acceptance || []).map(n=>`<li>${link(refs.spec_url,`${esc(t("specAcceptance"))} ${n+1} · ${esc(words(refs.acceptance?.[n] || ''))}`)}</li>`).join('')}</ul>` +
+          `<ul class="change-tests">${(ref.tests || []).map(test=>`<li>${link(test.url,`${esc(test.file)}:${test.line == null ? '—' : esc(test.line)} · ${esc(test.name)}`)}</li>`).join('')}</ul>` +
+          `<details class="change-code" data-change-code="${esc(key)}"${openChangeCode.has(key) ? ' open' : ''}><summary>${esc(t("showCode"))}</summary>${(ref.code || []).map(code=>`<div>${link(code.url,`${esc(code.file)}${code.start == null ? '' : ':'+esc(code.start)}${code.kind ? ' · '+esc(code.kind) : ''}`)}${code.snippet ? `<pre>${esc(code.snippet)}</pre>` : ''}</div>`).join('')}${ref.more ? `<p>${esc(t("codeMore").replace('{n}',ref.more))}</p>` : ''}</details>` : '') + '</section>';
+    }).join('') + (!detailOnly ? `<label class="intent-reviewed"><input type="checkbox" data-id="${esc(d.id)}" data-review-intent="${number}"${input.reviewed.includes(number) ? ' checked' : ''}${locked ? ' disabled' : ''}>${esc(t("intentReviewed"))}</label>` : '') + '</li>';
+  }).join('');
+  const check = !detailOnly && door?.kind === 'one-way' && content.check ? `<section class="door-check"><p>${esc(words(content.check.q))}</p>${content.check.options.map((option,i)=>`<button type="button" data-id="${esc(d.id)}" data-door-answer="${i}" aria-pressed="${input.answer===i}"${locked ? ' disabled' : ''}>${esc(words(option))}</button>`).join('')}<p class="door-feedback" role="status">${esc(doorMessages.get(d.id) || (doorReady(d) ? t("doorConfirmed") : t("doorUnconfirmed")))}</p></section>` : '';
+  const status = refs ? `<p class="change-status">${esc(t("gate_ci"))}: ${esc(String(d.gates?.ci ?? '—'))} · ${esc(t("gate_approval"))}: ${esc(String(d.gates?.approval ?? '—'))}</p>` : '';
+  return `<section class="change-walk"><h4>${esc(t("intentHeading"))}</h4><ol>${rows}</ol>${badge}${status}${check}</section>`;
+}
 function intentBody(d, content, locked, detailOnly = false) {
   const pick = picks.get(d.id);
   const sentence = (field, index, text) => detailOnly ? steSentence(d, field, index, text) : said(words(text), d);
@@ -1233,12 +1298,13 @@ function intentBody(d, content, locked, detailOnly = false) {
     `</div>${shownScope.length < scopeItems.length ? `<button type="button" class="show-more" data-reveal="${esc(scopeKey)}">${esc(t('showMore').replace('{n}',scopeItems.length - shownScope.length))}</button>` : ''}</section>` : '';
   const notes = hasItems('notes') ? `<section><h4>${esc(t('notesHeading'))}</h4>` +
     sectionItems(d, 'notes', content.notes || [], (note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${sentence('notes',index,note.text)}</p></aside>`) + '</section>' : '';
+  if (detailOnly && hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,true)}${how}${alignment}${scope}${notes}</div>`;
   if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`;
   const options = `<section class="acts intent-options">` +
     ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content.options?.[k];
       const eff = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
-      return `<button class="opt option-box" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked ? 'disabled' : ''}${tipAttr()}><span><b>${k}</b> · ${esc(o ? words(o.description) : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}${eff ? ` <i class="eff">→ ${esc(effectLabel(eff))}</i>` : ''}</span>` +
+      return `<button class="opt option-box" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked || (mergeDoorNeeded(d,k) && !doorReady(d)) ? 'disabled' : ''}${tipAttr()}><span><b>${k}</b> · ${esc(o ? words(o.description) : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}${eff ? ` <i class="eff">→ ${esc(effectLabel(eff))}</i>` : ''}</span>` +
         (o ? `<span class="tradeoffs"><b>${esc(t('pros'))}</b> ${esc(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${esc(words(o.cons))}</span>` : '') + '</button>';
     }).join('') +
     `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t('customChoice'))}</button>` +
@@ -1254,6 +1320,7 @@ function intentBody(d, content, locked, detailOnly = false) {
     `<p class="explanation">${said(words(content.explanation || ''),d)}</p>` +
     (hasItems('why') ? `<div class="intent-why">${sentences('why')}</div>` : '') +
     (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome),d)}</p>` : '') + '</details>';
+  if (hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,false)}${how}${scope}${notes}</div>${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
   return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
 }
 function decisionDetailsButton(d) {
@@ -1305,11 +1372,13 @@ function validate(id) {
   const validPick = chosen && (chosen !== 'custom' || validAnswerText(text));
   const replies = questionAnswers(latest?.pending?.find(d => d.id === id));
   const validQuestions = !replies || replies.every(a => a.ok === true || (a.ok === false && validAnswerText(a.text)));
-  const valid = validPick && validQuestions;
+  const decision = latest?.pending?.find(d => d.id === id);
+  const validDoor = !mergeDoorNeeded(decision,chosen) || doorReady(decision);
+  const valid = validPick && validQuestions && validDoor;
   const button = document.querySelector(`.confirm[data-id="${id}"]`);
   if (button) button.disabled = !valid || sent.has(id) || answered.has(id) || readOnly();
   const label = document.getElementById('validation-' + id);
-  if (label) label.textContent = chosen === 'custom' && !validPick ? t('customInvalid') : !validQuestions ? t('answersInvalid') : '';
+  if (label) label.textContent = chosen === 'custom' && !validPick ? t('customInvalid') : !validQuestions ? t('answersInvalid') : !validDoor ? t("doorUnconfirmed") : '';
   return valid;
 }
 // a write refused for want of the credential turns the tab read-only
@@ -1321,19 +1390,21 @@ async function answer(id) {
   if (sent.has(id) || answered.has(id) || readOnly() || !validate(id)) return;
   const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
   refused.delete(id); sent.add(id); feedback = {key:'sending'}; render(latest);
-  const r = await fetch("/decisions", {
+  let r = await fetch("/decisions", {
     method: "POST", headers: credential({ "content-type": "application/json" }),
-    body: JSON.stringify({ id, chosen, ...(decision?.project ? {project:decision.project} : {}), ...(chosen === 'custom' ? {text} : {}), ...(decision?.details?.en?.questions ? {answers:questionAnswers(decision)} : {}) }),
+    body: JSON.stringify({ id, chosen, ...(mergeDoorNeeded(decision,chosen) ? {reviewed_intents:doorInput(id).reviewed,check_answer:doorInput(id).answer,locale:lang} : {}), ...(decision?.project ? {project:decision.project} : {}), ...(chosen === 'custom' ? {text} : {}), ...(decision?.details?.en?.questions ? {answers:questionAnswers(decision)} : {}) }),
   }).then(x => x.status === 403 ? refusedFor(x) : x.json()).catch(() => ({ error: t("unreachable") }));
+  if (r?.ok === false) r = {...r,error:r.why || t("doorUnconfirmed")};
   if (!r.error) answered.add(id);
   sent.delete(id);
   if (r.error) {
+    if (r.code === 'doorUnconfirmed') { doorVerified.delete(id); doorRequests.delete(id); doorMessages.set(id,r.error); }
     orderUntil = 0; clearTimeout(orderTimer);
     feedback = {key:r.code || 'orderFailed', decisionId:id, task:decision?.task || null};
     refused.set(id, {error:String(r.error), announced:false});
   }
   else {
-    picks.delete(id); drafts.delete(id); answers.delete(id);
+    picks.delete(id); drafts.delete(id); answers.delete(id); doorInputs.delete(id); doorVerified.delete(id); doorRequests.delete(id); doorMessages.delete(id);
     // a merge answers at once while it runs; its outcome arrives in the record
     const merge = r.decision?.merge ?? r.merge ?? null;
     // T-118: an effect that failed says so, with its reason, and is never
