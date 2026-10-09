@@ -31,6 +31,9 @@ ZH_IMPERATIVE = r'^(請)?(合併|派工|派|審查|重跑|重新|修|修正|移�
 GLOSSARY = {'併入': '合併', '審核': '審查', '分派': '派工', '檢閱': '審查', '佈署': '部署', '預審': '預檢'}
 LIMITS = {'en': {'step': 20, 'fact': 25, 'label': 6}, 'zh-TW': {'step': 25, 'fact': 30, 'label': 14}}
 NEW_FIELDS = ('intent', 'why', 'scope_in', 'scope_out', 'done', 'notes', 'questions', 'before_nodes', 'after_nodes', 'change_table')
+WALK_FIELDS = ('change_points', 'door', 'check')
+LEGACY_FIELDS = NEW_FIELDS
+NEW_FIELDS += WALK_FIELDS
 LOCALES = ('en', 'zh-TW')
 
 
@@ -133,6 +136,63 @@ def _text(value, field, maximum=2000):
         raise ValueError(field + ': prohibited control or surrogate')
 
 
+def _integer(value, low, high):
+    return type(value) is int and low <= value <= high
+
+
+def _walk(details):
+    if not any(key in details.get(lang, {}) for lang in LOCALES for key in WALK_FIELDS):
+        return
+    for key in WALK_FIELDS:
+        if (key in details['en']) != (key in details['zh-TW']):
+            raise ValueError(key + ': required in both locales or neither')
+    for lang in LOCALES:
+        loc = details[lang]
+        points = loc.get('change_points')
+        if not isinstance(loc.get('intent'), list) or not loc['intent']:
+            raise ValueError(lang + '.intent: expected nonempty array')
+        count = len(loc['intent'])
+        if not isinstance(points, list) or not points:
+            raise ValueError(lang + '.change_points: expected nonempty array')
+        for point in points:
+            if not isinstance(point, dict) or set(point) != {'intent', 'how'} or not _integer(point.get('intent'), 1, count):
+                raise ValueError(lang + '.change_points: invalid intent or fields')
+            _text(point['how'], lang + '.change_points.how')
+            if len(split(point['how'])) != 1:
+                raise ValueError(lang + '.change_points.how: expected one fact sentence')
+        if {p['intent'] for p in points} != set(range(1, count + 1)):
+            raise ValueError(lang + '.change_points: every intent needs a point')
+        door = loc.get('door')
+        if not isinstance(door, dict) or set(door) != {'kind', 'reason', 'rollback'} or door.get('kind') not in ('one-way', 'two-way'):
+            raise ValueError(lang + '.door: expected kind, reason and rollback')
+        for key in ('reason', 'rollback'):
+            _text(door[key], lang + '.door.' + key)
+        if door['kind'] == 'two-way':
+            if 'check' in loc:
+                raise ValueError(lang + '.check: forbidden for two-way door')
+            continue
+        check = loc.get('check')
+        if not isinstance(check, dict) or set(check) != {'q', 'options', 'why', 'about'}:
+            raise ValueError(lang + '.check: required for one-way door')
+        for key in ('q', 'why'):
+            _text(check[key], lang + '.check.' + key)
+        options = check['options']
+        if not isinstance(options, list) or not 2 <= len(options) <= 4:
+            raise ValueError(lang + '.check.options: expected 2-4 options')
+        for option in options:
+            _text(option, lang + '.check.options')
+        about = check['about']
+        if not isinstance(about, dict) or set(about) != {'intent'} or not _integer(about.get('intent'), 1, count):
+            raise ValueError(lang + '.check.about: invalid intent')
+    en, zh = details['en'], details['zh-TW']
+    if [p['intent'] for p in en['change_points']] != [p['intent'] for p in zh['change_points']]:
+        raise ValueError('change_points: locale intent sequence must match')
+    if en['door']['kind'] != zh['door']['kind']:
+        raise ValueError('door: locale kind must match')
+    if en['door']['kind'] == 'one-way' and (en['check']['about'] != zh['check']['about'] or len(en['check']['options']) != len(zh['check']['options'])):
+        raise ValueError('check: locale about and option counts must match')
+
+
 def _validate(details):
     if not isinstance(details, dict):
         raise ValueError('details must be an object')
@@ -141,7 +201,8 @@ def _validate(details):
     for lang in LOCALES:
         if not isinstance(details.get(lang), dict) or 'intent' not in details[lang]:
             raise ValueError('intent is required in both locales')
-    for key in NEW_FIELDS:
+    _walk(details)
+    for key in LEGACY_FIELDS:
         if (key in details['en']) != (key in details['zh-TW']):
             raise ValueError(key + ': required in both locales or neither')
         if key not in details['en']:
@@ -213,7 +274,7 @@ def check_details(details, kind=None):
     for lang in LOCALES:
         loc = details[lang]
         if kind in ('merge', 'merge-untracked'):
-            for field in NEW_FIELDS:
+            for field in LEGACY_FIELDS:
                 if field != 'notes' and field not in loc:
                     raise ValueError(lang + '.' + field + ': required on a merge intent card')
             prefix = 'MERGE CARD — ' if lang == 'en' else '【合併卡】'
@@ -258,6 +319,16 @@ def _report(details, explain=False):
         for field in ('intent', 'why', 'done', 'questions', 'notes'):
             for index, item in enumerate(loc.get(field, [])):
                 add(field, item['text'], 'fact' if field == 'notes' else item['kind'], index)
+        for index, point in enumerate(loc.get('change_points', [])):
+            add('change_points.how', point['how'], 'fact', index)
+        for field in ('reason', 'rollback'):
+            if 'door' in loc:
+                add('door.' + field, loc['door'][field], 'fact')
+        if 'check' in loc:
+            for field in ('q', 'why'):
+                add('check.' + field, loc['check'][field], 'fact')
+            for index, option in enumerate(loc['check']['options']):
+                add('check.options', option, 'fact', index)
         for field in ('before_nodes', 'after_nodes'):
             for index, item in enumerate(loc.get(field, [])):
                 add(field, item['label'], index=index, sentences=False, node=True)

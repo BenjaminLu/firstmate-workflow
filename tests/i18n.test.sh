@@ -89,6 +89,27 @@ done
 assert_fail "grep -q . <<<\"\$(grep -vE '^#|^$' '$tbl' | awk -F'\t' 'NF!=2')\"" "every table row is exactly two columns"
 assert_fail "grep -q . <<<\"\$(grep -vE '^#|^$' '$tbl' | cut -f1 | sort | uniq -d)\"" "no term is listed twice"
 
+# T-242: confirmation and evidence controls have bilingual, convertible copy.
+for key in doorOneWay doorTwoWay doorRollback showCode intentReviewed specAcceptance codeMore doorConfirmed doorUnconfirmed decisionMissing decisionAlreadyRecorded; do
+  assert_ok "jq -e --arg key '$key' '.[\$key]|strings|select(length>0)' '$en' >/dev/null" "English walk key $key"
+  assert_ok "jq -e --arg key '$key' '.[\$key]|strings|select(length>0)' '$tw' >/dev/null" "Traditional Chinese walk key $key"
+done
+walk_cn="$(jq -r .doorUnconfirmed "$tw")"
+while IFS=$'\t' read -r a b; do
+  case "$a" in '#'*|'') continue;; esac
+  walk_cn="${walk_cn//$a/$b}"
+done < "$tbl"
+assert_eq '请在主卡片确认每条意图并回答确认题。' "$walk_cn" 'Simplified door guidance'
+
+for pair in 'doorOneWay|单向门' 'doorTwoWay|双向门' 'doorRollback|回复方式' 'showCode|显示代码' 'intentReviewed|我已确认这条意图' 'specAcceptance|Spec 验收条目' 'codeMore|Pull request 还有 {n} 个修改' 'doorConfirmed|每条意图及答案都已确认。' 'decisionMissing|这个决策已不在待确认列表。' 'decisionAlreadyRecorded|这个决策已记录。'; do
+  key="${pair%%|*}"; expected="${pair#*|}"; converted="$(jq -r --arg key "$key" '.[$key]' "$tw")"
+  while IFS=$'\t' read -r a b; do
+    case "$a" in '#'*|'') continue;; esac
+    converted="${converted//$a/$b}"
+  done < "$tbl"
+  assert_eq "$expected" "$converted" "Simplified walk copy $key"
+done
+
 # applying the table to the zh-TW dictionary must change something and break nothing
 cnout="$(jq -r '.gate_scope' "$tw")"
 while IFS=$'\t' read -r a b; do

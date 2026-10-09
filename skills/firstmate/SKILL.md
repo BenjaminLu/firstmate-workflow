@@ -838,6 +838,23 @@ a merge card always asks at least one question.
 A new task may keep this explanation in its spec's optional bilingual `explain`
 block: intent, why, scope_in, scope_out, done, notes and both node lists, without
 questions or change_table. It needs the same per-intent alignment and STE checks.
+When writing a spec with a change-point walk, judge the door. A stored-format
+change, a published external write or a force-push of a shared branch is one-way.
+Write bilingual `change_points` (intent number and how fact), `door` (kind,
+reason, rollback) and aligned top-level `change_refs` (files, named tests,
+acceptance indices). Cover every intent. For a one-way door, state the irreversible
+consequence in rollback, write the check with `about.intent` and 2–4 matching
+bilingual options, and set the top-level integer `check_answer`. Its correct
+option must be visible verbatim in the intent/how/door evidence in both locales;
+check feedback alone does not support an answer. Two-way doors name a concrete
+rollback and have no check or answer. Keep legacy specs unchanged unless the
+captain approves an exact repin.
+For enriched merge cards, author exactly the spec's intent items. The producer
+attaches walk fields and exact-head code/test refs; do not author substitute
+walks or copy dispatch-only prose as different intents. Missing or mismatched
+intents refuse the request, and autopilot waits for corrected authored details.
+The captain confirms one-way doors on the main card, including when a game
+request is refused; never auto-confirm or bypass the server check.
 After a spec with explain passes preflight, run `bin/fm-diagram.sh --task <id>
 [--project <name>]` to generate its three locale diagrams for the task panel.
 The panel uses the newest dispatch/repin/merge card's details when present and

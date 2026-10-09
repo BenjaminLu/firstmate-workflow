@@ -23,3 +23,22 @@ export function intentCard(id = 'D-211') {
   return card;
 }
 
+
+// Explicit opt-in: legacy cards and selected-copy defaults remain unchanged.
+export function changePointCard(kind: 'one-way' | 'two-way' = 'one-way', id = 'D-9242') {
+  const card: any = intentCard(id);
+  card.kind = 'merge'; card.pr = 9242; card.check_answer = 0;
+  for (const locale of ['en', 'zh-TW']) {
+    const en = locale === 'en';
+    const content = card.details[locale];
+    delete content.questions;
+    content.intent = [{kind:'fact',text:en ? 'Keep the saved records.' : '保留已存記錄。'}, {kind:'fact',text:en ? 'Show the records.' : '顯示記錄。'}];
+    content.change_points = [{intent:1,how:en ? 'Keep the saved records.' : '保留已存記錄。'}, {intent:2,how:en ? 'Show the records.' : '顯示記錄。'}];
+    content.door = {kind,reason:en ? 'Published records cannot be recalled.' : '已發布記錄無法收回。',rollback:en ? 'Keep the saved records.' : '保留已存記錄。'};
+    if (kind === 'one-way') content.check = {q:en ? 'What must stay?' : '必須留下什麼？',options:en ? ['Keep the saved records.','Lose records.'] : ['保留已存記錄。','刪除記錄。'],why:en ? 'Keep the saved records.' : '保留已存記錄。',about:{intent:1}};
+    else delete content.check;
+  }
+  if (kind === 'two-way') delete card.check_answer;
+  card.details.refs = {spec_url:'https://github.com/owner/repo/blob/' + 'a'.repeat(40) + '/design/tasks/T-211.json',acceptance:['Keep the saved records.','Show the records.'],points:[0,1].map(i=>({acceptance:[i],code:[{file:'src/a.py',start:i+1,end:i+1,url:'https://github.com/owner/repo/pull/9242/files#diff-abcR'+(i+1),snippet:'saved_records()'}],tests:[{file:'tests/a.py',line:i+1,name:'test_saved_'+i,url:'https://github.com/owner/repo/blob/'+'a'.repeat(40)+'/tests/a.py#L'+(i+1)}]}))};
+  return card;
+}

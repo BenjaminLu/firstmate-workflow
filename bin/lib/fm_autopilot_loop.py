@@ -689,14 +689,40 @@ class MechanicalLoop:
                     return
             # fm-decide validates the content and current signed gate readiness
             # again; deriving details never substitutes for those checks.
+            from fm_autopilot import key
+            # Include the evidence that authorized this advancement. A new head,
+            # base, verdict, CI result or replacement must revalidate even when
+            # authored details stay unchanged.
+            variant = key([read_json(details), gated_base,
+                           self.data['advanced'].get(str(pr['number']), {})])[:12]
+            request_token = f'merge-request:{pr["number"]}:{head}'
+            failure = self.data.get('merge_request_failures', {}).get(str(pr['number']))
+            if not replacement and failure and not self.retry_due(request_token, variant=variant): return
             try:
                 self.command(self.script('fm-decide.sh', '--request', ident, '--task', task, '--project', owner,
                     '--kind', 'merge', '--pr', pr['number'], '--expected-head', head, '--details', details))
-            except ERRORS:
-                if not (replacement and self.ctx['external']): raise
-                # The child error may contain authored text or private paths.
-                # Retain uncertain-job reconciliation, with a bounded wake.
-                raise ValueError(f'{task} #{pr["number"]}: replacement request refused; verify current evidence and details') from None
+            except ERRORS as error:
+                # Keep the existing replacement-external privacy contract and
+                # all legacy failures. Only authoritative walk-field refusals
+                # enter the new authored-input recovery path.
+                if replacement and self.ctx['external']:
+                    raise ValueError(f'{task} #{pr["number"]}: replacement request refused; verify current evidence and details') from None
+                field = re.search(r'card refs: (?:en|zh-TW)\.(intent|change_points|door|check)\s+(?:missing|mismatch)', str(error))
+                orphan = 'details walk fields mismatch: spec has no change_points' in str(error)
+                if replacement or not (field or orphan):
+                    raise
+                category = field[1] + ' missing or mismatched' if field else 'orphan walk fields'
+                reason = f'{task} #{pr["number"]} ({ident}): merge request refused ({category}); author intent and walk fields from the spec and verify current evidence'
+                self.data.setdefault('merge_request_failures', {})[str(pr['number'])] = dict(
+                    task=task, id=ident, head=head, reason=reason)
+                self.branch_failure('merge-request', str(pr['number']), head, task, reason, variant=variant)
+                self.attention('merge-request-' + ident + '-' + variant, task, pr, reason,
+                    f'{task} #{pr["number"]}（{ident}）：合併決策卡請求被拒絕；請依 spec 修正意圖與導覽欄位，並確認目前證據')
+                raise RuntimeError(reason) from None
+            if failure:
+                self.data['retries'].pop(request_token, None)
+                self.data['merge_request_failures'].pop(str(pr['number']), None)
+                self.save()
 
 
 def run_job(path):

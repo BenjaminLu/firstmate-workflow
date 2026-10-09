@@ -21,6 +21,7 @@ x="$(safe_tmpdir)"; mkdir -p "$x/bin" "$x/state/pending" "$x/state/runs" "$x/sta
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-herdr.py" "$x/bin/"; project_storage_fixture "$x/bin/"
 cp -R "$ROOT/bin/lib" "$x/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 binding_service_fixture "$x"
+merge_source_fixture "$x"
 # Refuse only a dispatch start event when the failure case requests it.
 cp "$x/bin/fm-emit.sh" "$x/bin/fm-emit-real.sh"
 cat > "$x/bin/fm-emit.sh" <<'SH'

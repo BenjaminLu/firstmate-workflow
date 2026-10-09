@@ -801,7 +801,7 @@ const responseFile = (id: string) => {
 // answer projections stable, including the durable session wake payload.
 const publicDecision = (record: any) => {
   if (!record || typeof record !== "object") return record;
-  const { details, purpose, title, ste, ...visible } = record;
+  const { details, purpose, title, ste, check_answer, door_confirmation_fingerprint, ...visible } = record;
   return visible;
 };
 
@@ -1691,7 +1691,7 @@ const buildState = (only: string | null, tasksOnly = false) => {
     // a lost run shows once: its agent_lost, not also the agent_finished the
     // deck reconcile closes it with
     recent: visibleEvents(events, only).slice(-40).reverse().map(logItem),
-    pending: shownPending.map(linked),
+    pending: shownPending.map(({ check_answer, door_confirmation_fingerprint, ...card }) => linked(card)),
   };
   const responseTotal = out.responses.length, outcomeTotal = out.outcomes.length;
   const retained = (d: Record<string, any>) => d.merge === "running" || d.merge_unknown
@@ -1798,6 +1798,51 @@ const pendingIn = (dir: string, events?: Event[]) => {
 const pending = (directories?: string[]) => (directories ?? stores()).flatMap(base => pendingIn(join(base, "pending"), directories ? readEvents([base]) : undefined))
   .sort((a, b) => a.at - b.at || String(a.card.id).localeCompare(String(b.card.id), "en", { numeric: true }))
   .map(x => x.card);
+
+// Confirmation remains private, including on retries after pending removal.
+const doorLocale = (body: any) => body?.locale === undefined ? DEFAULT_LANGUAGE : body.locale;
+const doorWhy = (card: any, body: any): string => {
+  const locale = doorLocale(body);
+  const lang = locale === "en" ? "en" : "zh-TW";
+  let text = card?.details?.[lang]?.check?.why;
+  if (typeof text !== "string" || !text) text = lang === "en"
+    ? "Review each intent and answer the check in the main card."
+    : "請在主卡片確認每條意圖並回答確認題。";
+  if (locale === "zh-CN") {
+    const table = join(ROOT, "i18n/tw2cn.tsv");
+    if (existsSync(table)) for (const line of readFileSync(table, "utf8").split("\n")) {
+      if (!line || line.startsWith("#")) continue;
+      const pair = line.split("\t");
+      if (pair.length === 2 && pair[0]) text = text.split(pair[0]).join(pair[1]);
+    }
+  }
+  return text;
+};
+const doorRefusal = (card: any, body: any, status: number) =>
+  json({ ok: false, code: "doorUnconfirmed", why: doorWhy(card, body) }, status);
+const confirmation = (card: any, body: any): { reviewed: number[]; answer: number } | null => {
+  if (!["en", "zh-TW", "zh-CN"].includes(doorLocale(body))) return null;
+  const count = card?.details?.en?.intent?.length;
+  const options = card?.details?.en?.check?.options?.length;
+  const reviewed = body?.reviewed_intents;
+  const answer = body?.check_answer;
+  if (!Number.isInteger(count) || count < 1 || !Number.isInteger(options) || options < 2 || options > 4
+      || !Array.isArray(reviewed) || reviewed.some(n => !Number.isInteger(n) || n < 1 || n > count)
+      || new Set(reviewed).size !== reviewed.length || !Number.isInteger(answer) || answer < 0 || answer >= options) return null;
+  return { reviewed: [...reviewed].sort((a, b) => a - b), answer };
+};
+const doorFingerprint = (value: { reviewed: number[]; answer: number }) =>
+  createHash("sha256").update(JSON.stringify({ reviewed_intents: value.reviewed, check_answer: value.answer })).digest("hex");
+const checkDoor = (card: any, body: any): { response: Response | null; value: ReturnType<typeof confirmation> } => {
+  const value = confirmation(card, body);
+  if (!value) return { response: doorRefusal(card, body, 400), value: null };
+  const stored = card.check_answer;
+  const options = card.details.en.check.options.length;
+  if (!Number.isInteger(stored) || stored < 0 || stored >= options
+      || value.reviewed.length !== card.details.en.intent.length || stored !== value.answer)
+    return { response: doorRefusal(card, body, 409), value: null };
+  return { response: null, value };
+};
 
 // --- Owners and wakes (T-151) ----------------------------------------------
 // Nothing the board starts outlives its owner. A merge the captain clicked
@@ -2599,6 +2644,23 @@ const server = Bun.serve({
         e instanceof StorageError ? 503 : 400));
     }
 
+    if (url.pathname === "/decisions/check-door" && req.method === "POST") {
+      const refused = writeRefusal(req);
+      if (refused) return refused;
+      if (draining) return restarting();
+      return req.json().then((body: any) => {
+        const id = body?.id;
+        const card = typeof id === "string" ? pending().find(d => d.id === id) : null;
+        if (!body || typeof body !== "object" || Array.isArray(body) || typeof id !== "string" || !isDecisionId(id)
+            || !["en", "zh-TW", "zh-CN"].includes(doorLocale(body))) return doorRefusal(card, body, 400);
+        if (existsSync(join(decisionDir(id), `${id}.json`))) return json({ ok: false, code: "decisionAlreadyRecorded" }, 409);
+        if (!card) return json({ ok: false, code: "decisionMissing" }, 404);
+        if (card.details?.en?.door?.kind !== "one-way") return doorRefusal(card, body, 409);
+        const checked = checkDoor(card, body);
+        return checked.response ?? json({ ok: true, id });
+      }).catch(() => doorRefusal(null, null, 400));
+    }
+
     // The captain answers. The board writes the answer down and, for a merge,
     // calls the one script allowed to merge - it never shells out ad hoc.
     if (url.pathname === "/decisions" && req.method === "POST") {
@@ -2619,11 +2681,15 @@ const server = Bun.serve({
 
         const p = pending().find((d: any) => d.id === id);
         const dir = decisionDir(id);
-        mkdirSync(dir, { recursive: true });
         const file = join(dir, `${id}.json`);
         if (existsSync(file)) {
           // the stored record, with whatever merge it holds by now
           const decision = JSON.parse(readFileSync(file, "utf8"));
+          if (decision.door_confirmation_fingerprint) {
+            const value = confirmation(decision, body);
+            if (!value || doorFingerprint(value) !== decision.door_confirmation_fingerprint)
+              return doorRefusal(decision, body, 409);
+          }
           const repeated = confirmAnswers(body?.answers, decision.answers?.length);
           const storedAnswers = confirmAnswers(decision.answers, decision.answers?.length);
           if ((decision.chosen === "change" ? decision.picked : decision.chosen) !== chosen
@@ -2654,6 +2720,12 @@ const server = Bun.serve({
         // carried out below by the script that owns it.
         const untracked = p.kind === "merge-untracked";
         const effect = changeRequested ? null : effectOf(p, chosen);
+        let doorValue: ReturnType<typeof confirmation> = null;
+        if (effect === "merge" && p.details?.en?.door?.kind === "one-way") {
+          const checked = checkDoor(p, body);
+          if (checked.response) return checked.response;
+          doorValue = checked.value;
+        }
         const merging = effect === "merge" && (p.kind === "merge" || untracked) && prNumber(p.pr) !== null && typeof p.pr === "number";
         const mergeTask = untracked ? null : taskKey(p.task) !== null ? String(p.task) : null;
         if (merging && !untracked && p.task != null && mergeTask === null)
@@ -2666,6 +2738,8 @@ const server = Bun.serve({
           return json({ error: "a merge is already running in this project", code: "mergeBusy", project: projectOf(p) || null }, 409);
         const decision: Record<string, unknown> = {
           id, chosen: recordedChoice,
+          ...(doorValue ? { reviewed_intents: doorValue.reviewed, check_ok: true,
+            door_confirmation_fingerprint: doorFingerprint(doorValue) } : {}),
           ...Object.fromEntries(["details", "purpose", "title", "ste"].filter(k => k in p).map(k => [k, p[k]])),
           ...(changeRequested ? { picked: chosen } : {}),
           ...(Array.isArray(questions) ? { answers } : {}),
@@ -2683,6 +2757,7 @@ const server = Bun.serve({
         };
         // Exclusive creation makes repeated requests unable to rerun a merge,
         // or any other effect.
+        mkdirSync(dir, { recursive: true });
         const temporary = join(dir, `.${id}.${crypto.randomUUID()}.tmp`);
         writeFileSync(temporary, JSON.stringify(decision) + "\n", { flag: "wx" });
         try { linkSync(temporary, file); } finally { unlinkSync(temporary); }
