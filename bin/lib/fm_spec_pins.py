@@ -230,6 +230,11 @@ class Pins:
         return ancestor == pin['engine_commit']
 
     def resolve(self, if_present=False, *, for_repin=False):
+        chain = self.chain(if_present, for_repin=for_repin)
+        return chain[-1] if chain else None
+
+    def chain(self, if_present=False, *, for_repin=False):
+        """Every verified pin version in order; resolve returns the last one."""
         # A leftover lock/temp file is not a pin. Enumerate explicitly so an
         # unreadable store is an error, never silently treated as absent.
         records = [p for p in self.directory.iterdir() if p.name.endswith('.json')] if self.directory.exists() else []
@@ -239,6 +244,7 @@ class Pins:
         if not paths:
             raise ValueError('no pin for ' + self.project + '/' + self.task)
         previous = None
+        verified = []
         legacy_version = None
         for version, path in enumerate(paths, 1):
             if path.is_symlink() or path.name != str(version) + '.json':
@@ -372,11 +378,12 @@ class Pins:
                     or not spec['scope'] or not all(isinstance(s, str) and s and '\n' not in s for s in spec['scope'])):
                 raise ValueError('invalid pinned task scope')
             previous = pin
+            verified.append(pin)
         # Older chains can already contain valid choice-approved successors
         # without a migration marker. Never rewrite those historical records.
         if legacy_version == previous['version'] and not for_repin:
             raise ValueError('pin authorization mismatch')
-        return previous
+        return verified
 
     def approved_branch_spec(self, worktree, snapshots, dispatch, spec_ref=None):
         """Only a captain choice naming the exact proposed commit can widen pin 1.
@@ -532,7 +539,8 @@ class Pins:
 
     def scope(self, head, base):
         import fnmatch
-        pin = self.resolve()
+        chain = self.chain()
+        pin = chain[-1]
         spec = json.loads(pin['snapshots']['spec']['text'])
         if not self.external:
             try:
@@ -541,12 +549,23 @@ class Pins:
                 actual = ''
             if actual != pin['snapshots']['spec']['text']:
                 raise ValueError('self task entry differs from pin')
+        # T-277: a self task's small-change store is read only when it exists,
+        # and is validated whole before any record widens the pinned scope.
+        allowed = None
+        if not self.external and os.path.lexists(self.state / 'small-changes' / self.task):
+            import fm_small_change
+            allowed = fm_small_change.allowed_paths(self, chain)
         paths = git(self.target, 'diff', '--no-renames', '--name-only', '-z', base + '...' + head).split('\0')
+        recorded = []
         for path in filter(None, paths):
             if any(part.startswith('.fm-') for part in Path(path).parts):
                 raise ValueError('forbidden .fm-* path: ' + path)
             if not any(fnmatch.fnmatchcase(path, pattern) for pattern in spec['scope']):
-                raise ValueError('out of scope: ' + path)
+                if allowed is None or path not in allowed:
+                    raise ValueError('out of scope: ' + path)
+                recorded.append(path)
+        if recorded:
+            fm_small_change.budget(self.target, base, head, recorded)
         return pin
 
 
