@@ -80,11 +80,12 @@ class MechanicalLoop:
                         'kind' not in record and record.get('purpose') == 'dispatch')
                     if nonmerge:
                         # Intent cannot erase outcome/binding or retained merge
-                        # events. Check contradictions before either exemption.
+                        # events. Canonical optional nulls carry no merge evidence;
+                        # every non-null value contradicts either exemption.
                         merge_keys = ('merge', 'merged', 'merge_settled', 'merge_reason',
                                       'merge_started', 'binding')
                         if (record.get('purpose') == 'merge' or record.get('effect') == 'merge'
-                                or any(k in record for k in merge_keys)):
+                                or any(k in record and record[k] is not None for k in merge_keys)):
                             return [], 'unverified identity'
                         event_path = self.state / 'events.jsonl'
                         for line in event_path.read_text().splitlines() if event_path.exists() else []:
@@ -95,7 +96,7 @@ class MechanicalLoop:
                                     and isinstance(data.get('decision'), str)
                                     and data['decision'] in (path.stem, record.get('id'))
                                     and (data.get('effect') == 'merge' or data.get('purpose') == 'merge'
-                                         or any(k in data for k in merge_keys))):
+                                         or any(k in data and data[k] is not None for k in merge_keys))):
                                 return [], 'unverified identity'
                         continue
                     if record.get('kind') != 'merge' or record.get('purpose') == 'dispatch':

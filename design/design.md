@@ -1488,6 +1488,18 @@ started inside a run holding the same lock (it inherits
 running unlocked, so every suite that runs the real gate sets its own
 `FM_GATE_LOCK`, and `tests/gate.test.sh` checks that each one does.
 
+Failed-card recovery distinguishes normal optional writer fields from merge
+contradictions (T-1003). Ordinary choice records and kindless dispatch records
+may retain missing or explicit JSON null merge metadata, including `merge` and
+`binding`; matching nonmerge `decision_made` events have the same compatibility.
+Every non-null merge key, including false, zero and empty strings or containers,
+and `purpose=merge` or `effect=merge` still refuses the nonmerge exemption.
+This is schema compatibility only: a failed A remains final. A different head
+requires verified owned failed history, signed old settlement/readiness, fresh
+current-head review, CI, six gates, signed readiness and a new captain answer.
+Load new code through normal reload draining; old snapshots finish unchanged,
+and retained records, events, signatures and pins are never rewritten.
+
 Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-autopilot.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
