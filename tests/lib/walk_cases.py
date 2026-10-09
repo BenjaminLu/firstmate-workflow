@@ -476,7 +476,7 @@ class MergeRequests(unittest.TestCase):
         self.assertEqual(0,allocated.returncode,allocated.stderr)
         ident=allocated.stdout.strip();self.assertEqual('D-beta-T242-1',ident)
         result=self.request(ident);self.assertEqual(0,result.returncode,result.stderr)
-        card=json.loads((workspace/'state/pending/'+ident+'.json').read_text())
+        card=json.loads((workspace/'state/pending'/(ident+'.json')).read_text())
         self.assertIn('walk',card['details'],'external merge requests attach privately')
         self.assertEqual('valid',card['details']['walk']['status'])
         self.assertIn('owner/private',card['details']['walk']['intents'][0]['key'][0]['url'])
