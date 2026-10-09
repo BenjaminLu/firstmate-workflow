@@ -138,3 +138,34 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 .door-badge.two-way { color: var(--kelp); border: 1px solid var(--kelp); }
 .door-check button { margin: .3rem; }
 .door-check button[aria-pressed="true"] { outline: 2px solid var(--kelp); }
+
+/* Optional scene and exact-head walk; legacy cards do not use these classes. */
+.scene-view { margin-block: 16px; overflow: auto; }
+.scene-view svg { width: 100%; min-width: 260px; max-height: 600px; }
+.scene-view svg text { fill: var(--fg); font-size: 13px; }
+.scene-node rect { fill: var(--bg2); stroke: var(--accent); stroke-width: 2; }
+.scene-node.kind-focal rect { stroke-width: 4; }
+.scene-node.kind-oneway rect { stroke: var(--bad); }
+.scene-edge path { fill: none; stroke: var(--accent); stroke-width: 2; }
+.scene-edge .scene-strike { stroke: var(--bad); stroke-width: 3; }
+.scene-token { fill: var(--brass); }
+.scene-view .scene-dim { opacity: .15 !important; }
+.scene-lit rect, .scene-lit path { stroke: var(--brass); stroke-width: 4; }
+.scene-number { font-weight: bold; }
+.scene-controls, .scene-badges, .scene-banner, .walk-tabs, .walk-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 8px; }
+.scene-controls[hidden], .scene-badges[hidden], .scene-banner[hidden], .walk-tabs[hidden], .walk-navigation[hidden], .scene-view [hidden], .diff-walk [hidden] { display: none; }
+.scene-controls input { flex: 1; min-width: 120px; }
+.scene-view button, .diff-walk button, .walk-intent-link { background: var(--bg2); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+.diff-walk [aria-selected=true], .scene-controls [aria-pressed=true] { border-color: var(--accent); font-weight: bold; }
+.diff-walk button:disabled, .scene-view button:disabled { opacity: .5; cursor: default; }
+.walk-intent-link { margin-inline-start: 8px; }
+.walk-block { margin-block: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
+.walk-block.active { border-color: var(--accent); }
+.walk-block pre { max-height: 500px; overflow: auto; white-space: pre; }
+.walk-row { display: block; }
+.walk-line { color: var(--fg2); }
+.walk-row.add { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.walk-row.del { background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.walk-row.noted { border-inline-start: 3px solid var(--brass); }
+.walk-row em { display: block; white-space: normal; color: var(--fg); }
+@media (prefers-reduced-motion: reduce) { .scene-view * { transition: none !important; animation: none !important; } }

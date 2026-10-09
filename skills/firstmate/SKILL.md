@@ -841,6 +841,14 @@ a merge card always asks at least one question.
 A new task may keep this explanation in its spec's optional bilingual `explain`
 block: intent, why, scope_in, scope_out, done, notes and both node lists, without
 questions or change_table. It needs the same per-intent alignment and STE checks.
+From T-244's merge onward, write a bilingual `scene` for every new spec whose
+flow changes. Keep before_nodes and after_nodes as the fallback. Author lanes,
+nodes, edges, before/after runtime token paths and numbered c1..cN changes
+mapped to intent indexes; do not author coordinates or a layout file. Labels
+use the node-label rules and each change text is one STE fact sentence. Both
+locales carry the same ids, topology, states, token paths, counters and intent
+mappings, with translated labels and text. Do not rewrite old pins or cards.
+
 When writing a spec with a change-point walk, judge the door. A stored-format
 change, a published external write or a force-push of a shared branch is one-way.
 Write bilingual `change_points` (intent number and how fact), `door` (kind,
