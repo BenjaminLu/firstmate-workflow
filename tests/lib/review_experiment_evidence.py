@@ -451,16 +451,20 @@ root = pathlib.Path.cwd()
 artifact = pathlib.Path(ARTIFACT)
 assert artifact.read_bytes() == b'ASSERTION FAILED: unlocked reader\\n'
 denied = []
-for action in (lambda: artifact.chmod(0o600), lambda: artifact.write_text('altered'), lambda: artifact.unlink(),
-               lambda: pathlib.Path(KEY).read_bytes(), lambda: [pathlib.Path(p).read_bytes() for p in PRIVATE],
-               lambda: pathlib.Path(PARENT).read_bytes()):
+actions = [('chmod', lambda: artifact.chmod(0o600)),
+           ('write', lambda: artifact.write_text('altered')),
+           ('unlink', lambda: artifact.unlink()),
+           ('key', lambda: pathlib.Path(KEY).read_bytes())]
+actions.extend((name, lambda p=p: pathlib.Path(p).read_bytes()) for name, p in PRIVATE)
+actions.append(('parent', lambda: pathlib.Path(PARENT).read_bytes()))
+for name, action in actions:
     try:
         action()
     except OSError:
-        denied.append(True)
+        denied.append(name)
     else:
         raise AssertionError('real OS confinement permitted private read or metadata write')
-(root/'model-started.json').write_text(json.dumps({'denied':len(denied),'artifact_read':True}))
+(root/'model-started.json').write_text(json.dumps({'denied':denied,'artifact_read':True}))
 sys.stdin.read()
 for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'agent_message',
                'text':'APPROVE:T-264\\nREVIEWER_COMPLETE:T-264'}}, {'type':'turn.completed','usage':{}}]:
@@ -471,7 +475,8 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         private = self.store.state/'private-session'
         private.write_text('private session sentinel')
         for placeholder, value in (('ARTIFACT', str(artifact)), ('KEY', str(self.store.key_path)),
-                                   ('PRIVATE', [str(private)] + ([str(self.store.state.parent/'CONVENTIONS.md')] if prepared else [])), ('PARENT', str(parent))):
+                                   ('PRIVATE', [('private-session', str(private))] +
+                                    ([('conventions', str(self.store.state.parent/'CONVENTIONS.md'))] if prepared else [])), ('PARENT', str(parent))):
             probe = probe.replace(placeholder, repr(value))
         vendor.write_text(probe)
         vendor.chmod(0o755)
@@ -511,7 +516,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         result = run()
         self.assertEqual(result.returncode, 0, result.stderr + (self.root/'adapter.log').read_text())
         observed = json.loads((tree/'model-started.json').read_text())
-        self.assertEqual(observed, dict(denied=6, artifact_read=True))
+        self.assertEqual(observed, dict(denied=['chmod', 'write', 'unlink', 'key', 'private-session', 'parent'], artifact_read=True))
         self.assertEqual(self.module.PROVENANCE, self.store.records()[0]['provenance'])
         self.assertEqual(1, self.store.records()[0]['experiments'][0]['claimed_result']['exit_code'])
     def test_actual_external_collector_retains_collects_and_confines_reviewer(self):
@@ -549,7 +554,10 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         self.assertTrue(shutil.which(tool, path=os.defpath), 'real OS confinement required')
         result = run()
         self.assertEqual(result.returncode, 0, result.stderr + (self.root/'adapter.log').read_text())
-        self.assertEqual(json.loads((tree/'model-started.json').read_text()), dict(denied=6, artifact_read=True))
+        observed = json.loads((tree/'model-started.json').read_text())
+        self.assertIn('conventions', observed['denied'], 'external private-root read must be attempted independently')
+        self.assertEqual(observed, dict(denied=['chmod', 'write', 'unlink', 'key',
+                                              'private-session', 'conventions', 'parent'], artifact_read=True))
         record = self.store.records()[0]
         self.assertEqual(record['provenance'], self.module.PROVENANCE)
         self.assertEqual(record['experiments'][0]['claimed_result'], self.manifest['experiments'][0]['claimed_result'])
