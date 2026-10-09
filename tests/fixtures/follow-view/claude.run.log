@@ -1,0 +1,5 @@
+[fm] worker-ada-t035-r1 worker started on T-035 (pid 5151)
+[fm] worker-ada-t035-r1 still running (15s); vendor may buffer until complete
+[fm] worker-ada-t035-r1 still running (30s); vendor may buffer until complete
+{"type":"result","subtype":"success","is_error":false,"duration_ms":31877,"duration_api_ms":30211,"num_turns":7,"result":"Claude finished: the follower test passes.\n\nWORKER_COMPLETE:T-035","session_id":"5e2c6c1a-6f43-4a51-9d8e-0b2b4c1d7e90","total_cost_usd":0.1873,"usage":{"input_tokens":21,"output_tokens":804}}
+[fm] worker-ada-t035-r1 finished exit=0 after 32s

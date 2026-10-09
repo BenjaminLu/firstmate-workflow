@@ -816,11 +816,19 @@ def run_supervised(attempt):
     return rc
 
 
-def follow(attempt, poll=0.2):
+def follow(attempt, poll=0.2, raw=None, engine=None):
     """What a window shows: the run's log from its start, followed until the
     round ends (result or exit file, or nothing of the round left running:
-    round_live, never the runner's pid alone). Stopping this
-    - a closed pane - stops nothing else."""
+    round_live_readonly, never the runner's pid alone). Stopping this
+    - a closed pane - stops nothing else. It only reads (T-271).
+
+    The log is shown formatted by bin/lib/fm_follow_view.py, loaded here and
+    only here; `--raw`, FM_FOLLOW_RAW=1, or a tree without that file copy it
+    byte for byte instead, as every follower did before T-271."""
+    if raw is None: raw = os.environ.get('FM_FOLLOW_RAW') == '1'
+    view = None if raw else follow_view()
+    if view is not None:
+        return view.follow(attempt, poll, probe=follow_probe(), engine=engine)
     attempt = Path(attempt); log = attempt / 'run.log'; at = 0; unseen = time.monotonic()
     out = sys.stdout.buffer
     while True:
@@ -831,7 +839,7 @@ def follow(attempt, poll=0.2):
             except (ValueError, OSError): over = True
             else:
                 try: os.kill(runner, 0)
-                except OSError: over = not round_live(attempt, runner)
+                except OSError: over = not round_live_readonly(attempt, runner)
         elif not over and time.monotonic() - unseen > float(os.environ.get('FM_FOLLOW_GRACE', '120')):
             over = True  # no round ever started under this window
         if log.is_file():
@@ -842,6 +850,33 @@ def follow(attempt, poll=0.2):
                 continue
         if over: return 0
         time.sleep(poll)
+
+
+def follow_view():
+    """bin/lib/fm_follow_view.py beside this file, or None where a fixture
+    copied this file alone. No bytecode: the code tree stays as committed."""
+    path = Path(__file__).resolve().parent / 'lib/fm_follow_view.py'
+    if not path.is_file(): return None
+    spec = importlib.util.spec_from_file_location('fm_follow_view', path)
+    module = importlib.util.module_from_spec(spec)
+    written, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try: spec.loader.exec_module(module)
+    finally: sys.dont_write_bytecode = written
+    return module
+
+
+def follow_probe():
+    """What the view may ask this file: the read-only liveness check (the
+    same `ps` as round_live) and the default project."""
+    import types
+    return types.SimpleNamespace(round_live=round_live_readonly, default_project=default_project)
+
+
+def follow_all(root):
+    """`fm.sh follow --all`: every live round of the routed record root."""
+    view = follow_view()
+    if view is None: raise ValueError('follow --all needs bin/lib/fm_follow_view.py')
+    return view.dashboard(record_root(root) / 'state/runs', follow_probe(), engine=Path(root))
 
 
 SAFE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
@@ -878,6 +913,36 @@ def round_live(attempt, pid):
     try: state = execution_state(attempt)
     except (OSError, ValueError): state = None
     if state and state.get('live'): return True
+    if (attempt / 'runner.exit').exists() or (attempt / 'result.json').exists(): return False
+    try: return group_live(pid)
+    except PermissionError: return True  # a group is there, if not one fm may signal
+
+
+def execution_held(attempt):
+    """execution_state's `live`, without creating anything: the lifetime lock
+    is opened read-only, and only if it is there. A lock never created is not
+    held; an unreadable receipt is no answer, as round_live takes it."""
+    attempt = Path(attempt)
+    try: read(attempt / 'execution.json')
+    except (OSError, ValueError): return False
+    try: fd = os.open(attempt / 'execution.lock', os.O_RDONLY)
+    except OSError: return False
+    try:
+        try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError: return True
+        except OSError: return False
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally: os.close(fd)
+
+
+def round_live_readonly(attempt, pid):
+    """round_live's answer for a follower, which runs outside the round and
+    only reads (T-271): execution_state can create execution.lock, this
+    never creates or changes a file."""
+    attempt = Path(attempt)
+    if process_matches(dict(pid=pid, token='fm-herdr.py')): return True
+    if execution_held(attempt): return True
     if (attempt / 'runner.exit').exists() or (attempt / 'result.json').exists(): return False
     try: return group_live(pid)
     except PermissionError: return True  # a group is there, if not one fm may signal
@@ -2994,12 +3059,23 @@ def main(args):
     if mode == 'pane-child': return run_supervised(*args)
     if mode == 'follow':
         # `follow <attempt>`, what a window runs, or `follow <root> <actor>`,
-        # what `fm.sh follow` runs: the actor's latest round
+        # what `fm.sh follow` runs: the actor's latest round. `--raw` copies
+        # the log byte for byte; `follow <root> --all` is the dashboard.
+        # A follower writes nothing, Python bytecode included (T-271).
+        sys.dont_write_bytecode = True
+        raw, every = '--raw' in args, '--all' in args
+        args = [arg for arg in args if arg not in ('--raw', '--all')]
+        if every:
+            if raw or len(args) != 1: raise ValueError('usage: follow <root> --all')
+            return follow_all(args[0])
+        engine = None
         if len(args) == 2:
+            engine = Path(args[0])
             attempt = latest_attempt(*args)
             if attempt is None: raise ValueError('no round of ' + args[1] + ' to follow')
             args = [attempt]
-        return follow(*args)
+        if len(args) != 1: raise ValueError('usage: follow <attempt> [--raw] | follow <root> <actor> [--raw] | follow <root> --all')
+        return follow(args[0], raw=raw or None, engine=engine)
     if mode == 'stop':
         out = stop_command(args); print(json.dumps(out)); return 1 if out['failed'] else 0
     if mode == 'context':
