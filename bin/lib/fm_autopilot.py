@@ -127,6 +127,378 @@ class Pilot(BranchUpdates, MechanicalLoop):
     def save(self):
         save_json(self.path, self.data)
 
+    def refresh_queue(self):
+        """Lazy loading preserves legacy frozen and isolated engine fixtures."""
+        self.queue_mode, self.queue_policy = 'off', None
+        path = self.directory / 'queue-policy.json'
+        if not path.exists() and not path.is_symlink() and 'self_queue' not in self.data:
+            return
+        try:
+            import fm_autopilot_queue as Q
+        except ImportError:
+            try:
+                value = json.loads(path.read_text())
+                if (not path.is_symlink() and not any(p.is_symlink() for p in path.parents)
+                        and isinstance(value, dict) and value.get('enabled') is False
+                        and 'self_queue' not in self.data):
+                    return
+            except (OSError, ValueError):
+                pass
+            self.queue_mode = 'off' if self.ctx['external'] else 'hold'
+            self.queue('queue-helper-missing', '', 'Queue helper unavailable; reload supported code',
+                       '佇列輔助程式無法使用；請重載受支援的程式')
+            return
+        policy, error = Q.load_policy(self.state, self.ctx['repository'], self.ctx['base'],
+                                     self.ctx['project'] or 'firstmate-workflow', self.ctx['external'])
+        if error:
+            self.queue('queue-' + error, '', 'Self queue held: ' + error + '; validate policy and captain record',
+                       '自身佇列暫緩：' + error + '；請驗證政策與船長紀錄')
+        if self.ctx['external']: return
+        q = self.data.get('self_queue')
+        if q is not None:
+            try: Q.validate_queue(q, self.ctx['repository'], self.ctx['base'])
+            except (ValueError, TypeError):
+                self.queue_mode = 'hold'
+                self.queue('queue-state-invalid', '', 'Self queue state invalid; reconcile without resetting it',
+                           '自身佇列狀態無法驗證；請核對，勿重設')
+                return
+        if error:
+            self.queue_mode = 'hold'
+            return
+        self.queue_policy = policy
+        if policy and policy['enabled']:
+            self.queue_mode = 'enabled'
+            if q is None:
+                self.data['self_queue'] = Q.new_queue(policy)
+                self.save()
+            elif q['policy_digest'] != Q.policy_digest(policy):
+                # A live turn cannot be replaced by a different approved cohort.
+                if q['front'] is not None:
+                    self.queue_mode = 'hold'
+                else:
+                    q['policy_digest'] = Q.policy_digest(policy)
+                    for m in q['members'].values():
+                        m['attempt_generation'] += 1
+            self.data['self_queue']['enabled'] = True
+        elif q and (q['front'] is not None or self.queue_reservation()
+                    or any(m['state'] == 'uncertain' for m in q['members'].values())
+                    or any(j.get('state') in ('running', 'consuming', 'uncertain')
+                           for j in self.data.get('jobs', {}).values())):
+            q['enabled'] = False
+            self.queue_mode = 'drain'
+        elif q:
+            q['enabled'] = False
+        self.save()
+
+    def queue_reservation(self):
+        import fm_autopilot_queue as Q
+        from fm_merge_outcome import merge_outcome
+        project = self.ctx['project'] or 'firstmate-workflow'
+        try:
+            if list((self.state / 'merging').glob('*.json')): return True
+            for folder in ('pending', 'decisions'):
+                for path in (self.state / folder).glob('*.json'):
+                    r = Q.read(path)
+                    if r.get('project') not in (None, '', project): continue
+                    if r.get('kind') not in ('merge', 'merge-untracked'): continue
+                    if folder == 'pending': return True
+                    if (Q.effect(r, r.get('chosen')) == 'merge'
+                            and merge_outcome(r) not in ('merged', 'failed')): return True
+            return False
+        except (ValueError, OSError, AttributeError, TypeError):
+            return True
+
+    def queue_release(self, number):
+        if self.queue_reservation(): return
+        import fm_autopilot_queue as Q
+        m = self.data['self_queue']['members'][number]
+        if m['request'] and m['request']['state'] != 'settled': return
+        Q.release(self.data['self_queue'], number, self.clock())
+
+    def queue_eligible(self, pr):
+        """Use the stock approved-pin resolver, including supported legacy pins."""
+        task = self.task(pr)
+        if not task: return '', 'untracked'
+        if pr.get('state') != 'open': return task, 'closed'
+        if pr.get('draft'): return task, 'draft'
+        if pr['base']['ref'] != self.ctx['base']: return task, 'stack-on-task'
+        if pr['head'].get('repo', {}).get('full_name') != self.ctx['repository']:
+            return task, 'ownership'
+        if self.round_live(task): return task, 'live-worker'
+        from fm_spec_pins import Pins
+        try:
+            pins = Pins(self.adoption_env(), task)
+            pin = pins.resolve()
+            spec = json.loads(pin['snapshots']['spec']['text'])
+        except (OSError, ValueError, TypeError, KeyError):
+            return task, 'approved-pin-unavailable'
+        if not any(r.get('task') == task and r.get('type') in ('dispatched', 'worker_started', 'agent_started', 'commit_pushed')
+                   for r in self.rows()):
+            return task, 'dispatch-provenance-unavailable'
+        merged = {r.get('task') for r in self.rows() if r.get('type') == 'merged'}
+        if any(dep not in merged for dep in spec.get('depends_on', [])):
+            return task, 'dependencies-unresolved'
+        return task, ''
+
+    def queue_snapshot(self, snapshots, base):
+        import fm_autopilot_queue as Q
+        q = self.data['self_queue']; now = self.clock()
+        if self.queue_mode == 'hold': return
+        if not getattr(self, '_queue_service_owned', False):
+            self.queue_mode = 'hold'
+            self.queue('queue-owner-unverified', '', 'Self queue owner is unverified; use the owned resident service',
+                       '自身佇列擁有者無法驗證；請使用受管理的常駐服務')
+            return
+        # Legacy jobs are never adopted by an activation. They finish under
+        # their original owner, but their results cannot launch a continuation.
+        outstanding = any(j.get('state') in ('running', 'consuming', 'uncertain') and not j.get('queue_binding')
+                          for j in self.data.get('jobs', {}).values())
+        if outstanding:
+            self._queue_snapshot_ready = False
+            self.queue('queue-activation-drain', '', 'Self queue observes legacy jobs; reconcile owners before activation',
+                       '自身佇列正觀察既有工作；啟用前請核對擁有者')
+            return
+        if q['front'] is None and self.queue_reservation():
+            self._queue_snapshot_ready = False
+            self.queue('queue-activation-card-drain', '', 'Self queue observes an existing merge reservation; reconcile its outcome',
+                       '自身佇列正觀察既有合併保留；請核對結果')
+            return
+        for number in sorted(snapshots, key=int):
+            pr, reviews, comments, runs, statuses = snapshots[number]
+            task, reason = self.queue_eligible(pr)
+            if not task:
+                if number in q['members']:
+                    Q.transition(q, number, 'uncertain', 'task-ownership-unreconciled', now)
+                continue
+            m = q['members'].get(number)
+            if m is None:
+                m = dict(task=task, admission_sequence=q['next_sequence'], head=pr['head']['sha'],
+                         base_sha=base, state='observed', reason='', attempt_generation=0,
+                         failed_fingerprint=None, resume_decision=None, request=None, jobs=[], card_id=None,
+                         timestamps={})
+                q['members'][number] = m; q['next_sequence'] += 1
+            elif m['task'] != task:
+                Q.transition(q, number, 'uncertain', 'task-ownership-changed', now)
+                continue
+            if pr.get('merged_at'):
+                if any(r.get('type') == 'merged' and str(r.get('pr')) == number for r in self.rows()):
+                    identity = 'landing:' + number
+                    if identity not in q['accounted']:
+                        q['accounted'].append(identity)
+                        q['counters']['completed_landings'] += 1
+                    if m['request']:
+                        m['request'].update(state='settled', outcome='authoritative-merge-reconciled')
+                    Q.transition(q, number, 'landed', 'authoritative-merge-reconciled', now)
+                    Q.release(q, number, now)
+                else: Q.transition(q, number, 'uncertain', 'merge-event-unreconciled', now)
+                continue
+            owned_jobs = [self.data.get('jobs', {}).get(ident, {}) for ident in m['jobs']]
+            if any(j.get('state') in ('consuming', 'uncertain') for j in owned_jobs):
+                Q.transition(q, number, 'uncertain', 'owned-job-unreconciled', now)
+                continue
+            if m['card_id']:
+                card = m['card_id']
+                pending = self.state / 'pending' / (card + '.json')
+                answered = self.state / 'decisions' / (card + '.json')
+                from fm_merge_outcome import merge_outcome
+                if pending.exists():
+                    Q.transition(q, number, 'waiting-captain', 'pending-captain-card', now)
+                elif answered.exists():
+                    record = Q.read(answered)
+                    outcome = merge_outcome(record)
+                    if outcome == 'running':
+                        if not self.queue_carry_active(task, pr):
+                            Q.transition(q, number, 'uncertain', 'merge-helper-owner-unreconciled', now)
+                            continue
+                        Q.transition(q, number, 'merging', 'captain-merge-running', now)
+                    elif outcome == 'failed':
+                        events = [r for r in self.rows() if r.get('actor') == 'captain'
+                                  and r.get('type') == 'decision_made' and r.get('task') == task
+                                  and r.get('data', {}).get('decision') == card
+                                  and r.get('data', {}).get('merge') == 'failed'
+                                  and r.get('data', {}).get('outcome') == 'failed']
+                        if not events or list((self.state / 'merging').glob('*.json')):
+                            Q.transition(q, number, 'uncertain', 'merge-failure-unreconciled', now)
+                            continue
+                        elif record.get('expected_head') != pr['head']['sha']:
+                            m['card_id'] = None
+                        else:
+                            m['failed_fingerprint'] = key(['merge-failed', card, m['head'], record.get('merge_settled')])
+                            Q.transition(q, number, 'blocked', 'failed-captain-merge', now)
+                            self.queue_release(number)
+                            continue
+                    elif outcome not in ('merged', 'failed') and not Q.cancelled_card(
+                            self.state, self.ctx['project'] or 'firstmate-workflow', card, task):
+                        Q.transition(q, number, 'uncertain', 'captain-answer-unreconciled', now)
+                        continue
+                else:
+                    Q.transition(q, number, 'uncertain', 'card-request-outcome-unreconciled', now)
+                    continue
+            parks = [r for r in self.rows() if r.get('task') == task and r.get('type') in ('parked', 'unparked')]
+            if parks and parks[-1]['type'] == 'parked':
+                if m['card_id'] and not Q.cancelled_card(self.state, self.ctx['project'] or 'firstmate-workflow',
+                                                       m['card_id'], task):
+                    continue
+                if list((self.state / 'merging').glob('*.json')):
+                    Q.transition(q, number, 'uncertain', 'merge-owner-unreconciled', now)
+                    continue
+                if m['request'] and m['request']['state'] != 'settled':
+                    Q.transition(q, number, 'uncertain', 'park-awaits-update-reconciliation', now)
+                    continue
+                Q.transition(q, number, 'parked', 'captain-parked', now)
+                Q.release(q, number, now)
+                continue
+            changed_head = m['head'] != pr['head']['sha']
+            request = m['request']
+            if request and request['state'] != 'settled':
+                # A response lost after PUT is never retried on a timer. The
+                # supervisor must verify the actual update's ancestry first.
+                if changed_head:
+                    try:
+                        self.prepare_head(pr)
+                        git = ['git', '-C', self.ctx['target']]
+                        self.checked([*git, 'merge-base', '--is-ancestor', request['H'], pr['head']['sha']])
+                        self.checked([*git, 'merge-base', '--is-ancestor', request['B'], pr['head']['sha']])
+                        commits = self.checked([*git, 'rev-list', '--first-parent',
+                                               request['H'] + '..' + pr['head']['sha']]).splitlines()
+                        if not commits or self.task(pr) != m['task']:
+                            raise ValueError('update ancestry unavailable')
+                        for commit in commits:
+                            parents = self.checked([*git, 'show', '-s', '--format=%P', commit]).split()
+                            if len(parents) != 2: raise ValueError('unrelated worker push')
+                            self.checked([*git, 'merge-base', '--is-ancestor', parents[1], request['B']])
+                        from fm_binding import change
+                        ancestor = self.checked([*git, 'merge-base', request['H'], request['B']]).strip()
+                        before = change(self.ctx['target'], request['H'], ancestor)
+                        after = change(self.ctx['target'], pr['head']['sha'], request['B'])
+                        if any(before[k] != after[k] for k in ('patch', 'files')):
+                            raise ValueError('update changed task patch')
+                        request.update(state='settled', outcome='verified-base-update')
+                    except (KeyError, ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+                        if isinstance(error, ValueError) and str(error) in ('unrelated worker push', 'update changed task patch'):
+                            request.update(state='settled', outcome='candidate-invalidated')
+                        else:
+                            Q.transition(q, number, 'uncertain', 'update-ancestry-unreconciled', now)
+                            continue
+                else:
+                    Q.transition(q, number, 'updating' if request['state'] == 'accepted' else 'uncertain',
+                                 'update-outcome-unreconciled', now)
+                    continue
+            if changed_head or m['base_sha'] != base:
+                m.update(head=pr['head']['sha'], base_sha=base, attempt_generation=m['attempt_generation'] + 1,
+                         request=None)
+                if changed_head: m.update(failed_fingerprint=None, resume_decision=None)
+            if m['failed_fingerprint'] and not changed_head:
+                resume = m.get('resume_decision')
+                note = f'Queue resume: PR {number} head {m["head"]} failed fingerprint {m["failed_fingerprint"]}'
+                if not resume:
+                    for path in sorted((self.state / 'decisions').glob('*.json')):
+                        cause = f'resume:{path.stem}:{number}:{m["failed_fingerprint"]}'
+                        if (cause not in q['accounted'] and Q.decision_authority(
+                                self.state, self.ctx['project'] or 'firstmate-workflow', path.stem, note)):
+                            resume = path.stem
+                            m['resume_decision'] = resume
+                            break
+                cause = f'resume:{resume}:{number}:{m["failed_fingerprint"]}'
+                if (cause in q['accounted'] or not Q.decision_authority(
+                        self.state, self.ctx['project'] or 'firstmate-workflow', resume, note)):
+                    Q.transition(q, number, 'blocked', 'failed-attempt-needs-approved-resume', now)
+                    self.queue_release(number)
+                    continue
+                q['accounted'].append(cause)
+                m.update(failed_fingerprint=None, attempt_generation=m['attempt_generation'] + 1)
+            if reason:
+                Q.transition(q, number, 'blocked', reason, now)
+                continue
+            checks = self.settled_checks(pr, runs, statuses)
+            verdict = self.verdict(task)
+            failed = checks is not None and any(c[-1] not in ('success', 'neutral', 'skipped') for c in checks)
+            rejected = verdict.get('head') == m['head'] and verdict.get('verdict') == 'REJECT'
+            if failed or rejected:
+                m['failed_fingerprint'] = key([m['head'], checks, verdict if rejected else None])
+                Q.transition(q, number, 'blocked', 'rejected-review' if rejected else 'failed-ci', now)
+                self.queue_release(number)
+            elif q['front'] != number:
+                Q.transition(q, number, 'queued', 'waiting-for-front', now)
+            elif checks is None:
+                Q.transition(q, number, 'waiting-ci', 'required-checks-pending', now)
+        if q['front'] is None and self.queue_mode == 'enabled' and not self.queue_reservation():
+            eligible = [n for n,m in q['members'].items() if n in snapshots and m['state'] == 'queued'
+                        and not m['failed_fingerprint'] and int(n) in self.queue_policy['cohort']]
+            if eligible:
+                n = min(eligible, key=lambda n:q['members'][n]['admission_sequence'])
+                q['front'] = n; q['members'][n]['timestamps']['acquired'] = now
+                Q.transition(q, n, 'front', 'front-acquired', now)
+                if self.settled_checks(snapshots[n][0], snapshots[n][3], snapshots[n][4]) is None:
+                    Q.transition(q, n, 'waiting-ci', 'required-checks-pending', now)
+        self._queue_snapshot_ready = True
+        for number, m in q['members'].items():
+            stamp = m['timestamps'].get('transition', 0)
+            self.queue(f'queue-transition-{number}-{m["attempt_generation"]}-{stamp}', m['task'],
+                       f'{m["task"]} #{number}: {m["state"]}; {m["reason"]}; H={m["head"]} B={m["base_sha"]}; generation={m["attempt_generation"]}; next: observe or reconcile',
+                       f'{m["task"]} #{number}：{m["state"]}；{m["reason"]}；H={m["head"]} B={m["base_sha"]}；世代={m["attempt_generation"]}；下一步：觀察或核對')
+        self.save()
+
+    def queue_guard(self, pr, packet=None, *, update=False):
+        packet = packet if packet is not None else getattr(self, '_queue_continuation', None)
+        self.refresh_queue()
+        mode = getattr(self, 'queue_mode', 'off')
+        if mode == 'off': return True
+        if mode == 'hold': return False
+        if not getattr(self, '_queue_service_owned', False): return False
+        if packet is None and not getattr(self, '_queue_snapshot_ready', False): return False
+        import fm_autopilot_queue as Q
+        q = self.data['self_queue']; number = str(pr['number'])
+        m = q['members'].get(number)
+        if (q['front'] != number or not m or m['state'] in ('blocked', 'parked', 'uncertain', 'landed')
+                or m['head'] != pr['head']['sha'] or m['base_sha'] != pr['base']['sha']): return False
+        request = m['request']
+        if request and request['state'] != 'settled' and not (update and request['state'] == 'planned'):
+            return False
+        if packet is not None and packet.get('queue_binding') != Q.binding(q, m): return False
+        current = self.api('pulls/' + number)
+        from urllib.parse import quote
+        base = self.api('branches/' + quote(self.ctx['base'], safe=''))['commit']['sha']
+        if (current.get('state') != 'open' or current.get('draft') or current['head']['sha'] != m['head']
+                or base != m['base_sha'] or current['base']['ref'] != self.ctx['base']
+                or self.task(current) != m['task'] or self.round_live(m['task'])): return False
+        return True
+
+    def queue_carry_active(self, task, pr):
+        """Recognize only a bound, running stock merge keeper for this front."""
+        if getattr(self, 'queue_mode', 'off') not in ('enabled', 'drain'): return False
+        q = self.data['self_queue']; number = str(pr['number'])
+        if q['front'] != number: return False
+        m = q['members'][number]
+        if not m.get('card_id'): return False
+        try:
+            import fm_autopilot_queue as Q
+            record = Q.read(self.state / 'decisions' / (m['card_id'] + '.json'))
+            marker = Q.read(self.state / 'merging' / ((self.ctx['project'] or '_default') + '.json'))
+            if (record.get('merge') != 'running' or record.get('effect') != 'merge'
+                    or record.get('task') != task or record.get('pr') != pr['number']
+                    or not record.get('binding', {}).get('signature')
+                    or marker.get('decision') != m['card_id'] or marker.get('task') != task
+                    or marker.get('pr') != pr['number'] or not Q.integer(marker.get('pid'), 2)):
+                return False
+            pid = str(marker['pid'])
+            started = self.checked(['ps', '-p', pid, '-o', 'lstart=']).strip()
+            if ' '.join(started.split()) != marker.get('started'): return False
+            command = self.checked(['ps', '-p', pid, '-o', 'command='])
+            import shlex
+            argv = shlex.split(command)
+            if not any(a.endswith('/fm_lifeline.py') for a in argv) or 'keep' not in argv:
+                return False
+            if not any(a.endswith('/fm-merge.sh') for a in argv): return False
+            for flag, value in (('--pr', number), ('--task', task), ('--expected-head', record['expected_head']),
+                                ('--bound-signature', record['binding']['signature'])):
+                if flag not in argv or argv[argv.index(flag) + 1] != value: return False
+            owner = int(argv[argv.index('--pid') + 1])
+            life.ProcessExit(owner).close()
+            return True
+        except (OSError, ValueError, TypeError, AttributeError, KeyError, IndexError, RuntimeError, subprocess.SubprocessError):
+            return False
+
     def reload_policy(self):
         if not self.ctx['external']:
             return
@@ -495,7 +867,10 @@ class Pilot(BranchUpdates, MechanicalLoop):
             self.recheck(task, pr, reviews)
         self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
         try:
-            if self.sync_branch(pr, task):
+            queue_mode = getattr(self, 'queue_mode', 'off')
+            behind_front = (queue_mode in ('enabled', 'drain') and pr.get('mergeable') is True
+                            and pr.get('mergeable_state') == 'behind')
+            if (queue_mode == 'off' or (not behind_front and self.queue_guard(pr))) and self.sync_branch(pr, task):
                 self.advance(pr, runs, statuses)
         except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
             self.attention('advance-error', task, pr, f'{task}: advancement needs reconciliation: {error}',
@@ -582,6 +957,8 @@ class Pilot(BranchUpdates, MechanicalLoop):
 
     def poll(self):
         self.data['poll_seq'] += 1
+        self.refresh_queue()
+        self._queue_snapshot_ready = False
         if self.policy_error:
             self.data['next_poll'] = self.clock() + self.policy['watch_seconds']
             return
@@ -590,6 +967,29 @@ class Pilot(BranchUpdates, MechanicalLoop):
             if self.ctx['external']:
                 self.adoptions()
             pulls = self.pages('pulls?state=open')
+            queue_snapshots = {}
+            if getattr(self, 'queue_mode', 'off') in ('enabled', 'drain'):
+                from urllib.parse import quote
+                base = self.api('branches/' + quote(self.ctx['base'], safe=''))['commit']['sha']
+                cohort = (self.queue_policy['cohort'] if self.queue_policy and self.queue_policy['enabled']
+                          else [int(n) for n in self.data['self_queue']['members']])
+                for n in sorted(cohort):
+                    pr = self.api('pulls/' + str(n))
+                    head = pr['head']['sha']
+                    reviews = self.pages(f'pulls/{n}/reviews')
+                    comments = self.pages(f'pulls/{n}/comments')
+                    runs = self.api(f'commits/{head}/check-runs?per_page=100')
+                    statuses = self.api(f'commits/{head}/status?per_page=100')
+                    if (statuses.get('sha') != head or runs.get('total_count', 0) > 100
+                            or statuses.get('total_count', 0) > 100):
+                        raise ValueError('incomplete queue snapshot')
+                    queue_snapshots[str(n)] = (pr, reviews, comments, runs['check_runs'], statuses['statuses'])
+                if self.api('branches/' + quote(self.ctx['base'], safe=''))['commit']['sha'] != base:
+                    raise ValueError('base changed during queue preparation')
+                self.queue_snapshot(queue_snapshots, base)
+                # Settlement may have completed a disable drain. Refresh
+                # before per-PR work so legacy resumes its original ordering.
+                self.refresh_queue()
             for item in pulls:
                 self.observe_pr(item)
                 # Track even an unrecognized PR: its eventual terminal event
@@ -606,7 +1006,8 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     self.closed_pull(self.api('pulls/' + number))
             for item in pulls:
                 number = item['number']
-                pr = self.api('pulls/' + str(number))
+                snapshot = queue_snapshots.get(str(number))
+                pr = snapshot[0] if snapshot else self.api('pulls/' + str(number))
                 if pr.get('state') == 'closed':
                     self.closed_pull(pr)
                     continue
@@ -790,6 +1191,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
 
     def local(self):
         merge_authorization.refresh(self)
+        self.refresh_queue()
         self.consume_jobs()
         self.reload_policy()
         self.read_lines(self.state / 'events.jsonl', 'offset', self.event)
@@ -1057,9 +1459,26 @@ def serve(ctx):
             save_json(pilot.directory / 'owner.json', record)
             print('ready', flush=True)
             os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
-            pilot.recover()
-            pilot.recover_jobs()
+            pilot.refresh_queue()
+            legacy_start = pilot.queue_mode == 'off'
+            if legacy_start:
+                pilot.recover()
+                pilot.recover_jobs()
             started(pilot, record)
+            # This node runs inside the exclusive service lock and lifeline.
+            # Neither an owner pid nor an arbitrary JSON receipt reaches it.
+            pilot._queue_service_owned = True
+            pilot.refresh_queue()
+            if pilot.data.get('self_queue') and pilot.queue_mode != 'hold':
+                q = pilot.data['self_queue']
+                receipt = {k: record.get(k) for k in ('owner', 'requested', 'pid', 'code', 'started_ok')}
+                if receipt != q['owner_receipt']:
+                    q['owner_generation'] += 1
+                    q['owner_receipt'] = receipt
+                    pilot.save()
+            if not legacy_start:
+                pilot.recover()
+                pilot.recover_jobs()
             pushed = True
             while True:
                 if pushed:
