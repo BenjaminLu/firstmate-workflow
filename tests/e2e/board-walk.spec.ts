@@ -1,7 +1,7 @@
 import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeTasks, writeProjects, projectState } from './lib/fixture';
 import { sceneWalkCard } from './lib/intent-card';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { showFleet } from './lib/board';
 
@@ -145,6 +145,7 @@ for (const variant of ['older card without a scene','card with a different scene
   writeTasks(root,[{id:'T-211',title:'Record walk',depends_on:[],scope:[],acceptance:[],explain:specExplain(sceneWalkCard())}]);
   const card=sceneWalkCard(variant==='older card without a scene' ? 'walk' : 'both');
   if (variant==='card with a different scene') for (const locale of ['en','zh-TW']) card.details[locale].scene.nodes[2].label=locale==='en' ? 'Card path' : '卡片路徑';
+  mkdirSync(join(root,'state/decisions'),{recursive:true});
   writeFileSync(join(root,'state/decisions/D-9242.json'),JSON.stringify({...card,chosen:'A',ts:'2026-10-01T00:00:00Z'}));
   const board=await startBoard(root);
   try {

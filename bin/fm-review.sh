@@ -840,36 +840,6 @@ head_evidence() {
   fi
 }
 
-project_without_walk() {  # stdin verdict -> stdout; fallback when fm_walk.py is unreadable or fails
-  # Same fence rules as fm_walk.segments: only a top-level ```walk / ~~~walk
-  # fence is dropped (to its close of the same char and at least its length);
-  # every other line, nested fences and verdict markers included, is kept.
-  local line fence info active='' walk=0 re='^[[:space:]]*(```+|~~~+)(.*)$'
-  while IFS= read -r line || [ -n "$line" ]; do
-    fence='' info=''
-    if [[ $line =~ $re ]]; then fence="${BASH_REMATCH[1]}" info="${BASH_REMATCH[2]}"; fi
-    if [ -n "$active" ]; then
-      if [ -n "$fence" ] && [ "${fence:0:1}" = "${active:0:1}" ] && [ "${#fence}" -ge "${#active}" ] \
-        && [[ $info =~ ^[[:space:]]*$ ]]; then
-        [ "$walk" = 1 ] || printf '%s\n' "$line"
-        active='' walk=0
-      elif [ "$walk" != 1 ]; then
-        printf '%s\n' "$line"
-      fi
-    elif [ -n "$fence" ]; then
-      active="$fence" walk=0
-      if [[ $info =~ ^[[:space:]]*walk[[:space:]]*$ ]]; then
-        walk=1
-        printf '%s\n' 'Code walk retained with the evidence.'
-      else
-        printf '%s\n' "$line"
-      fi
-    else
-      printf '%s\n' "$line"
-    fi
-  done
-}
-
 reviewed_line() {  # reviewed_line <APPROVE|REJECT>
   [ -n "$R_HEAD" ] && [ -n "$R_BASE" ] && [ -n "$R_FILES" ] || return 0
   printf '\n\nREVIEWED:%s verdict=%s head=%s base=%s patch=%s files=%s' \
@@ -1412,11 +1382,41 @@ fi
 projection="$(fm_projection)" || exit 65
 if [ -n "$PR" ] && [ "$projection" = comments ]; then
   # Walk text is never published: without a working helper the inline
-  # fallback drops the fence and keeps the prose and markers.
-  printf '%s\n' "$verdict" > "$work/project-verdict.txt"
+  # fallback drops the fence and keeps the prose and markers. The block is
+  # self-contained (no $work file, no function defined elsewhere), so it
+  # behaves the same when run on its own.
+  project_without_walk() {  # stdin verdict -> stdout; fallback when fm_walk.py is unreadable or fails
+    # Same fence rules as fm_walk.segments: only a top-level ```walk / ~~~walk
+    # fence is dropped (to its close of the same char and at least its length);
+    # every other line, nested fences and verdict markers included, is kept.
+    local line fence info active='' walk=0 re='^[[:space:]]*(```+|~~~+)(.*)$'
+    while IFS= read -r line || [ -n "$line" ]; do
+      fence='' info=''
+      if [[ $line =~ $re ]]; then fence="${BASH_REMATCH[1]}" info="${BASH_REMATCH[2]}"; fi
+      if [ -n "$active" ]; then
+        if [ -n "$fence" ] && [ "${fence:0:1}" = "${active:0:1}" ] && [ "${#fence}" -ge "${#active}" ] \
+          && [[ $info =~ ^[[:space:]]*$ ]]; then
+          [ "$walk" = 1 ] || printf '%s\n' "$line"
+          active='' walk=0
+        elif [ "$walk" != 1 ]; then
+          printf '%s\n' "$line"
+        fi
+      elif [ -n "$fence" ]; then
+        active="$fence" walk=0
+        if [[ $info =~ ^[[:space:]]*walk[[:space:]]*$ ]]; then
+          walk=1
+          printf '%s\n' 'Code walk retained with the evidence.'
+        else
+          printf '%s\n' "$line"
+        fi
+      else
+        printf '%s\n' "$line"
+      fi
+    done
+  }
   if ! { [ -r "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_walk.py" ] &&
-    projected_verdict="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_walk.py" comment --file "$work/project-verdict.txt" 2>/dev/null)"; }; then
-    projected_verdict="$(project_without_walk < "$work/project-verdict.txt")"
+    projected_verdict="$(printf '%s\n' "$verdict" | python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_walk.py" comment --file - 2>/dev/null)"; }; then
+    projected_verdict="$(printf '%s\n' "$verdict" | project_without_walk)"
   fi
   comment_verdict="EVIDENCE:$TASK $evidence_ref
 

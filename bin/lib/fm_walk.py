@@ -194,7 +194,7 @@ def main():
     parser.add_argument('--pr', default=0)
     args = parser.parse_args()
     if args.command == 'comment':
-        print(project_comment(Path(args.file).read_text()))
+        print(project_comment(sys.stdin.read() if args.file == '-' else Path(args.file).read_text()))
         return
     if args.command == 'ids':
         diff = Path(args.diff).read_text() if args.diff else canonical_diff(args.root, args.base, args.head)

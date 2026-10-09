@@ -316,10 +316,8 @@ class ExternalCommentProjection(unittest.TestCase):
     NESTED='Prose kept.\n```text\nquoted:\n```walk\n{}\n```\nAPPROVE:T-Z\nREVIEWER_COMPLETE:T-Z'
 
     def project(self,verdict,code_root):
-        from crew_blocks import section, function, shell
+        from crew_blocks import section, shell
         reviewer=ROOT/'bin/fm-review.sh'
-        try:fallback=function(reviewer,'project_without_walk')
-        except AssertionError:fallback=''
         block=section(reviewer,'project_review=fm\nif [ "$FM_EXTERNAL" = 1 ]; then',
                       'if [ "$FM_EXTERNAL" = 1 ] && [ -n "$PR" ] && [ "$projection" != comments ]; then')
         with tempfile.TemporaryDirectory() as home:
@@ -328,7 +326,7 @@ class ExternalCommentProjection(unittest.TestCase):
             prefix=('verdict="$(cat "$work/verdict.txt")"; decided=APPROVE; evidence_ref=sig; projection=comments;\n'
                     'FM_CODE_ROOT='+shlex.quote(str(code_root))+'\n'
                     'fm_private_note() { cp "$3" "$work/private"; }; fm_conventions() { echo fm; };\n'
-                    'fm_comment_projection() { printf "%s\\n" "$3" > "$work/comment"; };\n'+fallback)
+                    'fm_comment_projection() { printf "%s\\n" "$3" > "$work/comment"; };\n')
             result=shell(ROOT,home,block,prefix)
             self.assertEqual(0,result.returncode,result.stderr)
             self.assertIn('PRIVATE_NOTE' if 'PRIVATE_NOTE' in verdict else 'Prose kept.',(home/'private').read_text(),

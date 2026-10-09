@@ -153,6 +153,7 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 .scene-lit rect, .scene-lit path { stroke: var(--brass); stroke-width: 4; }
 .scene-number { font-weight: bold; }
 .scene-controls, .scene-badges, .scene-banner, .walk-tabs, .walk-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 8px; }
+.scene-controls[hidden], .scene-badges[hidden], .scene-banner[hidden], .walk-tabs[hidden], .walk-navigation[hidden], .scene-view [hidden], .diff-walk [hidden] { display: none; }
 .scene-controls input { flex: 1; min-width: 120px; }
 .scene-view button, .diff-walk button, .walk-intent-link { background: var(--bg2); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; cursor: pointer; }
 .diff-walk [aria-selected=true], .scene-controls [aria-pressed=true] { border-color: var(--accent); font-weight: bold; }
