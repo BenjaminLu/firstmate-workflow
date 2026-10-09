@@ -956,6 +956,7 @@ function render(s) {
   // the diagrams arrive after the card: mount checks each one is there
   // before it is shown, so a decision without one leaves no empty frame
   DIAGRAM.mount(deck, lang).catch(() => {});
+  mountWalk(deck);
 
   const crew = SHIP.crewOf(s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
   SHIP.rosterOn = true;
@@ -1163,6 +1164,7 @@ function drawTaskDetail() {
     (brief ? `<h5>${esc(t('detailBrief'))}</h5><p>${esc(brief)}</p>` : '') + list(notes.map(note))));
   if (wasClose) detailPanel.querySelector('[data-close-task]')?.focus();
   DIAGRAM.mount(detailPanel,lang).catch(() => {});
+  mountWalk(detailPanel);
 }
 detailPanel.addEventListener('click', event => {
   if (event.target.closest('[data-close-task]')) { closeTaskDetail(); return; }
@@ -1267,6 +1269,19 @@ function changeWalk(d, content, locked, detailOnly) {
   const status = refs ? `<p class="change-status">${esc(t("gate_ci"))}: ${esc(String(d.gates?.ci ?? '—'))} · ${esc(t("gate_approval"))}: ${esc(String(d.gates?.approval ?? '—'))}</p>` : '';
   return `<section class="change-walk"><h4>${esc(t("intentHeading"))}</h4><ol>${rows}</ol>${badge}${status}${check}</section>`;
 }
+let walkLoader;
+function mountWalk(root) {
+  if (!root?.querySelector('[data-walk-host]')) return;
+  walkLoader ||= new Promise((resolve, reject) => {
+    const script = document.createElement('script'); script.src = '/walk.js';
+    script.onload = resolve; script.onerror = reject; document.head.append(script);
+  });
+  walkLoader.then(() => window.WALK.mount(root, {t, esc, words, lang})).catch(() => {});
+}
+function walkHost(d, content, detailOnly) {
+  if (!content.scene && (detailOnly || !d.details?.walk)) return '';
+  return `<div data-walk-host="${esc(JSON.stringify({id:d.id, scene:content.scene, walk:detailOnly ? null : d.details?.walk, intents:content.intent, pr:d.pr, detailOnly}))}"></div>`;
+}
 function intentBody(d, content, locked, detailOnly = false) {
   const pick = picks.get(d.id);
   const sentence = (field, index, text) => detailOnly ? steSentence(d, field, index, text) : said(words(text), d);
@@ -1277,7 +1292,7 @@ function intentBody(d, content, locked, detailOnly = false) {
   const intent = `<section><h4>${esc(t('intentHeading'))}</h4>${sentences('intent', true)}` +
     (detailOnly && hasItems('why') ? `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${sentence('why',index,item.text)}</span>`)}</div>` : '') + '</section>';
   const how = `<section class="intent-how"><h4>${esc(t('howHeading'))}</h4>` +
-    (d.diagram === false ? '' : DIAGRAM.embed(d.diagram_name || d.id)) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div></section>`;
+    (d.diagram === false ? '' : DIAGRAM.embed(d.diagram_name || d.id)) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>${walkHost(d,content,detailOnly)}</section>`;
   const visibleIntents = revealedSections.has(JSON.stringify([d.id, 'intent'])) ? (content.intent || []) : (content.intent || []).slice(0,6);
   const visibleDone = revealedSections.has(JSON.stringify([d.id, 'done'])) ? (content.done || []) : (content.done || []).slice(0,6);
   const parent = item => {
