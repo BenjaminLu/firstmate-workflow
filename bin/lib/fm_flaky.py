@@ -75,7 +75,10 @@ def resolve(project):
         root = Path(paths.record_root(engine)).resolve()
     except (ValueError, OSError) as error:
         raise Refused(f'project {project} has no resolvable state root: {error}') from None
-    if root == engine and project != SELF and not _self_listed(paths, engine, project):
+    # The engine's own state is this repository's only. Outside an external context the
+    # canonical name is enough; inside one (FM_EXTERNAL=1) config.yaml must list it as repo: .
+    external = os.environ.get('FM_EXTERNAL') == '1'
+    if root == engine and (project != SELF or external) and not _self_listed(paths, engine, project):
         raise Refused(f'project {project} has no resolvable private state root')
     return project, root / LEDGER
 
@@ -212,8 +215,12 @@ def command_investigate(ledger, args, project):
     if current['status'] in ACTIVE:
         raise Refused(f"an investigation is already {current['status']} for signature: " + describe(entry))
     if current['status'] == 'fixed':
+        # The finished cycle moves to history whole; the new cycle starts clean.
         entry.setdefault('history', []).append(current)
-    entry['investigation'] = dict(blank_investigation(), status='open', owner=args.owner)
+        entry['investigation'] = dict(blank_investigation(), status='open', owner=args.owner)
+    else:
+        # A 'none' record becomes the open one in place, so its unknown fields survive.
+        current.update(status='open', owner=args.owner)
     return entry
 
 

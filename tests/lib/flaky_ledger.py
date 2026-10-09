@@ -197,6 +197,23 @@ class Ledger(unittest.TestCase):
         self.assertEqual(entry['hits'][0]['x_hit_note'], 'kept on the hit')
         self.assertEqual(entry['investigation']['x_investigation_note'], 'kept on the investigation')
 
+    def test_investigate_keeps_unknown_fields_of_a_none_record(self):
+        self.hit(DETAIL, *failure(100, '2026-10-09T09:57:35Z'))
+        ledger = self.read(); ledger['signatures'][0]['investigation']['x_note'] = 'kept'
+        self.ledger.write_text(json.dumps(ledger))
+        self.fm('investigate', *DETAIL, '--owner', 'researcher')
+        current = self.read()['signatures'][0]['investigation']
+        self.assertEqual((current['status'], current['owner'], current.get('x_note')), ('open', 'researcher', 'kept'))
+
+    def test_canonical_name_in_external_context_writes_nothing(self):
+        (self.root/'config.yaml').write_text('default_project: firstmate-workflow\n')
+        self.env['FM_EXTERNAL'] = '1'
+        before = (tree(self.root), tree(self.home))
+        for command in (['hit', *DETAIL, *failure(100, '2026-10-09T09:57:35Z')], ['show']):
+            self.fm(command[0], '--project', 'firstmate-workflow', *command[1:], code=65)
+        self.assertEqual((tree(self.root), tree(self.home)), before)
+        self.assertFalse(self.ledger.exists())
+
     def fixed_signature(self):
         self.hit(DETAIL, *failure(100, '2026-10-09T09:57:35Z'))
         self.hit(DETAIL, *failure(200, '2026-10-09T13:59:31Z'))

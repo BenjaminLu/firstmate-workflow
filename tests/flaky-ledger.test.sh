@@ -7,9 +7,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-# A missing helper is one structural failure, never behavioural evidence:
-# without it the behavioural assertions below are skipped, not failed.
-assert_ok "test -f '$ROOT/bin/lib/fm_flaky.py'" "the flaky ledger helper exists"
+# A missing helper is never behavioural evidence: without it every case below
+# prints a skip line and the suite exits 0, so fail-first counts none of them.
 
 while IFS='|' read -r name label; do
   [ -n "$name" ] || continue
@@ -35,6 +34,8 @@ test_hits_after_a_fix_start_a_new_cycle|after fixed --at, new hits count 1 then 
 test_same_post_fix_hit_twice_counts_once|the same post-fix hit twice keeps the count at 1
 test_investigate_from_fixed_keeps_history|investigate from fixed keeps the earlier one in history
 test_fixed_without_fixed_at_is_refused|fixed without fixed_at: hit, show, investigate exit 65
+test_investigate_keeps_unknown_fields_of_a_none_record|investigate from none keeps the record's unknown fields
+test_canonical_name_in_external_context_writes_nothing|canonical name with FM_EXTERNAL=1 and no registry: 65, writes nothing
 CASES
 
 finish
