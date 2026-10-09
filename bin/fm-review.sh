@@ -969,12 +969,51 @@ context_checkout_matches() {
     [ "$(git -C "$CHECKOUT" merge-base refs/fm/base refs/fm/head 2>/dev/null)" = "$R_BASE" ]
 }
 restore_context_evidence() {
-  [ -f "$work/evidence-path.txt" ] || return 0
+  # Always regenerate from authenticated retained bytes, including uncapped
+  # prompts which have no evidence-path.txt and both checkout refresh paths.
+  local previous_refresh=false current_refresh
+  if [ -f "$work/experiment-status.json" ]; then
+    previous_refresh="$(jq -r '.requires_context_refresh // false' "$work/experiment-status.json")" || return 70
+  fi
+  prepare_experiment_evidence || return 70
+  current_refresh="$(jq -r '.requires_context_refresh' "$work/experiment-status.json")" || return 70
+  # Ordinary retries keep the original prompt and archive reference. A fresh
+  # checkout needs its archived components restored, not a new nonce/path.
+  if [ "$previous_refresh" = false ] && [ "$current_refresh" = false ]; then
+    if [ -f "$work/evidence-path.txt" ]; then
+      local original_archive
+      original_archive="$(cat "$work/evidence-path.txt")"
+      mkdir -p "$original_archive" &&
+        cp "$work/intro.md" "$work/history.md" "$work/evidence.md" \
+           "$work/diff.md" "$work/outro.md" "$work/pins.json" "$original_archive/"
+      return "$?"
+    fi
+    return 0
+  fi
+  if [ ! -f "$work/evidence-path.txt" ]; then
+    python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_context.py" \
+      "$work" "$REVIEW_MODE" "${CHECKOUT:-}"
+    return "$?"
+  fi
   local archive
   archive="$(cat "$work/evidence-path.txt")"
   mkdir -p "$archive" &&
     cp "$work/intro.md" "$work/history.md" "$work/evidence.md" \
        "$work/diff.md" "$work/outro.md" "$work/pins.json" "$archive/"
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_context.py" \
+    "$work" "$REVIEW_MODE" "${CHECKOUT:-}"
+}
+prepare_experiment_evidence() {
+  FM_EVIDENCE_PROJECT="$(fm_evidence_project)" python3 \
+    "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_context.py" prepare-experiments \
+    "$work" "$REVIEW_MODE" "${CHECKOUT:-}" "$R_HEAD" "$R_BASE" "${FM_CODE_ROOT:-$REPO}" || return 70
+  FM_REVIEW_EXPERIMENT_INDEX="$(jq -r .index "$work/experiment-status.json")" || return 70
+  experiment_count="$(jq -r .experiment_count "$work/experiment-status.json")" || return 70
+  export FM_REVIEW_EXPERIMENT_INDEX
+  if [ "$experiment_count" -gt 0 ]; then
+    CREW_DATA="$(jq -c --argjson count "$experiment_count" \
+      '.has_experiments=true | .experiment_count=$count | .experiment_provenance_level="unverified"' <<<"$CREW_DATA")"
+  fi
 }
 if ! context_checkout_matches; then
   echo "fm-review: pinned context does not match the review checkout; no model called" >&2
@@ -989,6 +1028,13 @@ fi
 jq -n --arg head "$R_HEAD" --arg base "$R_BASE" --arg patch "$R_PATCH" \
   --argjson files "${R_FILES:-[]}" \
   '{head:$head,base:$base,patch:$patch,files:$files}' > "$work/pins.json"
+experiment_count=0
+prepare_experiment_evidence || {
+  emit --review-outcome infrastructure_error --type review_failed \
+    --en 'Experimental evidence integrity or binding unavailable; no model called' \
+    --tw '實驗證據完整性或綁定無法驗證；未呼叫模型'
+  exit 65
+}
 if ! python3 "$(dirname "${BASH_SOURCE[0]}")/lib/fm_review_context.py" \
     "$work" "$REVIEW_MODE" "${CHECKOUT:-}"; then
   emit --review-outcome infrastructure_error --type review_failed \
@@ -1095,6 +1141,13 @@ fi
 checkout_attempted=''
 prepare_review_attempt() {
   local vendor="$1"
+  if [ "$REVIEW_MODE" = run ] && [ "$experiment_count" -gt 0 ] &&
+     { [ "$vendor" != codex ] || [ "$unsandboxed" = 1 ]; }; then
+    emit --review-outcome infrastructure_error --type review_failed \
+      --en 'Experimental evidence requires supported readonly Codex OS confinement; no model called' \
+      --tw '實驗證據需要支援唯讀中繼資料的 Codex OS 隔離；未呼叫模型'
+    return 70
+  fi
   if [ "$REVIEW_MODE" = run ] && [ "$vendor" = codex ] && [ -n "$checkout_attempted" ]; then
     if ! rebuild_checkout || ! context_checkout_matches || ! restore_context_evidence; then
       echo "fm-review: cannot refresh pinned checkout and context evidence for Codex" >&2
@@ -1309,6 +1362,10 @@ decided="$(fm_evidence verdict --round "$ROUND" --head "$R_HEAD" --base "$R_BASE
   exit 3
 }
 evidence_ref="$(jq -r .signature "$FM_RUN_DIR/evidence-record.json")"
+if [ "$FM_EXTERNAL" = 1 ] && [ "$experiment_count" -gt 0 ]; then
+  evidence_ref="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_context.py" opaque-experiment-reference)" || exit 65
+  printf '%s\n' "$evidence_ref" > "$FM_RUN_DIR/experimental-projection-ref.txt"
+fi
 provenance_level=legacy
 [ "${FM_CHAIN_VENDOR:-}" != codex ] || provenance_level=authenticated
 CREW_DATA="$(jq -c --arg level "$provenance_level" '.provenance_level=$level' <<<"$CREW_DATA")"
@@ -1327,6 +1384,9 @@ $verdict"
   if [ "$project_review" != fm ]; then
     # A local pre-check must not masquerade as gate 6's repository review.
     comment_verdict="Firstmate local pre-check finished for $TASK at $R_HEAD ($decided). Required external project review remains outstanding; details retained privately. EVIDENCE:$TASK $evidence_ref"
+  fi
+  if [ "$FM_EXTERNAL" = 1 ] && [ "$experiment_count" -gt 0 ]; then
+    comment_verdict="Firstmate review finished for $TASK at $R_HEAD ($decided). Details retained privately. EVIDENCE:$TASK $evidence_ref"
   fi
   if ! fm_comment_projection "$PR" --body "$comment_verdict" >/dev/null 2>&1; then
     echo 'fm-review: optional comment projection failed; local verdict retained' >&2

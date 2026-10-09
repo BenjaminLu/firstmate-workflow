@@ -20,7 +20,7 @@ import sys
 import tempfile
 import uuid
 
-KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict', 'projection', 'spec-preflight'}
+KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict', 'projection', 'spec-preflight', 'experimental-evidence'}
 
 
 def unquoted(text):
@@ -263,6 +263,13 @@ class Store:
                     output.append('ASK-PASS-CRITERIA:' + self.task)
         return '\n\n'.join(output) or 'No local review history exists.'
 
+    def experiments(self, head, base, code):
+        # Sparse ordinary consumers remain independent of the optional module.
+        if not any(r['kind'] == 'experimental-evidence' for r in self.records()):
+            return [], []
+        from fm_experimental_evidence import collect
+        return collect(self, head, base, code)
+
 
 def retain_verdict(store, args):
     """Launcher selects the vendor; adapter-authored receipts cannot upgrade it.
@@ -339,13 +346,16 @@ def summary(store):
             else:
                 row['gates'] = [gate for value in row['gates']
                                 if (gate := gate_entry(value, mapping)) is not None]
+        elif record['kind'] == 'experimental-evidence':
+            row.update(has_experiments=True, experiment_count=len(record.get('experiments', [])),
+                       provenance_level='unverified')
         result.append(row)
     return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin', 'summary'])
+    parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin', 'summary', 'experiment-retain'])
     parser.add_argument('--state', required=True)
     parser.add_argument('--project', required=True)
     parser.add_argument('--task', required=True)
@@ -362,8 +372,19 @@ def main():
     parser.add_argument('--reviewer', action='store_true')
     parser.add_argument('--external', action='store_true', default=None)
     args = parser.parse_args()
+    if args.command == 'experiment-retain':
+        # Inline admission before importing the optional module (including its
+        # bytecode cache writes), any state initialization or binding command.
+        if (os.environ.get('FM_ROLE') in ('worker', 'reviewer')
+                or os.environ.get('FM_IN_ROUND') == '1'
+                or os.environ.get('FM_RUN_DIR')):
+            raise ValueError('experimental retention requires the outside-round operator')
     store = Store(args.state, args.project, args.task, external=args.external)
-    if args.command == 'summary':
+    if args.command == 'experiment-retain':
+        from fm_experimental_evidence import retain
+        record = retain(store, args)
+        print('Retained operator-attested experimental evidence; execution unverified by stock.')
+    elif args.command == 'summary':
         print(json.dumps(summary(store), ensure_ascii=False))
     elif args.command == 'pin':
         from fm_binding import source_binding
