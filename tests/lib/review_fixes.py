@@ -314,7 +314,7 @@ class Stored(unittest.TestCase):
         self.assertEqual(again.stdout.strip(), str(path))
         self.assertEqual(path.read_bytes(), kept)
         other = 'b' * 40
-        self.reject('1. open a\n' + block('diff', 1, PATCH) + CLOSE, head=other)
+        self.mixed(head=other)  # a later list re-issues every earlier number
         moved, _ = E.fixes_brief(self.store, 2, other)
         self.assertNotEqual(moved, path)
         self.mixed()  # a corrected verdict for the same head
