@@ -4,7 +4,9 @@ Fail-first cases plant records by hand and drive entry points that exist on
 the base: `fm_spec_pins.py scope`, `fm_prompt_context.py pin` and the
 autopilot merge path. Classes named *Interface exercise the new command and
 module; they are interface tests, not fail-first evidence. Classes named
-*Regression pin behaviour the base already has.
+*Regression pin behaviour the base already has; they compare against a copy
+of the head's `bin/` tree without `bin/lib/fm_small_change.py`, which every
+module treats as "no records", not against a git base commit.
 """
 import copy
 import hashlib
@@ -18,6 +20,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+# Never notify a live Herdr from a fixture that raises cards.
+os.environ['HERDR_ENV'] = '0'
+
 ROOT = Path(sys.argv[1])
 sys.path.insert(0, str(ROOT / 'tests/lib'))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
@@ -27,7 +32,6 @@ from ste_cases import card
 from fm_spec_pins import Pins
 
 A, PR, HEAD, BASE, CHECKS = fixture.A, fixture.PR, fixture.HEAD, fixture.BASE, fixture.CHECKS
-BASE_COMMIT = 'a118b065d7931b2e72b34b0a0907f5c37bc806aa'  # the approved base without T-277
 REASON = {'en': 'The suite needs one more case.', 'zh-TW': '測試套件需要多一個案例。'}
 TITLE = 'Gates recieve the file'
 ACCEPTANCE = ['The gate must recieve teh file.', 'Second line stays.', 'Third line stays.']
@@ -224,10 +228,12 @@ class GateEngine(Engine):
                    input=pin.stdout, env=env)
 
     def base_copy(self, name):
-        folder = self.tmp / 'base-code'; folder.mkdir(exist_ok=True)
-        path = folder / name
-        path.write_text(git(ROOT, 'show', f'{BASE_COMMIT}:bin/lib/{name}') + '\n')
-        return path
+        # The head's bin/ without fm_small_change.py: the no-T-277 baseline.
+        folder = self.tmp / 'no-small-change'
+        if not folder.exists():
+            shutil.copytree(ROOT / 'bin', folder / 'bin',
+                            ignore=shutil.ignore_patterns('fm_small_change.py', '__pycache__'))
+        return folder / 'bin/lib' / name
 
     def assert_refused(self, needle, result=None):
         result = result or self.gate()
@@ -491,8 +497,8 @@ class GateRegression(GateEngine, unittest.TestCase):
 
     def test_copied_pin_module_without_new_module_keeps_working(self):
         # Copy fixtures such as tests/lib/autopilot_entrypoints.py copy pins without fm_small_change.
-        lib = self.tmp / 'copied-lib'
-        shutil.copytree(ROOT / 'bin/lib', lib, ignore=shutil.ignore_patterns('fm_small_change.py', '__pycache__'))
+        lib = self.base_copy('fm_spec_pins.py').parent
+        self.assertFalse((lib / 'fm_small_change.py').exists())
         self.change({'src/a.py': 'x\n'})
         result = run(sys.executable, lib / 'fm_spec_pins.py', 'scope', '--task', 'T-X', '--head', 'work',
                      '--base', 'main', env=clean_env(**self.penv))
@@ -760,8 +766,10 @@ class MergeCard(Engine, unittest.TestCase):
         return path
 
     def add_record(self):
-        result = self.create('--path', 'tests/a.test.sh')
-        self.assertEqual(result.returncode, 0, result.stderr)
+        # Planted by hand, bound to the current pin, so on the base these cases
+        # fail at the disclosure assertion, not at the missing command.
+        version = max(int(p.stem) for p in (self.state / 'pins' / self.task).glob('*.json'))
+        self.plant(self.paths_record(version=version))
         return self.sha12(1)
 
     def requested(self, index=0):
@@ -818,7 +826,7 @@ class MergeCard(Engine, unittest.TestCase):
         for name, change in variants.items():
             with self.subTest(name=name):
                 shutil.rmtree(self.state / 'pending', ignore_errors=True)
-                verdict = dict(verdict='APPROVE', head=HEAD, **change)
+                verdict = {'verdict': 'APPROVE', 'head': HEAD, **change}
                 verdict['text'] += '\nAPPROVE:T-001'
                 self.pilot.verdict = lambda task, v=verdict: v
                 count = len(self.card_requests())
@@ -991,5 +999,39 @@ class MergeCard(Engine, unittest.TestCase):
         self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.store.iterdir()}, before)
 
 
+class NamedTestResult(unittest.TextTestResult):
+    """Expose behavioral outcomes in the fail-first collector's line format."""
+    def startTest(self, test):
+        self._fm_failed = False
+        self._fm_skipped = False
+        super().startTest(test)
+
+    def addFailure(self, test, err):
+        self._fm_failed = True
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self._fm_failed = True
+        super().addError(test, err)
+
+    def addSubTest(self, test, subtest, err):
+        if err is not None:
+            self._fm_failed = True
+        super().addSubTest(test, subtest, err)
+
+    def addSkip(self, test, reason):
+        self._fm_skipped = True
+        super().addSkip(test, reason)
+
+    def stopTest(self, test):
+        super().stopTest(test)
+        if not self._fm_skipped:
+            name = '%s.%s' % (type(test).__name__, test._testMethodName)
+            sys.stdout.write('    %-52s %s\n' % (name, 'FAIL' if self._fm_failed else 'ok'))
+            sys.stdout.flush()
+
+
 if __name__ == '__main__':
-    unittest.main()
+    result = unittest.main(exit=False, testRunner=unittest.TextTestRunner(
+        verbosity=2, resultclass=NamedTestResult)).result
+    sys.exit(0 if result.wasSuccessful() else 1)
