@@ -6180,6 +6180,31 @@ wake with unknown evidence. No idle timer invokes a model.
 
 Self-project mechanical branch updates require an open, non-draft PR observed
 as mergeable and behind; unknown mergeability never authorizes a self update.
+The default-off T-260 self-front pilot adds one durable landing reservation to
+the existing supervisor state. Its exact activation interface is self-owned
+`state/autopilot/queue-policy.json`, version 1, strategy `self-front`, explicit
+two or three PR cohort, repository/base, captain authorization and depth/batch 1.
+Activation requires a separate stock purpose-decision rollout card, captain A
+with hold effect, successful canonical event and exactly one authored note
+`Queue policy SHA-256: <digest>` matching canonical compact sorted-key policy
+JSON (sorted numeric cohort, excluding the authorization reference). The task's
+dispatch approval does not activate it. Invalid policy, changed identity,
+symlinked input or unverified authority holds new landing mutations. External
+projects report unsupported self strategy bilingually without applying it.
+Complete authoritative cohort snapshots assign stable numeric admission order;
+only the selected front requests updates, gates and new captain cards. Pending
+checks wait; failed attempts require a changed head or a separately approved
+resume. Existing feedback and independent workers continue. Legacy jobs and
+unresolved merge reservations drain before activation, and disabling drains
+owned front work rather than restoring fanout during uncertainty. Update intent
+is persisted before HTTP and a lost response is reconciled, never timer-retried.
+Existing signed gates, review bindings and each captain merge card remain the
+authority; no candidate SHA substitution, batch promotion or GitHub queue is
+introduced. A running, owned T-220 carry retains the same front's catch-up path.
+Read-only `python3 <FM_CODE_ROOT>/bin/lib/fm_autopilot_queue.py status --state
+<absolute-self-state-directory> --format json|text` projects bounded identifiers,
+states, reasons, generations and measured counters without locks, writes,
+network or process probes. CI runner minutes remain unavailable.
 External updates use ancestry and convention-selected rebase or merge (§5.3.3).
 With no live round or busy autopilot job for the task, REST `PUT /repos/{repo}/pulls/{n}/update-branch`
 uses `expected_head_sha` as GitHub's compare-and-swap. HTTP 202 stores a
