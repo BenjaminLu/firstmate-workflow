@@ -95,11 +95,14 @@ def header_paths(line):
     return git_path(parts[0]), git_path('b/' + parts[1])
 
 
-def parse_diff(diff, repo, pr):
+def parse_diff(diff, repo, pr, typed_rows=False):
     repository(repo)
     entries = []
     current = None
     hunk = None
+    rows = []
+    header = None
+    old_line = new_line = 0
 
     def refresh_url():
         path = current['new'] or current['old']
@@ -116,6 +119,9 @@ def parse_diff(diff, repo, pr):
         item = dict(file=current['new'] or current['old'], start=start,
                     end=start + max(0, count - 1), snippet='\n'.join(lines[:12]))
         if side == 'left': item['side'] = 'left'
+        if typed_rows:
+            item['rows'] = list(rows)
+            item['header'] = header
         item['url'] = current['url'] + ('R' if side == 'right' else 'L') + str(start)
         current['code'].append(item)
         hunk = None
@@ -135,6 +141,7 @@ def parse_diff(diff, repo, pr):
                           re.fullmatch(r'index (?:0+\.\.e69de29[0-9a-f]*|e69de29[0-9a-f]*\.\.0+)', metadata[1]))
             if kind is None and not (mode_only or empty_file):
                 raise ValueError('diff has no supported hunks')
+            if typed_rows and kind is None: kind = 'mode' if mode_only else 'empty'
             if kind is not None: current['code'].append(dict(file=current['new'] or current['old'], start=None,
                                         end=None, url=current['url'], snippet='', kind=kind))
         entries.append(current)
@@ -153,8 +160,18 @@ def parse_diff(diff, repo, pr):
                 finish_hunk()
                 match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
                 if not match: raise ValueError('invalid text hunk')
+                rows = []
+                header = line
+                old_line, new_line = int(match[1]), int(match[3])
                 hunk = (int(match[1]), int(match[2] or 1), int(match[3]), int(match[4] or 1), [], [], [False, False])
             elif hunk is not None:
+                if typed_rows and line[:1] in (' ', '+', '-'):
+                    tag = line[0]
+                    rows.append(dict(type={'+': 'add', '-': 'del', ' ': 'ctx'}[tag],
+                                     old=old_line if tag != '+' else None,
+                                     new=new_line if tag != '-' else None, text=line[1:]))
+                    if tag != '+': old_line += 1
+                    if tag != '-': new_line += 1
                 if line.startswith('+'): hunk[6][0] = True
                 if line.startswith('-'): hunk[6][1] = True
                 if line.startswith((' ', '+')): hunk[4].append(line[1:])
@@ -225,6 +242,12 @@ def prepare_details(spec, details):
     explain = spec.get('explain', {})
     points = explain.get('en', {}).get('change_points')
     fields = ('change_points', 'door', 'check')
+    for lang in ('en', 'zh-TW'):
+        loc = result.setdefault(lang, {})
+        source = explain.get(lang, {})
+        if 'scene' in loc and loc['scene'] != source.get('scene'):
+            raise ValueError(lang + '.scene mismatch with spec')
+        if 'scene' in source: loc['scene'] = deepcopy(source['scene'])
     if not points:
         if any(field in result.get(lang, {}) for lang in ('en', 'zh-TW') for field in fields):
             raise ValueError('details walk fields mismatch: spec has no change_points')

@@ -59,14 +59,19 @@ M
       printf '\n## The gates for this head\n'
       printf '\nNo gate summary for head %s exists under state/gates/, so its gate results are unknown.\n' "$hd"
       printf '\n---\n\n# The diff under review\n\n```diff\n'
-      git diff main...work
-      printf '```\n'
+      git diff --no-ext-diff --no-color --no-renames main work
+      printf '```\n\n## Hunk ids\n\n'
+      if [ -r bin/lib/fm_walk.py ]; then
+        python3 bin/lib/fm_walk.py ids --root "$rd" --base "$(git merge-base main work)" --head "$hd"
+      else
+        echo 'setup: fm_walk.py absent; helper ids are unavailable on base' >&2
+      fi
     } ) > "$dd/golden.md"
   assert_eq "$(shasum < "$dd/golden.md")" "$(shasum < "$dd/prompt.md" 2>/dev/null)" \
     "a diff round's prompt ($declared declared) is byte for byte today's: the skill, the task, the round, the head's evidence and the diff"
   assert_eq "|" "$(seen_of mode "$dd")|$(seen_of checkout "$dd")" \
     "and its adapter is handed no checkout, whatever the caller exported"
-  assert_eq "review_opened crew_status approved crew_status agent_finished" \
+  assert_eq "review_opened crew_status approved crew_status crew_status agent_finished" \
     "$(jq -r .type "$rd/state/events.jsonl" | tr '\n' ' ' | sed 's/ $//')" \
     "and its events are today's ($declared declared)"
   assert_eq "reviewer|T-Z reviewer|T-Z" \
