@@ -33,14 +33,17 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
   padding:0;font:20px var(--sans);border:1px solid var(--line);border-radius:var(--r-chip);
   background:var(--bg3);color:var(--fg);cursor:pointer}
 #voyage.voyage-resizing #voyage-stage{transition:height .2s}
+#voyage.voyage-resizing #voyage-mount{transition:min-height .2s}
 #voyage-bar #voyage-size{flex:none;width:44px;padding:0;font-size:20px}
 #voyage-size[hidden]{display:none}
 #voyage.voyage-strip:not(.voyage-full *) #voyage-stage{height:88px}
+#voyage.voyage-strip:not(.voyage-full *) #voyage-mount{min-height:88px}
 @media(max-width:650px){
   #voyage.voyage-strip:not(.voyage-full *) #voyage-stage{height:72px}
+  #voyage.voyage-strip:not(.voyage-full *) #voyage-mount{min-height:72px}
 }
 .voyage-full #voyage-stage{height:100%}
-@media(prefers-reduced-motion:reduce){#voyage.voyage-resizing #voyage-stage{transition:none}}
+@media(prefers-reduced-motion:reduce){#voyage.voyage-resizing :is(#voyage-stage,#voyage-mount){transition:none}}
 
 /* Captain card disclosures. Task detail retains its existing presentation. */
 #deck .intent-row{margin-bottom:12px}

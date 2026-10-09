@@ -63,4 +63,24 @@ assert_ok 'contract reviewer "may run.*read-only commands.*git inspection" "chec
 assert_ok 'contract reviewer "synchronize.*authoritative pr head.*local task ref.*isolated checkout" "bind.*checks?.*gates.*merge candidate" "approval carries only for unchanged authoritative patch-id with no later rejection"' \
   "merge evidence binds authoritative head and restricts approval carry-forward"
 
+# T-274: flaky failures are rerun narrowly and recurring ones root-caused.
+assert_ok 'contract firstmate "runs only two gh commands itself" "gh pr update-branch, only on a pull request github reports as both behind and mergeable" "gh run rerun <run> --failed, only for a ci failure shown to be flaky"' \
+  "firstmate names its two gh commands and their conditions"
+assert_fail 'contract firstmate "the only gh command firstmate runs itself"' \
+  "update-branch is no longer called the only gh command"
+assert_ok 'contract firstmate "update-branch exists to bring a branch up to date.*it and gh run rerun <run> --failed are the only two gh commands firstmate runs itself" "rerun <run> --failed reruns only the failed jobs of a ci run, and only when the failure is shown to be flaky" "same code passed that job before, or nothing the pull request changed can reach the failing test" "never rerun a whole run"' \
+  "rerun only failed jobs and only when shown flaky"
+assert_ok 'contract firstmate "second hit of one flaky signature.*counting the hits already in the ledger.*starts a root-cause investigation by a separate researcher" "stock read-only research round or a delegated agent" "reproduces the failure, proves the cause with a controlled experiment and writes a fix task spec for the captain" "rerun may still unblock the pull request meanwhile"' \
+  "second hit starts an independent investigation with experiment and fix spec"
+assert_ok 'contract firstmate "active investigation, open or fix task, is never started twice" "investigate refuses it"' \
+  "an active investigation is never started twice"
+assert_ok 'contract firstmate "projection allows pull request comments, a rerun gets a comment naming the job, the evidence and, from the second hit on, the open investigation"' \
+  "a rerun comment names the open investigation"
+assert_ok 'contract firstmate "external project \(fm_external=1\) follow that project.s projection and conventions" "never publish private project text, spec text or research findings" "evidence stays in the private ledger"' \
+  "external projects keep flaky evidence private"
+assert_ok 'contract firstmate "applies from t-274.s merge onward, for every firstmate session that has reloaded the merged skills" "hits seeded from earlier notes count toward the second hit"' \
+  "the flaky rule applies from T-274's merge for reloaded sessions"
+assert_ok 'contract firstmate "flaky ledger, state/flaky-ledger.json under the project.s state root" "bin/lib/fm_flaky.py: hit \(with --rerun once rerun\), investigate, link, fixed and show" "each with --project <name>"' \
+  "the ledger path, its helper and its commands"
+
 finish

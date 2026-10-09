@@ -201,6 +201,8 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 #voyage-bar{display:flex;gap:8px;padding:8px}
 #voyage-bar button{font:inherit;min-height:44px;padding:6px 14px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;cursor:pointer}
 #voyage-stage{display:block;width:100%;height:clamp(270px, 36vh, 440px);border:0}
+/* T-274: reserve the stage's final height, so loading it never moves the tabs. */
+#voyage-mount:not(.voyage-full *){min-height:clamp(270px, 36vh, 440px)}
 #voyage-drawer[hidden],#voyage-mount[hidden],#voyage-workflow[hidden]{display:none}
 .voyage-full{overflow:hidden}
 .voyage-full #voyage{position:fixed;inset:0;margin:0;z-index:1000;border-radius:0;
@@ -223,6 +225,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   body{display:flex;flex-direction:column}
   body>#shipregion,body>.lanes-wrap,body>.logwrap{order:2}
   #voyage-stage{height:270px}
+  #voyage-mount:not(.voyage-full *){min-height:270px}
   .voyage-full #voyage{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,2fr) minmax(0,3fr)}
   .voyage-full #voyage:has(#voyage-drawer[hidden]){grid-template-rows:auto minmax(0,1fr)}
 }
