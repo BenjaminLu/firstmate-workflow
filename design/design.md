@@ -1991,10 +1991,15 @@ the target repository. The verdict record gains `fix_checks` (`version`,
 applies, does-not-apply or not-a-patch, Git's first error `message`, and the
 patch paths `outside_scope` of the pinned scope). A check that cannot run is
 `unavailable` and the verdict is still retained; a patch that does not apply
-is reported, never a protocol error.
+is reported, never a protocol error. Every patch block is checked, duplicates
+included; an item's row is its worst block's result with the union of their
+outside-scope paths. Patch paths are read per file header outside hunks, with
+Git's quoting decoded, so spaced or quoted names and header-like hunk lines
+keep their real paths.
 
 Both autopilot REJECT paths run the bound protocol check first, in every
-round. A violation raises the protocol-violation wake. Otherwise `fm_evidence
+round and again after a restart; only the wake is deduplicated, keyed by head
+and verdict signature. A violation raises the protocol-violation wake. Otherwise `fm_evidence
 fixes-brief --round <next> --head <head>` writes a draft to
 `<project state>/briefs/<task>-r<next>-<head12>-<sig8>-review-fixes.md`: per
 item `<N>. fix: <finding>` with its proposal copied byte for byte and its

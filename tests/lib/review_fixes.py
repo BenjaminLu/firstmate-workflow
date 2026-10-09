@@ -11,6 +11,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,12 @@ CLOSE = 'CRITERIA-COMPLETE:T-X\nREJECT:T-X\n'
 PATCH = '--- a/src/a\n+++ b/src/a\n@@ -1 +1 @@\n-x\n+y\n'
 STALE = '--- a/src/a\n+++ b/src/a\n@@ -1 +1 @@\n-nope\n+y\n'
 OUTSIDE = '--- a/docs/b\n+++ b/docs/b\n@@ -1 +1 @@\n-d\n+e\n'
+# Valid patches Git accepts that a whitespace-bound, hunk-blind parser misreads.
+SPACED = '--- a/src/a b\n+++ b/src/a b\n@@ -1 +1 @@\n-x\n+y\n'
+QUOTED = r'--- "a/src/t\tb"' + '\n' + r'+++ "b/src/t\tb"' + '\n@@ -1 +1 @@\n-x\n+y\n'
+HEADERLIKE = '--- a/src/a\n+++ b/src/a\n@@ -1 +1 @@\n--- old\n+++ new\n'
+# The writer as launchers froze it before T-272 (the pinned target base).
+PRE_T272 = 'a118b065d7931b2e72b34b0a0907f5c37bc806aa'
 TEXT = 'file: src/a:1\nchange: replace x with y\nfixes: test_a\nfail-first: test_a fails on the old code\n'
 
 
@@ -187,6 +194,14 @@ class Protocol(unittest.TestCase):
         for name, (text, error) in cases.items():
             with self.subTest(case=name):
                 self.assertIn(error, self.errors(text + CLOSE))
+
+    def test_spaced_quoted_and_header_like_patches_are_valid(self):
+        for name, body in (('spaced', SPACED), ('quoted', QUOTED), ('header-like hunk', HEADERLIKE)):
+            with self.subTest(patch=name):
+                self.assertEqual(self.errors('1. open a\n' + block('diff', 1, body) + CLOSE), [])
+        self.assertEqual(E.patch_paths(SPACED), ['src/a b'])
+        self.assertEqual(E.patch_paths(QUOTED), ['src/t\tb'])
+        self.assertEqual(E.patch_paths(HEADERLIKE), ['src/a'])
 
     def test_unindented_or_foreign_decisions_do_not_count(self):
         for line in ('DECISION:T-X q', '   DECISION:T-Y q', '   DECISION:T-X ', '   DECISION:T-XY q'):
@@ -400,6 +415,35 @@ class Retain(unittest.TestCase):
         self.assertEqual(repository_state(self.repo), before, 'no tracked file, index, ref or worktree changed')
         self.assertEqual(E.Store(self.tmp / 'state', 'self', T).verdicts()[-1]['signature'], record['signature'])
 
+    def test_outside_scope_names_the_complete_path(self):
+        for body in (SPACED, QUOTED, HEADERLIKE):
+            numstat = subprocess.run(['git', '-C', str(self.repo), 'apply', '--numstat', '-'], input=body,
+                                     capture_output=True, text=True)
+            self.assertEqual(numstat.returncode, 0, 'Git itself accepts the patch: ' + numstat.stderr)
+        checks = E.fix_checks('1. open a\n' + block('diff', 1, SPACED) + CLOSE, T, self.head, self.repo, ['src/a'])
+        self.assertEqual(checks['items']['1']['outside_scope'], ['src/a b'])
+
+    def test_every_patch_block_reaches_the_check(self):
+        real = subprocess.run
+        applied = []
+        def recording(command, *args, **kwargs):
+            if 'apply' in command:
+                applied.append(kwargs.get('input'))
+            return real(command, *args, **kwargs)
+        cases = (('text then patch', block('text', 1, TEXT) + block('diff', 1, PATCH), [PATCH], 'applies', []),
+                 ('two patches', block('diff', 1, PATCH) + block('diff', 1, STALE), [PATCH, STALE], 'does-not-apply', []),
+                 ('scopes unite', block('diff', 1, PATCH) + block('diff', 1, OUTSIDE), [PATCH, OUTSIDE], 'applies', ['docs/b']))
+        for name, blocks, patches, outcome, outside in cases:
+            with self.subTest(case=name):
+                applied.clear()
+                text = '1. open a\n' + blocks + CLOSE
+                with patch.object(subprocess, 'run', recording):
+                    checks = E.fix_checks(text, T, self.head, self.repo, ['src/**'])
+                self.assertEqual(applied, patches, 'every patch block reaches git apply --cached --check')
+                row = checks['items']['1']
+                self.assertEqual((row['kind'], row['apply'], row['outside_scope']), ('patch', outcome, outside))
+                self.assertIn('item 1 has more than one fix block', E.protocol([rejection(text)], T))
+
     def test_an_unavailable_check_still_retains_the_verdict(self):
         result = E.fix_checks('1. open a\n' + block('diff', 1, PATCH) + CLOSE, T, self.head, self.repo, [],
                               git=str(self.tmp / 'no-git'))
@@ -464,6 +508,42 @@ class Retain(unittest.TestCase):
         new = self.retain(store, '1. open a\n' + CLOSE)
         self.assertEqual(new['fix_protocol'], 1)
         self.assertEqual(E.protocol(store.verdicts(), T), ['open item 1 has no fix proposal or DECISION'])
+
+    def test_a_review_launched_before_the_update_finishes_on_its_frozen_writer(self):
+        """Migration compatibility: the launch froze bin/, then the engine moved on."""
+        shown = subprocess.run(['git', '-C', str(ROOT), 'show', PRE_T272 + ':bin/lib/fm_evidence.py'],
+                               capture_output=True, text=True)
+        if shown.returncode:
+            self.skipTest('setup: the pre-T-272 commit is not in this clone (shallow checkout)')
+        engine = self.tmp / 'engine'
+        shutil.copytree(ROOT / 'bin', engine / 'bin', ignore=shutil.ignore_patterns('__pycache__'))
+        (engine / 'bin/lib/fm_evidence.py').write_text(shown.stdout)  # the engine before the update
+        frozen = self.tmp / 'frozen'
+        shutil.copytree(engine / 'bin', frozen / 'bin')  # the launcher's snapshot at launch
+        self.assertNotIn('fix_protocol', (frozen / 'bin/lib/fm_evidence.py').read_text())
+        store = E.Store(self.tmp / 'state', 'self', T)
+        earlier = store.append('brief', 1, 'firstmate', self.head, '1. fix: earlier\n', authorized=True)
+        files = {p: p.read_bytes() for p in store.directory.glob('*.json')}
+        shutil.copy2(ROOT / 'bin/lib/fm_evidence.py', engine / 'bin/lib/fm_evidence.py')  # the update lands
+        (self.run_dir / 'identity.json').write_text(json.dumps(dict(project='self', task=T, role='reviewer',
+                                                                    round=1, name='ada')))
+        (self.run_dir / 'answer.txt').write_text('1. open a\n' + CLOSE)
+        finished = subprocess.run(
+            [sys.executable, str(frozen / 'bin/lib/fm_evidence.py'), 'verdict', '--state', str(self.tmp / 'state'),
+             '--project', 'self', '--task', T, '--round', '1', '--head', self.head, '--base', 'b' * 40,
+             '--patch', 'p', '--run', str(self.run_dir), '--attempt', 'a1', '--vendor', 'custom',
+             '--code', str(frozen), '--file', str(self.run_dir / 'answer.txt')],
+            capture_output=True, text=True, env=dict(os.environ, FM_ACTOR='reviewer-ada-tx-r1', FM_ROOT=str(engine),
+                                                     FM_TARGET_ROOT=str(self.repo), PYTHONDONTWRITEBYTECODE='1'))
+        self.assertEqual(finished.returncode, 0, finished.stderr)
+        verdict = store.verdicts()[-1]
+        self.assertEqual((verdict['verdict'], verdict['actor']), ('REJECT', 'reviewer-ada-tx-r1'))
+        self.assertNotIn('fix_protocol', verdict, 'the pending launch finished on its frozen writer, not the new one')
+        self.assertNotIn('fix_checks', verdict)
+        self.assertEqual(E.protocol(store.verdicts(), T), [], 'and the old rules judge it')
+        for path, data in files.items():
+            self.assertEqual(path.read_bytes(), data)
+        self.assertEqual(store.brief(1, self.head)['signature'], earlier['signature'])
 
 
 class External(unittest.TestCase):
@@ -633,14 +713,36 @@ class Autopilot(BranchFixture, unittest.TestCase):
         self.pilot.advance(PR, CHECKS, [])
         self.assertIn('protocol violation', str(self.wakes()))
 
-    def test_a_restart_raises_no_second_wake_for_the_head(self):
-        self.reject('1. open helper\n' + block('diff', 1, PATCH) + CLOSE.replace('T-X', 'T-001'))
-        self.pilot.advance(PR, CHECKS, [])
-        restored = self.pilot_for()
-        restored.advance(PR, CHECKS, [])
-        self.review_completed()
-        self.assertEqual(len(restored.data['wakes']), 1)
-        self.assertEqual(len(self.pilot.data['wakes']), 1)
+    def protocol_checks(self):
+        return [c[1] for c in self.calls if c[0] == 'command' and c[1][0].endswith('fm-protocol.sh')]
+
+    def test_a_restart_repeats_the_check_but_raises_no_second_wake(self):
+        valid = '1. open helper\n' + block('diff', 1, PATCH) + CLOSE.replace('T-X', 'T-001')
+        paths = {'advance': lambda pilot: pilot.advance(PR, CHECKS, []),
+                 'completed review': lambda pilot: pilot.job_completed(dict(
+                     kind='review', task='T-001', pr=PR, code=0, output='', verdict_before='before'))}
+        for name, trigger in paths.items():
+            with self.subTest(path=name):
+                self.setUp()
+                record = self.reject(valid)
+                trigger(self.pilot)
+                restored = self.pilot_for()
+                self.assertEqual(len(restored.data['wakes']), 1, 'the wake survives the restart')
+                trigger(restored)
+                checks = self.protocol_checks()
+                self.assertEqual(len(checks), 2, 'the restarted poll repeats the protocol check')
+                for argv in checks:
+                    self.assertEqual(argv[argv.index('--signature') + 1], record['signature'])
+                self.assertEqual(len(restored.data['wakes']), 1, 'but raises no second wake for the head')
+                replacement = self.reject(valid)  # a replacement verdict on the same head
+                trigger(restored)
+                checks = self.protocol_checks()
+                self.assertEqual(checks[-1][checks[-1].index('--signature') + 1], replacement['signature'])
+                self.assertEqual(len(restored.data['wakes']), 2, 'the replacement is judged and woken once')
+                again = self.pilot_for()
+                trigger(again)
+                self.assertEqual(len(self.protocol_checks()), 4)
+                self.assertEqual(len(again.data['wakes']), 2)
 
     def test_decisions_and_legacy_rejections_still_need_a_brief(self):
         for text, legacy in (('1. open conflict\n   DECISION:T-001 spec or code?\n', False),

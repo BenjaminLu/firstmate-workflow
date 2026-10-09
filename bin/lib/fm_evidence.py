@@ -118,15 +118,67 @@ def item_is_open(body, task, earlier):
     return any(label + ':' + task in head for label in ('REGRESSION', 'NEW-GROUND'))
 
 
-def patch_paths(content):
-    """Repository paths a unified diff names; None when it names none validly."""
-    paths = set()
-    for line in content.splitlines():
-        match = re.match(r'^(?:---|\+\+\+) (\S+)', line)
-        if not match or match[1] == '/dev/null':
+GIT_ESCAPES = {'a': 7, 'b': 8, 'f': 12, 'n': 10, 'r': 13, 't': 9, 'v': 11, '"': 34, '\\': 92}
+
+
+def header_name(rest):
+    """The file name of a ---/+++ header: Git C-quoting decoded, timestamp dropped."""
+    if not rest.startswith('"'):
+        return rest.split('\t', 1)[0]
+    data = bytearray()
+    index = 1
+    while index < len(rest):
+        char = rest[index]
+        if char == '"':
+            return data.decode('utf-8', 'surrogateescape')
+        if char != '\\':
+            data += char.encode('utf-8', 'surrogateescape')
+            index += 1
             continue
-        path = match[1]
-        if not re.match(r'^[ab]/.', path):
+        octal = re.match(r'[0-7]{3}', rest[index + 1:])
+        if octal:
+            data.append(int(octal[0], 8) & 0xff)
+            index += 4
+        elif index + 1 < len(rest) and rest[index + 1] in GIT_ESCAPES:
+            data.append(GIT_ESCAPES[rest[index + 1]])
+            index += 2
+        else:
+            return None
+    return None
+
+
+def patch_paths(content):
+    """Repository paths a unified diff names; None when it names none validly.
+
+    A ---/+++ line is a file header only outside a hunk: inside one, the
+    `@@ -a,b +c,d @@` counts say how many lines are content.
+    """
+    paths = set()
+    old = new = 0
+    for line in content.splitlines():
+        if old > 0 or new > 0:
+            mark = line[:1]
+            if mark in (' ', ''):
+                old, new = old - 1, new - 1
+            elif mark == '-':
+                old -= 1
+            elif mark == '+':
+                new -= 1
+            elif mark != '\\':
+                old = new = 0
+            continue
+        hunk = re.match(r'^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@', line)
+        if hunk:
+            old = int(hunk[1]) if hunk[1] is not None else 1
+            new = int(hunk[2]) if hunk[2] is not None else 1
+            continue
+        match = re.match(r'^(?:---|\+\+\+) (.+)$', line)
+        if not match:
+            continue
+        path = header_name(match[1])
+        if path == '/dev/null':
+            continue
+        if path is None or not re.match(r'^[ab]/.', path):
             return None
         path = path[2:]
         if path.startswith('/') or '..' in Path(path).parts:
@@ -140,9 +192,11 @@ def fixes(text, task, earlier=False):
 
     Only fenced `diff fix-<N>` / `text fix-<N>` blocks and indented
     DECISION:<task> lines between the list's first item and its closing
-    marker count. Returns {N: dict(kind, content, open, errors)} for every
-    item of the list and every number a proposal names; kind is patch, text,
-    decision or None. `earlier` says whether an earlier standing list exists.
+    marker count. Returns {N: dict(kind, content, open, errors, blocks)} for
+    every item of the list and every number a proposal names; kind and
+    content are the first proposal's (patch, text, decision or None) and
+    blocks lists every fenced (kind, content) in order, duplicates included.
+    `earlier` says whether an earlier standing list exists.
     """
     items, first, close = standing(text, task)
     result = {}
@@ -207,7 +261,7 @@ def fixes(text, task, earlier=False):
                     if not re.search(r'(?m)^\s*' + re.escape(label) + r':[ \t]*\S', content):
                         errors.append(f'item {number} text fix has no non-empty {label}: line')
         kind, content = entries[0] if entries else (None, None)
-        result[number] = dict(kind=kind, content=content, open=is_open, errors=errors)
+        result[number] = dict(kind=kind, content=content, open=is_open, errors=errors, blocks=blocks)
     return result
 
 
@@ -217,6 +271,9 @@ def fix_checks(text, task, head, root, scope, git='git', seconds=60):
     The head is read into a temporary index in a new system temporary
     directory; `git apply --cached --check` never writes the repository's
     index, refs or worktree. A check that cannot run is `unavailable`.
+    Every patch block is checked, duplicates included: an item with any
+    patch is a patch whose result is its worst block's, with the union of
+    their outside-scope paths.
     """
     import fnmatch
     import shutil
@@ -224,7 +281,7 @@ def fix_checks(text, task, head, root, scope, git='git', seconds=60):
     import time
     proposals = fixes(text, task)
     items = {}
-    patches = [n for n, entry in proposals.items() if entry['kind'] == 'patch']
+    patches = [n for n, entry in proposals.items() if any(kind == 'patch' for kind, _ in entry['blocks'])]
     directory = None
     try:
         deadline = time.monotonic() + seconds
@@ -246,17 +303,23 @@ def fix_checks(text, task, head, root, scope, git='git', seconds=60):
         for number, entry in sorted(proposals.items()):
             if entry['kind'] is None:
                 continue
-            row = dict(kind=entry['kind'], apply='not-a-patch', message=None, outside_scope=[])
-            if entry['kind'] == 'patch':
+            bodies = [content for kind, content in entry['blocks'] if kind == 'patch']
+            row = dict(kind='patch' if bodies else entry['kind'], apply='not-a-patch', message=None,
+                       outside_scope=[])
+            outside = set()
+            for body in bodies:
                 applied = subprocess.run([git, '-C', str(root), 'apply', '--cached', '--check', '-'],
-                                         env=env, input=entry['content'], capture_output=True, text=True,
+                                         env=env, input=body, capture_output=True, text=True,
                                          timeout=max(1, deadline - time.monotonic()))
-                row['apply'] = 'does-not-apply' if applied.returncode else 'applies'
-                if applied.returncode:
+                if applied.returncode and row['apply'] != 'does-not-apply':
                     lines = [line for line in applied.stderr.splitlines() if line.strip()]
+                    row['apply'] = 'does-not-apply'
                     row['message'] = lines[0] if lines else 'git apply refused the patch'
-                row['outside_scope'] = [path for path in patch_paths(entry['content']) or []
-                                        if not any(fnmatch.fnmatchcase(path, glob) for glob in scope)]
+                elif not applied.returncode and row['apply'] == 'not-a-patch':
+                    row['apply'] = 'applies'
+                outside.update(path for path in patch_paths(body) or []
+                               if not any(fnmatch.fnmatchcase(path, glob) for glob in scope))
+            row['outside_scope'] = sorted(outside)
             items[str(number)] = row
         return dict(version=1, status='complete', reason=None, items=items)
     except (OSError, ValueError, subprocess.SubprocessError) as error:

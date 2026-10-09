@@ -623,23 +623,25 @@ class MechanicalLoop:
         """T-272: judge the triggering REJECT first, then name its fix draft.
 
         The protocol check is bound to this verdict's signature, in every
-        round. Once either wake exists for the head, nothing runs again.
+        round, and repeated after a restart. Only the notification is
+        deduplicated: the wake identity binds head and verdict signature, so
+        a repeat raises no second wake and a replacement verdict its own.
         """
-        from fm_autopilot import key
         from fm_evidence import Store, Refused, fixes_brief
-        number, head = pr['number'], pr['head']['sha']
-        if any('autopilot-' + key([self.ctx['project'], f'{reason}-{number}-{head}']) in self.data['wakes']
-               for reason in ('protocol', 'reject')):
-            return
+        head = pr['head']['sha']
+        source = (verdict.get('signature') or 'unsigned')[:16]
+
+        def wake(reason, en, tw):
+            self.queue(f'{reason}-{pr["number"]}-{head}-{source}', task, en, tw)
         round_number = verdict.get('round', 1)
         try:
             # An unsigned pre-T-138 verdict has no signature to bind to.
             bound = ['--signature', verdict['signature']] if verdict.get('signature') else []
-            self.command(self.script('fm-protocol.sh', 'check', '--task', task, '--pr', number,
+            self.command(self.script('fm-protocol.sh', 'check', '--task', task, '--pr', pr['number'],
                                      '--round', round_number, *bound))
         except ERRORS:
-            self.attention('protocol', task, pr, f'{task}: protocol violation in round {round_number}',
-                           f'{task}：審查協定違規，需要 firstmate 處理')
+            wake('protocol', f'{task}: protocol violation in round {round_number}',
+                 f'{task}：審查協定違規，需要 firstmate 處理')
             return
         try:
             store = Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external'])
@@ -647,15 +649,15 @@ class MechanicalLoop:
         except (Refused, ValueError, OSError, KeyError, TypeError):
             path, decision = None, True
         if decision:
-            self.attention('reject', task, pr, f'{task} REJECT: brief needed', f'{task} 審查拒絕：需要 firstmate 撰寫工作簡報')
+            wake('reject', f'{task} REJECT: brief needed', f'{task} 審查拒絕：需要 firstmate 撰寫工作簡報')
         elif self.ctx['external']:
             # Private paths and proposal text never reach a wake.
-            self.attention('reject', task, pr, f'{task} REJECT: review fixes ready in the private project state; record the brief',
-                           f'{task} 審查拒絕：審查修正草稿已備好於私有專案狀態；請記錄工作簡報')
+            wake('reject', f'{task} REJECT: review fixes ready in the private project state; record the brief',
+                 f'{task} 審查拒絕：審查修正草稿已備好於私有專案狀態；請記錄工作簡報')
         else:
             where = Path(path).relative_to(self.state)
-            self.attention('reject', task, pr, f'{task} REJECT: review fixes ready at {where}; record the brief',
-                           f'{task} 審查拒絕：審查修正草稿已備好於 {where}；請記錄工作簡報')
+            wake('reject', f'{task} REJECT: review fixes ready at {where}; record the brief',
+                 f'{task} 審查拒絕：審查修正草稿已備好於 {where}；請記錄工作簡報')
 
     def merge_card(self, task, pr, gated_base):
         from fm_concurrent import merge_blocker
