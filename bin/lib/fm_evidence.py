@@ -23,9 +23,10 @@ import uuid
 KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict', 'projection', 'spec-preflight', 'experimental-evidence'}
 
 
-def unquoted(text):
+def numbered_unquoted(text):
+    """(raw line index, line) for every line outside fences and block quotes."""
     fenced = None
-    for line in text.splitlines():
+    for index, line in enumerate(text.splitlines()):
         match = re.match(r'^\s*(`{3,}|~{3,})', line)
         if match:
             fence = match[1]
@@ -35,7 +36,12 @@ def unquoted(text):
                 fenced = None
             continue
         if fenced is None and not line.lstrip().startswith('>'):
-            yield line
+            yield index, line
+
+
+def unquoted(text):
+    for _, line in numbered_unquoted(text):
+        yield line
 
 
 def verdict_marker(text, task):
@@ -52,18 +58,30 @@ def criteria(text, task):
     with their item. Adjacent duplicate numbers and non-restart numbering
     errors reach protocol() unchanged.
     """
-    lines = list(unquoted(text))
-    ends = [n for n, line in enumerate(lines) if line.strip() == 'CRITERIA-COMPLETE:' + task]
+    return standing(text, task)[0]
+
+
+def standing(text, task):
+    """criteria() plus the raw line span of that list: (items, first, close).
+
+    first is the raw index of the list's first item and close that of the
+    final closing marker; both are None when there is no closed list.
+    """
+    lines = list(numbered_unquoted(text))
+    ends = [n for n, (_, line) in enumerate(lines) if line.strip() == 'CRITERIA-COMPLETE:' + task]
     if not ends:
-        return []
+        return [], None, None
     items = []
+    first = None
     blank = False
     label = False
-    for line in lines[:ends[-1]]:
+    for raw, line in lines[:ends[-1]]:
         match = re.match(r'^\s*(\d+)[.)]\s+(.+)', line)
         if match:
             if int(match[1]) == 1 and (blank or label):
                 items = []
+            if not items:
+                first = raw
             items.append((int(match[1]), [match[2]]))
         elif not line.strip():
             if items:
@@ -81,7 +99,313 @@ def criteria(text, task):
         # A non-item line can label the next list even without blank lines.
         # Keep it as wrapped text unless the next item restarts at 1.
         label = not match and not line[0].isspace()
-    return [(number, '\n'.join(body).rstrip()) for number, body in items]
+    if not items:
+        return [], None, None
+    return ([(number, '\n'.join(body).rstrip()) for number, body in items],
+            first, lines[ends[-1]][0])
+
+
+FIX_LABELS = ('file', 'change', 'fixes', 'fail-first')
+
+
+def item_is_open(body, task, earlier):
+    """open, or with no earlier list anything not done; labelled new items are open."""
+    head = body.splitlines()[0] if body else ''
+    if re.match(r'^(?:\*\*)?done\b', head, re.I):
+        return False
+    if re.match(r'^(?:\*\*)?open\b', head, re.I) or not earlier:
+        return True
+    return any(label + ':' + task in head for label in ('REGRESSION', 'NEW-GROUND'))
+
+
+GIT_ESCAPES = {'a': 7, 'b': 8, 'f': 12, 'n': 10, 'r': 13, 't': 9, 'v': 11, '"': 34, '\\': 92}
+
+
+def header_name(rest):
+    """The file name of a ---/+++ header: Git C-quoting decoded, timestamp dropped."""
+    if not rest.startswith('"'):
+        return rest.split('\t', 1)[0]
+    data = bytearray()
+    index = 1
+    while index < len(rest):
+        char = rest[index]
+        if char == '"':
+            return data.decode('utf-8', 'surrogateescape')
+        if char != '\\':
+            data += char.encode('utf-8', 'surrogateescape')
+            index += 1
+            continue
+        octal = re.match(r'[0-7]{3}', rest[index + 1:])
+        if octal:
+            data.append(int(octal[0], 8) & 0xff)
+            index += 4
+        elif index + 1 < len(rest) and rest[index + 1] in GIT_ESCAPES:
+            data.append(GIT_ESCAPES[rest[index + 1]])
+            index += 2
+        else:
+            return None
+    return None
+
+
+def patch_paths(content):
+    """Repository paths a unified diff names; None when it names none validly.
+
+    A ---/+++ line is a file header only outside a hunk: inside one, the
+    `@@ -a,b +c,d @@` counts say how many lines are content.
+    """
+    paths = set()
+    old = new = 0
+    for line in content.splitlines():
+        if old > 0 or new > 0:
+            mark = line[:1]
+            if mark in (' ', ''):
+                old, new = old - 1, new - 1
+            elif mark == '-':
+                old -= 1
+            elif mark == '+':
+                new -= 1
+            elif mark != '\\':
+                old = new = 0
+            continue
+        hunk = re.match(r'^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@', line)
+        if hunk:
+            old = int(hunk[1]) if hunk[1] is not None else 1
+            new = int(hunk[2]) if hunk[2] is not None else 1
+            continue
+        match = re.match(r'^(?:---|\+\+\+) (.+)$', line)
+        if not match:
+            continue
+        path = header_name(match[1])
+        if path == '/dev/null':
+            continue
+        if path is None or not re.match(r'^[ab]/.', path):
+            return None
+        path = path[2:]
+        if path.startswith('/') or '..' in Path(path).parts:
+            return None
+        paths.add(path)
+    return sorted(paths)
+
+
+def fixes(text, task, earlier=False):
+    """Fix proposals of the final standing list (T-272); writes nothing.
+
+    Only fenced `diff fix-<N>` / `text fix-<N>` blocks and indented
+    DECISION:<task> lines between the list's first item and its closing
+    marker count. Returns {N: dict(kind, content, open, errors, blocks)} for
+    every item of the list and every number a proposal names; kind and
+    content are the first proposal's (patch, text, decision or None) and
+    blocks lists every fenced (kind, content) in order, duplicates included.
+    `earlier` says whether an earlier standing list exists.
+    """
+    items, first, close = standing(text, task)
+    result = {}
+    if first is None:
+        return result
+    states = {}
+    for number, body in items:
+        states[number] = item_is_open(body, task, earlier)
+    found = {}
+    raw = text.splitlines()
+    current = None
+    fence = None
+    for line in raw[first:close]:
+        if fence is not None:
+            closing = re.match(r'^\s*(`{3,}|~{3,})', line)
+            if closing and closing[1][0] == fence['marker'][0] and len(closing[1]) >= len(fence['marker']):
+                kind = re.fullmatch(r'(diff|text)\s+fix-(\d+)', fence['info'])
+                if kind:
+                    body = ''.join(row + '\n' for row in fence['lines'])
+                    found.setdefault(int(kind[2]), []).append(
+                        ('patch' if kind[1] == 'diff' else 'text', body))
+                fence = None
+            else:
+                indent = len(line) - len(line.lstrip(' '))
+                fence['lines'].append(line[min(indent, fence['indent']):])
+            continue
+        opening = re.match(r'^(\s*)(`{3,}|~{3,})(.*)$', line)
+        if opening:
+            fence = dict(indent=len(opening[1]), marker=opening[2], info=opening[3].strip(), lines=[])
+            continue
+        if line.lstrip().startswith('>'):
+            continue
+        item = re.match(r'^\s*(\d+)[.)]\s+', line)
+        if item:
+            current = int(item[1])
+            continue
+        decision = re.match(r'^[ \t]+DECISION:' + re.escape(task) + r'[ \t]+(\S.*?)\s*$', line)
+        if decision and current is not None:
+            found.setdefault(current, []).append(('decision', decision[1]))
+    for number in sorted(set(states) | set(found)):
+        entries = found.get(number, [])
+        blocks = [entry for entry in entries if entry[0] != 'decision']
+        decisions = [entry for entry in entries if entry[0] == 'decision']
+        is_open = states.get(number, False)
+        errors = []
+        if not is_open and entries:
+            errors.append(f'item {number}: a fix-{number} block or DECISION names no open item of this standing list')
+        if is_open and not entries:
+            errors.append(f'open item {number} has no fix proposal or DECISION')
+        if len(blocks) > 1:
+            errors.append(f'item {number} has more than one fix block')
+        if blocks and decisions:
+            errors.append(f'item {number} has both a fix block and a DECISION line')
+        if len(decisions) > 1:
+            errors.append(f'item {number} has more than one DECISION line')
+        for kind, content in blocks:
+            if kind == 'patch' and (not content.strip() or not patch_paths(content)
+                                    or not re.search(r'(?m)^@@ ', content)):
+                errors.append(f'item {number} fix patch is empty or not a unified diff with a/ and b/ paths')
+            if kind == 'text':
+                for label in FIX_LABELS:
+                    if not re.search(r'(?m)^\s*' + re.escape(label) + r':[ \t]*\S', content):
+                        errors.append(f'item {number} text fix has no non-empty {label}: line')
+        kind, content = entries[0] if entries else (None, None)
+        result[number] = dict(kind=kind, content=content, open=is_open, errors=errors, blocks=blocks)
+    return result
+
+
+def fix_checks(text, task, head, root, scope, git='git', seconds=60):
+    """Read-only applicability of each patch proposal against the reviewed head.
+
+    The head is read into a temporary index in a new system temporary
+    directory; `git apply --cached --check` never writes the repository's
+    index, refs or worktree. A check that cannot run is `unavailable`.
+    Every patch block is checked, duplicates included: an item with any
+    patch is a patch whose result is its worst block's, with the union of
+    their outside-scope paths.
+    """
+    import fnmatch
+    import shutil
+    import subprocess
+    import time
+    proposals = fixes(text, task)
+    items = {}
+    patches = [n for n, entry in proposals.items() if any(kind == 'patch' for kind, _ in entry['blocks'])]
+    directory = None
+    try:
+        deadline = time.monotonic() + seconds
+        env = None
+        if patches:
+            if not root:
+                raise ValueError('no target repository to check patches against')
+            directory = tempfile.mkdtemp(prefix='fm-fix-check-')
+            for owner in (Path(root), Path(__file__).resolve().parents[2]):
+                if Path(directory).resolve().is_relative_to(owner.resolve()):
+                    raise ValueError('temporary index would sit inside a repository')
+            env = dict(os.environ, GIT_INDEX_FILE=str(Path(directory) / 'index'))
+            # A reviewed tree, never the repository's own index.
+            read = subprocess.run([git, '-C', str(root), 'read-tree', head], env=env,
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                  timeout=max(1, deadline - time.monotonic()))
+            if read.returncode:
+                raise ValueError('git read-tree of the reviewed head failed')
+        for number, entry in sorted(proposals.items()):
+            if entry['kind'] is None:
+                continue
+            bodies = [content for kind, content in entry['blocks'] if kind == 'patch']
+            row = dict(kind='patch' if bodies else entry['kind'], apply='not-a-patch', message=None,
+                       outside_scope=[])
+            outside = set()
+            for body in bodies:
+                applied = subprocess.run([git, '-C', str(root), 'apply', '--cached', '--check', '-'],
+                                         env=env, input=body, capture_output=True, text=True,
+                                         timeout=max(1, deadline - time.monotonic()))
+                if applied.returncode and row['apply'] != 'does-not-apply':
+                    lines = [line for line in applied.stderr.splitlines() if line.strip()]
+                    row['apply'] = 'does-not-apply'
+                    row['message'] = lines[0] if lines else 'git apply refused the patch'
+                elif not applied.returncode and row['apply'] == 'not-a-patch':
+                    row['apply'] = 'applies'
+                outside.update(path for path in patch_paths(body) or []
+                               if not any(fnmatch.fnmatchcase(path, glob) for glob in scope))
+            row['outside_scope'] = sorted(outside)
+            items[str(number)] = row
+        return dict(version=1, status='complete', reason=None, items=items)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        reason = 'patch check timed out' if isinstance(error, subprocess.TimeoutExpired) else str(error)
+        return dict(version=1, status='unavailable', reason=reason, items={})
+    finally:
+        if directory is not None:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+def check_line(checks, number):
+    if not isinstance(checks, dict) or checks.get('status') != 'complete':
+        return 'patch check unavailable'
+    row = checks.get('items', {}).get(str(number))
+    if row is None:
+        return f'patch check missing for item {number}'
+    if row.get('apply') == 'not-a-patch':
+        line = 'patch check: not a patch'
+    elif row.get('apply') == 'applies':
+        line = 'patch check: applies to the reviewed head'
+    else:
+        line = 'patch check: does not apply to the reviewed head: ' + (row.get('message') or 'no message')
+    if row.get('outside_scope'):
+        line += '; outside the pinned scope: ' + ', '.join(row['outside_scope'])
+    return line
+
+
+class Refused(ValueError):
+    """fixes-brief refused; nothing was written (exit 65)."""
+
+
+def fixes_brief(store, next_round, head):
+    """Write the review-fix draft for the latest REJECT at head (T-272).
+
+    Returns (path, has_decision). An existing draft for the same head and
+    verdict is never overwritten, so firstmate's appended context survives.
+    """
+    if not re.fullmatch(r'[0-9a-f]{40,64}', head or ''):
+        raise Refused('fixes-brief needs a full head SHA')
+    verdicts = store.verdicts()
+    positions = [n for n, r in enumerate(verdicts) if r['verdict'] == 'REJECT' and r['head'] == head]
+    if not positions:
+        raise Refused('no REJECT verdict for head ' + head)
+    record = verdicts[positions[-1]]
+    if int(next_round) != int(record['round']) + 1:
+        raise Refused(f'round {next_round} does not follow the REJECT of round {record["round"]}')
+    if record.get('fix_protocol') != 1:
+        raise Refused('legacy REJECT carries no fix proposals; write the brief by hand')
+    errors = protocol(verdicts[:positions[-1] + 1], store.task)
+    if errors:
+        raise Refused('the REJECT fails the review protocol: ' + '; '.join(errors))
+    earlier = any(criteria(r['text'], store.task) for r in verdicts[:positions[-1]])
+    proposals = fixes(record['text'], store.task, earlier)
+    decision = any(entry['kind'] == 'decision' for entry in proposals.values())
+    folder = store.state / 'briefs'
+    path = folder / f'{store.task}-r{next_round}-{head[:12]}-{record["signature"][:8]}-review-fixes.md'
+    if path.exists():
+        return path, decision
+    output = []
+    for number, body in criteria(record['text'], store.task):
+        entry = proposals.get(number, {})
+        if not entry.get('open'):
+            output.append(f'{number}. deferred: done in the reviewed round; keep as is\n')
+        elif entry['kind'] == 'decision':
+            output.append(f'{number}. deferred: captain decision needed: {entry["content"]}\n')
+        else:
+            content = entry['content']
+            longest = max((len(run) for run in re.findall(r'`+', content)), default=0)
+            fence = '`' * max(3, longest + 1)
+            info = ('diff' if entry['kind'] == 'patch' else 'text') + f' fix-{number}'
+            output.append(f'{number}. fix: {body.splitlines()[0]}\n\n{fence}{info}\n{content}{fence}\n\n'
+                          f'{check_line(record.get("fix_checks"), number)}\n')
+    output.append(f'\nSource: reviewer {record["actor"]}, round {record["round"]}, '
+                  f'head {record["head"]}, signature {record["signature"]}\n')
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, pending = tempfile.mkstemp(prefix='.review-fixes-', dir=folder)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(''.join(output))
+        try:
+            os.link(pending, path)  # never replace a draft firstmate may have extended
+        except FileExistsError:
+            pass
+    finally:
+        os.unlink(pending)
+    return path, decision
 
 
 def protocol(records, task):
@@ -112,6 +436,10 @@ def protocol(records, task):
             if previous and not any(label + ':' + task in current[n].splitlines()[0]
                                     for label in ('REGRESSION', 'NEW-GROUND')):
                 errors.append(f'new item {n} has no REGRESSION or NEW-GROUND label')
+        if record['verdict'] == 'REJECT' and record.get('fix_protocol') == 1:
+            # T-272: verdicts retained before the field are judged by the old rules.
+            for entry in fixes(record['text'], task, earlier=bool(previous)).values():
+                errors.extend(entry['errors'])
         previous.update(current)  # a dropped item remains standing until restored
     return errors
 
@@ -307,11 +635,45 @@ def retain_verdict(store, args):
     # Preserve the existing fail-closed decision for legacy prose mentioning a
     # signature without signing one. Quoted markers never approve a head.
     decided = verdict_marker(answer, store.task) or 'REJECT'
+    # T-272: check the exact answer's patch proposals before the single append.
+    checks = fix_checks(answer, store.task, args.head, os.environ.get('FM_TARGET_ROOT', ''),
+                        pinned_scope(run, store.task, args.head))
     return store.append('verdict', args.round, os.environ['FM_ACTOR'], args.head, answer,
                         verdict=decided, base=args.base, patch=args.patch,
                         reviewer=identity, login=os.environ.get('FM_REVIEWER_LOGIN', os.environ['FM_ACTOR']),
                         provenance=provenance, binding=binding, attempt=args.attempt, vendor=args.vendor,
-                        model=identity.get('model', 'unknown'))
+                        model=identity.get('model', 'unknown'), fix_protocol=1, fix_checks=checks)
+
+
+def pinned_scope(run, task, head):
+    """The round's pinned scope, else the head's committed task entry, else none."""
+    import subprocess
+    try:
+        pinned = Path(run) / 'pinned/spec.json'
+        if pinned.is_file():
+            return list(json.loads(pinned.read_text()).get('scope', []))
+        root = os.environ.get('FM_TARGET_ROOT', '')
+        if root and os.environ.get('FM_EXTERNAL') != '1':
+            shown = subprocess.run(['git', '-C', root, 'show', f'{head}:design/tasks/{task}.json'],
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+            if shown.returncode == 0:
+                return list(json.loads(shown.stdout).get('scope', []))
+    except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+        pass
+    return []
+
+
+def avoided_reviewer(store):
+    """The reviewer name of the task's latest REJECT, whatever its protocol (T-272)."""
+    rejects = [r for r in store.records() if r['kind'] == 'verdict' and r.get('verdict') == 'REJECT']
+    if not rejects:
+        return ''
+    reviewer = rejects[-1].get('reviewer')
+    name = reviewer.get('name') if isinstance(reviewer, dict) else None
+    if not name:
+        found = re.match(r'^reviewer-(.+)-([a-z0-9]+)-r([0-9]+)([a-z]*)$', rejects[-1].get('actor', ''))
+        name = found[1] if found else ''
+    return name or ''
 
 
 def summary(store):
@@ -355,7 +717,8 @@ def summary(store):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin', 'summary', 'experiment-retain'])
+    parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin', 'summary',
+                                            'experiment-retain', 'fixes-brief', 'avoid-reviewer'])
     parser.add_argument('--state', required=True)
     parser.add_argument('--project', required=True)
     parser.add_argument('--task', required=True)
@@ -371,6 +734,7 @@ def main():
     parser.add_argument('--vendor', default='legacy')
     parser.add_argument('--reviewer', action='store_true')
     parser.add_argument('--external', action='store_true', default=None)
+    parser.add_argument('--signature')
     args = parser.parse_args()
     if args.command == 'experiment-retain':
         # Inline admission before importing the optional module (including its
@@ -402,12 +766,23 @@ def main():
         record = retain_verdict(store, args)
         Path(args.run, 'evidence-record.json').write_text(json.dumps(record))
         print(record['verdict'])
+    elif args.command == 'fixes-brief':
+        path, _ = fixes_brief(store, args.round, args.head)
+        print(path)
+    elif args.command == 'avoid-reviewer':
+        print(avoided_reviewer(store))
     elif args.command == 'history':
         print(store.history(args.reviewer))
     elif args.command == 'protocol':
         records = store.verdicts()
         if not records:
             raise ValueError('missing local verdict; PR comments are not fallback evidence')
+        if args.signature is not None:
+            # Judge the sequence up to the triggering verdict; later records cannot mask it.
+            bound = [n for n, record in enumerate(records) if record.get('signature') == args.signature]
+            if not args.signature or not bound:
+                raise ValueError('no local verdict carries this signature')
+            records = records[:bound[-1] + 1]
         errors = protocol(records, args.task)
         if errors:
             raise ValueError('; '.join(errors))
@@ -452,6 +827,9 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
+    except Refused as error:
+        print('fm-evidence: ' + str(error), file=sys.stderr)
+        sys.exit(65)
     except (ValueError, OSError, KeyError, TypeError) as error:
         # Metadata readers need the failure reason, never a private key path.
         message = (error.strerror or 'evidence read failed') if len(sys.argv) > 1 and sys.argv[1] == 'summary' and isinstance(error, OSError) else str(error)

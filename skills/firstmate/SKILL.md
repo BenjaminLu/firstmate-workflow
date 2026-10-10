@@ -587,6 +587,15 @@ set by the captain.
    records append-only under state/evidence/<project>/<task>/; gate 6 and the
    protocol reader consume local verdicts and standing lists. T-138 extends
    external storage and bindings; T-140 adds summary/check/threads projections.
+   After a REJECT whose open items each carry a fix proposal (T-272), the
+   autopilot checks the protocol for that verdict and writes a draft brief
+   with `fm_evidence fixes-brief`; its wake names the draft ("review fixes
+   ready"), or for an external project says only that it is in the private
+   project state. Read the draft, append a section titled "Context from
+   firstmate" with any facts the reviewer lacked, leave the copied proposals
+   unchanged, and record it with `fm-evidence brief` for the exact round and
+   head. A "brief needed" wake (a decision item, a legacy verdict or a refused
+   draft) still means writing the brief yourself.
 
 ## Judge a task when it turns ready
 

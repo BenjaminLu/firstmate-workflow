@@ -416,7 +416,7 @@ def run_is_live(run):
     return not process.is_file() and not attempts
 
 
-def choose_name(alias, role, rosters, live, last, other_role, room, served=None):
+def choose_name(alias, role, rosters, live, last, other_role, room, served=None, avoid=None):
     """The crew name for one run, whole, from its own role's roster only. Every
     comparison is on the whole name and it is never cut: a name the final
     actor has no `room` for is refused. A roster that has run out fails the
@@ -425,7 +425,9 @@ def choose_name(alias, role, rosters, live, last, other_role, room, served=None)
     neither roster, back from a redraw, or moved in config.yaml. The refusals
     that never lift come before the one that does: a name that belongs to the
     other role is refused as such even while it is live, since waiting for
-    that run to finish would not make it usable."""
+    that run to finish would not make it usable. `avoid` is the reviewer
+    name of the REJECT a review answers: the next review goes to someone else
+    (T-272), even a retry whose own name that is."""
     served = served or {}
     roster = rosters.get(ROLES.get(role), [])
     foreign = {key[:-1]: names for key, names in rosters.items() if key != ROLES.get(role)}
@@ -443,22 +445,28 @@ def choose_name(alias, role, rosters, live, last, other_role, room, served=None)
             raise RuntimeError('crew name ' + name + " is this task's other role; choose another --name or omit it")
         if name in live:
             raise RuntimeError('crew name ' + name + ' is live in another run; choose another --name or omit it')
+        if avoid and name == avoid:
+            raise RuntimeError('crew name ' + name + ' reviewed the REJECT this round answers, and the review'
+                               ' after a REJECT goes to another reviewer; choose another --name or omit it')
     elif not roster:
         raise RuntimeError(role + ' has no roster; give it a --name')
     else:
         # A task's worker and reviewer are never the same crew member.
         free = [n for n in roster if n not in other_role and n not in live
-                and not crossed(n, role, served)]
+                and not crossed(n, role, served) and n != avoid]
         if last in free: name = last  # the same crew member across a task's rounds
         elif free: name = free[0]
         else:
             held = [n for n in roster if n in other_role and n not in live]
             gone = [n for n in roster if n not in other_role and n not in live
                     and crossed(n, role, served)]
+            avoided = [n for n in roster if n == avoid and n not in other_role and n not in live
+                       and not crossed(n, role, served)]
             also = f', {", ".join(held)} held by this task\'s other role' if held else ''
             also += f', {", ".join(gone)} already served the other role' if gone else ''
+            also += f', {avoided[0]} reviewed the REJECT this round answers' if avoided else ''
             raise RuntimeError(f'the {role} roster ran out: none of its {len(roster)} names is free'
-                               f' ({len(roster) - len(held) - len(gone)} live{also}), and a name of the other'
+                               f' ({len(roster) - len(held) - len(gone) - len(avoided)} live{also}), and a name of the other'
                                f' role is never borrowed; wait for a {role} run to finish, or pin more'
                                f' names under rosters: in config.yaml')
     if len(name) > room:
@@ -489,6 +497,8 @@ def allocate_identity(root, role, task, alias, owner_record=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]+', task):
         raise ValueError('invalid task identity')
     mode = 'spec-preflight' if role == 'reviewer' and os.environ.get('FM_SPEC_PREFLIGHT_MODE') == '1' else 'review'
+    # T-272: only a code review answers a REJECT; workers and preflights avoid no one.
+    avoid = (os.environ.get('FM_AVOID_REVIEWER') or None) if role == 'reviewer' and mode == 'review' else None
     root = Path(root).resolve()
     directory = record_root(root) / 'state/runs'
     rosters = crew_rosters(root)
@@ -534,7 +544,7 @@ def allocate_identity(root, role, task, alias, owner_record=None):
             # Measured against the final suffix: an attempt mark added on
             # retry must not push the actor past 32 characters.
             room = 32 - len(role) - 1 - len(suffix)
-            name = choose_name(alias, role, rosters, live, last, other_role, room, served)
+            name = choose_name(alias, role, rosters, live, last, other_role, room, served, avoid)
             actor = role + '-' + name + suffix
             run = directory / actor
             # a directory already there - a run from before T-116 whose counter

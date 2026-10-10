@@ -210,8 +210,8 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.gate_result(0)
         self.assertFalse((self.state / 'pending').exists())
     def test_reject_wakes_once_without_worker_or_review(self):
-        self.pilot.verdict = lambda task: dict(verdict='REJECT', head=HEAD, signature='reject')
-        self.pilot.advance(PR, CHECKS, []); self.pilot.advance(PR, CHECKS, [])
+        self.pilot.verdict = lambda task: dict(kind='verdict', verdict='REJECT', head=HEAD, signature='reject', round=1, actor='reviewer-ada-t001-r1', text='1. open a\nCRITERIA-COMPLETE:T-001\nREJECT:T-001', provenance=dict(level='legacy'))
+        self.pilot.advance(PR, CHECKS, []); self.pilot.advance(PR, CHECKS, [])  # a legacy REJECT: the stubbed protocol check passes, no draft
         self.assertEqual(len(self.pilot.data['wakes']), 1)
         self.assertIn('brief needed', str(self.pilot.data['wakes']))
         self.assertFalse(any(c[0] in ('gate', 'review') for c in self.calls))

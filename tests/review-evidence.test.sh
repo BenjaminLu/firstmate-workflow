@@ -11,7 +11,7 @@ cat > "$rc/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
 cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
-printf '1. open fix the helper\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z\n' > "$3/verdict.txt"
+printf '1. open fix the helper\n```text fix-1\nfile: src/a:1\nchange: name the helper\nfixes: the helper check\nfail-first: the helper check fails on the old code\n```\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z\n' > "$3/verdict.txt"
 exit 0
 M
 chmod +x "$rc/bin/adapters/mock.sh"

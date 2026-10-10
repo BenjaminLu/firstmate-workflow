@@ -111,8 +111,13 @@ fi
 # The actor carries the review round (T-116): the one --round names, else
 # the allocation reads it from the log. Never one inherited from the shell.
 if [ -n "$ROUND_GIVEN" ]; then export FM_ROUND="$ROUND"; else unset FM_ROUND; fi
+# T-272: the review after a REJECT goes to another reviewer name. Spec
+# preflight never reaches here, and a worker never reads this.
+FM_AVOID_REVIEWER="$(fm_evidence avoid-reviewer)" || {
+  echo 'fm-review: the latest REJECT reviewer could not be read from local evidence' >&2; exit 65; }
+export FM_AVOID_REVIEWER
 fm_identity reviewer "$TASK" "$NAME" || exit 70
-unset FM_ROUND
+unset FM_ROUND FM_AVOID_REVIEWER
 ROUND="$(jq -r .round "$FM_RUN_DIR/identity.json")"
 # T-146: the vendor this round starts on and the model "$FM_CONFIG" names for
 # that vendor are in identity.json from the start, so the board shows them
@@ -877,6 +882,8 @@ fm_round_pinned reviewer "$spec" || exit 65
     printf '\n# The closed list\n'
     closed_list
   fi
+  # T-272: every round, round one included; reviewers propose, never edit.
+  printf '\nEach open item of a REJECT'"'"'s standing list carries exactly one fix proposal - a fenced `diff fix-<N>` unified diff against the reviewed head, or a fenced `text fix-<N>` block with non-empty file:, change:, fixes: and fail-first: lines - or, for a decision only the captain can make, one indented line DECISION:%s <question> inside that item. Do not edit, commit or push files: propose the fix in your answer.\n' "$TASK"
 } > "$work/history.md"
 {
   # Either mode: the reviewer judges with what CI found on this head, and
