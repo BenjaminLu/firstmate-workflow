@@ -16,6 +16,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=bin/fm-config.sh
 . "$ROOT/bin/fm-config.sh"   # fm_tasks_write: a fixture's tasks, one file each
+# shellcheck source=tests/lib/stacking.sh
+. "$ROOT/tests/lib/stacking.sh"   # approved-scope reader setup (T-278)
 
 fixture() {
   local d; d="$(mktemp -d)"
@@ -27,16 +29,19 @@ fixture() {
   printf 'concurrency: 2\n' > "$d/config.yaml"
   fm_tasks_write /dev/stdin "$d/design/tasks" <<'JSON'
 {"tasks":[
- {"id":"A","depends_on":[]},
- {"id":"B","depends_on":["A"]},
- {"id":"C","depends_on":[]},
- {"id":"D","depends_on":[]}
+ {"id":"A","depends_on":[],"scope":["a/**"]},
+ {"id":"B","depends_on":["A"],"scope":["b/**"]},
+ {"id":"C","depends_on":[],"scope":["c/**"]},
+ {"id":"D","depends_on":[],"scope":["d/**"]}
 ]}
 JSON
+  stacking_scope_sources "$d"
   printf '%s' "$d"
 }
 say() {
   FM_ROOT="$1" "$1/bin/fm-emit.sh" --actor firstmate --type "$2" ${3:+--task "$3"} >/dev/null
+  # The approved-scope reader accepts a task-named greenlight (T-278).
+  if [ "$2" = greenlit ] && [ -z "${3-}" ]; then stacking_scope_approvals "$1"; fi
   # Capacity fixtures have an actual live owner (this suite), independent of
   # their lifecycle events. A historical event alone consumes no slot.
   case "$2" in
@@ -145,7 +150,7 @@ assert_eq "1" "$(FM_ROOT="$d3" "$d3/bin/fm-dispatch.sh" --repo "$d3" --dry-run -
 # compared as versions. Ids of one width sort the same as text or as
 # versions, so these do not: as text T-10 would come first.
 dv="$(fixture)"; rm -f "$dv/design/tasks/"*.json
-for id in T-10 T-9 T-2; do printf '{"id":"%s","depends_on":[]}\n' "$id" > "$dv/design/tasks/$id.json"; done
+for id in T-10 T-9 T-2; do printf '{"id":"%s","depends_on":[],"scope":["%s/**"]}\n' "$id" "$id" > "$dv/design/tasks/$id.json"; done
 say "$dv" greenlit
 assert_eq "T-2
 T-9" "$(ready "$dv")" "with two slots and T-10, T-9, T-2 ready, T-2 and T-9 start"
@@ -263,9 +268,11 @@ pr_tree() {                     # pr_tree -> a greenlit repo with T-001 and T-00
   cp -R "$ROOT/bin/lib" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'vendor: mock\nconcurrency: 3\n' > "$d/config.yaml"
-  printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
+  printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[],"scope":["one/**"]},{"id":"T-002","title":"b","depends_on":[],"scope":["two/**"]}]}\n' \
     | fm_tasks_write /dev/stdin "$d/design/tasks"
+  stacking_scope_sources "$d"
   FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
+  stacking_scope_approvals "$d"
   approve "$d"
   printf '%s' "$d"
 }
