@@ -45,8 +45,8 @@ The six gates are 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci, 6 approval. T
 - **Gate 4** — revert your implementation and your new tests must go red. A
   test that passes without the code it covers is worse than no test: it is a
   green light wired to nothing. Write the test first and identify its expected
-  failing assertion; CI and the gates observe red/base and green/head. Workers
-  do not run suites.
+  failing assertion; CI and the gates observe red/base and green/head. Run
+  only the tests related to your change, through the runner your prompt names.
 
 A new feature's tests go in a new file named for that feature, or in the
 file that already owns the feature; never append them to an unrelated suite.
@@ -263,10 +263,18 @@ old off-list complaints plainly; only an item labelled `REGRESSION:<task-id>`
 or `NEW-GROUND:<task-id>` extends the work. Report protocol violations for
 board coordination and satisfy every open item on the standing list in one pass.
 
-Workers do not run the test suite or `ci.sh`: GitHub CI and the gates verify
-(captain's rule; SK-002). Write the fail-first test and name, in the pull
-request, the assertion that should go red when your implementation is
-reverted, with the file:line it lives at. A metadata/link check proves
+Before you finish, run the local test runner your prompt names (T-275). It
+selects the suites that cover your change, runs them in this sandbox within
+the policy's time budget, and writes the results into `.fm-say.md`. Name with
+`--case` the test cases you added or changed, so firstmate can see what you
+meant to test; each selected suite still runs as a whole file. Fix what it
+reports as failed and run it again. Never run `bin/ci.sh`, the project check
+or a whole test folder: CI runs those. Treat `not runnable here` as a limit of
+this sandbox and leave that suite to CI. Never edit the results block. A round
+launched on older code has no runner; then say so and run nothing. The local
+results are evidence, not a verdict: gate 4 and CI still decide, so still
+name, in the pull request, the assertion that should go red when your
+implementation is reverted, with the file:line it lives at. A metadata/link check proves
 structure, not model compliance; report instruction-only validation limits
 and do not waive gate 4. T-163 managed Codex run mode authenticates final-output provenance; that does
 not establish authoritative remote-head freshness or make legacy/custom paths

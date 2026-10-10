@@ -180,6 +180,9 @@ fm_projects()         { _fm_registry "${1:-${FM_CONFIG:-config.yaml}}" names; }
 #                toolchain; added to, never replacing
 #   never_read:  more paths no round may read; added to
 #   procs, cpu:  the process and CPU-seconds ulimits
+#   test_budget: the seconds a worker round's local test runs may take,
+#                60 to 7200, 900 when no layer sets it (T-275); only the
+#                worker launcher reads it
 #
 # What is not a key cannot be loosened by one: the write roots (the round's
 # worktree or checkout, and a TMPDIR of its own), the never-readable floor

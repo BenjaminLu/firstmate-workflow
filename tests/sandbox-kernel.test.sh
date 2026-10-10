@@ -108,6 +108,53 @@ printf "%s|" "$PATH"' 2>&1)"
     assert_contains "$zout" "heredoc ok" "real sandbox: a here-document works in a login zsh"
     assert_contains "$zout" "$(printf '%s' "${lpath%%|*}")|" "and a login zsh ends with the round's own PATH"
   fi
+  # T-275 (guard, skipped where no real sandbox nests): the round's local
+  # test runner folder is readable and runnable, never writable, and the
+  # refusals this sandbox really prints match the runner's own patterns.
+  lrun="$rt/state/runs/worker-lt-t1-r1"; lfolder="$lrun/local-tests"
+  mkdir -p "$lfolder" "$rt/tree/tests"
+  cp "$ROOT/bin/lib/fm_local_tests.py" "$lfolder/runner.py"
+  printf '%s\n' '{"schema":1,"base":null,"tests":["tests/**"],"test":"case {file} in *.test.sh) bash {file} ;; esac","check_env":{},"docs":[],"unrunnable":null,"budget_seconds":120,"network":[],"suite_seconds":60,"jobs":1}' \
+    > "$lfolder/plan.json"
+  chmod 444 "$lfolder/runner.py" "$lfolder/plan.json"; chmod 755 "$lfolder"
+  printf '#!/usr/bin/env bash\nprintf "    %%-52s%%s\\n" "runs inside the sandbox" ok\n' > "$rt/tree/tests/inside.test.sh"
+  lout="$(FM_RUN_DIR="$lrun" FM_LOCAL_TESTS_DIR="$lfolder" "$SB" run --policy="$rt/policy.json" --root="$rt/tree" \
+    --tmp="$rt/tmp" -- bash -c '
+      cd "$2" || exit 1
+      test -r "$1/runner.py" && echo READ_OK
+      touch "$1/new" 2>/dev/null || echo WRITE_REFUSED
+      { echo x >> "$1/runner.py"; } 2>/dev/null || echo APPEND_REFUSED
+      rm -f "$1/plan.json" 2>/dev/null; test -e "$1/plan.json" && echo DELETE_REFUSED
+      rm -rf "$1" 2>/dev/null; test -d "$1" && echo RMDIR_REFUSED
+      python3 "$1/runner.py" run; echo "run rc=$?"
+      echo "--- ps"; ps -o pid= -p $$ 2>&1; echo "ps rc=$?"
+      echo "--- pty"; python3 -c "import os; os.openpty()" 2>&1; echo "pty rc=$?"
+    ' _ "$lfolder" "$rt/tree" 2>&1)"
+  assert_contains "$lout" "READ_OK" "real sandbox: the round reads the local tests runner"
+  for refused in WRITE_REFUSED APPEND_REFUSED DELETE_REFUSED RMDIR_REFUSED; do
+    assert_contains "$lout" "$refused" "real sandbox: runner folder refuses $refused"
+  done
+  assert_contains "$lout" "| tests/inside.test.sh | passed |" "real sandbox: run reports the suite it ran"
+  assert_ok "grep -qF '<!-- fm-local-tests v1 -->' '$rt/tree/.fm-say.md'" "real sandbox: and writes its block"
+  # the real refusal text, read against the runner's fixed table
+  pattern_matches() {   # pattern_matches <capability> <text>
+    python3 -B - "$ROOT/bin/lib" "$1" "$2" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fm_local_tests as runner
+lines = sys.argv[3].splitlines()
+sys.exit(0 if any(p.search(line) for line in lines for p in runner.PATTERNS[sys.argv[2]]) else 1)
+PY
+  }
+  for probe in ps pty; do
+    said="$(sed -n "/^--- $probe\$/,/^$probe rc=/p" <<<"$lout")"
+    capability='ps'; [ "$probe" = ps ] || capability='pseudo-terminal'
+    if grep -qx "$probe rc=0" <<<"$said"; then
+      assert_ok "grep -qF '$capability works' '$rt/tree/.fm-say.md'" "real sandbox: $probe works, and the probe says so"
+    else
+      assert_ok "pattern_matches '$capability' \"\$said\"" "real sandbox: the real $probe refusal matches the runner"
+    fi
+  done
   safe_rm_rf "$rt"
 else
   echo "    (skipped: no real sandbox nestable on this host - real-sandbox behaviour untested here)"

@@ -336,6 +336,20 @@ the owner's directory write bit. `spec.json` is required; `design.md`,
 Missing folders, invalid ownership or permissions, and unexpected entries
 refuse sandbox profile creation.
 
+### Local test runner folder (T-275)
+
+The worker launcher also exports `FM_LOCAL_TESTS_DIR`, the absolute real path
+of its own run's `local-tests/` directory beside `pinned/`. It holds exactly
+`runner.py` and `plan.json`, each a regular file with mode 0444, in a folder
+the current user owns with no group or other write bit. The shared OS sandbox
+grants this folder read-only to every vendor, right after the pinned folder's
+grant; an adapter preserves the variable and never adds the folder or its
+parent to a write root or an extra-directory flag. A value that is not this
+run's folder, or a folder of any other shape, refuses sandbox profile
+creation. The launcher unsets an inherited value first and exports none when
+it cannot build the folder; a reviewer round has none. No adapter script
+reads it.
+
 The sandbox launcher's Python lives in `bin/lib/fm_sandbox_policy.py`,
 `fm_sandbox_forward.py` and `fm_sandbox_loopback.py` (T-177). Partial engine
 copies must include these files beside `fm-sandbox.sh`; copies that launch
