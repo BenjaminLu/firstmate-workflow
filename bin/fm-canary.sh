@@ -471,7 +471,7 @@ destroy_fixture_build() {   # destroy_fixture_build <dir>
     for m in ${DESTROY_MODES[@]+"${DESTROY_MODES[@]}"}; do
       id="$(destroy_task_id "$m")"
       jq -n --arg id "$id" --arg mode "$m" \
-        '{id:$id,title:("a hostile round: " + $mode),scope:["src/**"],acceptance:["it exists"]}' \
+        '{id:$id,title:("a hostile round: " + $mode),scope:[("src/" + $mode + "/**")],acceptance:["it exists"]}' \
         > "design/tasks/$id.json" || exit 1
     done
     git add -A || exit 1
@@ -660,6 +660,27 @@ PY_AUTHOR
       # above already require
   fi
   record_destroy "$label" "$mode" "$id" "$ok" "$why" "$rc" "$restored_event"
+  # The drill is finished: close its task, as greenlit was appended above, so
+  # the next self mode starts with nothing in flight (T-278 overlap check).
+  if [ "$label" = self ]; then
+    (cd "$engine" && "${scrub[@]}" HERDR_ENV=0 FM_ROOT="$engine" bash -c '
+      . "$1/bin/fm-config.sh"
+      fm_storage_init "$1" || exit 65
+      python3 - "$1/bin/lib" "$2" <<"PY_CLOSE"
+import json, os, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from fm_spec_pins import Pins
+from fm_self_pr import state_path
+pins = Pins(os.environ, sys.argv[2])
+events = state_path(pins.state, "events.jsonl")
+events.parent.mkdir(parents=True, exist_ok=True)
+with events.open("a") as out:
+    out.write(json.dumps(dict(type="closed", actor="captain", task=pins.task,
+                             project=pins.project, ts="2026-10-03T00:00:00Z"))+"\n")
+PY_CLOSE
+    ' _ "$engine" "$id") || { echo "fm-canary: could not close fixture task $id" >&2; failed=1; }
+  fi
   if [ "$ok" = 1 ]; then
     printf '%-13s %-9s %-20s ok\n' "destroy:$label" "$mode" "$id"
   else

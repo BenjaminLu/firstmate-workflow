@@ -53,7 +53,9 @@ cp "$ROOT/skills/worker/SKILL.md" "$r/skills/worker/"
 cp "$ROOT/skills/reviewer/SKILL.md" "$r/skills/reviewer/"
 printf 'vendor: mock\nproject:\n  check: true\n' > "$r/config.yaml"
 printf '{"id":"T-1","title":"first","activity":{"en":"Build the first fixture","zh-TW":"實作第一個測試任務"},"scope":["src/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-1.json"
-printf '{"id":"T-2","title":"second","scope":["src/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-2.json"
+# T-2's approved scope does not overlap T-1's, which stays in flight: the
+# second worker's T-278 overlap check must let it start from main.
+printf '{"id":"T-2","title":"second","scope":["lib/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-2.json"
 printf '## 6. Gates\nApproved fixture.\n## 8. Board\n' > "$r/design/design.md"
 seed_spec_preflight "$r" T-1
 seed_spec_preflight "$r" T-2
