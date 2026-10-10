@@ -1,0 +1,10 @@
+{
+  "readable": [
+    {"verdict": "REJECT", "text": "Findings.\n\n1. open: the merge count reads one project.\n2. open: the clock ignores a late answer.\nCRITERIA-COMPLETE:T-1\nREJECT:T-1"},
+    {"verdict": "REJECT", "text": "Still short.\n\n1. done: the merge count reads every project.\n2. **open — the clock still ignores a late answer.**\n4. **open — REGRESSION:T-1 the index moved back.**\nCRITERIA-COMPLETE:T-1\nREJECT:T-1"},
+    {"verdict": "APPROVE", "text": "Good.\n\n1. done: fixed.\n2. ok: fixed.\n4. done: fixed.\nCRITERIA-COMPLETE:T-1\nAPPROVE:T-1"}
+  ],
+  "unreadable": [
+    {"verdict": "REJECT", "text": "Findings.\n\n2. done: the merge count reads every project.\n7. gap NEW-GROUND: the board shows no button.\nCRITERIA-COMPLETE:T-1\nREJECT:T-1"}
+  ]
+}

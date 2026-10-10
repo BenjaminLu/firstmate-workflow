@@ -4338,6 +4338,81 @@ cannot quietly edit itself.
 `skills/vendor/`, read-only, never writing back, never polluting the user's
 global skills.
 
+### Periodic retrospective (T-273)
+
+firstmate looks back at its own work on a schedule. A retrospective (retro)
+asks, for every configured project, what went wrong between task and merge,
+what simpler answer would have avoided it, and what has gone stale, and turns
+the answers into work items the captain approves, parks or drops one by one.
+A retro proposes only: it never changes, deletes, commits or dispatches
+anything by itself, and it prefers taking things away over adding protocol.
+
+**When it is due.** One counter covers every project, so the captain gets one
+retro and one card, and patterns shared by several projects are seen together.
+`state/retro/index.json` (schema 1: `baseline_at`, `last_completed` with its
+`run_id`, `window_end` and `completed_at`, and `open_run`) is the record; it
+holds no project names. A retro is due when no run is open and either 7 days
+have passed since the last completion (or since the baseline), or at least 10
+pull requests across all projects have merged since the last window end. The
+self project's autopilot asks on each poll and queues one `retro due` wake
+per window under the stable identity `retro-due-<last run id or initial>`;
+it never starts a retro itself. The board's **Run retrospective** button
+records a request through `bin/lib/fm_retro.py request` and pushes a
+`retro_requested` wake; it never runs one either.
+
+**Runs.** `bin/fm-retro.sh run` takes `state/retro/run.lock` for its whole
+life and opens a run `<UTC start>-<6 hex>` under the index lock. A run's
+`state.json` is one of `running`, `reviewed`, `awaiting-answer`, `completed`
+or `failed`. `bin/lib/fm_retro.py` is the only writer of these records, and
+every read-modify-write holds `state/retro/index.lock`. Every entry point
+first reconciles: it resumes a recorded completion step, moves a reviewed run
+whose card exists on, and fails a running run whose owner is gone.
+
+**Rounds.** A script computes facts first, with no model: per merged pull
+request, worker attempts and rounds, dispatch-to-merge time, spec versions
+and scope drift from the pins, review rejections, standing-list rounds,
+external findings, stops, cards and GitHub Actions reds (real, flaky,
+infrastructure or unknown). Missing data stays null and visible. Then
+`bin/fm-review.sh --retro` runs one read-only reviewer round per project
+that has merges, approved items awaiting follow-up or parked items, on a
+fresh clone of the one commit the run resolved from the self project's
+configured base (its prompt, checkout and round record all name that commit),
+with every state directory unreadable; the inputs travel in the prompt. A
+round's checkout is removed only after every managed process of the round
+has ended. A last cross-project round reads only an
+anonymous projection of every project's facts. Each round answers in one
+`retro-items` block whose items say what they remove; an item that adds
+surface says why a removal cannot do. A malformed answer fails the run.
+Retro rounds run on `config.yaml`'s `retro:` vendor and model only.
+
+**Privacy.** An external project's metrics, prompts, reports, items, drafts
+and task links stay in its own private state. Outside it, only the card's own
+records and the run's `private/labels.json` (opaque label to name) may hold
+its text. Each external project appears as an opaque, salted label
+`P-<8 hex>`; the self project is `self`, cross-project items are `firstmate`.
+Anything else written outside a project's private state passes the
+identifying text check first, and a field that fails it is not written: it
+is redacted, or an optional text is left out, and the run goes on. The self
+project's metrics and prompt are checked this way too. The card's text
+reaches its pending record from the run's `private/` folder and over a pipe,
+never a shared temporary file, and a self or cross round's run directory has
+every retained file that names an external project replaced once its
+processes end.
+
+**The card.** A reviewed run raises one choice card with purpose `retro` on a
+hand-raised `D-<n>` number, reserved under the index lock, which every
+hand-raised numeric card publication also takes. It lists at most 60 items,
+removal first, and offers A (record a choice for each item) and C (park the
+whole retro); each item takes its own A (approve), C (park) or D (drop). The
+answer is then recorded in four resumable steps: answers, run completed,
+index advanced, wake. Approved items are claimed, proposed and linked as
+normal tasks in their own project; parked items return in the next retro
+(items the full card had no room for are parked at once, whatever becomes of
+the card), and an item repeats a parked one only by naming a parked item of
+its own label. The next retro measures each approved item against its
+baseline; an item retires only once a round was shown it with its measured
+row.
+
 ---
 
 ## 12. Failure and recovery

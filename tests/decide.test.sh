@@ -1067,7 +1067,7 @@ code() {
 }
 has() { code "$1" | grep -E -- "$2" >/dev/null; }
 both() { grep -E -- 'fm-decide' "$ROOT/$1" >/dev/null && grep -E -- '--request' "$ROOT/$1" >/dev/null; }
-names='fm_autopilot|autopilot_turn\.py|(^|[^A-Za-z0-9_-])fm\.sh'
+names='fm_autopilot|autopilot_turn\.py|(^|[^A-Za-z0-9_-])fm\.sh|fm-retro\.sh'
 # What bin/ci.sh runs: the bash suites, bun on every *.test.ts and *.spec.ts
 # outside tests/e2e, playwright on its testDir, and its own stages. Each
 # selector is pinned, so a new place ci.sh runs from turns this red first.
@@ -1095,7 +1095,7 @@ raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!bin/f
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 # Autopilot holds ready tasks and queues firstmate to read the spec against
 # main and author recommendation/evidence; merge cards consume authored details.
-assert_eq "bin/fm.sh bin/lib/fm_autopilot_loop.py " "$raisers" "only fm.sh and the autopilot merge loop raise cards; readiness still needs judgment"
+assert_eq "bin/fm-retro.sh bin/fm.sh bin/lib/fm_autopilot_loop.py " "$raisers" "only fm.sh, fm-retro.sh's one retro card and the autopilot merge loop raise cards; readiness still needs judgment"
 # A line that is one quoted message and nothing else only prints the name: it
 # tells a reader what to run; it does not run it. Any other non-comment line naming them counts as a call.
 said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(>&2)?[[:space:]]*$'
@@ -1104,7 +1104,7 @@ assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks'" "a bare call is still a c
 assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks\" >&2'" \
   "a printed message is not a call"
 named="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' \
-  ':!bin/lib/fm_autopilot*.py' ':!bin/fm.sh' ':!bin/fm-decide.sh' \
+  ':!bin/lib/fm_autopilot*.py' ':!bin/fm.sh' ':!bin/fm-decide.sh' ':!bin/fm-retro.sh' \
   | while read -r f; do has "$f" "$names" && printf '%s ' "$f"; done)"
 via="$(for f in $named; do runs "$f" && printf '%s ' "$f"; done)"
 assert_eq "bin/fm-autopilot.sh " "$via" "only the autopilot wrapper enters its supervisor"
@@ -1125,7 +1125,7 @@ reaching() {
   done
   return 0
 }
-reach="$(reaching)"
+reach="$(reaching)"; assert_contains " $(printf '%s ' $reach)" " tests/retro.test.sh " "the sweep finds a suite that reaches cards through fm-retro.sh, so its guard is checked"
 for f in $reach; do
   assert_ok "git -C '$ROOT' ls-files --error-unmatch -- '$f' >/dev/null 2>&1" "$f, a suite that reaches a card, is a tracked file"
 done

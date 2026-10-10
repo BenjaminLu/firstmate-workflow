@@ -1742,3 +1742,34 @@ or one acceptance line). A pin version takes at most 3 records.
   change of meaning, external project, or a fourth record. At that repin, fold
   the earlier records into the amended spec: the record paths join `scope` and
   the errata are applied to the text.
+
+## Periodic retrospective (T-273)
+
+A `retro due` wake (the self project's autopilot) or a `retro requested` wake
+(the board's **Run retrospective** button) asks you to look back at recent
+work across every project. Handle it from the engine checkout with the self
+project's context; every retro command refuses an external context.
+
+1. Start `bin/fm-retro.sh run` under `bin/lib/fm-lifeline.sh`, owned by the
+   session. It computes the facts, runs one reviewer round per project that
+   has merges, approved items awaiting follow-up or parked items, then the
+   cross-project round, and leaves the run `reviewed`, `completed` (no items)
+   or `failed` with its reason. `bin/fm-retro.sh status` shows where it stands.
+2. For a `reviewed` run, raise its one card with
+   `bin/fm-retro.sh card --run <run-id>`. Never author or raise a retro card
+   by hand, and never raise a second one: `card` is idempotent.
+3. When the card is answered, run `bin/fm-retro.sh record --run <run-id>`.
+   It records each item's answer and completes the run in resumable steps.
+4. For every item answered A, run `bin/fm-retro.sh claim --run <run-id>
+   --item <label>/<item-id>` first, write the task proposal in the item's own
+   project (an external item's draft and task stay in that project's private
+   state and tasks directory), take it through the usual spec check and
+   dispatch card, then run `bin/fm-retro.sh link ... --task <task-id>`. After
+   a restart, resume every `proposing` item from its recorded draft; never
+   claim an item twice. Nothing is dispatched automatically.
+
+Parked and dropped items need nothing from you: parked items return in the
+next retro. Never copy an external project's name, repository, owner,
+reviewers or paths into this repository's files, a commit, a pull request or
+a self proposal; the card's own records are the only self place that may show
+an external item's text.
