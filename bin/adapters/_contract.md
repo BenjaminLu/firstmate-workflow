@@ -333,6 +333,9 @@ the current user and must not be writable by group or others; 0755 is valid
 and allows launcher cleanup. The sandbox denies round writes regardless of
 the owner's directory write bit. `spec.json` is required; `design.md`,
 `contract.yaml` and `CONVENTIONS.md` are each optional for legacy inputs.
+A spec preflight may also pin `card.json` and `pr-authoring.json`; each is
+allowed only when its preflight hash variable (`FM_SPEC_PREFLIGHT_CARD` or
+`FM_SPEC_PREFLIGHT_PR_AUTHORING`) is set and matches the file's SHA-256 (T-284).
 Missing folders, invalid ownership or permissions, and unexpected entries
 refuse sandbox profile creation.
 
