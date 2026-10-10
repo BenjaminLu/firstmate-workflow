@@ -1681,7 +1681,9 @@ Every later preflight re-issues the latest stored standing list, even after
 SPEC-OK or changed spec bytes. It keeps all earlier numbers: gap/open becomes
 done/open; ok/done becomes ok/open. It appends only the next numbers, marked
 `gap NEW-GROUND:` for amended text or `gap MISSED:` for something the earlier
-pass should have caught. Every gap belongs in the first report. Retention checks
+pass should have caught, except that when the spec has more acceptance lines
+than the earlier list, a new line with no gap gets an unlabelled `N. ok:` item,
+numbered at most the acceptance line count (T-284). Every gap belongs in the first report. Retention checks
 the final contiguous numbered block, acceptance count, numbering, transitions
 and verdict consistency: SPEC-GAPS requires a gap/open item, SPEC-OK forbids one.
 The signed receipt adds `standing` (number, status, label and verbatim first line)
