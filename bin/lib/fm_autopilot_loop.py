@@ -468,6 +468,11 @@ class MechanicalLoop:
                    for job in self.data.get('jobs', {}).values()): return
             # Preserve the exact seven-element ordinary input on upgrade.
             inputs.append(replacement)
+        # T-277: a new small-change record lets the gates run again on the
+        # same head. Without a store the inputs stay byte-equivalent.
+        if not self.ctx['external'] and os.path.lexists(self.state / 'small-changes' / task):
+            from fm_small_change import store_digest
+            inputs.append(store_digest(self.state, task))
         fingerprint = key(inputs)
         round_number = 1 + sum(r.get('type') == 'review_opened' and r.get('task') == task for r in self.rows())
         number = str(pr['number'])
@@ -743,6 +748,9 @@ class MechanicalLoop:
                 if hold or not replacement:
                     self.failed_card_hold(task, pr, hold or 'unverified failed history')
                     return
+            if not self.ctx['external']:
+                details = self.small_change_details(task, pr, ident, details)
+                if details is None: return
             # fm-decide validates the content and current signed gate readiness
             # again; deriving details never substitutes for those checks.
             from fm_autopilot import key
@@ -786,6 +794,38 @@ class MechanicalLoop:
                 self.data['retries'].pop(request_token, None)
                 self.data['merge_request_failures'].pop(str(pr['number']), None)
                 self.save()
+
+    def small_change_details(self, task, pr, ident, details):
+        """Disclose every small-change record of the current pin (T-277).
+
+        Runs under merge-turn.lock, so a record is either already published
+        here or refused by the command. Authored details are never modified.
+        """
+        if not os.path.lexists(self.state / 'small-changes' / task):
+            return details
+        import fm_small_change as small
+        try:
+            entries = small.current(self.adoption_env(), task)
+            if not entries:
+                return details
+            combined = small.disclose(read_json(details), entries, task,
+                                      self.verdict(task), pr['head']['sha'])
+            failure = small.fit_failure(combined)
+            reason, reason_tw = ('small-change disclosure does not fit: ' + failure,
+                                 '小改動揭露放不下：' + failure)
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            failure = ' '.join(str(error).split())
+            reason, reason_tw = ('small-change records cannot be read: ' + failure,
+                                 '小改動紀錄無法讀取：' + failure)
+        if failure:
+            self.attention('details', task, pr,
+                           f'{task} ready: merge card details needed ({ident}): {reason}',
+                           f'{task} 已就緒：需要 firstmate 撰寫合併決策卡內容（{ident}）：{reason_tw}')
+            return None
+        built = self.state / 'decision-details-built' / (ident + '.json')
+        built.parent.mkdir(exist_ok=True)
+        save_json(built, combined)
+        return built
 
 
 def run_job(path):

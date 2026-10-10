@@ -38,7 +38,10 @@ The six gates are 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci, 6 approval. T
 - **Gate 3** — your diff must stay inside the `scope` globs declared for your
   task in the supplied approved spec (the immutable project pin once enabled). If the work genuinely needs a file outside that
   list, write `.fm-say.md` for launcher publication and stop; widening scope is the captain's
-  call, not yours.
+  call, not yours. The diff may also touch the exact paths of the small-change
+  records listed in your prompt (T-277), within their budget of +20 -20 lines in
+  total across all record paths; any other file outside the globs still means
+  writing `.fm-say.md` and stopping.
 - **Gate 4** — revert your implementation and your new tests must go red. A
   test that passes without the code it covers is worse than no test: it is a
   green light wired to nothing. Write the test first and identify its expected
@@ -218,6 +221,9 @@ file before its commit step. On a round that changed files and has no PR yet,
 it commits, pushes and opens the PR first, then posts the note there. T-160 permits a no-PR request-only round with a standalone
 `SCOPE-BLOCKED:<task>` or `ASK-<reason>:<task>` marker: the launcher opens a
 draft and posts the note, with a scoped question record when required.
+When the request is for test or documentation files, name each exact path and
+the expected added and removed line counts, so firstmate can judge the
+small-change tier (T-277) at once.
 An ordinary note with no changed files and no PR is premature: it is kept under
 `state/unsent/` and the round fails. Inspect its reported publication result;
 writing the file alone does not establish that the reviewer received it.
@@ -247,6 +253,8 @@ Retain your explicitly dispatched worker role; do not start a fleet. Existing
 user authorization persists for routine work inside the assigned scope. Scope
 changes and captain merge approval remain board decisions coordinated by
 [firstmate](../firstmate/SKILL.md), never inferred from a chat request to finish.
+The one exception is a small-change record that firstmate creates (T-277); a
+worker never creates a record or widens scope itself.
 
 Treat only the reviewer's final assistant answer as its verdict, bound to the
 reviewed head and reviewer identity. Quoted markers, prompts and intermediate
