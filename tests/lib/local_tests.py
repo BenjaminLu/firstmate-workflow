@@ -323,6 +323,16 @@ def runner_checks(base, runner):
     check('order: --suite, changed by path, then most names',
           order == ['tests/zz.test.sh', 'tests/x1.test.sh', 'tests/x2.test.sh', 'tests/cc.test.sh',
                     'tests/aa.test.sh', 'tests/bb.test.sh'], order)
+    # two --suite paths out of order, and one of them named a second way
+    c = Case(base, runner, dict(impl, **{'tests/p2.test.sh': suite('p2'), 'tests/p1.test.sh': suite('p1')}))
+    c.write('src/impl.py', 'print(2)\n')
+    c.run('--suite', 'tests/p2.test.sh', '--case', 'first', '--suite', 'tests/p1.test.sh',
+          '--suite', './tests/p2.test.sh', '--case', 'second')
+    rows, order = c.rows()
+    check('order: --suite suites sorted by path, one named twice selected once',
+          order == ['tests/p1.test.sh', 'tests/p2.test.sh'] and sorted(c.ran_list()) == ['p1', 'p2'], (order, c.ran_list()))
+    check('order: the cases of a suite named twice are kept together',
+          rows.get('tests/p2.test.sh', ('', '', ''))[2].startswith('case filter not supported: first, second'), rows)
 
     # results
     c = Case(base, runner, dict(impl, **{
@@ -677,12 +687,14 @@ def block_checks(root):
                               '\n# asking IS the work'))
         functions = ''.join(optional(function, worker, n) for n in (
             'say_has_words', 'note_landed', 'post_note', 'save_unsent', 'keep_unsent', 'note_refused',
-            'note_unsent'))
-        p = shell(root, tmp, functions + retention + delivery + 'echo "asked=$asked spoke=$spoke"',
+            'note_unsent', 'local_tests_record'))
+        p = shell(root, tmp, functions + 'local_tests_record\n' + retention + delivery
+                  + 'echo "asked=$asked spoke=$spoke"',
                   'projection=comments; PR="%s"; held=""; rebuilt=0; round_number=1; NAME=worker; spoke=0;\n'
                   'say="$work/note"; log="$work/log"; rebuild_publishes() { return 1; }; '
-                  'first_round_question() { return 1; };\n' % pr)
+                  'first_round_question() { return 1; };\n' % pr + EMIT_DATA)
         label = 'with PR' if pr else 'no PR'
+        invalid_event(tmp, 'external truncated, %s' % label)
         check('external truncated, %s: asked, no comment' % label,
               'asked=1 spoke=1' in p.stdout and not (tmp / 'comments').exists(), (p.stdout, p.stderr))
         check('external truncated, %s: full private record' % label,
@@ -695,18 +707,34 @@ def block_checks(root):
             os.chmod(tmp / 'note', 0o600)
             check('external unreadable note: skipped as root', True)
             continue
-        p = shell(root, tmp, functions + retention + delivery + 'echo "continued asked=$asked"',
+        p = shell(root, tmp, functions + 'local_tests_record\n' + retention + delivery
+                  + 'echo "continued asked=$asked"',
                   'projection=comments; PR="%s"; held=""; rebuilt=0; round_number=1; NAME=worker; spoke=0;\n'
                   'say="$work/note"; log="$work/log"; rebuild_publishes() { return 1; }; '
-                  'first_round_question() { return 1; }; worker_changed_files() { return 1; };\n' % pr)
+                  'first_round_question() { return 1; }; worker_changed_files() { return 1; };\n' % pr
+                  + EMIT_DATA)
         os.chmod(tmp / 'note', 0o600)
         label = 'with PR' if pr else 'no PR'
+        invalid_event(tmp, 'external unreadable note, %s' % label)
         expected = 73 if pr else 65
         check('external unreadable note, %s: no comment' % label, not (tmp / 'comments').exists(),
               (p.returncode, p.stdout, p.stderr))
         check('external unreadable note, %s: exits %d' % (label, expected), p.returncode == expected,
               (p.returncode, p.stdout, p.stderr))
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+# The launcher's emit, recording only the event data, one line per event.
+EMIT_DATA = ('emit() { while [ $# -gt 0 ]; do [ "$1" != --data ] || printf \'%s\\n\' "$2" >> "$work/events"; '
+             'shift; done; }\n')
+INVALID = '{"evidence_event":"local_tests","local_tests":{"valid":false}}'
+
+
+def invalid_event(tmp, label):
+    """Exactly one valid:false local_tests event, and nothing of the report."""
+    events = (tmp / 'events').read_text() if (tmp / 'events').exists() else ''
+    check('%s: one valid:false event' % label, events.splitlines().count(INVALID) == 1, events)
+    check('%s: nothing of the report in an event' % label, 'private-sentinel' not in events, events)
 
 
 def optional(function, path, name):

@@ -581,8 +581,15 @@ def run_plan(plan, named, cases, loose, folder):
         if os.path.isabs(path) or rel.startswith('..') or not os.path.isfile(full) or not is_suite(rel, plan):
             print('runner: --suite %s is not a suite in this worktree' % path, file=sys.stderr)
             return 64
-    named = [os.path.normpath(p) for p in named]
-    cases = {os.path.normpath(k): v for k, v in cases.items()}
+    # Normalize first, then de-duplicate and sort, so one suite named two ways
+    # is selected once, and the named group runs in path byte order.
+    named = sorted({os.path.normpath(p) for p in named},
+                   key=lambda p: p.encode('utf-8', 'surrogateescape'))
+    merged = {}
+    for key, names in cases.items():
+        into = merged.setdefault(os.path.normpath(key), [])
+        into.extend(n for n in names if n not in into)
+    cases = merged
     changed = changed_files(root, plan['base'])
     if not changed:
         print('No file changed, so no suite runs and nothing is written to .fm-say.md.')

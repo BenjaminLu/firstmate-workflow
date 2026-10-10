@@ -299,12 +299,17 @@ no_pin_scenario() {
   safe_rm_rf "$d"
 }
 
-# results only, with a pull request, and with comments refused
-results_only_scenario() {   # results_only_scenario <refuse 0|1>
+# results only: with no pull request, with one, and with comments refused
+results_only_scenario() {   # results_only_scenario <none|pr number> <refuse 0|1>
   lt_fixture
-  [ "$1" = 0 ] || : > "$d/refuse-comments"
-  FM_LTX_CHANGE="$CHANGE_SUITE" lt_round --pr 9
-  label="a PR"; [ "$1" = 0 ] || label="comments refused"
+  [ "$2" = 0 ] || : > "$d/refuse-comments"
+  args=(); [ "$1" = none ] || args=(--pr "$1")
+  # the block goes straight into the note, so base, which reads any
+  # non-empty note as the worker speaking, comments and goes red
+  block "$good" > "$d/say-in"
+  FM_LTX_CHANGE="$CHANGE_SUITE" FM_LTX_RUN=0 FM_LTX_AFTER="cp '$d/say-in' .fm-say.md" \
+    lt_round ${args[@]+"${args[@]}"}
+  label="no PR"; [ "$1" = none ] || label="a PR"; [ "$2" = 0 ] || label="comments refused"
   assert_eq 0 "$rc" "results only, $label: exits as if empty"
   assert_lacks "$(cat "$d/ghcalls" 2>/dev/null)" "pr comment" "results only, $label: no comment"
   assert_lacks "$(jq -r .type "$r/state/events.jsonl" | tr '\n' ' ')" "worker_note_unsent" "results only, $label: nothing unsent"
@@ -416,8 +421,9 @@ fault_scenario() {   # fault_scenario <folder|copy|plan>
 
 spawn runner_scenario
 spawn no_pin_scenario
-spawn results_only_scenario 0
-spawn results_only_scenario 1
+spawn results_only_scenario none 0
+spawn results_only_scenario 9 0
+spawn results_only_scenario 9 1
 spawn no_block_scenario
 for kind in extra-key string negative second-block no-end v2; do spawn invalid_block_scenario "$kind"; done
 spawn truncated_scenario none
