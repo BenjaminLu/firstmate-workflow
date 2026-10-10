@@ -6964,6 +6964,70 @@ protection defers cleanup. Merge and cleanup independently retain all open PR
 bases, including self-project and forced cleanup paths. T-141 may automate
 these mechanical operations later; it does not supply their authorization.
 
+T-278 replaces judgement-based holding of overlapping self tasks with a
+stock rule; external projects are unchanged. A self task is in flight from
+its `dispatched` or `pr_opened` event until a later `merged` or `closed`
+event. Two approved scope lists overlap when two literal entries are equal,
+a glob matches a literal with fnmatch, or two globs have static prefixes
+(leading segments without `*`, `?` or `[`) where one equals or is a
+whole-segment prefix of the other; an empty prefix overlaps every glob. The
+shared reader in `bin/lib/fm_stack.py` takes a task's scope from its latest
+valid pin, or before the first pin from the snapshot `Pins.collect()` makes
+once an approval exists. It never reads the mutable task file, and any error
+or missing approval makes the scope unreadable. It runs only when a self
+task is in flight.
+
+Dispatch checks each candidate against every in-flight self task without a
+GitHub call: once while preparing, and again under `state/dispatch.lock`
+against the events read there plus each candidate already selected in the same
+run, so one batch never selects two overlapping tasks. An unreadable scope
+holds the candidate as `overlap check unavailable: <task>`. Without overlap
+the dependency rule above is unchanged. With overlap, C is the overlapped
+tasks plus unmerged dependencies, in task order (numeric IDs by number,
+then any other pin-valid ID in string order), each `<task> (PR #<n>)` or
+`<task> (no PR yet)`. Under hold, or when C has several members, the
+candidate holds as `overlaps <list>`. Under allowed policy a single member
+with no PR holds as `overlaps <task> (no PR yet)`; a single member whose open
+PR is based on main becomes the parent; one whose PR is itself stacked holds as
+`waits for stacked PR #<n> to reach main`. Stacks stay one level deep. Holds
+are re-evaluated on every dispatch attempt; an overlapped member leaves C on
+merge or close, a dependency only on merge. `fm_stack select` computes the same
+C, excluding the candidate's own dispatch record. A self worker without a PR
+runs it under every policy, so a task reserved under one policy never starts
+overlapping work from main under another; workers with a PR keep its base.
+`select` accepts every task ID pin validation accepts and resolves the GitHub
+repository only when choosing a parent needs a GitHub read, so an empty C or
+a locally decided hold works in a checkout whose origin is a local path.
+
+`state/autopilot/self-stack-policy.json` is runtime state, not pinned
+context. Its schema-1 record has exactly `version` (integer 1),
+`stacking` (`allowed` or `hold`), `force_with_lease` (boolean) and
+`captain_authorization` (a decision id). For the self project it supplies
+only those two fields to `fm_stack_policy`, the `select` and `restack`
+actions and the autopilot; every other self value is unchanged. An absent
+file keeps today's behaviour. An invalid file (symlink, unknown or missing
+key, wrong type, other version) means hold and no force-with-lease, with one
+bilingual autopilot attention per distinct problem. Only
+`python3 bin/lib/fm_stack.py self-policy --decision <id> --payload <file>`
+writes it: the four-key payload must name the decision, which must be an
+answered self choice card for T-278 with A, matched to a captain
+`decision_made` event, whose details carry the payload's SHA-256. It writes
+atomically, is idempotent, refuses with 65 writing nothing, and refuses
+external projects. Under allowed stacking and force-with-lease the restack path
+above runs for self children after their parent merges, including children
+created before activation; otherwise they get `restack-held`. Writing,
+changing or removing the file rewrites no pin, card, receipt, PR base or
+history.
+
+`python3 bin/lib/fm_merge_metrics.py report --last N` prints one JSON line
+per merged self PR, newest first: `pr`, `task`, `merged_at`,
+`branch_updates` (commits titled `Merge branch 'main' into ...`), `ci_runs`
+and `ci_reruns` (Actions runs for the head branch, every page, deduplicated by
+run id), `stacked` (a timeline base change or a non-main base at merge) and
+`source: "github-estimate"`. It reads only the self checkout's GitHub
+repository, writes nothing, refuses external projects, and reports null for
+anything GitHub cannot provide. The retro compares it before and after.
+
 
 #### Autopilot owns PR advancement (T-175)
 
