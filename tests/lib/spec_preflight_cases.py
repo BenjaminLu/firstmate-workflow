@@ -355,5 +355,215 @@ class Preflight(unittest.TestCase):
         self.assertEqual('', managed.review_final(run, 'one', env))
 
 
+
+class Rewrites(unittest.TestCase):
+    """T-270 reviewer rewrites through retain(), the receipt writer the
+    launcher calls. Behavioural: on the base retain() ignores the blocks."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.store = Store(self.root / 'state', 'self', 'T-X', external=False)
+        self.spec = dict(id='T-X', title='Keep retries', scope=['src/**'],
+                         acceptance=['Keep 3 retries in `src/a.py`.', 'Show the round number.'],
+                         public_summary='The widget is blue.')
+        self.data = (json.dumps(self.spec, indent=1) + '\n').encode()
+        self.actor = 'reviewer-noah-tx-sp-r1'
+
+    def block(self, kind, value):
+        text = value if isinstance(value, str) else json.dumps(value, indent=1)
+        return '```json fm-reworded-' + kind + '\n' + text + '\n```\n'
+
+    def answer(self, blocks='', verdict='SPEC-OK', items=None):
+        status = 'ok' if verdict == 'SPEC-OK' else 'gap'
+        items = items or (f'1. {status}: line 1 keeps its meaning in the rewrite.\n'
+                          '2. ok: readability: "Show the round number." The rewrite fixes it.\n')
+        return 'Summary.\n' + blocks + items + 'PREFLIGHT-COMPLETE:T-X\n\n' + verdict + ':T-X\n'
+
+    def retain(self, answer, data=None, provenance=None, **inputs):
+        return retain(self.store, self.data if data is None else data, 'a' * 40, self.actor, 1, answer,
+                      provenance or {'level': 'legacy'}, **inputs)
+
+    def reworded(self, **changes):
+        value = json.loads(self.data)
+        value.update(changes)
+        return value
+
+    def test_accepted_spec_rewrite_authorizes_only_the_rewritten_bytes(self):
+        import fm_spec_preflight as P
+        new = self.reworded(title='Keep the retry count',
+                            acceptance=['Keep the 3 retries in `src/a.py`.', 'Show which round runs now.'])
+        text = json.dumps(new, indent=1) + '\n'
+        answer = self.answer(self.block('spec', new))
+        sha = hashlib.sha256(self.data).hexdigest()
+        provenance = dict(level='authenticated', final_source='codex-json-completed-turn',
+                          final_sha256=hashlib.sha256(answer.encode()).hexdigest(), actor=self.actor,
+                          task='T-X', role='reviewer', spec_preflight=sha)
+        record = self.retain(answer, provenance=provenance)
+        self.assertEqual(answer, record['text'], 'the answer is retained exactly as returned')
+        self.assertEqual('SPEC-OK', record['verdict'])
+        self.assertEqual(sha, record['spec_sha256'])
+        rewrite = record['rewrite']['spec']
+        self.assertEqual('accepted', rewrite['status'])
+        self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), rewrite['sha256'])
+        # A fresh reader verifies the authenticated rewritten receipt.
+        fresh = Store(self.root / 'state', 'self', 'T-X', external=False).records()
+        self.assertEqual(rewrite, fresh[-1]['rewrite']['spec'])
+        require_ok(self.store, text.encode())
+        with self.assertRaises(ValueError):
+            require_ok(self.store, self.data)
+        out = self.root / 'out'; out.mkdir()
+        lines = P.export(fresh[-1], out)
+        exported = (out / 'spec.reworded.json').read_bytes()
+        self.assertEqual(text.encode(), exported)
+        self.assertEqual(rewrite['sha256'], hashlib.sha256(exported).hexdigest())
+        self.assertEqual([f'fm-review: reworded spec {out / "spec.reworded.json"} sha256 {rewrite["sha256"]}'], lines)
+        self.assertEqual('spec-ok', P.outcome(self.store, self.actor, sha, 0, 1))
+
+    def assert_refused(self, blocks, reason, **inputs):
+        import fm_spec_preflight as P
+        record = self.retain(self.answer(blocks), **inputs)
+        refused = {kind: entry['reason'] for kind, entry in record['rewrite'].items()
+                   if entry['status'] == 'refused'}
+        self.assertTrue(any(reason in text for text in refused.values()), refused)
+        self.assertEqual('rewrite-refused', P.effective(record))
+        self.assertEqual('SPEC-OK', record['verdict'], 'the reviewer marker stays as returned')
+        self.assertEqual('rewrite-refused', P.outcome(self.store, self.actor, record['spec_sha256'], 0, 1))
+        with self.assertRaises(ValueError):
+            require_ok(self.store, self.data)
+        return record
+
+    def test_rewrite_guards_refuse(self):
+        moved = self.reworded(acceptance=['Keep retries in `src/a.py`.', 'Show round 3.'])
+        cases = [
+            ('scope', self.block('spec', self.reworded(scope=['bin/**'])), 'only prose may change'),
+            ('public_summary', self.block('spec', self.reworded(public_summary='The private plan.')), 'only prose'),
+            ('moved number', self.block('spec', moved), 'protected tokens changed'),
+            ('length', self.block('spec', self.reworded(acceptance=['One line.'])), 'changed list length'),
+            ('duplicate', self.block('spec', self.reworded()) * 2, 'duplicate'),
+            ('not an object', self.block('spec', '[1, 2]'), 'not-an-object'),
+            ('unsolicited card', self.block('card', {'en': {}}), 'unsolicited'),
+            ('unsolicited draft', self.block('pr-authoring', {'subject': 'Add x'}), 'unsolicited'),
+        ]
+        for name, blocks, reason in cases:
+            with self.subTest(name=name):
+                self.setUp()
+                self.assert_refused(blocks, reason)
+
+    def test_private_public_summary_sentinel_never_reaches_an_export(self):
+        import fm_spec_preflight as P
+        sentinel = 'The board meeting chose the vendor quietly.'
+        record = self.assert_refused(self.block('spec', self.reworded(public_summary=sentinel)), 'only prose')
+        out = self.root / 'out'; out.mkdir()
+        self.assertEqual([], P.export(record, out))
+        self.assertEqual([], list(out.iterdir()))
+
+    def test_unclosed_block_is_an_invalid_final_with_no_receipt(self):
+        import fm_spec_preflight as P
+        unclosed = 'Summary.\n```json fm-reworded-spec\n{"id": "T-X"}\n' + self.answer()[len('Summary.\n'):]
+        with self.assertRaises(ValueError):
+            self.retain(unclosed)
+        self.assertEqual([], Store(self.root / 'state', 'self', 'T-X', external=False).records())
+        self.assertEqual('failed', P.outcome(self.store, self.actor, hashlib.sha256(self.data).hexdigest(), 0, 1))
+
+    def test_semantic_gap_beside_a_rewrite_is_spec_gaps(self):
+        import fm_spec_preflight as P
+        new = self.reworded(acceptance=['Keep 3 retries in `src/a.py`.', 'Show the round number.'])
+        items = ('1. gap: line 1: a clear rewrite would change the retry condition; state when retries stop.\n'
+                 '2. ok: line 2 is clear.\n')
+        record = self.retain(self.answer(self.block('spec', new), 'SPEC-GAPS', items))
+        self.assertEqual('SPEC-GAPS', P.effective(record))
+        self.assertEqual('unused', record['rewrite']['spec']['status'])
+        self.assertEqual('spec-gaps', P.outcome(self.store, self.actor, record['spec_sha256'], 0, 1))
+        out = self.root / 'out'; out.mkdir()
+        self.assertEqual([], P.export(record, out))
+
+    def test_refusal_reasons_reach_the_next_prompt(self):
+        self.assert_refused(self.block('spec', self.reworded(scope=['bin/**'])), 'only prose')
+        body = prompt('T-X', self.data, 'b' * 40, standing(self.store))
+        self.assertIn('The previous preflight refused these rewrites', body)
+        self.assertIn('- spec: spec.scope.0: only prose may change', body)
+
+    def test_readability_item_open_then_done(self):
+        first = ('1. ok: line 1 is clear.\n'
+                 '2. gap: readability: "Show the round number." The reader cannot tell which round; name it.\n')
+        self.retain(self.answer('', 'SPEC-GAPS', first))
+        amended = (json.dumps(self.reworded(acceptance=['Keep 3 retries in `src/a.py`.',
+                                                        'Show the number of the running round.']), indent=1) + '\n').encode()
+        second = '1. ok: line 1 is clear.\n2. done: readability: line 2 now names the running round.\n'
+        self.retain(self.answer('', 'SPEC-OK', second), data=amended)
+        require_ok(self.store, amended)
+        body = prompt('T-X', amended, 'b' * 40, standing(self.store))
+        self.assertIn('readability', body)
+
+    def card(self):
+        loader = importlib.util.spec_from_file_location('ste_cases', ROOT / 'tests/lib/ste_cases.py')
+        cases = importlib.util.module_from_spec(loader); loader.loader.exec_module(cases)
+        return cases.card()
+
+    def test_card_rewrite_accepted_refused_and_unchanged(self):
+        card = self.card()
+        submitted = (json.dumps(card) + '\n').encode()
+        better = json.loads(json.dumps(card)); better['en']['title'] = 'The check passes now.'
+        record = self.retain(self.answer(self.block('card', better)), card=submitted)
+        entry = record['rewrite']['card']
+        self.assertEqual('accepted', entry['status'])
+        self.assertEqual(hashlib.sha256(submitted).hexdigest(), entry['submitted_sha256'])
+        self.assertEqual(hashlib.sha256((json.dumps(better, indent=1) + '\n').encode()).hexdigest(), entry['sha256'])
+        for name, mutate, reason in (
+                ('effect', lambda c: c.update(effect={'A': 'dispatch'}), 'changed keys'),
+                ('intent', lambda c: c['en']['intent'][0].update(text='Another intent.'), 'only prose'),
+                ('glossary', lambda c: c['en'].update(glossary=['board']), 'changed list length'),
+                ('plain', lambda c: c['en']['how'][0].update(text='Read kind/purpose/chosen first.'), 'slash-chain')):
+            with self.subTest(name=name):
+                self.setUp()
+                changed = json.loads(json.dumps(card)); mutate(changed)
+                self.assert_refused(self.block('card', changed), reason, card=submitted)
+        self.setUp()
+        record = self.retain(self.answer(), card=submitted)
+        self.assertEqual(dict(status='unchanged', submitted_sha256=hashlib.sha256(submitted).hexdigest()),
+                         record['rewrite']['card'])
+        require_ok(self.store, self.data)
+
+    def draft(self):
+        sources = {k: dict(sha256=hashlib.sha256(k.encode()).hexdigest(), absent=False)
+                   for k in ('spec', 'design', 'contract', 'conventions')}
+        sources['spec']['sha256'] = hashlib.sha256(self.data).hexdigest()
+        return dict(schema=1, task='T-X', sources=sources, subject='Keep the retry count visible', size='small',
+                    problem='Readers cannot see the retry count.', expected_result='Readers see 3 retries.',
+                    approach='Print the count beside the round.', intent_notes=[dict(index=0, note='Keep 3 retries.')])
+
+    def test_pr_authoring_rewrites(self):
+        import fm_self_pr
+        draft = self.draft()
+        submitted = (json.dumps(draft) + '\n').encode()
+        bad = dict(draft, subject='Made the retry count visible')
+        record = self.assert_refused(self.block('pr-authoring', bad), 'allowed verb', pr_authoring=submitted)
+        self.assertEqual('SPEC-OK', record['verdict'])
+        self.setUp()
+        items = '1. gap: the draft rewrite would change when retries stop.\n2. ok: line 2 is clear.\n'
+        better = dict(draft, approach='Print the count next to the round.')
+        record = self.retain(self.answer(self.block('pr-authoring', better), 'SPEC-GAPS', items), pr_authoring=submitted)
+        self.assertEqual('unused', record['rewrite']['pr-authoring']['status'])
+        # A spec rewrite and a draft rewrite together, then a spec rewrite alone.
+        new = self.reworded(title='Keep the retry count')
+        new_sha = hashlib.sha256((json.dumps(new, indent=1) + '\n').encode()).hexdigest()
+        for blocks in (self.block('spec', new) + self.block('pr-authoring', better), self.block('spec', new)):
+            with self.subTest(blocks=blocks.count('```json')):
+                self.setUp()
+                record = self.retain(self.answer(blocks), pr_authoring=submitted)
+                entry = record['rewrite']['pr-authoring']
+                self.assertEqual('accepted', entry['status'])
+                self.assertEqual(['sources.spec.sha256'], entry['machine_change'])
+                # The exported draft; seal() itself runs in tests/lib/plain_writing.py SealAfterRewrite.
+                exported = json.loads(entry['text'])
+                self.assertEqual(new_sha, exported['sources']['spec']['sha256'])
+                for key in ('design', 'contract', 'conventions'):
+                    self.assertEqual(draft['sources'][key], exported['sources'][key])
+                self.assertEqual(draft['intent_notes'][0]['index'], exported['intent_notes'][0]['index'])
+                fm_self_pr.validate(exported, new, exported['sources'], prose_checks=True)
+                self.assertEqual(hashlib.sha256(entry['text'].encode()).hexdigest(), entry['sha256'])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

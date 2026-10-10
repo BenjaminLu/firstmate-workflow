@@ -127,6 +127,19 @@ class Standing(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'external spec needs a valid public_title:'):
                 P.main()
 
+    def test_rewrite_blocks_are_not_list_items(self):
+        # Regression (T-270): a rewrite block before item 1 holds numbered
+        # lines and markers, and none of them is read as a list item or verdict.
+        block = ('```json fm-reworded-spec\n1. gap: inside the block\n'
+                 'PREFLIGHT-COMPLETE:T-X\nSPEC-GAPS:T-X\n```\n')
+        answer = self.answer(block + '1. ok: src/a:1 one\n2. ok: src/b:2 two')
+        items = P.structure(answer, 'T-X', 2)
+        self.assertEqual([1, 2], [item['n'] for item in items])
+        self.assertEqual(['ok', 'ok'], [item['status'] for item in items])
+        self.assertEqual('SPEC-OK', P.decision(answer, 'T-X'))
+        _, kept = P._standing_block(answer, 'T-X')
+        self.assertNotIn('inside the block', kept)
+
     def test_reissue_drops_item_at_acceptance_count(self):
         self.retain(self.answer('1. gap: src/a:1 fix one\n2. ok: src/b:2 two\n'
                                 '3. ok: src/c:3 three', 'SPEC-GAPS'))

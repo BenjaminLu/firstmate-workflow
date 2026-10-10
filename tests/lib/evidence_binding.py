@@ -131,7 +131,8 @@ candidate = subprocess.run(binding_command + ['candidate', '--task', 'T-138', '-
 assert json.loads(candidate.stdout)['head'] == changed, 'candidate must keep exact checked head'
 # The real card producer must retain the verified SHA and signed evidence.
 locale = dict(title='Merge candidate', explanation='Checked candidate', before='Open', after='Merged', outcome='Recorded',
-              options={k:dict(description='Choose',pros='Benefit',cons='Cost') for k in 'ABC'})
+              why=[dict(kind='fact', text='Checked candidate.')], how=[dict(kind='fact', text='The card names the head.')],
+              glossary=[], options={k:dict(description='Choose',pros='Benefit',cons='Cost') for k in 'ABC'})
 details = temporary/'details.json'
 details.write_text(json.dumps({'en':locale,'zh-TW':locale}))
 allocate = ['bash', str(code/'bin/fm-decide.sh'), '--repo', str(root), '--task', 'T-138', '--kind', 'merge']

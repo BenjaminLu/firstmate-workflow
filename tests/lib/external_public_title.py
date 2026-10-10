@@ -73,6 +73,24 @@ class PublicText(unittest.TestCase):
                     fields[field] = 'Read the ' + token + ' widget'
                     self.assertIn('path-like', self.check(**fields).stdout)
 
+    def test_plain_checks_block_preflight_but_not_a_publishing_round(self):
+        # T-270 Change 15: glued numbers and slash chains in public fields are
+        # refused at spec preflight; an approved pin still publishes unchanged.
+        glued = dict(self.spec, public_title=TITLE, public_summary='The widget shows All13 rows.')
+        p = self.check(public_title=TITLE, public_summary='The widget shows All13 rows.')
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        from fm_public_text import plain_problems
+        self.assertEqual(['public_summary: glued-number "All13"'],
+                         plain_problems(glued['public_title'], glued['public_summary']))
+        with patch.dict(os.environ, FM_EXTERNAL='1'):
+            with self.assertRaisesRegex(ValueError, 'glued-number "All13"'):
+                prompt('T-051', json.dumps(glued).encode(), 'base')
+        shell = self.shell({'public_title': TITLE, 'public_summary': 'The widget shows All13 rows.'},
+                           tail='printf "%s\\n%s" "$commit_msg" "$pr_body"')
+        self.assertEqual(shell.returncode, 0, shell.stderr)
+        self.assertEqual(shell.stdout.splitlines()[0], TITLE)
+        self.assertIn('All13', shell.stdout)
+
     def test_prompt_external_refusal_and_self_compatibility(self):
         with patch.dict(os.environ, FM_EXTERNAL='1'):
             with self.assertRaisesRegex(ValueError, 'external spec needs a valid public_title:'):
@@ -100,8 +118,8 @@ fm_project() { :; }; fm_project_reviewer_mode() { :; }; fm_cfg_in() { :; }; FM_S
         for fields, external, title, body in (
             ({'public_title': TITLE, 'public_summary': SUMMARY}, 1, TITLE, SUMMARY),
             ({'public_title': TITLE}, 1, TITLE, ''),
-            ({}, 1, 'project work', 'Task T-051. ' + FOOTER),
-            ({'public_title': 'Utilize the widget'}, 1, 'project work', 'Task T-051. ' + FOOTER)
+            ({}, 1, "Save the round's changes", 'Task T-051. ' + FOOTER),
+            ({'public_title': 'Utilize the widget'}, 1, "Save the round's changes", 'Task T-051. ' + FOOTER)
         ):
             with self.subTest(fields=fields, external=external):
                 p = self.shell(fields, external, tail='printf "%s\\n%s\\n%s" "$commit_msg" "$pr_title" "$pr_body"')
@@ -131,13 +149,15 @@ fm_project() { :; }; fm_project_reviewer_mode() { :; }; fm_cfg_in() { :; }; FM_S
                                tail='printf "%s\\n%s\\n%s" "$commit_msg" "$pr_title" "$pr_body"')
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual(p.stderr, '')
-                self.assertEqual(p.stdout, 'T-051: project work\nT-051: project work\nTask T-051. ' + FOOTER)
+                self.assertEqual(p.stdout, "T-051: Save the round's changes\nT-051: Save the round's changes\nTask T-051. " + FOOTER)
 
     def test_later_round_retitles_only_matching_generic_pr(self):
         block = section(WORKER, '  # Upgrade only the untouched external fallback title.',
                         '  emit_status "Pushed another round')
         for external, current, branch, view_rc, edit_rc, edits in (
             (1, 'T-051: project work', 't-051-work', 0, 0, 1),
+            (1, "T-051: Save the round's changes", 't-051-work', 0, 0, 1),
+            (1, "T-051: Save the round's changes", 'other', 0, 0, 0),
             (1, 'Captain chose a title', 't-051-work', 0, 0, 0),
             (1, 'T-051: ' + TITLE, 't-051-work', 0, 0, 0),
             (1, 'T-051: project work', 'other', 0, 0, 0),
@@ -181,21 +201,38 @@ fm_project() { :; }; fm_project_reviewer_mode() { :; }; fm_cfg_in() { :; }; FM_S
 
     def test_imports_do_not_load_optional_modules(self):
         # A consumer may copy the preflight module without public-text or STE.
-        for name in ('fm_spec_preflight.py', 'fm_public_text.py'):
-            shutil.copy(ROOT / 'bin/lib' / name, self.home / name)
-        (self.home / 'fm_evidence.py').write_text('Store = None\nunquoted = None\n')
-        p = subprocess.run([sys.executable, '-c',
-            'import fm_spec_preflight, fm_public_text; '
-            'fm_spec_preflight.prompt("T-051", ' + repr(json.dumps(self.spec).encode()) + ', "base")'],
-            cwd=self.home, env=dict(self.env, FM_EXTERNAL='0'), capture_output=True, text=True)
+        # T-270: prompt() reads the writing rules and glossary from the frozen
+        # code root, so the isolated copy keeps the repository layout.
+        lib = self.home / 'bin/lib'
+        lib.mkdir(parents=True)
+        (self.home / 'fm_spec_preflight.py').unlink(missing_ok=True)
+        (lib / 'fm_evidence.py').write_text('Store = None\nunquoted = None\n')
+        shutil.copy(ROOT / 'bin/lib/fm_spec_preflight.py', lib / 'fm_spec_preflight.py')
+        p = subprocess.run([sys.executable, '-c', 'import fm_spec_preflight'], cwd=lib,
+                           env=dict(self.env, FM_EXTERNAL='0'), capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, 'importing the preflight needs no fm_plain.py: ' + p.stderr)
+        for name in ('fm_public_text.py', 'fm_plain.py'):
+            shutil.copy(ROOT / 'bin/lib' / name, lib / name)
+        (self.home / 'i18n').mkdir()
+        shutil.copy(ROOT / 'i18n/glossary.json', self.home / 'i18n/glossary.json')
+        shutil.copy(ROOT / 'i18n/tw2cn.tsv', self.home / 'i18n/tw2cn.tsv')
+        call = ('import fm_spec_preflight, fm_public_text; '
+                'fm_spec_preflight.prompt("T-051", ' + repr(json.dumps(self.spec).encode()) + ', "base")')
+        p = subprocess.run([sys.executable, '-c', call], cwd=lib,
+                           env=dict(self.env, FM_EXTERNAL='0'), capture_output=True, text=True)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('plain-writing.md', p.stderr, 'a missing rules file is named')
+        (self.home / 'skills/firstmate').mkdir(parents=True)
+        shutil.copy(ROOT / 'skills/firstmate/plain-writing.md', self.home / 'skills/firstmate/plain-writing.md')
+        p = subprocess.run([sys.executable, '-c', call], cwd=lib,
+                           env=dict(self.env, FM_EXTERNAL='0'), capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
-        (self.home / 'fm_public_text.py').unlink()
+        (lib / 'fm_public_text.py').unlink()
         p = subprocess.run([sys.executable, '-c',
             'import fm_spec_preflight; fm_spec_preflight.prompt("T-051", ' +
-            repr(json.dumps(self.spec).encode()) + ', "base")'], cwd=self.home,
+            repr(json.dumps(self.spec).encode()) + ', "base")'], cwd=lib,
             env=dict(self.env, FM_EXTERNAL='0'), capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
-
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

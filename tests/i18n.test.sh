@@ -142,6 +142,77 @@ done < "$tbl"
 assert_eq '船员名册 · 读取变量 · 每张任务卡片 · 任务文件' "$displayed_cn" \
   "displayed CN vocabulary matches an independently authored oracle"
 
+# T-270: card why, how and glossary labels, in all three languages. The
+# expectations are written by hand, independent of the table under test.
+cn_of() {  # cn_of <zh-TW text>: the table applied in file order, as the board does
+  local text="$1" a b
+  while IFS=$'\t' read -r a b; do
+    case "$a" in '#'*|'') continue ;; esac
+    text="${text//$a/$b}"
+  done < "$tbl"
+  printf '%s' "$text"
+}
+assert_eq 'How' "$(jq -r '."card.how"' "$en")" 'card.how in English'
+assert_eq 'Glossary' "$(jq -r '."card.glossary"' "$en")" 'card.glossary in English'
+assert_eq '做法' "$(jq -r '."card.how"' "$tw")" 'card.how in Traditional Chinese'
+assert_eq '詞彙表' "$(jq -r '."card.glossary"' "$tw")" 'card.glossary in Traditional Chinese'
+assert_eq '做法' "$(cn_of "$(jq -r '."card.how"' "$tw")")" 'card.how in Simplified Chinese'
+assert_eq '词汇表' "$(cn_of "$(jq -r '."card.glossary"' "$tw")")" 'card.glossary in Simplified Chinese'
+caution_tw="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fm_merge_details as m; print(m.CAUTION["zh-TW"])' "$ROOT/bin/lib")"
+assert_eq '未經可讀性審查。' "$caution_tw" 'the merge card caution sentence in Traditional Chinese'
+assert_eq '未经可读性审查。' "$(cn_of "$caution_tw")" 'the caution sentence converts fully to Simplified Chinese'
+# Every glossary explanation is one plain sentence that passes the STE fact
+# check, in both locales, and the file passes the glossary validator.
+glossary_ste="$(python3 - "$ROOT/bin/lib" "$ROOT/i18n/glossary.json" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import fm_plain, fm_ste
+data = fm_plain.validate_glossary(json.load(open(sys.argv[2], encoding='utf-8')))
+for entry in data['terms']:
+    for lang in fm_plain.LOCALES:
+        text = entry[lang]['text']
+        report = fm_ste.check(text, 'fact')
+        failed = [i['rule'] for i in report['issues'] if i['severity'] == 'fail']
+        if failed or len(fm_ste.split(text)) != 1:
+            print(entry['id'], lang, failed or 'not one sentence')
+PY
+)"
+assert_eq 0 "$?" 'the glossary file loads and validates'
+assert_eq '' "$glossary_ste" 'every glossary explanation passes the STE fact check as one sentence'
+# Every glossary term, alias and explanation converts fully to Simplified
+# Chinese: no character that the table converts on its own (a one-character
+# row) is left after the table runs in file order.
+glossary_cn_left="$(python3 - "$ROOT/bin/lib" "$ROOT" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fm_plain
+rows = fm_plain.tw2cn_rows(sys.argv[2])
+traditional = {a for a, b in rows if len(a) == 1 and a != b}
+for entry in fm_plain.load_glossary(sys.argv[2])['terms']:
+    loc = entry['zh-TW']
+    for text in [loc['term'], *loc['aliases'], loc['text']]:
+        left = sorted({ch for ch in fm_plain.to_cn(text, rows) if ch in traditional})
+        if left:
+            print(entry['id'], ''.join(left))
+PY
+)"
+assert_eq '' "$glossary_cn_left" 'every glossary entry converts fully to Simplified Chinese'
+# Hand-written zh-CN expectations for several entries, independent of the table.
+glossary_cn() {  # glossary_cn <id> <term|text>
+  cn_of "$(jq -r --arg id "$1" --arg key "$2" '.terms[] | select(.id == $id) | ."zh-TW"[$key]' "$ROOT/i18n/glossary.json")"
+}
+assert_eq '工作简报' "$(glossary_cn brief term)" 'zh-CN glossary term brief'
+assert_eq '自动驾驶' "$(glossary_cn autopilot term)" 'zh-CN glossary term autopilot'
+assert_eq '先失败测试' "$(glossary_cn fail-first term)" 'zh-CN glossary term fail-first'
+assert_eq '固定版本是已核准规格的冻结副本，任务用它直到船长核准修改。' "$(glossary_cn pin text)" 'zh-CN glossary text pin'
+assert_eq '待办项目是审查清单上的一个编号修改，任务必须完成它才能通过审查。' "$(glossary_cn standing-item text)" 'zh-CN glossary text standing-item'
+assert_eq '门的种类说明改动是否容易复原：双向门容易复原，单向门难以复原。' "$(glossary_cn door text)" 'zh-CN glossary text door'
+assert_eq '先失败测试在旧程序上失败，在新程序上通过。' "$(glossary_cn fail-first text)" 'zh-CN glossary text fail-first'
+assert_eq '工作简报是 firstmate 写给工人的说明，指出下一次执行要做什么。' "$(glossary_cn brief text)" 'zh-CN glossary text brief'
+for id in pin repin standing-item gate six-gates carry door spec-ok preflight round brief autopilot board scope fail-first; do
+  assert_ok "jq -e --arg id '$id' 'any(.terms[]; .id == \$id)' '$ROOT/i18n/glossary.json' >/dev/null" "the glossary explains $id"
+done
+
 # the page carries no Chinese of its own: it all comes from the dictionary
 # comments included on purpose: the page must carry no Chinese at all, so
 # this one counts rather than filtering - and counting keeps the hygiene lint

@@ -70,6 +70,7 @@ fixture() {                     # a repo with a remote, a task, and the real scr
      "$ROOT/bin/fm-auth-probe.sh" "$ROOT/bin/fm-sandbox.sh" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
+  cp -R "$ROOT/i18n" .   # the glossary the pull-request renderer reads (T-270)
   stack_base_fixture bin
   cp "$ROOT/skills/worker/SKILL.md" "$d/repo/skills/worker/"
   printf 'vendor: mock\nfallback:\n  - mock\nproject:\n  check: true\n' > config.yaml

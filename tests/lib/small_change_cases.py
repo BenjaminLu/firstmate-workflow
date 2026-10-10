@@ -32,6 +32,7 @@ import autopilot_merge_path as merge_path
 from ste_cases import card
 from fm_spec_pins import Pins
 import fm_lifeline
+from fm_merge_details import CAUTION
 
 A, PR, HEAD, BASE, CHECKS = fixture.A, fixture.PR, fixture.HEAD, fixture.BASE, fixture.CHECKS
 REASON = {'en': 'The suite needs one more case.', 'zh-TW': '測試套件需要多一個案例。'}
@@ -877,12 +878,17 @@ class MergeCard(Engine, unittest.TestCase):
         request = self.card_requests()[index]
         return Path(request[request.index('--details') + 1])
 
-    def assert_disclosed(self, path, status_en, status_tw, base_notes, base_questions):
+    def assert_disclosed(self, path, status_en, status_tw, base_notes, base_questions, cautions=1):
         details = json.loads(path.read_text())
         for lang, status, question in (('en', status_en, 'Do you accept the small changes listed in the notes?'),
                                        ('zh-TW', status_tw, '你接受備註列出的小改動嗎？')):
             loc = details[lang]
-            self.assertEqual(len(loc['notes']), base_notes + 1)
+            # A card built from the dispatch card, with no reviewed merge card,
+            # carries the "Not reviewed for readability" caution (T-270);
+            # authored details carry none.
+            found = sum(1 for n in loc['notes'] if n['text'] == CAUTION[lang])
+            self.assertEqual(found, cautions)
+            self.assertEqual(len(loc['notes']), base_notes + cautions + 1)
             self.assertEqual(len(loc['questions']), base_questions + 1)
             note = loc['notes'][-1]
             self.assertEqual(note['kind'], 'caution')
@@ -942,7 +948,7 @@ class MergeCard(Engine, unittest.TestCase):
         self.gate_result(0)
         self.assertEqual(authored.read_bytes(), original)
         self.assertEqual(self.requested(), self.built_path())
-        self.assert_disclosed(self.built_path(), 'not checked by the review', '審查未確認', 1, 1)
+        self.assert_disclosed(self.built_path(), 'not checked by the review', '審查未確認', 1, 1, cautions=0)
 
     def test_disclosure_that_does_not_fit_raises_details_attention(self):
         for name, kwargs, failure in (('12 notes', dict(notes=12), 'en.notes: expected 1-12 items'),
@@ -1068,7 +1074,7 @@ class MergeCard(Engine, unittest.TestCase):
         request = self.requests[0]
         path = Path(request[request.index('--details') + 1])
         self.assertEqual(path, self.state / 'decision-details-built/D-alpha-T001-2.json')
-        self.assert_disclosed(path, 'not checked by the review', '審查未確認', 1, 1)
+        self.assert_disclosed(path, 'not checked by the review', '審查未確認', 1, 1, cautions=0)
 
     def test_record_after_gate_failure_starts_new_gate_on_same_head(self):
         self.pilot.advance(PR, CHECKS, [])

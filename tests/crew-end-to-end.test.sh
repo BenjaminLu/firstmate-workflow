@@ -47,6 +47,7 @@ mkdir -p "$r/bin" "$r/design/tasks" "$r/state" "$r/skills/worker" "$r/skills/rev
 cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$r/bin/"; project_storage_fixture "$r/bin/"
 cp -r "$ROOT/bin/adapters" "$r/bin/"
 cp -R "$ROOT/bin/lib" "$r/bin/"   # the lifeline a round's runner holds (T-151)
+cp -R "$ROOT/i18n" "$r/"   # the glossary the pull-request renderer reads (T-270)
 cp "$ROOT/board/server.ts" "$r/board/"
 cp "$ROOT/skills/worker/SKILL.md" "$r/skills/worker/"
 cp "$ROOT/skills/reviewer/SKILL.md" "$r/skills/reviewer/"

@@ -291,6 +291,66 @@ class ExternalReviews(unittest.TestCase):
         self.collect()
         with self.assertRaises(ValueError): project(self.store,self.home,'org/app',9,HEAD,self.policy,'worker')
         self.assertTrue(any(r['kind']=='external-verdict' for r in self.store.records()))
+    def test_thread_reply_lint_is_advisory_and_keeps_markers(self):
+        # T-270: a reply that breaks the plain-writing checks is still posted,
+        # unchanged, and the findings reach firstmate's log.
+        self.policy['post']='threads'; self.data['threads']=[self.thread(True)]
+        self.data['reviews'][0]=self.review(1,'R2D2-im','CHANGES_REQUESTED',OLD)
+        self.collect()
+        body='Fixed All13 in kind/purpose/chosen for the round.\nSWEPT:T-140 every reply'
+        project(self.store,self.home,'org/app',9,HEAD,self.policy,'worker',
+                replies=[dict(finding='thread1',commit=HEAD,language='en',body=body)])
+        calls=self.mutations()
+        self.assertEqual(len(calls),1)
+        self.assertTrue(calls[0]['body']['body'].startswith(body+'\n\n'), 'the reply is posted unchanged')
+        log=[json.loads(x) for x in (self.home/'state/runtime/plain-writing.jsonl').read_text().splitlines()]
+        found={(f['check'],f['match']) for row in log if row['source']=='external-thread-reply' for f in row['findings']}
+        self.assertIn(('glued-number','All13'),found)
+        self.assertIn(('slash-chain','kind/purpose/chosen'),found)
+        self.assertIn(('unexplained-term','round'),found)
+    def test_summary_projection_is_plain_and_carries_no_review_text(self):
+        self.policy['post']='summary'; self.collect()
+        project(self.store,self.home,'org/app',9,HEAD,self.policy,'reviewer')
+        body=self.mutations()[0]['body']['body']
+        self.assertEqual(body, f'Firstmate finished the reviewer step at commit {HEAD}. The review details and evidence '
+                               "stay in firstmate's private records. This comment reports progress only; it does not approve a merge.")
+        self.assertNotIn('fm-merge-card', body)
+    MERGE_CARD_SENTINEL='PRIVATE-MERGE-CARD-PROSE'
+    def merge_card_texts(self):
+        block='```json fm-merge-card\n{"en": {"title": "'+self.MERGE_CARD_SENTINEL+'"}}\n```\n'
+        return [('closed','Fixed the bounds.\n'+block+'APPROVE:T-140'),
+                ('duplicate','Fixed the bounds.\n'+block+block+'APPROVE:T-140'),
+                ('unclosed','Fixed the bounds.\n```json fm-merge-card\n{"en": {"title": "'+self.MERGE_CARD_SENTINEL+'"}}\nAPPROVE:T-140')]
+    def check_local_only(self, text, posted):
+        # T-270 Change 11: local evidence keeps the block; no public projection carries it.
+        self.store.append('verdict',1,'reviewer',HEAD,text,verdict='APPROVE',provenance={'level':'legacy'})
+        fresh=Store(self.home/'state','app','T-140',external=True)
+        self.assertTrue(any(self.MERGE_CARD_SENTINEL in r.get('text','') for r in fresh.records() if r['kind']=='verdict'),
+                        'local evidence keeps the merge card')
+        self.assertNotIn(self.MERGE_CARD_SENTINEL,posted)
+        self.assertNotIn('fm-merge-card',posted)
+        self.assertIn('Fixed the bounds.',posted)
+    def test_comment_projection_excludes_merge_card_blocks(self):
+        self.policy['post']='comments'; self.save()
+        for name,text in self.merge_card_texts():
+            with self.subTest(block=name):
+                before=len(self.mutations())
+                project(self.store,self.home,'org/app',9,HEAD,self.policy,'reviewer',text=text)
+                calls=self.mutations()[before:]
+                self.assertEqual(1,len(calls))
+                self.check_local_only(text,calls[0]['body']['body'])
+    def test_thread_reply_projection_excludes_merge_card_blocks(self):
+        self.policy['post']='threads'; self.data['threads']=[self.thread(True)]
+        self.data['reviews'][0]=self.review(1,'R2D2-im','CHANGES_REQUESTED',OLD)
+        self.collect()
+        for (name,text),commit in zip(self.merge_card_texts(),('d'*40,'e'*40,'f'*40)):
+            with self.subTest(block=name):
+                before=len(self.mutations())
+                project(self.store,self.home,'org/app',9,HEAD,self.policy,'reviewer',
+                        replies=[dict(finding='thread1',commit=commit,language='en',body=text)])
+                calls=self.mutations()[before:]
+                self.assertEqual(1,len(calls))
+                self.check_local_only(text,calls[0]['body']['body'])
 
 unittest.main(argv=['external-reviews'], verbosity=2)
 PY

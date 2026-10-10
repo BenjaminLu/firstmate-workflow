@@ -458,6 +458,8 @@ destroy_fixture_build() {   # destroy_fixture_build <dir>
     cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
        "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-project.sh" bin/ || exit 1
     cp -r "$ROOT/bin/adapters" "$ROOT/bin/lib" bin/ || exit 1
+    # T-270: the frozen code root carries the glossary; a self round refuses without it.
+    cp -r "$ROOT/i18n" . || exit 1
     cp "$ROOT/tests/fixtures/hostile-adapter/bin/adapters/mock-hostile.sh" bin/adapters/ || exit 1
     chmod +x bin/adapters/mock-hostile.sh || exit 1
     cp "$ROOT/skills/worker/SKILL.md" "$wskill/" || exit 1

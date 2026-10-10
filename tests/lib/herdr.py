@@ -352,7 +352,8 @@ class EntrypointsFixture(unittest.TestCase):
         cls.source_tmp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.source_tmp.cleanup)
         cls.source = Path(cls.source_tmp.name)
-        for name in ('bin', 'skills'):
+        # i18n/ carries the glossary the pull-request renderer reads (T-270).
+        for name in ('bin', 'skills', 'i18n'):
             shutil.copytree(root / name, cls.source / name)
 
     def setUp(self):
@@ -360,7 +361,7 @@ class EntrypointsFixture(unittest.TestCase):
         self.repo = Path(self.tmp.name)
         # Link immutable code from the one class copy. The two source files
         # that entrypoint cases intentionally overwrite get private copies.
-        for name in ('bin', 'skills'):
+        for name in ('bin', 'skills', 'i18n'):
             shutil.copytree(self.source / name, self.repo / name, copy_function=os.link)
         for name in ('bin/fm-gate.sh', 'bin/adapters/codex.sh'):
             (self.repo / name).unlink()

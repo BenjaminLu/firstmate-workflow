@@ -13,7 +13,7 @@ fixture() {
   cp "$ROOT/bin/fm.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
     "$ROOT/bin/fm-ready.sh" "$ROOT/bin/fm-diagram.sh" "$ROOT/bin/fm-emit.sh" "$d/bin/"
   cp -R "$ROOT/bin/lib" "$d/bin/"
-  cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
+  cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$ROOT/i18n/glossary.json" "$d/i18n/"
   printf '# Worker\nOriginal instructions.\n' > "$d/skills/worker/SKILL.md"
   printf '{"id":"SK-009","depends_on":[],"title":"Skill proposal"}\n' > "$d/design/tasks/SK-009.json"
   printf 'concurrency: 3\n' > "$d/config.yaml"
@@ -25,6 +25,15 @@ assert_eq 0 "$?" 'self-update raises a complete card'
 card="$d/state/pending/D-SK-010.json"
 assert_ok "jq -e 'all(.details.en,.details[\"zh-TW\"]; all(.title,.explanation,.before,.after,.outcome; type == \"string\" and length > 0) and all(.options.A,.options.B,.options.C; all(.description,.pros,.cons; type == \"string\" and length > 0)))' '$card'" 'every field and A/B/C tradeoff exists in both languages'
 assert_eq 'State the evidence before editing.' "$(jq -r '.details.en.explanation' "$card")" 'card preserves the proposal reason'
+# T-270 Change 8: the real self-update card carries why, how and glossary.
+assert_eq 'State the evidence before editing.' "$(jq -r '.details.en.why[0].text' "$card")" 'self-update card states why in English'
+assert_eq '提案記錄的原因：State the evidence before editing.' "$(jq -r '.details["zh-TW"].why[0].text' "$card")" 'self-update card states why in Traditional Chinese'
+assert_ok "jq -e 'all(.details.en,.details[\"zh-TW\"]; (.how|length) == 2 and all(.how[]; .kind == \"fact\" and (.text|length) > 0) and (.glossary|type) == \"array\")' '$card'" 'self-update card states how and lists its glossary in both languages'
+d2="$(fixture glossary)"
+FM_ROOT="$d2" bash "$d2/bin/fm.sh" self-update --skill worker --why 'Name the round in each note.' > "$d2/out" 2>&1
+assert_eq 0 "$?" 'self-update raises a card whose reason uses a glossary term'
+assert_eq 'round' "$(jq -r '.details.en.glossary | map(.id) | join(",")' "$d2/state/pending/D-SK-010.json")" 'self-update lists the term its reason uses'
+assert_contains "$(jq -r '.details.en.glossary[0].text' "$d2/state/pending/D-SK-010.json")" 'A round is' 'the raised card keeps the glossary explanation'
 assert_contains "$(jq -r '.details.en.title' "$card")" worker 'card names the proposed skill'
 assert_contains "$(jq -r '.details.en.before' "$card")" 'not provided' 'missing before text is disclosed'
 assert_contains "$(jq -r '.details.en.after' "$card")" 'not provided' 'missing proposed text is disclosed'
@@ -34,7 +43,8 @@ assert_eq '修訂：由船長指出要改什麼，firstmate 修訂提案後重�
 assert_ok "jq -e 'all(.details.en.options.C[],.details[\"zh-TW\"].options.C[]; type == \"string\" and (test(\"same decision id|相同決策編號\"; \"i\") | not))' '$card'" 'revise makes no same-id promise in either language'
 assert_eq '# Worker
 Original instructions.' "$(cat "$d/skills/worker/SKILL.md")" 'proposal does not edit the skill'
-jq '.details' "$card" > "$d/details.json"
+# Copying a raised card converts its stored glossary objects back to ids.
+jq '.details | .en.glossary |= map(.id) | ."zh-TW".glossary |= map(.id)' "$card" > "$d/details.json"
 # All command helpers disable desktop notification explicitly.
 request() { HERDR_ENV=0 FM_ROOT="$d" bash "$d/bin/fm-decide.sh" --request "$1" --task "$2" --details "$d/details.json"; }
 request D-SK-009 SK-009 > "$d/request" 2>&1

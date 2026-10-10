@@ -155,4 +155,21 @@ class Lifecycle(LifecycleFixture):
         self.assertEqual('original', (snap / 'bin/example.sh').read_text())
         self.assertIn('bin/example.sh', json.loads((snap / 'manifest.json').read_text()))
 
+    def test_snapshot_carries_i18n(self):
+        # T-270: frozen code reads the glossary from its own root, so the
+        # snapshot carries i18n/ and lists it in the manifest.
+        (self.root / 'bin').mkdir(); (self.root / 'skills').mkdir(); (self.root / 'i18n').mkdir()
+        terms = self.root / 'i18n/glossary.json'; terms.write_text('{"schema": 1, "terms": []}')
+        snap = m.snapshot(self.root)
+        terms.write_text('changed')
+        self.assertEqual('{"schema": 1, "terms": []}', (snap / 'i18n/glossary.json').read_text())
+        self.assertIn('i18n/glossary.json', json.loads((snap / 'manifest.json').read_text()))
+
+    def test_snapshot_without_i18n(self):
+        (self.root / 'bin').mkdir(); (self.root / 'skills').mkdir()
+        (self.root / 'bin/example.sh').write_text('original')
+        snap = m.snapshot(self.root)
+        self.assertFalse((snap / 'i18n').exists())
+        self.assertEqual(['bin/example.sh'], list(json.loads((snap / 'manifest.json').read_text())))
+
 unittest.main(argv=['herdr', *os.environ.get('FM_TEST_CASES','').split()], verbosity=2)

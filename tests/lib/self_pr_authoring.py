@@ -4,7 +4,7 @@ import copy
 import gzip
 import hashlib
 import importlib.util
-import json
+import json, re
 from pathlib import Path
 import sys
 import unittest
@@ -622,7 +622,7 @@ class StockPublication(unittest.TestCase):
                         PYTHONDONTWRITEBYTECODE='1', FM_SEEN=str(self.home),
                         FM_SESSION_PID=str(os.getpid()))
         (self.home/'gitconfig').write_text('')
-        for directory in ('bin', 'skills'):
+        for directory in ('bin', 'skills', 'i18n'):
             shutil.copytree(ROOT/directory, self.repo/directory,
                             ignore=shutil.ignore_patterns('__pycache__'))
         self.run_ok('git', 'init', '-q', '--bare', '-b', 'main', str(self.home/'remote.git'))
@@ -812,6 +812,40 @@ else: print('[]')
         envelope = json.loads(result.stdout)
         self.assertEqual(envelope['sources'], pr.source_digests(pin['snapshots']))
         self.assertEqual(envelope['pin_sha256'], pr.pin_digest(pin))
+
+    def test_new_draft_with_a_glued_number_is_refused_at_sealing(self):
+        # T-270: sealing a new pull-request draft blocks glued numbers.
+        self.draft['problem'] = 'Self PR titles copy All13 task titles.'
+        (self.state/'pr-authoring/T-259.json').write_text(json.dumps(self.draft))
+        self.assertIn('glued-number "All13"', self.assert_refused().stderr)
+
+    def test_old_sealed_envelope_renders_and_previews_with_new_sections(self):
+        # An envelope sealed before T-270 keeps rendering: only structure and
+        # binding are checked, and the body gains Why, How and Glossary.
+        self.pin_create()
+        helper = str(self.repo/'bin/lib/fm_self_pr.py')
+        sealed = self.subprocess.run([sys.executable, helper, 'seal', '--task', 'T-259'],
+                                     env=self.pin_env, capture_output=True, text=True)
+        self.assertEqual(sealed.returncode, 0, sealed.stderr)
+        path = self.state/'pr-authoring/envelopes/T-259.json'; envelope = json.loads(path.read_text())
+        envelope['draft']['problem'] = 'Old prose kept All13 glued.'
+        path.write_text(json.dumps(envelope))
+        draft = self.state/'pr-authoring/T-259.json'
+        draft.write_text(json.dumps(dict(json.loads(draft.read_text()), problem='Old prose kept All13 glued.')))
+        rendered = self.subprocess.run([sys.executable, helper, 'render', '--task', 'T-259', '--head', 'a'*40],
+                                       env=self.pin_env, capture_output=True, text=True)
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        body = json.loads(rendered.stdout)['body']
+        self.assertTrue(body.startswith('## Why\n\nOld prose kept All13 glued.\n\n## How\n\n'), body[:120])
+        for text in ('## Problem and result', 'Required CI: pending', 'Proposed approach', '## Glossary'):
+            self.assertIn(text, body)
+        preview = self.subprocess.run([sys.executable, helper, 'preview', '--task', 'T-259', '--head', 'a'*40,
+                                       '--pr', '42', '--old-title-sha256', '0'*64, '--old-body-sha256', '0'*64],
+                                      env=self.pin_env, capture_output=True, text=True)
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        # render and preview each stamp their own creation time; compare the rest.
+        stamp = lambda s: re.sub(r'Status at PR creation \([^)]*\)', 'Status at PR creation (T)', s)
+        self.assertEqual(stamp(body), stamp(json.loads(preview.stdout)['proposed']['body']))
 
     def test_existing_pin_needs_no_repin_for_prose(self):
         self.pin_create(); original = (self.state/'pins/T-259/1.json').read_bytes()

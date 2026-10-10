@@ -62,7 +62,7 @@ fm-protocol 6
 fm-ready 4
 fm-reconcile 4
 fm-restack 5
-fm-review 9
+fm-review 11
 fm-session 4
 fm-setup 3
 fm-worker 6"
@@ -102,6 +102,12 @@ total=0
 run_capped 6 bash "$ROOT/bin/fm-review.sh" --spec
 assert_eq "64" "$code" "fm-review --spec with no value is refused"
 assert_contains "$said" "--spec needs a value" "spec refusal reaches the value guard"
+# T-270 adds two value flags for the spec preflight: --card and --pr-authoring.
+for flag in --card --pr-authoring; do
+  run_capped 6 bash "$ROOT/bin/fm-review.sh" "$flag"
+  assert_eq "64" "$code" "fm-review $flag with no value is refused"
+  assert_contains "$said" "$flag" "fm-review $flag is named in the refusal"
+done
 while read -r name want; do
   [ -n "$name" ] || continue
   f="$ROOT/bin/$name.sh"
@@ -155,7 +161,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "124" "$total" "all 124 pinned flag cases, including the nine fm option cases, were exercised"
+assert_eq "126" "$total" "all 126 pinned flag cases, including the nine fm option cases, were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.

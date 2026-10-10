@@ -418,8 +418,22 @@ if [ "$MODE" = request ]; then
         echo 'fm-decide: change_points, door and check apply only to tracked merge cards; nothing was written' >&2; exit 65;
       }
     fi
+    # T-270: every card carries why, how and a glossary list and passes the
+    # plain-writing checks, for every kind, before anything is read or written.
+    [ -r "$HERE/lib/fm_ste.py" ] && [ -r "$HERE/lib/fm_plain.py" ] || {
+      echo "fm-decide: missing $HERE/lib/fm_ste.py or fm_plain.py; nothing was written" >&2; exit 70;
+    }
+    plain_error="$(mktemp)" || exit 70
+    python3 "$HERE/lib/fm_ste.py" check-plain "$DETAILS" >/dev/null 2> "$plain_error"
+    plain_rc=$?
+    if [ "$plain_rc" -ne 0 ]; then
+      echo "fm-decide: a card needs why, how and glossary, in plain words (skills/firstmate/plain-writing.md); nothing was written" >&2
+      cat "$plain_error" >&2; rm -f "$plain_error"
+      case "$plain_rc" in 64|65) exit "$plain_rc";; *) exit 70;; esac
+    fi
+    rm -f "$plain_error"
     ste='null'; ste_deferred=false
-    if jq -e 'any(.en,."zh-TW"; has("intent") or has("why") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table") or has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
+    if jq -e 'any(.en,."zh-TW"; has("intent") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table") or has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
       [ -r "$HERE/lib/fm_ste.py" ] || {
         echo "fm-decide: missing $HERE/lib/fm_ste.py; nothing was written" >&2; exit 70;
       }
@@ -573,6 +587,24 @@ PYWALK
       fi
       mv "$walk_attached" "$DETAILS"
     fi
+    # Store each glossary id as {id, term, text} for its locale, so the card
+    # keeps the explanation it had when it was raised.
+    glossary_details="$(mktemp)" || exit 70
+    python3 - "$HERE/lib" "$DETAILS" > "$glossary_details" <<'PYGLOSSARY' || { rm -f "$glossary_details"; exit 65; }
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import fm_plain
+try:
+    details = json.load(open(sys.argv[2], encoding='utf-8'))
+    glossary = fm_plain.load_glossary()
+    for lang in fm_plain.LOCALES:
+        details[lang]['glossary'] = fm_plain.expand(fm_plain.ids_of(details[lang]['glossary']), lang, glossary)
+except (ValueError, OSError, KeyError, TypeError) as error:
+    print('fm-decide: glossary expansion failed: ' + str(error), file=sys.stderr)
+    sys.exit(65)
+print(json.dumps(details, ensure_ascii=False))
+PYGLOSSARY
+    DETAILS_ORIGINAL="$DETAILS"; DETAILS="$glossary_details"
     payload="$(jq -cn --arg expected_head "$EXPECTED_HEAD" --argjson binding "$binding" --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
       --slurpfile gate_list "$(dirname "${BASH_SOURCE[0]}")/lib/fm_gates.json" \
       --arg purpose "$PURPOSE" --argjson ste "$ste" --arg project "$RECORD" --slurpfile details "$DETAILS" \
@@ -587,13 +619,14 @@ PYWALK
     if [ "${walk_enriched:-false}" = true ] && jq -e 'has("check_answer")' "$walk_spec" >/dev/null; then
       payload="$(jq --slurpfile spec "$walk_spec" '. + {check_answer:$spec[0].check_answer}' <<<"$payload")" || exit 65
     fi
-    (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || exit 65
+    (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || { rm -f "$glossary_details"; exit 65; }
     # after the pending file and before the event: the generator reads the file
     # it is drawing, and the event is what wakes anything watching
     draw
     emit --type decision_requested ${TASK:+--task "$TASK"} ${PR:+--pr "$PR"} ${RECORD:+--project "$RECORD"} \
          --en "$(jq -r '.en.title' "$DETAILS")" --tw "$(jq -r '."zh-TW".title' "$DETAILS")"
     notify "$(jq -r '."zh-TW".title' "$DETAILS")" "$RECORD"
+    rm -f "$glossary_details"; DETAILS="$DETAILS_ORIGINAL"
     printf '%s\n' "$PEND/$ID.json"
     exit 0
   fi

@@ -256,7 +256,7 @@ publish_wip_if_dirty() {
   _ckpt="${FM_CODE_ROOT:-$REPO}/bin/fm-checkpoint.sh"
   [ -x "$_ckpt" ] || _ckpt="$REPO/bin/fm-checkpoint.sh"
   if ! "$_ckpt" --dir "$tree" \
-       --message "checkpoint ($reason)" </dev/null; then
+       --message "Save unfinished work after the round stopped ($reason)" </dev/null; then
     echo "fm-worker: checkpoint push failed for $branch ($reason)" >&2
     return 1
   fi
@@ -1794,6 +1794,10 @@ note_landed() {   # note_landed <pr> <sha256>: found=0, absent=1, lookup failed=
   bodies="$(cd "$tree" && fm_gh_read "${GH:-${FM_GH:-gh}}" api "$endpoint" --paginate --jq '.[].body')" || return 2
   grep -Fq -- "<!-- fm-note sha256=$2 -->" <<<"$bodies"
 }
+plain_lint() {  # plain_lint <source> <text>: advisory plain-writing lint (T-270); never fails
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plain.py" lint - --source "$1" \
+    --log "$FM_STATE_DIR/runtime/plain-writing.jsonl" <<<"$2" >/dev/null 2>&1 || true
+}
 post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
@@ -1816,6 +1820,10 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   [ "$projection" = comments ] || return 0
   local body="$1" landed=0 retries=0 lookup_rc delay marker_hex
   local retry_delays=()
+  # Advisory only (T-270): plain-writing findings go to firstmate's log, and
+  # the note is posted whatever they say.
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plain.py" lint "$1" --source worker-note \
+    --log "$FM_STATE_DIR/runtime/plain-writing.jsonl" >/dev/null 2>&1 </dev/null || true
   if [ "$FM_EXTERNAL" = 0 ]; then
     marker_hex="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1")" || return 1
     body="$(scratch_new)" || return 1
@@ -2226,7 +2234,7 @@ fi || { echo "fm-worker: could not set the executable bit on a new script on $br
 # a failed record - relies on that. Left on the base with the rebuild
 # staged, the next round would take a pushed or refused commit for an
 # uncommitted round and rescue it as crashed work.
-commit_msg="$TASK: project work"
+commit_msg="$TASK: Save the round's changes"
 public_text=''
 if [ "$FM_EXTERNAL" = 0 ]; then
   commit_msg="$TASK: $(jq -r .title <<<"$spec")"
@@ -2263,6 +2271,9 @@ elif [ -n "${spec:-}" ] && [ -n "${FM_CODE_ROOT:-}" ]; then
 fi
 fm_private_stage "$tree" || exit 65
 rebuilt_head=''; commit_ok=0
+# Advisory only (T-270): the commit message's plain-writing findings go to
+# firstmate's log; the commit happens whatever they say.
+if [ "$rebuilt" = 1 ]; then plain_lint rebuilt-commit "$commit_msg"; else plain_lint round-commit "$commit_msg"; fi
 if [ "$rebuilt" = 1 ]; then
   # fm_git_commit (bin/fm-config.sh) is the identity rule, a refusal and
   # `commit -q -m`; this is the same rule and refusal, applied to
@@ -2375,7 +2386,7 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   draft_args=()
   if first_round_question; then draft_args=(--draft); fi
   pr_body="Dispatched by firstmate for $TASK. Acceptance is in design/tasks/$TASK.json."
-  pr_title="$TASK: project work"
+  pr_title="$TASK: Save the round's changes"
   if [ "$FM_EXTERNAL" = 0 ]; then
     self_pr_repository="$(fm_project_get "${FM_PROJECT:-firstmate-workflow}" github "$FM_CONFIG" 2>/dev/null || true)"
     self_pr_origin="$(git -C "$FM_TARGET_ROOT" config --get remote.origin.url 2>/dev/null || true)"
@@ -2433,8 +2444,9 @@ else
     if current_pr="$(fm_github pr view "$num" --json title,headRefName 2>/dev/null)" &&
        jq -e 'type == "object" and (.title | type == "string") and (.headRefName | type == "string")' \
          <<<"$current_pr" >/dev/null 2>&1; then
-      if jq -e --arg title "$TASK: project work" --arg branch "$branch" \
-           '.title == $title and .headRefName == $branch' <<<"$current_pr" >/dev/null; then
+      # Both the fallback title before T-270 and the current one are untouched.
+      if jq -e --arg old "$TASK: project work" --arg title "$TASK: Save the round's changes" --arg branch "$branch" \
+           '(.title == $title or .title == $old) and .headRefName == $branch' <<<"$current_pr" >/dev/null; then
         if ! fm_github pr edit "$num" --title "$(jq -r .title <<<"$public_text")" \
              --body "$(jq -r .body <<<"$public_text")" >/dev/null 2>&1; then
           echo 'fm-worker: could not update the public PR title / 無法更新公開 PR 標題' >&2
@@ -2489,10 +2501,15 @@ if [ "$rebuilt" = 1 ]; then
       echo 'fm-worker: could not retain the private rebuild note / 無法保留私密重建記錄' >&2
     fi
   else
-    if ! fm_github pr comment "$num" --body "$(printf '%s\n' \
-         "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
+    # This runs after the round: the worker has resolved every conflict, and
+    # the rebuilt commit is already published (unresolved markers refuse it).
+    rebuild_comment="$(printf '%s\n' \
+         "The firstmate launcher rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`, because the branch no longer rebased onto it cleanly." \
+         "The worker resolved any conflicts listed below in this round. The pull request is ready for CI." \
          "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
-         "Conflicts handed to the worker: $handed")" \
+         "Conflicts handed to the worker: $handed")"
+    plain_lint rebuild-comment "$rebuild_comment"
+    if ! fm_github pr comment "$num" --body "$rebuild_comment" \
          >/dev/null 2>&1 </dev/null; then
       echo "fm-worker: could not note the rebuild on #$num; the previous head was ${rebuild_prev}" >&2
     fi

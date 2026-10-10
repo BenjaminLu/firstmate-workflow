@@ -771,6 +771,8 @@ class OwnerChecks(AdoptionRounds):
                     shutil.copytree(ROOT/directory, self.engine/directory)
             details = {lang: dict(title='Continue feature', explanation='Read the change',
                        before='Work in progress', after='Work is ready', outcome='Choice recorded',
+                       why=[dict(kind='fact', text='The work is ready.')],
+                       how=[dict(kind='fact', text='The card names the change.')], glossary=[],
                        options={key: dict(description='Review work', pros='Read changes', cons='Takes time')
                                 for key in ('A', 'B', 'C')}) for lang in ('en', 'zh-TW')}
             path = self.scratch/'details.json'; path.write_text(json.dumps(details))

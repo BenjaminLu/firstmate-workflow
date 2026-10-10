@@ -242,6 +242,17 @@ class MechanicalLoop:
         except ERRORS as error:
             self.branch_failure('event-' + kind, pr['number'], pr['head']['sha'], task, str(error))
 
+    def readiness(self, task, pr):
+        """The signed six-gate record for this head; its verdict supplies the merge card."""
+        from fm_evidence import Store
+        try:
+            records = Store(str(self.state), self.ctx['evidence_project'], task,
+                            external=self.ctx['external']).records()
+        except (OSError, ValueError):
+            return None
+        return next((r for r in reversed(records) if r.get('kind') == 'readiness'
+                     and r.get('head') == pr['head']['sha'] and str(r.get('pr')) == str(pr['number'])), None)
+
     def verdict(self, task):
         from fm_evidence import Store
         rows = Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external']).verdicts()
@@ -758,12 +769,17 @@ class MechanicalLoop:
                 try:
                     if self.ctx['external']:
                         raise ValueError('external project: author the details')
-                    content = build(self.state, owner, task, pr['number'])
+                    content = build(self.state, owner, task, pr['number'], readiness=self.readiness(task, pr),
+                                    head=head, root=self.ctx['target'],
+                                    evidence_project=self.ctx['evidence_project'],
+                                    env=dict(os.environ, **self.adoption_env()))
                     # Built output is not an input to advance's fingerprint.
                     details = self.state / 'decision-details-built' / (ident + '.json')
                     details.parent.mkdir(exist_ok=True)
                     save_json(details, content)
-                except ValueError as error:
+                except (ValueError, TypeError, KeyError) as error:
+                    # Any composition failure asks firstmate for details;
+                    # none crashes the loop.
                     reason = 'external project: author the details' if self.ctx['external'] else str(error)
                     reason_tw = '外部專案：請撰寫決策卡內容' if self.ctx['external'] else str(error)
                     self.attention('details', task, pr,

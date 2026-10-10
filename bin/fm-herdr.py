@@ -606,12 +606,15 @@ def snapshot(root):
     root = Path(root).resolve()
     base = root / 'state/snapshots'; base.mkdir(parents=True, exist_ok=True)
     dest = Path(tempfile.mkdtemp(prefix='code-', dir=base))
+    # i18n/ carries the glossary and the zh-CN table that frozen code reads
+    # (T-270); a source without it still snapshots.
+    folders = ('bin', 'skills', 'i18n')
     def inventory(where):
         return {str(p.relative_to(where)): hashlib.sha256(p.read_bytes()).hexdigest()
-                for folder in ('bin', 'skills') for p in (where / folder).rglob('*')
+                for folder in folders for p in (where / folder).rglob('*')
                 if p.is_file() and '__pycache__' not in p.parts}
     before = inventory(root)
-    for folder in ('bin', 'skills'):
+    for folder in folders:
         if (root / folder).exists():
             shutil.copytree(root / folder, dest / folder, ignore=shutil.ignore_patterns('__pycache__'))
     if before != inventory(dest) or before != inventory(root):

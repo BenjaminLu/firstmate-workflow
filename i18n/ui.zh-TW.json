@@ -333,5 +333,7 @@
   "walkReasonInvalidBlockChanges": "區塊變更無效",
   "walkReasonProvesOnCodeBlock": "程式碼區塊帶有 proves",
   "walkReasonInvalidProvesTarget": "proves 目標無效",
-  "walkReasonWalkCheckFailed": "導覽檢查失敗"
+  "walkReasonWalkCheckFailed": "導覽檢查失敗",
+  "card.how": "做法",
+  "card.glossary": "詞彙表"
 }

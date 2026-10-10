@@ -13,6 +13,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 e="$(safe_tmpdir)"; mkdir -p "$e/bin" "$e/state/pending" "$e/design" "$e/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-ready.sh" "$e/bin/"; project_storage_fixture "$e/bin/"
 cp -R "$ROOT/bin/lib" "$e/bin/"   # the lifeline the board starts merges and rounds under (T-151)
+mkdir -p "$e/i18n"; cp "$ROOT/i18n/glossary.json" "$e/i18n/"   # the glossary fm-decide reads (T-270)
 cp "$ROOT/board/server.ts" "$e/board/"
 cp "$ROOT/board/public/index.html" "$e/board/public/"
 printf '#!/usr/bin/env bash\necho refused\nexit 1\n' > "$e/bin/fm-merge.sh"
@@ -239,7 +240,8 @@ card4() {   # card4 <id> <task> <option keys, e.g. ABCD>: raise a choice card th
   jq -n --arg keys "$3" '
     ($keys | split("") | map({key: ., value: {description: ("do " + .), pros: "p", cons: "c"}})
       | from_entries) as $o
-    | {title: "judge", explanation: "e", before: "b", after: "a", outcome: "o", options: $o} as $l
+    | {title: "judge", explanation: "e", before: "b", after: "a", outcome: "o", options: $o,
+       why: [{kind: "fact", text: "e"}], how: [{kind: "fact", text: "a"}], glossary: []} as $l
     | {en: $l, "zh-TW": $l}' > "$e/details-$1.json"
   FM_ROOT="$e" FM_PROJECT='' bash "$e/bin/fm-decide.sh" --request "$1" --task "$2" \
     --details "$e/details-$1.json" --repo "$e" > "$e/decide-$1.out" 2>&1

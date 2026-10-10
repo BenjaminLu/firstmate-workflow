@@ -256,7 +256,7 @@ class FormatTests(unittest.TestCase):
         p = self.worker(prefix='fm_conventions() { return 65; }')
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stderr, 'fm-worker: cannot read the PR format; using the generic title\n')
-        self.assertEqual(p.stdout, 'T-051: project work\nT-051: project work\nTask T-051. Captain acceptance and evidence are retained privately.')
+        self.assertEqual(p.stdout, "T-051: Save the round's changes\nT-051: Save the round's changes\nTask T-051." ' Captain acceptance and evidence are retained privately.')
 
     def test_shell_preflight_format_failure_and_self_guard(self):
         source = (ROOT / 'bin/lib/fm-spec-preflight.sh').read_text()

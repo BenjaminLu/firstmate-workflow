@@ -81,6 +81,9 @@ The captain's own rules, restated here where they are easy to find:
 7. A merge happens only through a board card; a chat order to merge counts
    only inside an explicit, time-boxed authorisation the captain gives in
    chat, naming the card, and only one merge at a time.
+8. Write every spec, captain card, pull-request text and commit message by
+   [plain-writing.md](plain-writing.md). This is a rule of the workflow, not
+   a habit of one session (captain, 2026-10-09).
 
 ## Start with evidence
 
@@ -1620,6 +1623,37 @@ that both edit §15.10 itself can still meet at the end of the file. Every other
 home is mid-file. Existing specs that list design/design.md without naming a
 section are checked at their next preflight; a SPEC-OK already recorded for a
 spec's exact current bytes stays valid.
+
+### Plain writing in specs and cards (T-270)
+
+Write every spec, captain card, pull-request draft and commit message by
+[plain-writing.md](plain-writing.md), for a backend engineer who has never seen
+this repository. Each card's details carry, in en and zh-TW, a nonempty `why`
+list and a nonempty `how` list of `{kind, text}` items and a `glossary` list of
+ids from `i18n/glossary.json` for every term the card text uses.
+`bin/fm-decide.sh --request` runs `bin/lib/fm_ste.py check-plain` on every card
+and refuses one that lacks these or uses a term it does not list; it stores
+each id as `{id, term, text}`. When you copy an existing card, convert its
+stored glossary objects back to ids first.
+
+Review a dispatch or repin card and the pull-request draft in the same
+preflight as the spec: `bin/fm-review.sh --spec-preflight --task <task> --spec
+<file> --card <details.json> --pr-authoring state/pr-authoring/<task>.json`.
+The reviewer may return improved wording in `fm-reworded-spec`,
+`fm-reworded-card` and `fm-reworded-pr-authoring` blocks. The launcher prints
+`fm-review: reworded <kind> <path> sha256 <sha>` for each accepted rewrite.
+Put exactly those bytes in the task file, in the card request and in the
+pull-request draft; a receipt with a spec rewrite authorizes only the
+rewritten bytes. Request a dispatch or repin card with the reviewed card bytes.
+A `rewrite-refused` outcome exits 65 like `SPEC-GAPS`: fix the reason or the
+wording yourself and preflight again. The reviewer never rewrites
+`public_title`, `public_summary` or `public_changes`; fix a readability gap in
+those fields yourself.
+
+A merge card built by the autopilot takes its title, why, how, notes and
+glossary from the `fm-merge-card` block of the review that the six-gate
+readiness record selected. Without a usable block it falls back to the
+dispatch card and adds the caution "Not reviewed for readability".
 
 ## Small changes (T-277)
 

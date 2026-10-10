@@ -156,6 +156,7 @@ mkdir -p "$recover/bin" "$recover/design/tasks" "$recover/skills/reviewer" "$rec
 cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"; project_storage_fixture "$recover/bin/"
 cp -r "$ROOT/bin/adapters" "$recover/bin/"
 cp -R "$ROOT/bin/lib" "$recover/bin/"   # the lifeline a round's runner holds (T-151)
+cp -R "$ROOT/i18n" "$recover/"   # the glossary the comment lint reads (T-270)
 binding_service_fixture "$recover"
 cp "$ROOT/skills/reviewer/SKILL.md" "$recover/skills/reviewer/"
 printf '{"id":"T-Z","title":"z","scope":["src/**"],"depends_on":[],"acceptance":["a"]}\n' > "$recover/design/tasks/T-Z.json"
@@ -832,6 +833,7 @@ class AskClarification(unittest.TestCase):
                         GH_REPO='fixture/project', FM_REVIEW_CI_WAIT='0', FM_GH=str(self.tools / 'gh'))
         shutil.copytree(root / 'bin', self.repo / 'bin')
         shutil.copytree(root / 'skills', self.repo / 'skills')
+        shutil.copytree(root / 'i18n', self.repo / 'i18n')
         (self.repo / 'design/tasks').mkdir(parents=True)
         (self.repo / 'design/tasks/T-Z.json').write_text(json.dumps(dict(
             id='T-Z', title='fixture', scope=['src/**'], acceptance=['pinned review'])))
