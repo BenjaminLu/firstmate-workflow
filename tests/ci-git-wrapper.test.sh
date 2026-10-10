@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # T-280: on Linux, bin/ci.sh, bin/fm-failfirst.sh and the two workflow steps
 # that run suites directly put fm_git_quiet's git first on PATH, so no test
-# repository starts Git's background maintenance - which can still hold
-# objects/maintenance.lock when the test removes the repository. Suites
+# repository leaves Git's automatic maintenance running in the background -
+# where it can still hold objects/maintenance.lock when the test removes the
+# repository. Maintenance itself stays on and runs in the foreground. Suites
 # drop every GIT_* variable, so the probes below do too: only PATH reaches
 # them.
 set -uo pipefail
@@ -21,7 +22,7 @@ isolate_tmpdir
 unwrapped=''
 IFS=: read -r -a path_dirs <<< "$PATH"
 for dir in "${path_dirs[@]}"; do
-  if [ -f "$dir/git" ] && grep -q 'maintenance.auto=false' "$dir/git" 2>/dev/null; then continue; fi
+  if [ -f "$dir/git" ] && grep -q 'maintenance\.auto' "$dir/git" 2>/dev/null; then continue; fi
   unwrapped="${unwrapped:+$unwrapped:}$dir"
 done
 PATH="$unwrapped"; export PATH
@@ -48,11 +49,19 @@ r="$(mktemp -d "${TMPDIR:-/tmp}/probe.XXXXXX")"
 git init -q "$r"; git -C "$r" config user.email a@b.c; git -C "$r" config user.name t
 echo a > "$r/a"; git -C "$r" add a
 {
-  printf 'maintenance=%s\n' "$(cd "$r" && git config --get maintenance.auto)"
+  printf 'detach=%s\n' "$(cd "$r" && git config --get maintenance.autoDetach)"
+  printf 'auto=%s\n' "$(cd "$r" && git config --get maintenance.auto)"
   printf 'gc=%s\n' "$(cd "$r" && git config --get gc.auto)"
-  GIT_TRACE2_EVENT="$r.trace" git -C "$r" commit -qm 'two words'
-  printf 'trace=%s:%s\n' "$([ -s "$r.trace" ] && echo written)" \
-    "$(grep -c '"event":"child_start".*"argv":\["git","maintenance"' "$r.trace")"
+  git -C "$r" commit -qm 'two words'
+  # Right after the commit returns: any `git maintenance` still running in
+  # this repository, and the lock it holds.
+  top="$(cd "$r" && pwd -P)"; live=0
+  while read -r pid args; do
+    case "$args" in "git maintenance"*) ;; *) continue ;; esac
+    cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+    case "$cwd" in "$top"|"$top"/*) live=$((live + 1)) ;; esac
+  done < <(ps -eo pid=,args=)
+  printf 'live=%s lock=%s\n' "$live" "$([ -e "$r/.git/objects/maintenance.lock" ] && echo yes || echo no)"
   printf 'subject=%s\n' "$(git -C "$r" log -1 --format=%s)"
   printf 'short=%s\n' "$(cd "$r" && git -c core.abbrev=12 rev-parse --short HEAD)"
   printf 'realshort=%s\n' "$(cd "$r" && "$real" -c core.abbrev=12 rev-parse --short HEAD)"
@@ -70,9 +79,9 @@ ci_out="$(FM_TEST_OS=Linux PATH="$osbin:$PATH" FM_ROOT="$q" PROBE_OUT="$probe_ou
 [ -s "$probe_out" ] || printf '%s\n' "$ci_out" | tail -n 20
 seen() { sed -n "s/^$1=//p" "$probe_out" 2>/dev/null; }
 
-assert_eq "false" "$(seen maintenance)" "linux ci: maintenance.auto is false"
-assert_eq "0" "$(seen gc)" "linux ci: gc.auto is 0"
-assert_eq "written:0" "$(seen trace)" "linux ci: a commit starts no maintenance"
+assert_eq "false" "$(seen detach)" "linux ci: maintenance.autoDetach is false"
+assert_eq "auto= gc=" "auto=$(seen auto) gc=$(seen gc)" "linux ci: automatic maintenance is not turned off"
+assert_eq "0 no" "$(sed -n 's/^live=\([0-9]*\) lock=/\1 /p' "$probe_out" 2>/dev/null)" "linux ci: no maintenance outlives a commit"
 assert_eq "two words" "$(seen subject)" "wrapper: arguments pass through"
 assert_eq "$(seen realshort)" "$(seen short)" "wrapper: arguments pass through (-c and --short)"
 assert_ne "" "$(seen short)" "wrapper: rev-parse --short printed a name"
@@ -109,7 +118,7 @@ git -C "$d" config user.email a@b.c; git -C "$d" config user.name t
 mkdir -p "$d/bin" "$d/tests"
 printf 'project:\n  tests:\n    - tests/**\n  test: case {file} in *.test.sh) bash {file} ;; esac\n' > "$d/config.yaml"
 printf '#!/usr/bin/env bash\necho old\n' > "$d/bin/tool.sh"
-git -C "$d" add -A; git -C "$d" -c maintenance.auto=false commit -qm base
+git -C "$d" add -A; git -C "$d" -c maintenance.autoDetach=false commit -qm base
 git -C "$d" checkout -q -b change
 printf '#!/usr/bin/env bash\necho new\n' > "$d/bin/tool.sh"
 cat > "$d/tests/probe.test.sh" <<'P'
@@ -119,11 +128,11 @@ while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep '^GIT_')
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 r="$(mktemp -d "${TMPDIR:-/tmp}/probe.XXXXXX")"
 git init -q "$r"
-printf '%s\n' "$(cd "$r" && git config --get maintenance.auto)" >> "$out"
+printf '%s\n' "$(cd "$r" && git config --get maintenance.autoDetach)" >> "$out"
 rm -rf "$r"
 exit 0
 P
-git -C "$d" add -A; git -C "$d" -c maintenance.auto=false commit -qm change
+git -C "$d" add -A; git -C "$d" -c maintenance.autoDetach=false commit -qm change
 ff_out="$d.probe"; : > "$ff_out"
 ( cd "$d" && FM_TEST_OS=Linux PATH="$osbin:$PATH" FF_PROBE_OUT="$ff_out" bash "$ROOT/bin/fm-failfirst.sh" main ) \
   > "$d.report" 2>&1

@@ -947,14 +947,14 @@ fm_git_commit() {  # fm_git_commit <worktree> <message>
 }
 
 # fm_git_quiet <folder> (T-280): on Linux, put a `git` first on PATH that
-# runs the real one with background maintenance off. Git 2.55 starts
-# `git maintenance run --auto --detach` after every commit, and a test that
-# removes its repository while that still holds objects/maintenance.lock
+# runs the real one with automatic maintenance in the foreground. Git 2.55
+# starts `git maintenance run --auto --detach` after every commit, and a test
+# that removes its repository while that still holds objects/maintenance.lock
 # fails with "Directory not empty". Suites drop every GIT_* variable and
 # point GIT_CONFIG_GLOBAL at their own file, so no config file reaches
 # their repositories; PATH does, and `-c` beats every config file. Another
 # system is left as it is (macOS rounds check the first git on PATH).
-# Wrapping a wrapper only repeats the same two settings.
+# Wrapping a wrapper only repeats the same setting.
 fm_git_quiet() {
   local dir="$1" real
   [ "$(uname -s 2>/dev/null)" = Linux ] || return 0
@@ -962,7 +962,7 @@ fm_git_quiet() {
   mkdir -p "$dir" || return 70
   dir="$(cd "$dir" && pwd)" || return 70
   [ "$real" != "$dir/git" ] || return 0
-  printf '#!/bin/sh\nexec %q -c maintenance.auto=false -c gc.auto=0 "$@"\n' "$real" > "$dir/git" || return 70
+  printf '#!/bin/sh\nexec %q -c maintenance.autoDetach=false "$@"\n' "$real" > "$dir/git" || return 70
   chmod +x "$dir/git" || return 70
   export PATH="$dir:$PATH"
 }
