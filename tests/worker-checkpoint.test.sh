@@ -102,6 +102,7 @@ git -C "$rp" config user.email a@b.c; git -C "$rp" config user.name t
 mkdir -p "$rp/bin" "$rp/state/worktrees"
 cp "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-config.sh" \
    "$ROOT/bin/fm-emit.sh" "$rp/bin/"; config_modules_fixture "$rp/bin/"
+cp "$ROOT/bin/lib/fm_git_transfer.py" "$ROOT/bin/lib/fm-ssh-transfer.sh" "$rp/bin/lib/"
 printf 'base\n' > "$rp/README"; git -C "$rp" add README; git -C "$rp" commit -qm base
 git -C "$rp" remote add origin "$barep"; git -C "$rp" push -q -u origin main
 git -C "$rp" branch -q t-cs-branch
