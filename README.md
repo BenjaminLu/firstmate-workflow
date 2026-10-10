@@ -60,7 +60,9 @@ gets a log window; cmux requires explicit verified caller configuration and
 remains subject to the supervised-access limitations below. A closed or crashed window never affects the round,
 and a window that cannot be opened is skipped; each round's `window.json` says
 which window it had, `none` included. `bin/fm.sh follow <actor>` shows a round's
-log without a window, and `bin/fm.sh stop <actor>` or `stop --task <id>` stops
+log without a window, formatted (commands, diffs, messages, a header with the
+pull request; `--raw` for the log byte for byte), `bin/fm.sh follow --all`
+lists every live round, and `bin/fm.sh stop <actor>` or `stop --task <id>` stops
 rounds by their process groups, the same stop the board's park and drop use.
 Transport or empty/partial output is never reported as fabricated success.
 
