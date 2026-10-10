@@ -297,12 +297,8 @@ class MechanicalLoop:
         return any(job['task'] == task and job['state'] == 'running'
                    for job in self.data.setdefault('jobs', {}).values())
 
-    def settled_checks(self, pr, runs, statuses):
-        """Return only latest required conclusions; None means CI is pending.
-
-        Branch protection and confirmed external policy supply the names, as
-        in gate 5. This is scheduling evidence, never gate authorization.
-        """
+    def check_names(self, pr):
+        """Required check names from confirmed policy and branch protection, as in gate 5."""
         from urllib.parse import quote
         names = set(self.policy.get('required_checks', []))
         names.update(self.policy.get('analysers', []))
@@ -315,6 +311,29 @@ class MechanicalLoop:
             if not names: raise
         if not names:
             raise ValueError('required checks unknown: no confirmed names')
+        return names
+
+    def ci_pending_only(self, pr, output):
+        """T-282: gate 5 stopped only on required checks this loop tracks and that still run."""
+        prefix = 'fm-binding: required check/status pending: '
+        pending, other = [], False
+        for line in output.splitlines():
+            if line.startswith(prefix): pending.append(line[len(prefix):].strip())
+            elif line.startswith('fm-binding: '): other = True
+        if not pending or other: return False
+        try:
+            names = self.check_names(pr)
+        except Exception:  # unknown names keep the wake, as gate 5 stops either way
+            return False
+        return all(name in names for name in pending)
+
+    def settled_checks(self, pr, runs, statuses):
+        """Return only latest required conclusions; None means CI is pending.
+
+        Branch protection and confirmed external policy supply the names, as
+        in gate 5. This is scheduling evidence, never gate authorization.
+        """
+        names = self.check_names(pr)
         conclusions = []
         for name in sorted(names):
             sources = [('check', [r for r in runs if r.get('name') == name and
@@ -689,6 +708,10 @@ class MechanicalLoop:
             elif code == 0:
                 self.merge_card(task, pr, result['base'])
             elif 1 <= code <= 5:
+                # T-282: CI still running is no judgment; the next poll regates
+                # once the tracked checks settle and the fingerprint changes.
+                if (code == 5 and getattr(self, 'queue_mode', 'off') == 'off'
+                        and self.ci_pending_only(pr, output)): return
                 from fm_binding import gate_list
                 try:
                     name = next(g['name'] for g in gate_list()['gates'] if g['n'] == code)
