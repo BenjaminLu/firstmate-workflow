@@ -407,8 +407,11 @@ class MechanicalLoop:
         base = self.api('branches/' + quote(pr['base']['ref'], safe=''))
         if base['commit']['sha'] != pr['base']['sha']:
             raise ValueError('PR base moved while preparing review')
-        self.command(['git', '-C', target, 'fetch', '--no-tags', 'https://github.com/' + repository + '.git',
-                      'refs/heads/' + pr['base']['ref']])
+        from fm_git_transfer import prepare
+        argv, env = prepare(['git', '-C', target, 'fetch', '--no-tags', 'https://github.com/' + repository + '.git',
+                             'refs/heads/' + pr['base']['ref']], env=os.environ,
+                            code_root=os.environ.get('FM_CODE_ROOT', Path(__file__).resolve().parents[2]))
+        self.command(argv, env=env)
         current = json.loads(self.command(self.gh('pr', 'view', str(pr['number']), '--repo', repository,
                                                    '--json', 'headRefOid,baseRefOid,state')))
         if (current['headRefOid'], current['baseRefOid'], current['state']) != (pr['head']['sha'], pr['base']['sha'], 'OPEN'):

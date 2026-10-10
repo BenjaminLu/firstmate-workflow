@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import uuid
+from fm_git_transfer import prepare
 
 
 def gate_list():
@@ -21,9 +23,9 @@ def gate_entry(value, mapping):
     return next((gate for gate in mapping['gates'] if gate['name'] == name), None)
 
 
-def command(argv, cwd=None):
+def command(argv, cwd=None, *, env=None):
     result = subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL,
-                            capture_output=True, timeout=120)
+                            capture_output=True, timeout=120, **({} if env is None else {"env": env}))
     if result.returncode:
         raise ValueError('binding command failed: ' + result.stderr.decode(errors='replace')[:500])
     return result.stdout
@@ -39,11 +41,24 @@ def fetch_ref(root, url, source, *, runner=None):
     prefix = ['git', '-C', str(root)]
     ref = 'refs/fm/fetch/' + str(os.getpid()) + '-' + uuid.uuid4().hex
     try:
-        run([*prefix, 'fetch', '--no-tags', url, '+' + source + ':' + ref])
+        argv, env = prepare([*prefix, 'fetch', '--no-tags', url, '+' + source + ':' + ref],
+                            cwd=None, env=os.environ, code_root=os.environ.get('FM_CODE_ROOT', Path(__file__).resolve().parents[2]))
+        run(argv, env=env)
         value = run([*prefix, 'rev-parse', ref])
         return sha((value.decode() if isinstance(value, bytes) else value).strip())
     finally:
-        run([*prefix, 'update-ref', '-d', ref])
+        primary = sys.exc_info()[0] is not None
+        try:
+            run([*prefix, 'update-ref', '-d', ref])
+        except Exception:
+            if not primary:
+                raise
+
+
+def transfer(root, *args):
+    argv, env = prepare(['git', '-C', str(root), *args], cwd=None, env=os.environ,
+                        code_root=os.environ.get('FM_CODE_ROOT', Path(__file__).resolve().parents[2]))
+    return command(argv, env=env).decode().strip()
 
 
 def sha(value):
