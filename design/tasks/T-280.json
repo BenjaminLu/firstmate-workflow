@@ -9,7 +9,8 @@
     "bin/ci.sh",
     "bin/fm-failfirst.sh",
     ".github/workflows/ci.yml",
-    "tests/ci-git-wrapper.test.sh"
+    "tests/ci-git-wrapper.test.sh",
+    "design/tasks/T-280.json"
   ],
   "acceptance": [
     "Why. With Git 2.55 (the version the Linux CI runner installs from the git-core PPA), every `git commit` starts `git maintenance run --auto --quiet --detach` in the background and returns before that process ends. Right after the commit, that process can still hold `.git/objects/maintenance.lock`. When a test removes its repository in that moment, the removal fails with `Directory not empty: 'objects'`. This failed `tests/review-verdict.test.sh` on pull request #256 (run 38047822331), and a similar race broke a repository copy in a test of pull request #266. Each such red run costs a rerun and a diagnosis.",
