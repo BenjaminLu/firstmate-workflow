@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # T-280: on Linux, bin/ci.sh, bin/fm-failfirst.sh and the two workflow steps
-# that run suites directly put fm_git_quiet's git first on PATH, so no test
-# repository leaves Git's automatic maintenance running in the background -
-# where it can still hold objects/maintenance.lock when the test removes the
-# repository. Maintenance itself stays on and runs in the foreground. Suites
-# drop every GIT_* variable, so the probes below do too: only PATH reaches
-# them.
+# that run suites directly put fm_git_quiet's git first on PATH, so Git's
+# automatic maintenance is off in every test repository: nothing runs in the
+# background to hold objects/maintenance.lock when the test removes the
+# repository, and nothing runs in the foreground either. Suites drop every
+# GIT_* variable, so the probes below do too: only PATH reaches them.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
@@ -19,11 +18,11 @@ isolate_tmpdir
 # This suite itself may run under a wrapper (the workflow step's, or the
 # gate's on CI). Every folder holding one leaves PATH here, or the probes
 # would see its settings on the base too and prove nothing. A wrapper is the
-# `#!/bin/sh` script fm_git_quiet writes; a real git binary (which holds the
-# text maintenance.auto too) is never one, so its folder stays.
+# `#!/bin/sh` script fm_git_quiet writes; a real git binary is never one, so
+# its folder stays.
 is_git_quiet_wrapper() {
   [ -f "$1" ] && [ "$(head -n 1 "$1" 2>/dev/null)" = '#!/bin/sh' ] \
-    && grep -q -- '-c maintenance\.autoDetach=false' "$1" 2>/dev/null
+    && grep -q -- '-c maintenance\.auto=false' "$1" 2>/dev/null
 }
 unwrapped=''
 IFS=: read -r -a path_dirs <<< "$PATH"
@@ -85,8 +84,8 @@ ci_out="$(FM_TEST_OS=Linux PATH="$osbin:$PATH" FM_ROOT="$q" PROBE_OUT="$probe_ou
 [ -s "$probe_out" ] || printf '%s\n' "$ci_out" | tail -n 20
 seen() { sed -n "s/^$1=//p" "$probe_out" 2>/dev/null; }
 
-assert_eq "false" "$(seen detach)" "linux ci: maintenance.autoDetach is false"
-assert_eq "auto= gc=" "auto=$(seen auto) gc=$(seen gc)" "linux ci: automatic maintenance is not turned off"
+assert_eq "false" "$(seen auto)" "linux ci: maintenance.auto is false"
+assert_eq "detach= gc=" "detach=$(seen detach) gc=$(seen gc)" "linux ci: the wrapper adds no other setting"
 assert_eq "0 no" "$(sed -n 's/^live=\([0-9]*\) lock=/\1 /p' "$probe_out" 2>/dev/null)" "linux ci: no maintenance outlives a commit"
 assert_eq "two words" "$(seen subject)" "wrapper: arguments pass through"
 assert_eq "$(seen realshort)" "$(seen short)" "wrapper: arguments pass through (-c and --short)"
@@ -124,7 +123,7 @@ git -C "$d" config user.email a@b.c; git -C "$d" config user.name t
 mkdir -p "$d/bin" "$d/tests"
 printf 'project:\n  tests:\n    - tests/**\n  test: case {file} in *.test.sh) bash {file} ;; esac\n' > "$d/config.yaml"
 printf '#!/usr/bin/env bash\necho old\n' > "$d/bin/tool.sh"
-git -C "$d" add -A; git -C "$d" -c maintenance.autoDetach=false commit -qm base
+git -C "$d" add -A; git -C "$d" -c maintenance.auto=false commit -qm base
 git -C "$d" checkout -q -b change
 printf '#!/usr/bin/env bash\necho new\n' > "$d/bin/tool.sh"
 cat > "$d/tests/probe.test.sh" <<'P'
@@ -134,11 +133,11 @@ while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep '^GIT_')
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 r="$(mktemp -d "${TMPDIR:-/tmp}/probe.XXXXXX")"
 git init -q "$r"
-printf '%s\n' "$(cd "$r" && git config --get maintenance.autoDetach)" >> "$out"
+printf '%s\n' "$(cd "$r" && git config --get maintenance.auto)" >> "$out"
 rm -rf "$r"
 exit 0
 P
-git -C "$d" add -A; git -C "$d" -c maintenance.autoDetach=false commit -qm change
+git -C "$d" add -A; git -C "$d" -c maintenance.auto=false commit -qm change
 ff_out="$d.probe"; : > "$ff_out"
 ( cd "$d" && FM_TEST_OS=Linux PATH="$osbin:$PATH" FF_PROBE_OUT="$ff_out" bash "$ROOT/bin/fm-failfirst.sh" main ) \
   > "$d.report" 2>&1
