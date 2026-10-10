@@ -2240,6 +2240,67 @@ the reject coverage check because every item has a fix or deferred line.
 The point is to end the loop where each round fixes one thing and surfaces
 another.
 
+**Severity tags (T-276).** Each standing-list item carries `[must-fix]` or
+`[follow-up]` anywhere on its first line. Must-fix means the head cannot merge
+without it; follow-up means the change is correct without it and the item is
+worth a separate task. An untagged item, in any record old or new, is
+must-fix. `severity(body)` in `bin/lib/fm_evidence.py` reads one item;
+`criteria()` is unchanged and still returns the full item text. A reviewer
+rejects only with an open must-fix item and approves when every open item is a
+follow-up, re-issuing the list. For a verdict retained with
+`severity_protocol: 1`, `protocol()` reports `item <N> has two severity tags`,
+`REJECT has no open must-fix item`, and, for an APPROVE with its own list,
+`APPROVE leaves must-fix item <N> open`; open follow-ups are no error. Gate 6
+already runs `protocol()`, so it refuses such an APPROVE; no other gate
+changes. When the latest verdict is a marked APPROVE for the pull request's
+head, the autopilot runs `fm-protocol.sh check` before the gate in every round
+and raises the protocol-violation wake, with no review, when it fails. T-272's
+`fixes-brief` writes an open follow-up as `<N>. deferred: follow-up, not needed
+for approval: <first line>` with its proposal below it. `fm_evidence.py
+follow-ups --task <id>` prints the open follow-ups of a latest APPROVE (its own
+list, else the latest earlier list); for a marked APPROVE at the head the
+autopilot wakes firstmate once per head to propose them as tasks on a
+`--purpose decision` card. Follow-ups never hold the merge card.
+
+**Review round budget (T-276).** `config.yaml` holds `review_budget:` with
+`rounds` (default 3), `stall` (2) and `extend` (2), each a whole number from 1
+to 99, read through `fm_cfg_in` from the engine checkout's own file by both the
+autopilot and `fm-worker.sh`; external projects share it. A review round is a
+round number among the task's verdicts (`Store.verdicts()`, so the reviewer
+filter applies), represented by its last retained record. The task stops when
+its latest round is a marked REJECT and the round count reaches the budget, or
+one item number is open and must-fix in `stall` consecutive rounds after the
+latest budget card; an APPROVE round, a round without a list, or the item done
+or a follow-up breaks a streak. Earlier unmarked rounds count. Both autopilot
+REJECT paths ask `bin/lib/fm_round_budget.py` after the bound protocol check;
+a stopped task gets no brief wake and no review, and a held task's running
+protocol, gate and review results start no gate, review or merge card. For the
+self project the autopilot allocates an id, builds a bilingual choice card
+from the round history into `decision-details-built/<id>.json`, records it
+with `record-card` in `<project state>/round-budget/<task>.json` (written
+atomically under a lock; one card per stopping verdict) and requests it with
+`--purpose decision`; a restart requests a recorded card again with the same
+id, and a failure wakes firstmate once per verdict. An external project gets
+only a wake asking firstmate to author the card; no item text, head, reviewer
+name, reason or private path leaves the private state. The card's answer is
+the decision record of the same id and task. C (continue) sets the budget to
+the card's round count plus `extend`, restarts `stall` and raises the normal
+REJECT wake once under `budget-continue-<id>`. B (park) and A (narrow) hold
+the task: advance returns before any gate or wake, after one wake per card,
+and `fm-worker.sh` refuses the round (exit 65) before allocating an identity.
+The hold ends at a repin whose version exceeds the card's recorded pin
+version, whose captain approval is later than the answer, and whose exact spec
+bytes have a SPEC-OK; the budget then becomes the card's round count plus
+`rounds`. A task with no pin resumes only through a second card for the same
+verdict that the captain answers C.
+
+**Migration (T-276).** `retain_verdict` writes `severity_protocol: 1` on every
+new verdict. The severity errors and the stop rule apply only to marked
+records, while the round count includes every earlier round, so a task in
+flight stops at its next rejection under the new launcher, never at one
+retained before. A round on an old frozen launcher is judged by the old rules.
+No pin, brief, verdict, signature or decision record is rewritten.
+
 ---
 
 ## 8. The captain's board

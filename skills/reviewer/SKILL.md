@@ -380,6 +380,24 @@ wrote the code would be approving its own work. This rule is for code review
 only, not spec preflight, and an APPROVE needs no fix proposals. The review
 after your REJECT goes to another reviewer name.
 
+Tag every item `[must-fix]` or `[follow-up]` on its first line (T-276), for
+example `2. open [follow-up]: rename the helper` or
+`3. REGRESSION:<task-id> [must-fix] the lock is never released`.
+`[must-fix]` means this head cannot merge without it. `[follow-up]` means the
+change is correct without it and the item is worth a separate task. An item
+with no tag counts as must-fix, and one line must not carry both tags. Keep an
+item's tag across rounds unless your reasoning changed, and say why when it
+changes. Reject only when at least one must-fix item is open. Approve when
+every open item is a follow-up, and re-issue the list in the approving answer
+so the follow-ups are recorded; firstmate proposes them to the captain as new
+tasks. A follow-up item still carries its fix proposal or DECISION line in a
+REJECT. `bin/fm-protocol.sh` refuses, for a verdict retained under this rule,
+an item with both tags, a REJECT with no open must-fix item and an APPROVE
+whose own list leaves a must-fix item open. A task stops for the captain when
+its review rounds reach the budget in `config.yaml` (`review_budget:`), or when
+one must-fix item stays open for `stall` consecutive rounds, so name every
+must-fix item in your first list.
+
 `ASK-PASS-CRITERIA:<task-id>` may come from a worker who finds no list or an
 unclear one, or from a genuine firstmate operator requesting clarification.
 When the launcher delivers that exact standalone marker, before any truthful
@@ -390,8 +408,8 @@ prior numbered item and explain its finding associations transparently; mark
 each done/open with factual evidence. Do not renumber away open findings,
 invent same-head regressions or new ground, require changes without findings,
 or select APPROVE merely to repair syntax. An APPROVE requires truthful closure
-of findings even though the syntax parser accepts an approval block with open
-items. Syntax cannot establish semantic closure.
+of must-fix findings even though the syntax parser accepts an unmarked approval
+block with open items. Syntax cannot establish semantic closure.
 
 Only the marker crosses from ask records: operator and worker prose and private
 state paths stay excluded, as do firstmate briefs and worker reports. An ASK is
