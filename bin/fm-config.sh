@@ -912,6 +912,27 @@ fm_git_commit() {  # fm_git_commit <worktree> <message>
   git -C "$dir" -c user.name="$n" -c user.email="$e" commit -q -m "$msg"
 }
 
+# fm_git_quiet <folder> (T-280): on Linux, put a `git` first on PATH that
+# runs the real one with background maintenance off. Git 2.55 starts
+# `git maintenance run --auto --detach` after every commit, and a test that
+# removes its repository while that still holds objects/maintenance.lock
+# fails with "Directory not empty". Suites drop every GIT_* variable and
+# point GIT_CONFIG_GLOBAL at their own file, so no config file reaches
+# their repositories; PATH does, and `-c` beats every config file. Another
+# system is left as it is (macOS rounds check the first git on PATH).
+# Wrapping a wrapper only repeats the same two settings.
+fm_git_quiet() {
+  local dir="$1" real
+  [ "$(uname -s 2>/dev/null)" = Linux ] || return 0
+  real="$(fm_path_tool git "$PATH")" || { echo 'fm_git_quiet: git not found on PATH' >&2; return 70; }
+  mkdir -p "$dir" || return 70
+  dir="$(cd "$dir" && pwd)" || return 70
+  [ "$real" != "$dir/git" ] || return 0
+  printf '#!/bin/sh\nexec %q -c maintenance.auto=false -c gc.auto=0 "$@"\n' "$real" > "$dir/git" || return 70
+  chmod +x "$dir/git" || return 70
+  export PATH="$dir:$PATH"
+}
+
 # A round needs no terminal host (T-144): it runs headless, as a process group
 # fm supervises, and a host (Herdr, cmux, tmux) is only a window onto it. So no
 # transport is a bypass of anything and nothing is refused here; the function
