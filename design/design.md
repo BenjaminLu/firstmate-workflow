@@ -1669,6 +1669,88 @@ is edited. Tests cover missing and mismatched receipts, exact-byte admission,
 changed pins, existing pins without receipts, and mode-bound final selection.
 Missing or untested migration in a rule-changing diff is a REJECT finding.
 
+### Small changes (T-277)
+
+A repin (amend, preflight, captain card, repin) is right for a change of
+meaning and too costly for a few test lines. A small change is either a path
+record (exact files under `tests/`, `docs/` or `README.md` that the pinned scope
+does not cover) or an erratum (a typo fix in the pinned title or one acceptance
+line). It needs no preflight and no card. Every other change, including any
+production file, any glob, any change of meaning and any external project,
+keeps the full process.
+
+**Store.** `<state>/small-changes/<task>/<n>.json`, `n` from 1, beside the pin
+store and with its rules: append-only, no symlinks, a `.lock` taken with
+`flock` while writing, atomic publication by `os.link`. Nothing rewrites or
+deletes a record. Creating one emits no event and raises no card.
+
+**Format.** Exactly these keys: `schema` (1), `project`, `task`, `number`,
+`pin_version`, `pin_sha256` (the pin-chain digest of the bound pin), `kind`
+(`paths` or `erratum`), `reason` (`en` and `zh-TW`), `origin` (`kind` of
+`worker-ask`, `review-finding` or `firstmate`, and a single-line `ref`),
+`author` (`firstmate`), `created` (ISO 8601 UTC), `previous_sha256` (the
+previous record file's SHA-256, null for record 1) and the kind key. `paths`
+lists 1 to 5 exact paths of at most 200 characters each, with no glob
+character, `..`, leading `/` or `.fm-` part, none already matched by the bound
+pin's scope. `erratum` holds `field` (`title` or `acceptance`), `index` (null
+for the title), `before` (the pinned string with earlier errata of the same pin
+applied in record order) and `after`. No other spec key takes an erratum; the
+pinned bytes and the task file never change.
+
+**Typo guard.** A mechanical filter, deliberately stricter than the T-270
+rewrite guard and independent of it; meaning stays firstmate's and the
+reviewer's judgment. The whitespace sequence is identical, at most 3 word
+positions differ, each pair is within Levenshtein distance 2, and no changed
+word holds a digit, backquote, `/`, `_`, `=` or `.`, starts with `T-` or `D-`,
+looks like a hexadecimal hash of 7 or more letters, only gains letters at one
+end, or is a meaning word (not, no, never, none, nor, must, may, should, shall,
+can, cannot, only, all, any, every, each, without, unless).
+
+**Limits and creator.** A pin version takes at most 3 records; a fourth needs
+the full process, which folds the earlier records into the amended spec. Only
+firstmate creates records, outside any round, with
+`bin/fm-project.sh small-change` (`bin/lib/fm_small_change.py`). It binds the
+record to the pin `Pins.resolve` returns and checks every rule that needs no
+diff, the reason lengths (200 and 120 characters) and the STE checks of the
+exact merge card note. It exits 64 for a malformed argument or `FM_EXTERNAL=1`,
+and 65 for a refusal, inside a round, while a merge card for the task is
+pending, or after an A answer whose merge did not fail. It holds
+`state/merge-turn.lock` and then the store's `.lock`, the same order the merge
+loop uses, so a record is either disclosed on the card or refused. A record
+never lifts a B, C or failed-merge hold.
+
+**Gate 3.** `Pins.scope` runs every check it ran before. When the store exists
+for a self task, it validates every record against the pin version it names,
+through the verified chain `Pins.chain` returns: structure, key set and types,
+identity, chain hashes, path eligibility and erratum `before` text against that
+pin's spec, and the per-pin limit. Any failure refuses with
+`invalid small-change record <n>: <reason>`. Only then does it accept a
+changed path that no glob matches if a record bound to the latest pin lists it
+exactly. It runs `git diff --no-renames --numstat` over the accepted paths and
+refuses more than +20 or -20 lines in total, or a binary file. Records of an
+older pin are ignored after validation, so a repin returns the task to its new
+pinned scope. `fm_spec_pins.py` and `fm_prompt_context.py` import the module
+only when the store exists.
+
+**Prompts and review.** The pinned part of every worker and reviewer prompt
+adds `# Small changes recorded for this pin` after the design section anchors:
+each record's number, first 12 hex digits of its file SHA-256, paths and budget
+or erratum field and corrected wording, and reason. With no records the prompt
+is byte-for-byte unchanged. Reviewer check 3 checks each record against the
+diff and writes the standalone line `SMALL-CHANGE-CHECKED:<task> <n> <sha12>`
+above any standing list; `criteria()` and `protocol()` are unchanged.
+
+**Merge card.** After the details are chosen, `MechanicalLoop.merge_card` copies
+them to `state/decision-details-built/<id>.json` with one caution note per
+record in both locales and one question asking whether the captain accepts the
+small changes. A note says `checked by the review` only when the approving
+verdict for the gated head carries the exact unquoted line for that task,
+number and hash; otherwise `not checked by the review`, which does not block.
+Combined details that fail `check_details(kind='merge')` raise the `details`
+attention and request nothing. Authored details are never modified. A new record
+changes the advancement fingerprint (§15.8). Older frozen code ignores the
+store, so the change fails closed; reverting it leaves records on disk, unread.
+
 ---
 
 Task PR review prompts carry the canonical `git diff --no-ext-diff --no-color
@@ -2481,7 +2563,10 @@ of these:
 
 The card kinds and their effects: a **merge card** (`--kind merge`) that
 names none merges on A and holds on B and C, as it always has; sending work
-back starts a worker, so only a card that says so does it. An **untracked
+back starts a worker, so only a card that says so does it. A self merge card
+lists every small-change record of the task's current pin (T-277, §6) as one
+caution note each, with its review status, and asks whether the captain
+accepts them. An **untracked
 merge card** (`--kind merge-untracked`, T-119) is read the same way, and its
 merge hands `fm-merge.sh` `--untracked` and no task; it has no task to park,
 drop, dispatch or send back, so any of those fails with that reason. A
@@ -5844,6 +5929,10 @@ public engine commit. Self committed sources are re-derived; uncommitted self
 sources have explicit provenance and hash. One resolver verifies all hashes and
 supplies the latest authorized pin; a mutable branch cannot widen its own scope.
 Gate 3 refuses missing pins, mismatches, out-of-scope files and `.fm-*` artifacts.
+The one exception (T-277, §6): for a self task, gate 3 also accepts the exact
+paths of valid small-change records bound to the latest pin, within their fixed
+line budget; it validates the whole record store first and never reads it for
+an external project.
 Repin requires an exact project/task captain decision for changed snapshots,
 appends a version and emits `spec_repinned`; never rewrite old pins.
 
@@ -6432,6 +6521,11 @@ hold, and active/uncertain jobs retain ownership or reconciliation. Unchanged
 polls and restarts neither regate nor duplicate the new pending card. Load this
 through normal stock self-update/reload drain, preserving live jobs; old snapshots
 retain their old hold. No record/pin migration, archive or manual reset is needed.
+A self task with a small-change store (T-277) appends one more element last,
+after any failed-card replacement evidence: the SHA-256 of its record files'
+bytes in number order, so a new record regates an unchanged head. Without a
+store the input stays byte-equivalent. External projects never read the store.
+Same-head failure and answered B, C or failed-merge cards still hold first.
 PR events are decided by the event log alone: an event already in
 `events.jsonl` is never written again; a failed write retries at poll offsets
 0, 1 and 3, then wakes once. Terminal PRs are marked finished immediately;

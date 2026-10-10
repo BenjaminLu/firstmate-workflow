@@ -96,6 +96,15 @@ Check, in order:
    finding. With no report, name the assertion you believe would break; if you
    cannot name one, that is a finding.
 3. Does anything reach outside the declared scope?
+   For each small-change record in the prompt (T-277), check that the diff in
+   its paths matches its reason, touches only test or documentation content,
+   and does not change what any acceptance line requires; for an erratum, check
+   that the corrected wording means the same as the original. When a record
+   passes, put one line in the verdict that is exactly
+   `SMALL-CHANGE-CHECKED:<task> <n> <sha12>` (the record number and the first
+   12 hex digits of its SHA-256, as the prompt shows them), standing alone and
+   not quoted, above the numbered standing list when there is one, never
+   inside it. When a record fails, report a finding instead.
 4. What did the diff change that no test covers?
 5. For anything you found: is it one occurrence, or one of a kind? Say which.
 

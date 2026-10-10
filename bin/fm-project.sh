@@ -4,6 +4,9 @@
 #
 #   fm-project.sh sync <name>   [--repo <engine root>]
 #   fm-project.sh verify <name> [--repo <engine root>]
+#   fm-project.sh small-change --project <p> --task <t> --origin <kind> --ref <text>
+#       --reason-en <text> --reason-tw <text> (--path <path>... | --erratum <title|acceptance:N>
+#       --after <text>) [--repo <engine root>]
 #
 # sync clones the project's GitHub repository into
 # FM_HOME/projects/<name>/repo, or fetches and prunes the clone that is
@@ -65,6 +68,33 @@ if [ "${1:-}" = repin ]; then
     --en 'Approved task snapshots repinned' --tw '已重新固定核准的任務快照' || exit 70
   printf '%s\n' "$pin"
   exit 0
+fi
+
+# Small changes (T-277): firstmate records exact test/docs paths or a typo fix
+# against the current pin, outside any round, with no preflight and no card.
+if [ "${1:-}" = small-change ]; then
+  shift
+  if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+    echo 'fm-project: small-change tier is self-project only; use the full process' >&2; exit 64
+  fi
+  python3 "$_fm_code_dir/lib/fm_small_change.py" check-args "$@" || exit 64
+  if [ -n "${FM_IN_ROUND:-}" ]; then
+    echo "fm-project: small-change runs from the operator's shell, not inside a crew round" >&2; exit 65
+  fi
+  REPO="${FM_ROOT:-$(pwd)}"; SMALL_PROJECT=''; small_args=("$@")
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) fm_need "fm-project" "$@"; REPO="${2-}"; shift 2 ;;
+      --project) fm_need "fm-project" "$@"; SMALL_PROJECT="${2-}"; shift 2 ;;
+      # check-args accepted only exact option names, each with one value
+      *) fm_need "fm-project" "$@"; shift 2 ;;
+    esac
+  done
+  fm_storage_init "$REPO" "$SMALL_PROJECT" || exit 65
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    echo 'fm-project: small-change tier is self-project only; use the full process' >&2; exit 64
+  fi
+  exec python3 "$_fm_code_dir/lib/fm_small_change.py" create "${small_args[@]}"
 fi
 
 REPO="${FM_ROOT:-$(pwd)}"; MIGRATE=0; GH="${FM_GH:-gh}"; URL="${FM_GITHUB_URL:-https://github.com}"
