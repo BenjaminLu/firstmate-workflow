@@ -52,9 +52,9 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.pilot.prepare_head = lambda *args: None
         self.pilot.launch_review = lambda *args: self.calls.append(('review', args))
 
-    def probe(self, argv):
+    def probe(self, argv, *, env=None):
         self.calls.append(argv)
-        return self.branch_probe(argv)
+        return self.branch_probe(argv, env=env)
 
     def command(self, argv, **kwargs):
         if argv[:2] == ['bash', '-c']:
@@ -295,7 +295,7 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.graphql_answer = (1, '', 'GraphQL refused')
         self.pull_at(PR)
         self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
-        self.pilot.command = lambda argv: json.dumps(dict(headRefOid='f' * 40))
+        self.pilot.command = lambda argv, **kwargs: json.dumps(dict(headRefOid='f' * 40))
         self.pull_at(PR)
         self.assertNotIn('update:12:' + HEAD, self.pilot.data['retries'])
         self.assertNotIn('12', self.pilot.data['updates'])
@@ -677,8 +677,8 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
             self.review_posts.append((self.pilot.data['poll_seq'], argv))
             if isinstance(self.review_answer, Exception): raise self.review_answer
             return self.review_answer
-        def probe(argv):
-            return answer(argv) if is_request(argv) else original_probe(argv)
+        def probe(argv, *, env=None):
+            return answer(argv) if is_request(argv) else original_probe(argv, **({} if env is None else {"env": env}))
         def command(argv, **kwargs):
             if not is_request(argv): return original_command(argv, **kwargs)
             rc, out, err = answer(argv)
@@ -921,11 +921,11 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
                        (1, '', 'transport lost')):
             with self.subTest(answer=answer):
                 self.calls.clear(); self.pilot.data['retries'].clear(); self.pilot.data['updates'].clear()
-                def probe(argv):
+                def probe(argv, *, env=None):
                     self.calls.append(argv)
                     if argv[1:4] == ['api', '-X', 'PUT']:
                         return answer if '/12/' in argv[4] else response()
-                    return self.branch_probe(argv)
+                    return self.branch_probe(argv, env=env)
                 self.pilot.probe = probe
                 with patch.object(self.pilot, 'network_failure') as failure:
                     self.pilot.poll()
@@ -1156,13 +1156,13 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         result = subprocess.CompletedProcess(['git'], 128, 'body', 'noise\nfatal: last line\n\n')
         with patch.object(A.subprocess, 'run', return_value=result):
             self.assertEqual(A.Pilot.probe(self.pilot, ['git']), (128, result.stdout, result.stderr))
-        self.pilot.probe = lambda argv: (128, result.stdout, result.stderr)
+        self.pilot.probe = lambda argv, *, env=None: (128, result.stdout, result.stderr)
         with self.assertRaises(ValueError) as raised:
             self.pilot.checked(['git', 'bad-arg'])
         self.assertIn("['git', 'bad-arg']", str(raised.exception))
         self.assertIn('fatal: last line', str(raised.exception))
         self.assertNotIn('noise', str(raised.exception))
-        self.pilot.probe = lambda argv: (0, 'stdout', '')
+        self.pilot.probe = lambda argv, *, env=None: (0, 'stdout', '')
         self.assertEqual(self.pilot.checked(['git']), 'stdout')
     def test_http_status_controls_outcome_even_with_unusual_exit_code(self):
         self.put_answer = (1, response()[1], 'unexpected exit')
@@ -1175,9 +1175,9 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)
     def test_raised_transport_failure_is_reread_and_retried(self):
         original = self.pilot.probe
-        def probe(argv):
+        def probe(argv, *, env=None):
             if argv[1:4] == ['api', '-X', 'PUT']: raise OSError('transport failed')
-            return original(argv)
+            return original(argv, **({} if env is None else {"env": env}))
         self.pilot.probe = probe
         self.pull_at(self.behind())
         self.assertEqual(self.pilot.data['retries']['update:12:' + HEAD]['count'], 1)

@@ -153,17 +153,18 @@ else: sys.exit(2)
         body=function(worker,'bring_up_to_date')+'bring_up_to_date'
         p=shell(root,self.home,body,'fm_stack_policy() { echo false; }; '
             'fm_task() { echo spec-read >> "$work/gitcalls"; return 1; }; '
-            'git() { echo git >> "$work/gitcalls"; return 1; }')
+            'git() { echo git >> "$work/gitcalls"; return 1; }; fm_git_transfer() { echo transfer >> "$work/gitcalls"; return 1; }')
         self.assertEqual(p.returncode,0,p.stderr)
         self.assertIn('conventions do not allow force_with_lease',p.stderr)
         self.assertFalse((self.home/'gitcalls').exists())
         # The defence remains even if a caller hands publication a rebuilt tree.
         block=section(worker,'_fm_wip_done=1\nif [ "$rebuilt" = 1 ]; then','# Only now: a push')
-        p=shell(root,self.home,block,'fm_stack_policy() { echo false; }; rebuilt=1; FM_TARGET_ROOT="$work/tree"; rebuilt_head=abc; git() { echo "$*" >> "$work/gitcalls"; }')
+        p=shell(root,self.home,block,'fm_stack_policy() { echo false; }; rebuilt=1; FM_TARGET_ROOT="$work/tree"; rebuilt_head=abc; git() { echo "$*" >> "$work/gitcalls"; }; fm_git_transfer() { echo transfer >> "$work/transfers"; }')
         self.assertEqual(p.returncode,65,p.stderr)
         self.assertIn('conventions do not allow force_with_lease',p.stderr)
         self.assertNotIn(' push ',(self.home/'gitcalls').read_text())
         self.assertIn('update-ref',(self.home/'gitcalls').read_text())
+        self.assertFalse((self.home/'transfers').exists())
     def test_external_question_is_not_a_draft_candidate(self):
         p=shell(root,self.home,function(worker,'first_round_question')+'first_round_question',
                 'question_draft=1; round_two=0; rebuild_publishes() { return 1; }')
@@ -172,21 +173,30 @@ else: sys.exit(2)
         (self.home/'tree').mkdir()
         body=function(worker,'publish_wip_if_dirty')+'publish_wip_if_dirty'
         p=shell(root,self.home,body,
-            '_fm_wip_done=0; fm_publication_policy() { return 65; }; git() { echo git >> "$work/gitcalls"; }')
+            '_fm_wip_done=0; fm_publication_policy() { return 65; }; git() { echo git >> "$work/gitcalls"; }; fm_git_transfer() { echo transfer >> "$work/gitcalls"; }')
         self.assertEqual(p.returncode,1,p.stderr)
         self.assertFalse((self.home/'gitcalls').exists())
     def test_final_push_is_gated_before_git(self):
         block=section(worker,'_fm_wip_done=1\nif [ "$rebuilt" = 1 ]; then','# Only now: a push')
         prefix='''rebuilt=0
 fm_publication_policy() { echo policy >> "$work/order"; return 65; }
-git() { echo git >> "$work/order"; }
+# The stable git marker denotes the named transfer, not a raw Git call.
+fm_git_transfer() {
+  echo git >> "$work/order"
+  printf '%s\\0' "$@" >> "$work/transfer-argv"
+}
+tree="$work/tree with spaces"; branch="t-fixture"; rebuilt=0
 '''
         p=shell(root,self.home,block,prefix)
         self.assertEqual(p.returncode,65,p.stderr)
         self.assertEqual((self.home/'order').read_text(),'policy\n')
+        self.assertFalse((self.home/'transfer-argv').exists())
         (self.home/'order').unlink()
         self.run_block(block,prefix.replace('return 65','return 0'))
         self.assertEqual((self.home/'order').read_text(),'policy\ngit\n')
+        self.assertEqual((self.home/'transfer-argv').read_bytes().split(b'\0')[:-1],
+                         [b'git', b'-C', str(self.home/'tree with spaces').encode(),
+                          b'push', b'-q', b'-u', b'origin', b't-fixture'])
 
 unittest.main(argv=['onboarding-crew'],verbosity=2)
 PY

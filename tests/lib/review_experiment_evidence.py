@@ -981,7 +981,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         names = ('fm-task-grammar.sh', 'fm_gates.json', 'fm_binding.py', 'fm_evidence.py',
                  'fm_spec_preflight.py', 'fm_ste.py', 'fm_lifeline.py', 'fm-lifeline.sh',
                  'fm_project_paths.py', 'fm_registry.py', 'fm_config_values.py',
-                 'fm_config_tasks.py', 'fm_config_runtime.py')
+                 'fm_config_tasks.py', 'fm_config_runtime.py', 'fm_git_transfer.py')
         for name in names:
             shutil.copy2(ROOT/'bin/lib'/name, library/name)
         shutil.copy2(ROOT/'bin/fm-herdr.py', sparse/'bin/fm-herdr.py')

@@ -1681,6 +1681,32 @@ glossary from the `fm-merge-card` block of the review that the six-gate
 readiness record selected. Without a usable block it falls back to the
 dispatch card and adds the caution "Not reviewed for readability".
 
+### SSH configuration across frozen engines
+
+Config sourcing performs zero Git/gh calls. With neither operator SSH override,
+it exports the frozen lazy transfer helper and an exact
+`FM_SSH_GENERATED_COMMAND` ownership marker. Each updated config copy rebinds
+an unchanged marked command to its own helper; an operator change clears the
+marker. Named engine transfers prepare core SSH configuration separately for
+each call before starting Git, preserving inherited configuration that Git
+strips before SSH. Fetch, push and `ls-remote` helpers receive the prepared
+child command, with the OpenSSH time-limit options only when the resolved
+variant is `ssh`. A clone gets no firstmate time limit: its boundary only drops
+the generated command and `FM_SSH_` variables, leaves operator overrides as
+sourced, and lets Git choose the program, variant and options. An explicit
+operator command remains bounded by config sourcing and outranks config.
+Preparation never changes the clone destination. Unknown invocation contexts refuse.
+Raw Git in unchanged old snapshots retains its old behavior. Do not expose its command or identity in board wakes.
+
+Updated-owner reload and fallback rebind to the respective copied helper.
+Old-to-new reload preserves an unmarked legacy command as an explicit bounded
+override, including its historical repository selection. A failed candidate
+cannot mutate its old parent's environment: old-owner fallback retains that
+original legacy environment, without requiring old code to understand markers.
+For lazy selection after such a transition, start with a clean environment or
+unset `GIT_SSH_COMMAND`. Do not rewrite stored records, pins or config schemas.
+A deliberate new-wrapper transplant into old code has no migration guarantee.
+
 ## Small changes (T-277)
 
 A small change skips spec preflight and the captain's repin card. It is either

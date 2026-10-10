@@ -90,22 +90,56 @@ fm_vendors() { printf '%s\n' claude codex cursor-agent gemini; }
 
 _fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-# Bound stalled git transfers without replacing the operator's SSH identity.
-# Resolve core.sshCommand here, once: later git -C clones inherit this value.
+# Config sourcing is transport-free, including adapter startup. Ownership is
+# exact equality, not authority to execute an inherited marker.
 _fm_ssh_options='-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4'
-if [ "${GIT_SSH_COMMAND+x}" = x ]; then
-  case "$GIT_SSH_COMMAND" in
-    *ServerAliveInterval*) ;;
-    *) GIT_SSH_COMMAND="$GIT_SSH_COMMAND $_fm_ssh_options" ;;
-  esac
+# A later executable override outranks generated machinery only.
+if [ "${GIT_SSH+x}" = x ] && [ "${GIT_SSH_COMMAND+x}" = x ] &&
+   [ "${FM_SSH_GENERATED_COMMAND+x}" = x ] &&
+   [ "$GIT_SSH_COMMAND" = "$FM_SSH_GENERATED_COMMAND" ]; then
+  unset GIT_SSH_COMMAND FM_SSH_GENERATED_COMMAND
+fi
+if { [ "${FM_SSH_GENERATED_COMMAND+x}" = x ] &&
+     [ "${GIT_SSH_COMMAND+x}" = x ] &&
+     [ "$GIT_SSH_COMMAND" = "$FM_SSH_GENERATED_COMMAND" ]; } ||
+   { [ "${GIT_SSH_COMMAND+x}" != x ] && [ "${GIT_SSH+x}" != x ]; }; then
+  # POSIX shell quoting works with Git's /bin/sh command evaluation, including
+  # copied-code paths containing spaces and apostrophes. Do not read the helper.
+  _fm_ssh_path="$_fm_code_dir/lib/fm-ssh-transfer.sh"
+  # Literal quotes are required by Git's command-string evaluation.
+  # shellcheck disable=SC2089
+  _fm_ssh_quoted="'"
+  while case "$_fm_ssh_path" in *"'"*) true ;; *) false ;; esac; do
+    _fm_ssh_prefix="${_fm_ssh_path%%"'"*}"
+    _fm_ssh_quoted="$_fm_ssh_quoted$_fm_ssh_prefix'\\''"
+    _fm_ssh_path="${_fm_ssh_path#*"'"}"
+  done
+  # Git evaluates this literal shell command string; Bash does not expand argv.
+  # shellcheck disable=SC2089
+  GIT_SSH_COMMAND="$_fm_ssh_quoted$_fm_ssh_path'"
+  # shellcheck disable=SC2090
   export GIT_SSH_COMMAND
-elif [ "${GIT_SSH+x}" != x ]; then
-  _fm_ssh_base="$(git config --get core.sshCommand 2>/dev/null)" || _fm_ssh_base=ssh
-  export GIT_SSH_COMMAND="$_fm_ssh_base $_fm_ssh_options"
+  export FM_SSH_GENERATED_COMMAND="$GIT_SSH_COMMAND"
+else
+  unset FM_SSH_GENERATED_COMMAND
+  if [ "${GIT_SSH_COMMAND+x}" = x ]; then
+    case "$GIT_SSH_COMMAND" in
+      *ServerAliveInterval*) ;;
+      *) GIT_SSH_COMMAND="$GIT_SSH_COMMAND $_fm_ssh_options" ;;
+    esac
+    # Git, rather than this shell, evaluates the retained command string.
+    # shellcheck disable=SC2090
+    export GIT_SSH_COMMAND
+  fi
 fi
 export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT-1000}"
 export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME-60}"
-unset _fm_ssh_options _fm_ssh_base
+unset _fm_ssh_options _fm_ssh_path _fm_ssh_quoted _fm_ssh_prefix
+
+# Explicit network boundary; raw operator git and local Git stay unchanged.
+fm_git_transfer() {
+  python3 "$_fm_code_dir/lib/fm_git_transfer.py" "$@"
+}
 
 # The project contract: the self registry or historical `project:` block, which the target
 # project fills in so that nothing here has to know its toolchain.

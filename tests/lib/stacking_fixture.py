@@ -4,10 +4,35 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import fm_stack as stack
+import fm_binding as binding
 
 A, B, C, D = (letter * 40 for letter in 'abcd')
+
+
+@contextmanager
+def network_fixture(answer=None):
+    """Isolate preparation for imaginary repos; retain transfer and command."""
+    inherited_run = subprocess.run
+    network = Mock(side_effect=answer or (lambda root, *args: ''))
+    def prepare(argv, *, cwd, env, code_root):
+        assert cwd is None
+        assert argv[:2] == ['git', '-C'] and argv[3] in ('push', 'fetch')
+        assert code_root == os.environ.get('FM_CODE_ROOT', Path(binding.__file__).resolve().parents[2])
+        return argv, dict(env, FM_TEST_TRANSFER='stack-network')
+    def dispatch(argv, **kwargs):
+        if argv[:2] == ['git', '-C'] and argv[3] in ('push', 'fetch'):
+            assert kwargs == dict(cwd=None, stdin=subprocess.DEVNULL, capture_output=True,
+                                 timeout=120, env=dict(os.environ, FM_TEST_TRANSFER='stack-network'))
+            value = network(argv[2], *argv[3:])
+            return subprocess.CompletedProcess(argv, 0, value.encode(), b'')
+        return inherited_run(argv, **kwargs)
+    with patch.object(binding, 'prepare', side_effect=prepare) as prepared, \
+         patch.object(binding.subprocess, 'run', side_effect=dispatch):
+        network.prepared = prepared
+        yield network
+        assert prepared.call_count == network.call_count
 
 
 @contextmanager
@@ -25,9 +50,15 @@ def restack_fixture(*, local=B, remote_error=None, git_errors=None, retarget_err
     if identity and identity.get('isCrossRepository') == 'missing':
         child.pop('isCrossRepository')
     final = dict(child, headRefOid=C, baseRefName='main', baseRefOid=D)
-    def git_answer(root, *args):
+    def errors(args):
         for prefix, error in (git_errors or {}).items():
             if args[:len(prefix)] == prefix: raise error
+    def network_answer(root, *args):
+        errors(args)
+        return ''
+    def git_answer(root, *args):
+        assert args[0] not in ('push', 'fetch'), 'network calls must use prepared runner'
+        errors(args)
         if args == ('rev-parse', 'refs/heads/' + child['headRefName']):
             if isinstance(local, Exception): raise local
             return local
@@ -70,6 +101,7 @@ def restack_fixture(*, local=B, remote_error=None, git_errors=None, retarget_err
         git = context.enter_context(patch.object(stack, 'git', side_effect=git_answer))
         command = context.enter_context(patch.object(stack, 'command', side_effect=retarget_error))
         context.enter_context(patch.object(stack.subprocess, 'run', side_effect=rebase))
+        git.network = context.enter_context(network_fixture(network_answer))
         def run():
             return stack.restack('/repo', 'owner/repo', 2, 1, B,
                 dict(force_with_lease=True, stacking='allowed', base='main'), tmp)

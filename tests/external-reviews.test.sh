@@ -170,10 +170,11 @@ class ExternalReviews(unittest.TestCase):
                   baseRefName='main',headRefName='task')
         fixture_command=fm_binding.command
         gh_fixture=str(root/'tests/lib/external-review-gh.py')
-        def command(argv):
+        def command(argv, *, env=None):
             if argv[:1] == ['git']:
                 self.assertEqual(argv[:3], ['git', '-C', str(self.home)])
                 args = argv[3:]
+                self.assertEqual(env, {'FM_FIXTURE_TRANSFER': 'review'} if args[0] == 'fetch' else None)
                 if args[0] == 'fetch':
                     self.assertEqual(args[:3], ['fetch', '--no-tags', 'https://github.com/org/app.git'])
                     source, self.fetched_ref = args[3].split(':')
@@ -200,6 +201,7 @@ class ExternalReviews(unittest.TestCase):
                  patch('fm_binding.repository',return_value='org/app'), \
                  patch('fm_binding.remote_head',return_value=view), \
                  patch('fm_binding.view_base',return_value='main'), \
+                 patch('fm_binding.prepare',side_effect=lambda argv, **kw: (argv, {'FM_FIXTURE_TRANSFER': 'review'})), \
                  patch('fm_binding.command',side_effect=command), \
                  patch('fm_binding.git',return_value=BASE), \
                  patch('fm_binding.source_binding',return_value=self.bound), \

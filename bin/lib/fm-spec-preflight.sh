@@ -86,8 +86,8 @@ checkout_root="$(mktemp -d "${TMPDIR:-/tmp}/fm-spec-preflight.XXXXXX")" || exit 
 checkout_root="$(cd "$checkout_root" && pwd -P)" || exit 70
 checkout="$checkout_root/checkout"
 printf '%s\n' "$checkout" > "$preflight/checkout-path"
-git clone -q --no-checkout --no-hardlinks "$FM_TARGET_ROOT" "$checkout" &&
-  git -C "$checkout" fetch -q origin "$base_head:refs/fm/head" "$base_head:refs/fm/base" &&
+fm_git_transfer git clone -q --no-checkout --no-hardlinks "$FM_TARGET_ROOT" "$checkout" &&
+  fm_git_transfer git -C "$checkout" fetch -q origin "$base_head:refs/fm/head" "$base_head:refs/fm/base" &&
   git -C "$checkout" checkout -q --detach refs/fm/head &&
   git -C "$checkout" remote remove origin || exit 70
 # Keep the clone as evidence. Nothing the round writes can alter it or state.
