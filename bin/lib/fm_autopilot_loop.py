@@ -405,11 +405,25 @@ class MechanicalLoop:
         if replacement and any(job.get('task') == task
                 and job.get('state') in ('running', 'consuming', 'uncertain')
                 for job in self.data.get('jobs', {}).values()): return
+        # T-276: a parked or narrowed task waits for the captain before any
+        # gate, review or REJECT wake.
+        budget = self.round_budget(task, pr)
+        if budget is None: return
+        if budget['state'] in ('parked', 'narrow'):
+            self.budget_hold(task, pr, budget)
+            return
         verdict = self.verdict(task)
         head = pr['head']['sha']
         if verdict.get('verdict') == 'REJECT' and verdict.get('head') == head:
             self.reject_wake(task, pr, verdict)
             return
+        if budget['state'] in ('stop', 'waiting'):
+            self.budget_stop(task, pr, budget)
+            return
+        marked_approve = (verdict.get('verdict') == 'APPROVE' and verdict.get('head') == head
+                          and verdict.get('severity_protocol') == 1)
+        if marked_approve:
+            self.follow_ups_wake(task, pr)
         from fm_evidence import Store
         records = Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external']).records()
         asks = []
@@ -498,7 +512,8 @@ class MechanicalLoop:
             if self.authoritative_head(task, pr) != head:
                 return  # A raced observation is reconsidered on the next poll.
             base = self.base_tip()
-            kind = 'protocol' if round_number >= 3 else 'gate'
+            # T-276: a marked APPROVE for this head is checked before the gate, in every round.
+            kind = 'protocol' if round_number >= 3 or marked_approve else 'gate'
             argv = self.script('fm-protocol.sh', 'check', '--task', task, '--pr', pr['number'],
                                '--round', round_number) if kind == 'protocol' else self.gate_command(task, pr)
             self.start_job(kind, task, pr, argv, base=base, round=round_number)
@@ -649,6 +664,14 @@ class MechanicalLoop:
                 self.save()
         if (kind in ('gate', 'protocol', 'review') and self.landed(task, pr)
                 and not (getattr(self, 'queue_mode', 'off') != 'off' and self.queue_carry_active(task, pr))): return
+        if kind in ('gate', 'protocol', 'review'):
+            # T-276: a stopped or held task starts no gate, review or merge card;
+            # a review result follows only the budget path in reject_wake.
+            import fm_round_budget
+            budget = self.round_budget(task, pr)
+            if budget is None or (kind != 'review' and budget['state'] in fm_round_budget.HELD):
+                self.data['next_poll'] = 0
+                return
         said = [line for line in output.splitlines() if 'log is at' in line or 'no adapter' in line]
         suffix = ' (' + said[-1] + ')' if said else ''
         if kind == 'protocol':
@@ -702,9 +725,6 @@ class MechanicalLoop:
         """
         from fm_evidence import Store, Refused, fixes_brief
         head = pr['head']['sha']
-
-        def wake(reason, en, tw):
-            self.attention(reason, task, pr, en, tw)
         round_number = verdict.get('round', 1)
         try:
             # An unsigned pre-T-138 verdict has no signature to bind to.
@@ -712,9 +732,26 @@ class MechanicalLoop:
             self.command(self.script('fm-protocol.sh', 'check', '--task', task, '--pr', pr['number'],
                                      '--round', round_number, *bound))
         except ERRORS:
-            wake('protocol', f'{task}: protocol violation in round {round_number}',
-                 f'{task}：審查協定違規，需要 firstmate 處理')
+            self.attention('protocol', task, pr, f'{task}: protocol violation in round {round_number}',
+                           f'{task}：審查協定違規，需要 firstmate 處理')
             return
+        # T-276: a stopped or held task gets its card or hold, never a brief wake.
+        budget = self.round_budget(task, pr)
+        if budget is None: return
+        if budget['state'] in ('parked', 'narrow'):
+            self.budget_hold(task, pr, budget)
+            return
+        if budget['state'] in ('stop', 'waiting'):
+            self.budget_stop(task, pr, budget)
+            return
+
+        def wake(reason, en, tw):
+            if budget['state'] == 'continue':
+                # A card-specific identity: an earlier wake for this head cannot
+                # suppress it, and a restart cannot repeat it.
+                self.queue('budget-continue-' + budget['card'], task, en, tw)
+            else:
+                self.attention(reason, task, pr, en, tw)
         try:
             store = Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external'])
             path, decision = fixes_brief(store, int(round_number) + 1, head)
@@ -730,6 +767,127 @@ class MechanicalLoop:
             where = Path(path).relative_to(self.state)
             wake('reject', f'{task} REJECT: review fixes ready at {where}; record the brief',
                  f'{task} 審查拒絕：審查修正草稿已備好於 {where}；請記錄工作簡報')
+
+    def budget_reader(self, task):
+        import fm_round_budget
+        # The engine checkout's own config.yaml; there is no per-project budget.
+        return fm_round_budget.Budget(str(self.state), self.ctx['evidence_project'], task,
+                                      self.root / 'config.yaml', env=self.adoption_env(),
+                                      external=self.ctx['external'])
+
+    def round_budget(self, task, pr):
+        """T-276 budget state, or None after a fixed-text wake when it cannot be read."""
+        try:
+            return self.budget_reader(task).state_of()
+        except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+            self.attention('budget-unreadable', task, pr,
+                           f'{task}: round budget state unreadable; check review_budget in config.yaml and the round-budget file',
+                           f'{task}：回合預算狀態無法讀取；請檢查 config.yaml 的 review_budget 與回合預算檔')
+            return None
+
+    def budget_hold(self, task, pr, budget):
+        card = budget['card']
+        if budget['state'] == 'parked':
+            self.queue('budget-park-' + card, task, f'{task} parked by the captain (card {card})',
+                       f'{task} 已由船長暫停（決策卡 {card}）')
+        else:
+            self.queue('budget-narrow-' + card, task,
+                       f'{task}: captain chose to narrow the scope (card {card}); prepare a repin',
+                       f'{task}：船長選擇縮小範圍（決策卡 {card}）；請準備重新釘選規格')
+
+    def budget_card_wake(self, task, ident, card):
+        rounds, budget = card['rounds'], card['budget']
+        self.queue('budget-card-' + ident, task,
+                   f'{task}: round budget reached ({rounds} of {budget} review rounds); captain card {ident}',
+                   f'{task}：審查回合已達上限（{rounds}／{budget}）；決策卡 {ident}')
+
+    def budget_failed(self, task, signature, reason):
+        if self.ctx['external']:
+            # Private reasons never reach an external project's wake.
+            en = f'{task}: round budget card failed; raise it by hand and run record-card'
+            tw = f'{task}：回合預算決策卡建立失敗；請手動提出並執行 record-card'
+        else:
+            reason = ' '.join(str(reason).split())[:200] or 'unknown error'
+            en = f'{task}: round budget card failed: {reason}; raise it by hand and run record-card'
+            tw = f'{task}：回合預算決策卡建立失敗：{reason}；請手動提出並執行 record-card'
+        self.queue('budget-failed-' + signature, task, en, tw)
+
+    def budget_stop(self, task, pr, budget):
+        """The card step: build, allocate, record and request once per stopping verdict."""
+        import fm_round_budget
+        latest = budget['latest']
+        if budget['state'] == 'waiting':
+            card = budget['record']
+            ident = card['id']
+            if self.ctx['external'] or any((self.state / folder / (ident + '.json')).exists()
+                                           for folder in ('pending', 'decisions')):
+                self.budget_card_wake(task, ident, card)
+            else:
+                # Recorded before a restart or a failed request: request the same id again.
+                self.request_budget_card(task, ident, card)
+            return
+        if self.ctx['external']:
+            # firstmate authors an external card; no history leaves the private state.
+            self.queue('budget-author-' + latest['signature'], task,
+                       f'{task}: round budget reached ({budget["rounds"]} of {budget["budget"]} review rounds); '
+                       'author the round budget card',
+                       f'{task}：審查回合已達上限（{budget["rounds"]}／{budget["budget"]}）；請撰寫回合預算決策卡')
+            return
+        owner = self.ctx['project'] or 'firstmate-workflow'
+        reserved = self.data.setdefault('budget_ids', {})
+        try:
+            ident = reserved.get(latest['signature'])
+            if not ident:
+                ident = self.command(self.script('fm-decide.sh', '--allocate', '--task', task,
+                                                 '--project', owner)).strip()
+                if not re.fullmatch(re.escape('D-' + owner + '-' + task.replace('-', '') + '-') + r'[1-9][0-9]*', ident):
+                    raise ValueError('invalid allocated card id')
+                reserved[latest['signature']] = ident
+                self.save()
+            reader = self.budget_reader(task)
+            self.build_budget_details(task, ident, dict(rounds=budget['rounds'], budget=budget['budget'],
+                                                        extend=reader.config['extend']), reader)
+            card = reader.record_card(ident)
+        except (fm_round_budget.Refused, ValueError, RuntimeError, OSError, KeyError, TypeError,
+                subprocess.SubprocessError) as error:
+            self.budget_failed(task, latest['signature'], error)
+            return
+        self.request_budget_card(task, ident, card)
+
+    def build_budget_details(self, task, ident, card, reader):
+        import fm_round_budget
+        cards = [c for c in reader.cards() if c['id'] != ident]
+        after = cards[-1]['round'] if cards else 0
+        rows = fm_round_budget.rounds(reader.store)
+        content = fm_round_budget.details(task, rows, card, reader.config['stall'], card['extend'], after)
+        path = self.state / 'decision-details-built' / (ident + '.json')
+        path.parent.mkdir(exist_ok=True)
+        save_json(path, content)
+        return path
+
+    def request_budget_card(self, task, ident, card):
+        owner = self.ctx['project'] or 'firstmate-workflow'
+        try:
+            path = self.build_budget_details(task, ident, card, self.budget_reader(task))
+            self.command(self.script('fm-decide.sh', '--request', ident, '--task', task, '--project', owner,
+                                     '--purpose', 'decision', '--details', path))
+        except (ValueError, RuntimeError, OSError, KeyError, TypeError, subprocess.SubprocessError) as error:
+            self.budget_failed(task, card['signature'], error)
+            return
+        self.budget_card_wake(task, ident, card)
+
+    def follow_ups_wake(self, task, pr):
+        from fm_evidence import Store, follow_ups
+        try:
+            count = len(follow_ups(Store(str(self.state), self.ctx['evidence_project'], task,
+                                         external=self.ctx['external'])))
+        except (ValueError, OSError, KeyError, TypeError):
+            return  # gate 6 reads the same records and reports them
+        if count:
+            # Never holds the merge card: advance continues to the gates.
+            self.attention('follow-ups', task, pr,
+                           f'{task} approved with {count} open follow-ups; propose follow-up tasks on a card',
+                           f'{task} 已核准，但仍有 {count} 個後續項目；請在決策卡上提出後續任務')
 
     def merge_card(self, task, pr, gated_base):
         from fm_concurrent import merge_blocker

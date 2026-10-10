@@ -593,7 +593,7 @@ closed_list() {
     END { exit !found }'; then
     printf '\nASK clarification: Before any truthful verdict, including APPROVE or REJECT, independently reissue the complete contiguous numbered standing list, preserve every prior numbered item and explain its finding associations, mark each done/open with factual evidence, and close it with CRITERIA-COMPLETE:%s before the verdict. This ASK exception applies even though ordinary no-ASK APPROVE need not reissue a list. Do not invent regressions or new ground, renumber away findings, require technical changes without findings, or choose a verdict to repair syntax.\n' "$TASK"
   fi
-  printf '\nEvery REJECT supplies the complete numbered standing list and CRITERIA-COMPLETE:%s. Preserve numbering and done/open states; label new items REGRESSION:%s or NEW-GROUND:%s. Syntax checks do not prove finding semantics.\n' "$TASK" "$TASK" "$TASK"
+  printf '\nEvery REJECT supplies the complete numbered standing list and CRITERIA-COMPLETE:%s. Preserve numbering and done/open states; label new items REGRESSION:%s or NEW-GROUND:%s. Keep each item'"'"'s `[must-fix]` or `[follow-up]` tag, and an untagged item counts as must-fix. Syntax checks do not prove finding semantics.\n' "$TASK" "$TASK" "$TASK"
 }
 
 # Given --pr, every round, in either mode, is shown what the machine found
