@@ -1602,7 +1602,9 @@ one amendment; a `SPEC-GAPS` item cannot be waved through.
 
 Re-preflight re-issues every earlier number, even after SPEC-OK: gap/open becomes
 done/open, and ok/done becomes ok/open. Only appended `gap NEW-GROUND:` (changed
-text) or `gap MISSED:` (previously overlooked) items may extend the list. Watch
+text) or `gap MISSED:` (previously overlooked) items may extend the list, except
+that a spec with more acceptance lines than the list may get unlabelled `N. ok:`
+items for new lines, up to the acceptance line count (T-284). Watch
 the signed receipt's `missed` count and inspect every MISSED item; repeated
 omissions defeat convergence. The receipt's `standing` field holds the parsed
 list, while its answer retains the verbatim checklist. Legacy receipts without
