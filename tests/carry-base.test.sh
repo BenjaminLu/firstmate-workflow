@@ -94,5 +94,67 @@ printf dirt > "$d/unrelated"
 export FM_EXTERNAL=1 FM_BASE=master
 sync_result 75 'without touching local work' master external-dirty
 assert_eq "$old" "$(git -C "$d" rev-parse master)" 'dirty managed base unchanged'
+# T-262: genuine SSH upload-pack observes both named carry-base fetch paths.
+# Literal dependencies: bin/lib/fm_git_transfer.py bin/lib/fm-ssh-transfer.sh bin/fm-config.sh
+transport_git="$(command -v git)"
+cat > "$t/carry-ssh" <<'SSH'
+#!/usr/bin/env python3
+import json, os, shlex, sys
+identity, args = sys.argv[1], sys.argv[2:]
+with open(os.environ['CARRY_SSH_LOG'], 'a') as stream:
+    stream.write(json.dumps({'identity': identity, 'args': args,
+        'count': os.environ.get('GIT_CONFIG_COUNT'),
+        'parameters': os.environ.get('GIT_CONFIG_PARAMETERS')}) + '\n')
+if os.environ.get('CARRY_SSH_FAIL') == '1':
+    sys.exit(255)
+remote = shlex.split(args[-1])[-1]
+os.execv(os.environ['CARRY_REAL_GIT'], [os.environ['CARRY_REAL_GIT'], 'upload-pack', remote])
+SSH
+chmod +x "$t/carry-ssh"
+carry_transport_case() (
+  mode="$1"
+  unset GIT_SSH_COMMAND GIT_SSH FM_SSH_GENERATED_COMMAND GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+  fixture "transport-$mode"
+  if [ "$mode" = external ]; then
+    git -C "$d" branch -m master
+    git -C "$d-origin" update-ref refs/heads/master "$live"
+    export FM_EXTERNAL=1 FM_BASE=master
+  fi
+  git -C "$d" remote set-url origin "ssh://example.invalid$d-origin"
+  # Source first, then mutate inherited config separately for each real fetch.
+  . "$ROOT/bin/fm-config.sh"
+  export CARRY_REAL_GIT="$transport_git" CARRY_SSH_LOG="$t/transport-$mode.jsonl"
+  export GIT_SSH_VARIANT=ssh GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.sshCommand
+  export GIT_CONFIG_VALUE_0="'$t/carry-ssh' count"
+  owner_command="$GIT_SSH_COMMAND"
+  out="$(fm_carry_sync_base "$FM_BASE" 2>&1)"; status=$?
+  assert_eq 0 "$status" "$mode COUNT-selected carry fetch succeeds"
+  assert_eq 1 "$GIT_CONFIG_COUNT" "$mode child preparation retains parent COUNT"
+  assert_eq "'$t/carry-ssh' count" "$GIT_CONFIG_VALUE_0" "$mode parent identity unchanged"
+  assert_eq "$owner_command" "$GIT_SSH_COMMAND" "$mode generated parent command unchanged"
+  assert_eq "$live" "$(git -C "$d" rev-parse "$FM_BASE")" "$mode COUNT fetch advances base"
+  unset GIT_CONFIG_COUNT
+  export GIT_CONFIG_PARAMETERS="'core.sshCommand=\"$t/carry-ssh\" parameters'"
+  out="$(fm_carry_sync_base "$FM_BASE" 2>&1)"; status=$?
+  assert_eq 0 "$status" "$mode changed PARAMETERS fetch succeeds"
+  assert_eq "'core.sshCommand=\"$t/carry-ssh\" parameters'" "$GIT_CONFIG_PARAMETERS" "$mode child preparation retains parent PARAMETERS"
+  export CARRY_SSH_FAIL=1
+  out="$(fm_carry_sync_base "$FM_BASE" 2>&1)"; status=$?
+  assert_eq 75 "$status" "$mode failed prepared fetch stays failed"
+  assert_contains "$out" 'cannot fetch the live base' "$mode failed transport diagnostic retained"
+  assert_eq '' "$(git -C "$d" for-each-ref --format='%(refname)' refs/fm/carry-base/)" "$mode transport failure cleans private refs"
+  assert_eq "$live" "$(git -C "$d" rev-parse "$FM_BASE")" "$mode failed fetch leaves base unchanged"
+  assert_ok "python3 - '$CARRY_SSH_LOG' <<'CHECK'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1])]
+assert [row['identity'] for row in rows] == ['count', 'parameters', 'parameters'], rows
+for row in rows:
+    assert row['count'] is None and row['parameters'] is None, row
+    for option in ('ConnectTimeout=20', 'ServerAliveInterval=15', 'ServerAliveCountMax=4'):
+        assert option in row['args'], row
+CHECK" "$mode actual SSH sees late identity, bounds and native inherited-config stripping"
+)
+carry_transport_case self
+carry_transport_case external
 safe_rm_rf "$t"
 finish

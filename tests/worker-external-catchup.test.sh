@@ -78,6 +78,11 @@ class Rebuild(unittest.TestCase):
             'rebuild_publishes'))
 
     def run_body(self, body, prefix=''):
+        tools = self.home / 'transfer-tools'
+        tools.mkdir(exist_ok=True)
+        recorder = tools / 'git'
+        recorder.write_text("#!/usr/bin/env python3\nimport json, os, shlex, sys\nwith open(os.environ['FM_FIXTURE_GIT_LOG'], 'a') as out: out.write(shlex.join(sys.argv[1:])+'\\n')\nwith open(os.environ['FM_FIXTURE_GIT_LOG']+'.jsonl', 'a') as out: out.write(json.dumps(sys.argv[1:])+'\\n')\nos.execv(os.environ['FM_FIXTURE_REAL_GIT'], [os.environ['FM_FIXTURE_REAL_GIT'], *sys.argv[1:]])\n")
+        recorder.chmod(0o755)
         setup = r'''
 cd "$tree" || exit 1
 FM_TARGET_ROOT="$tree"; FM_WORKTREES="$work"; worker_tmp="$work"
@@ -92,7 +97,8 @@ fm_private_stage() { :; }
 fm_task() { echo forbidden-private-task-read >&2; exit 99; }
 fm_git_name() { echo Test; }; fm_git_email() { echo test@example.invalid; }
 first_round_question() { return 1; }
-git() { printf '%s\n' "$*" >> "$work/gitcalls"; command git "$@"; }
+export FM_FIXTURE_REAL_GIT="$(command -v git)" FM_FIXTURE_GIT_LOG="$work/gitcalls"
+export PATH="$work/transfer-tools:$PATH" GIT_EXEC_PATH="$work/transfer-tools"
 '''
         return shell(root, self.home, self.definitions() + '\n' + body, setup + prefix)
 
