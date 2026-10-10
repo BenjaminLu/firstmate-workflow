@@ -30,7 +30,7 @@ class Entrypoints(unittest.TestCase):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         for name in ('fm_registry.py', 'fm_config_values.py', 'fm_config_tasks.py', 'fm_config_runtime.py',
                      'fm-task-grammar.sh', 'fm-stack.sh', 'fm_project_paths.py', 'fm_spec_pins.py', 'fm_concurrent.py', 'fm_merge_outcome.py',
-                     'fm_host.py', 'fm_hooks.py'):
+                     'fm_host.py', 'fm_hooks.py', 'fm-ssh-transfer.sh', 'fm_git_transfer.py'):
             shutil.copy2(ROOT/'bin/lib'/name, self.bin/'lib'/name)
         (self.root/'config.yaml').write_text('project:\n  check: "true"\n')
 
