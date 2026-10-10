@@ -28,5 +28,325 @@
     "Guards for still waking: with `queue_mode` `off`, exit 5 queues one 'stopped at gate 5 (ci)' wake for each of these outputs: a `failed: ci` line; a `pending (missing): ci` line; a pending line plus a failed line; empty output; and `fm-binding: required check/status pending: lint` where `lint` is not in `check_names(pr)`. Exit 4 still queues 'stopped at gate 4'.",
     "Guard for the self queue: with the fixture of `tests/lib/autopilot_queue.py`, `queue_mode` `enabled` and this pull request as the accepted front member, exit 5 with a pending line marks the member `blocked` and queues one 'stopped at gate 5 (ci)' wake.",
     "Guard for starting again: after a skipped pending result, `advance()` called with `CHECKS` plus a run of `ci` with id 2 whose status is `queued` (the shape at `tests/lib/autopilot_loop.py` about line 386) starts no gate, and `advance()` called with a completed `ci` run with id 2 starts one gate."
-  ]
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A gate that stops only because tracked required checks are still running raises no wake."
+        },
+        {
+          "kind": "fact",
+          "text": "A failed, missing or unknown check still raises the same wake as today."
+        },
+        {
+          "kind": "fact",
+          "text": "With the self queue on, gate results follow the current rules."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "After each merge today, every open pull request sent one false gate 5 wake."
+        },
+        {
+          "kind": "fact",
+          "text": "Real problems got lost among these wakes."
+        }
+      ],
+      "scope_in": [
+        "the autopilot loop",
+        "new test suites"
+      ],
+      "scope_out": [
+        "gate 5 itself",
+        "gate numbers",
+        "the self queue rules"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: tests show no wake for an output with only pending lines."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: guards show a wake for failed, missing, mixed and empty output."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: a guard shows the self queue path is unchanged."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "It overlaps T-262, T-276 and T-281 in the autopilot loop."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Gate 5 stops"
+        },
+        {
+          "state": "gone",
+          "label": "Wake firstmate"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Gate 5 stops"
+        },
+        {
+          "state": "new",
+          "label": "No wake, gate again later"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Gate"
+          },
+          {
+            "label": "Firstmate"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "gate",
+            "label": "Gate 5 stops",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "pend",
+            "label": "Check still running",
+            "lane": 0,
+            "kind": "decision",
+            "state": "same"
+          },
+          {
+            "id": "noise",
+            "label": "Wake firstmate",
+            "lane": 1,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "wait",
+            "label": "No wake, gate again later",
+            "lane": 0,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "gate",
+            "to": "pend",
+            "state": "same"
+          },
+          {
+            "id": "e2",
+            "from": "pend",
+            "to": "noise",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "pend",
+            "to": "wait",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e1",
+            "e3"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "Running checks alone no longer wake firstmate.",
+            "intents": [
+              1,
+              2
+            ]
+          }
+        ]
+      }
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "gate 只因追蹤中的必要 check 還在跑而停下時，不發通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "check 失敗、缺少或無法判斷時，照舊發同樣的通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "self queue 開著時，gate 結果照現行規則處理。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "今天每次合併後，每個開著的 PR 都發一則假的 gate 5 通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "真正的問題淹沒在這些通知裡。"
+        }
+      ],
+      "scope_in": [
+        "autopilot 迴圈",
+        "新測試"
+      ],
+      "scope_out": [
+        "gate 5 本身",
+        "gate 編號",
+        "self queue 規則"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：測試證明輸出只有 pending 行時不通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：守門測試證明失敗、缺少、混合和空白輸出都會通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：守門測試證明 self queue 的路徑不變。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "它和 T-262、T-276、T-281 都改 autopilot 迴圈。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "gate 5 停下"
+        },
+        {
+          "state": "gone",
+          "label": "通知 firstmate"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "gate 5 停下"
+        },
+        {
+          "state": "new",
+          "label": "不通知，之後重跑 gate"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "gate"
+          },
+          {
+            "label": "firstmate"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "gate",
+            "label": "gate 5 停下",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "pend",
+            "label": "check 還在跑",
+            "lane": 0,
+            "kind": "decision",
+            "state": "same"
+          },
+          {
+            "id": "noise",
+            "label": "通知 firstmate",
+            "lane": 1,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "wait",
+            "label": "不通知，之後重跑 gate",
+            "lane": 0,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "gate",
+            "to": "pend",
+            "state": "same"
+          },
+          {
+            "id": "e2",
+            "from": "pend",
+            "to": "noise",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "pend",
+            "to": "wait",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e1",
+            "e3"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "只是 check 還在跑時，不再通知 firstmate。",
+            "intents": [
+              1,
+              2
+            ]
+          }
+        ]
+      }
+    }
+  }
 }
