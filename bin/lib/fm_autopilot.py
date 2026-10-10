@@ -63,7 +63,8 @@ class Pilot(BranchUpdates, MechanicalLoop):
         if not isinstance(self.data, dict): raise ValueError('invalid autopilot recovery state')
         for name, default in dict(offset=0, wake_offset=0, seen={}, batches={},
                                   wakes={}, pulls={}, cache={}, failures=0, next_poll=0,
-                                  poll_seq=0, retries={}, holds={}, updates={}, advanced={}, rechecked={}, restacks={}).items():
+                                  poll_seq=0, retries={}, holds={}, updates={}, advanced={}, rechecked={}, restacks={},
+                                  stuck={}).items():
             self.data.setdefault(name, default)
         if not self.data.get('migrated_t205'):
             for token, action in self.data.get('actions', {}).items():
@@ -610,12 +611,12 @@ class Pilot(BranchUpdates, MechanicalLoop):
     def gh(self, *args):
         return [os.environ.get('FM_GH', 'gh'), *map(str, args)]
 
-    def emit(self, kind, task, en, tw, pr=None, actor='autopilot'):
+    def emit(self, kind, task, en, tw, pr=None, actor='autopilot', env=None):
         self.command(['bash', str(BIN / 'fm-emit.sh'), '--actor', actor, '--type', kind,
                       *(['--task', task] if task else []), '--en', en, '--tw', tw,
                       *(['--pr', str(pr)] if pr else []),
                       *(['--project', self.ctx['project']] if self.ctx['project'] else [])],
-                     env={**os.environ, 'FM_ROOT': str(self.root)})
+                     env={**os.environ, 'FM_ROOT': str(self.root), **(env or {})})
 
     def queue(self, identity, task, en, tw):
         ident = 'autopilot-' + key([self.ctx['project'], identity])
@@ -929,6 +930,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
         if self.data['rechecked'].get(number, {}).get('head') == head:
             self.recheck(task, pr, reviews)
         self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
+        self.settle_stale_jobs(number=pr['number'], head=head)
         try:
             queue_mode = getattr(self, 'queue_mode', 'off')
             behind_front = (queue_mode in ('enabled', 'drain') and pr.get('mergeable') is True
@@ -938,6 +940,8 @@ class Pilot(BranchUpdates, MechanicalLoop):
         except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
             self.attention('advance-error', task, pr, f'{task}: advancement needs reconciliation: {error}',
                            f'{task}：機械流程需要 firstmate 核對')
+        if not self.ctx['external'] and getattr(self, 'queue_mode', 'off') == 'off':
+            self.stuck_check(task, pr, runs, statuses)
         latest = {}
         for row in runs:
             if row.get('head_sha') == head:
@@ -1090,6 +1094,11 @@ class Pilot(BranchUpdates, MechanicalLoop):
             for item in recent:
                 if self.observed_closure(item): self.closed_pull(item)
             open_numbers = {str(item['number']) for item in pulls}
+            self.settle_stale_jobs(open_numbers=open_numbers)
+            stuck = self.data.setdefault('stuck', {})
+            for number in [n for n in stuck if n not in open_numbers]:
+                del stuck[number]
+            self.save()
             for number, previous in list(self.data['pulls'].items()):
                 if number not in open_numbers and (not previous.get('terminal') or previous.get('event_pending')):
                     self.closed_pull(self.api('pulls/' + number))
