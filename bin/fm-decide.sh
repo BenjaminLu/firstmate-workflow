@@ -8,6 +8,7 @@
 #   fm-decide.sh --request <id> --task <id> --details details.json [--purpose <p>]
 #   fm-decide.sh --request D-SK-001 --task SK-001 --kind choice --title "..."
 #   fm-decide.sh --request D-1096 --kind merge-untracked --pr 96 --details details.json
+#   fm-decide.sh --request D-1000 --kind choice --purpose retro --retro-run <run-id> --details details.json
 #   fm-decide.sh --await   D-firstmate-workflow-T047-1 [--timeout 3600]
 #
 # A merge card names its pull request and its task, and they must agree
@@ -33,6 +34,15 @@
 # before this (D-<digits>, D-SK-<n>) stay valid wherever they are read, and
 # are never renamed or moved.
 #
+# A hand-raised D-<digits> id is published through bin/lib/fm_retro.py
+# publish-numeric when that file sits beside this script (T-273): under the
+# retro index lock it checks that no card holds the number and that no
+# retrospective reserved it, then creates the pending file exclusively. A
+# retrospective's own card (--purpose retro) names its run, takes only the
+# number reserved for that run, offers A and C only, and carries an items list
+# equal to the run's card-items.json. A tree without fm_retro.py holds no
+# reservations and publishes directly, as before.
+#
 # Waiting blocks on a doorbell of the wait's own, which the board rings
 # when it writes an answer (T-151); nothing polls for the file. It
 # deliberately depends on neither fswatch, entr nor watchexec: a board that
@@ -46,7 +56,7 @@ set -uo pipefail
 exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=''; TIMEOUT=0; DETAILS=''; PURPOSE=''; PURPOSE_GIVEN=0
-PROJECT=''; ID_PROJECT=''; ID_TASK=''; ID_N=''; GH="${FM_GH:-gh}"
+PROJECT=''; ID_PROJECT=''; ID_TASK=''; ID_N=''; GH="${FM_GH:-gh}"; RETRO_RUN=''
 # the registry library lives beside this script, wherever --repo points
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # See fm_need in bin/fm-config.sh: shifting two with one argument does not
@@ -90,6 +100,7 @@ while [ $# -gt 0 ]; do
     --details) need "$@"; DETAILS="${2-}"; shift 2 ;;
     --expected-head) need "$@"; EXPECTED_HEAD="${2-}"; shift 2 ;;
     --pr)    need "$@"; PR="${2-}";    shift 2 ;;
+    --retro-run) need "$@"; RETRO_RUN="${2-}"; shift; shift ;;
     --repo)  need "$@"; REPO="${2-}";  shift 2 ;;
     --timeout) need "$@"; TIMEOUT="${2-}"; shift 2 ;;
     *) echo "fm-decide: unknown argument $1" >&2; exit 64 ;;
@@ -334,11 +345,37 @@ pr_agrees() {   # pr_agrees: returns when --pr is --task's pull request (none fo
     echo "fm-decide: #$PR is $owner's pull request (branch '$branch'), not $TASK's; no card raised" >&2; exit 65; }
 }
 
+# One card's pending file, created exclusively. A hand-raised numeric id goes
+# through the retro index lock when bin/lib/fm_retro.py is here (T-273).
+publish() {   # publish <payload>
+  local rc
+  if fm_decision_id "$ID" numeric && [ -r "$HERE/lib/fm_retro.py" ]; then
+    # On a pipe, never in a file of its own: a retrospective card's text may
+    # be an external project's, which only the card's own records may hold.
+    printf '%s\n' "$1" | python3 "$HERE/lib/fm_retro.py" publish-numeric --state "$FM_STATE_DIR" --id "$ID" --payload - \
+      ${RETRO_RUN:+--retro-run "$RETRO_RUN"} >/dev/null; rc=$?
+    [ "$rc" -eq 0 ] || exit 65
+    return 0
+  fi
+  (set -o noclobber; printf '%s\n' "$1" > "$PEND/$ID.json") || exit 65
+}
+
 if [ "$MODE" = request ]; then
   case "$KIND" in choice|merge|merge-untracked) ;; *) echo 'fm-decide: bad kind' >&2; exit 64 ;; esac
   if [ "$PURPOSE_GIVEN" = 1 ]; then
-    case "$PURPOSE" in dispatch|repin|scope|skill|decision) ;; *) echo "fm-decide: bad purpose $PURPOSE" >&2; exit 64 ;; esac
+    case "$PURPOSE" in dispatch|repin|scope|skill|decision|retro) ;; *) echo "fm-decide: bad purpose $PURPOSE" >&2; exit 64 ;; esac
     [ "$KIND" = choice ] || { echo 'fm-decide: --purpose applies only to a choice card' >&2; exit 64; }
+  fi
+  # A retrospective's card (T-273) belongs to no task and to one run: a
+  # hand-raised D-<digits> id that bin/lib/fm_retro.py reserved for that run.
+  if [ "$PURPOSE" = retro ] || [ -n "$RETRO_RUN" ]; then
+    [ "$PURPOSE" = retro ] && [ -n "$RETRO_RUN" ] || {
+      echo 'fm-decide: a retrospective card takes --purpose retro with --retro-run <run-id>' >&2; exit 64; }
+    [ -z "$TASK" ] || { echo 'fm-decide: a retrospective card belongs to no task; drop --task' >&2; exit 64; }
+    fm_decision_id "$ID" numeric || {
+      echo 'fm-decide: a retrospective card takes a hand-raised D-<digits> id' >&2; exit 64; }
+    [ -n "$DETAILS" ] || { echo 'fm-decide: a retrospective card needs --details' >&2; exit 64; }
+    [ -r "$HERE/lib/fm_retro.py" ] || { echo "fm-decide: missing $HERE/lib/fm_retro.py" >&2; exit 70; }
   fi
   fm_decision_id "$ID" || { echo 'fm-decide: bad decision id' >&2; exit 64; }
   if fm_decision_id "$ID" skill; then
@@ -378,24 +415,37 @@ if [ "$MODE" = request ]; then
     fm_decision_id "$ID" || { echo 'fm-decide: bad decision id' >&2; exit 64; }
     # a task id, or the T-<...> a card has always taken; an untracked merge
     # card has none, checked above
-    [ "$KIND" = merge-untracked ] || [[ "$TASK" =~ ^T-[A-Za-z0-9._-]{1,32}$ ]] || fm_task_is "$TASK" \
+    [ "$KIND" = merge-untracked ] || [ "$PURPOSE" = retro ] || [[ "$TASK" =~ ^T-[A-Za-z0-9._-]{1,32}$ ]] || fm_task_is "$TASK" \
       || { echo 'fm-decide: bad task' >&2; exit 64; }
     if [ "$KIND" = merge ] || [ "$KIND" = merge-untracked ]; then
       [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo 'fm-decide: merge requires a positive PR' >&2; exit 64; }
     fi
-    [ -f "$DETAILS" ] && jq -e -s '
+    # items belong to a retrospective card and to no other card (T-273)
+    if [ "$PURPOSE" != retro ] && jq -e 'any(.en,."zh-TW"; type == "object" and has("items"))' "$DETAILS" >/dev/null 2>&1; then
+      echo 'fm-decide: items apply only to a retrospective card (--purpose retro); nothing was written' >&2; exit 64
+    fi
+    if [ "$PURPOSE" = retro ] && ! jq -e 'all(.en,."zh-TW"; has("items"))' "$DETAILS" >/dev/null 2>&1; then
+      echo 'fm-decide: a retrospective card carries its items in both locales; nothing was written' >&2; exit 64
+    fi
+    # A retrospective card offers A and C only, and asks no questions.
+    [ -f "$DETAILS" ] && jq -e -s --arg purpose "$PURPOSE" '
       def bad: (. < 32 and . != 9 and . != 10 and . != 13)
         or (. >= 127 and . <= 159) or (. >= 55296 and . <= 57343);
       def words: type == "string" and length <= 2000 and test("\\S")
         and (any(explode[]; bad) | not);
+      def option: type == "object" and (.description|words) and (.pros|words) and (.cons|words);
       def locale: type == "object" and (.title|words) and (.explanation|words)
         and (.before|words) and (.after|words)
         and (.outcome|words)
         and (.options|type == "object")
-        and all(.options.A,.options.B,.options.C;
-          type == "object" and (.description|words) and (.pros|words) and (.cons|words));
+        and (if $purpose == "retro"
+             then (.options|keys) == ["A","C"] and all(.options.A,.options.C; option) and (has("questions")|not)
+             else all(.options.A,.options.B,.options.C; option) end);
       length == 1 and (.[0] | type == "object" and (.en|locale) and (."zh-TW"|locale))
     ' "$DETAILS" >/dev/null 2>&1 || {
+      if [ "$PURPOSE" = retro ]; then
+        echo 'fm-decide: a retrospective card needs complete en and zh-TW details with options A and C only, and no questions' >&2; exit 64
+      fi
       echo 'fm-decide: --details requires complete authored en and zh-TW title, explanation, before, after, outcome and A/B/C description/pros/cons' >&2; exit 64;
     }
     # What each option does when the captain picks it (T-118): an optional
@@ -433,7 +483,7 @@ if [ "$MODE" = request ]; then
     fi
     rm -f "$plain_error"
     ste='null'; ste_deferred=false
-    if jq -e 'any(.en,."zh-TW"; has("intent") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table") or has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null; then
+    if jq -e 'any(.en,."zh-TW"; has("intent") or has("scope_in") or has("scope_out") or has("done") or has("notes") or has("questions") or has("before_nodes") or has("after_nodes") or has("change_table") or has("change_points") or has("door") or has("check") or has("items"))' "$DETAILS" >/dev/null; then
       [ -r "$HERE/lib/fm_ste.py" ] || {
         echo "fm-decide: missing $HERE/lib/fm_ste.py; nothing was written" >&2; exit 70;
       }
@@ -480,6 +530,11 @@ PYTITLE
         case "$ste_rc" in 64|65) exit "$ste_rc";; *) exit 70;; esac
       fi
       rm -f "$ste_error"
+    fi
+    # The run's own reservation and item order, after the text checks
+    if [ "$PURPOSE" = retro ]; then
+      python3 "$HERE/lib/fm_retro.py" card-check --engine "$(cd "$HERE/.." && pwd -P)" \
+        --retro-run "$RETRO_RUN" --id "$ID" --details "$DETAILS" >/dev/null || exit 65
     fi
     # Preserve authored-card and canonical ownership refusal precedence.
     [ "$KIND" = choice ] || pr_agrees
@@ -589,7 +644,13 @@ PYWALK
     fi
     # Store each glossary id as {id, term, text} for its locale, so the card
     # keeps the explanation it had when it was raised.
-    glossary_details="$(mktemp)" || exit 70
+    # A retrospective card's text stays beside its details in the run's
+    # private/ folder, never in a shared temporary directory (T-273).
+    if [ "$PURPOSE" = retro ]; then
+      glossary_details="$(mktemp "$(dirname "$DETAILS")/glossary.XXXXXX")" || exit 70
+    else
+      glossary_details="$(mktemp)" || exit 70
+    fi
     python3 - "$HERE/lib" "$DETAILS" > "$glossary_details" <<'PYGLOSSARY' || { rm -f "$glossary_details"; exit 65; }
 import json, sys
 sys.path.insert(0, sys.argv[1])
@@ -619,7 +680,7 @@ PYGLOSSARY
     if [ "${walk_enriched:-false}" = true ] && jq -e 'has("check_answer")' "$walk_spec" >/dev/null; then
       payload="$(jq --slurpfile spec "$walk_spec" '. + {check_answer:$spec[0].check_answer}' <<<"$payload")" || exit 65
     fi
-    (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || { rm -f "$glossary_details"; exit 65; }
+    (set -o noclobber; publish "$payload") || { rm -f "$glossary_details"; exit 65; }
     # after the pending file and before the event: the generator reads the file
     # it is drawing, and the event is what wakes anything watching
     draw
