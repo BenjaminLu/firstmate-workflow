@@ -1,0 +1,352 @@
+{
+  "id": "T-282",
+  "title": "A gate that stops at gate 5 only because a required check is still running raises no wake; a failed or missing check still does",
+  "public_title": "Do not wake firstmate when a gate stops only because CI is still running",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_autopilot_loop.py",
+    "tests/gate-ci-pending.test.sh",
+    "tests/lib/gate_ci_pending.py",
+    "tests/lib/gate_ci_pending_queue.py",
+    "design/tasks/T-282.json"
+  ],
+  "acceptance": [
+    "Why. Firstmate is the supervising agent that briefs workers and answers the captain. The autopilot (`bin/lib/fm_autopilot_loop.py`) is the background loop beside it that runs gates, reviews and merge cards. When the autopilot needs firstmate, it queues a wake, a short message firstmate must act on, through `attention()` (about line 261). A gate run that exits 5 queues the wake 'T-xxx: stopped at gate 5 (ci)'.",
+    "Why, the noise. Gate 5 (`gate5` in `bin/fm-gate.sh` about line 243) asks `fm_binding checks`. That command stops at the first problem and prints one reason line, and the gate exits 5 both when a required check failed and when it is still running. On 2026-10-10 dozens of these wakes fired right after branches were brought up to date with main, while CI was still running. Each needed firstmate to look, found nothing to do, and hid wakes that did need action.",
+    "How. When a gate job exits 5 and its only reasons are required checks that are still running, and the autopilot itself tracks those checks, `_job_completed` queues no wake. The next poll starts the gate again when those checks finish. Any other reason still queues the wake, as today.",
+    "Terms. `required_checks` in `bin/lib/fm_binding.py` (about lines 180-232) reads the required checks of a pull request head and, when it stops, prints one line to standard error. The autopilot keeps that line in the job's `output`, because `run_job` joins standard error into standard output (`bin/lib/fm_autopilot_loop.py` about line 889). `fm-binding: required check/status pending: <name>` means the check exists but has not finished. `fm-binding: required check/status pending (missing): <name>` means the check does not exist on the head yet. `fm-binding: required check/status failed: <name>` means it finished and did not pass. Any other `fm-binding: ` line means the list could not be read. The self queue is an opt-in mode (`queue_mode` other than `off`) in which the autopilot lets pull requests on firstmate's own repository reach merge one at a time.",
+    "Names the autopilot tracks. Add the helper `check_names(pr)` to the loop and move into it the code in `settled_checks()` (about lines 306-316) that collects check names from `self.policy` and from branch protection. It returns that name set and raises in the same two cases as today: branch protection cannot be read and `self.policy` gives no names, or there are no confirmed names. `settled_checks()` calls it, so its results do not change.",
+    "Rule. For a `gate` job result with exit code 5 and `queue_mode` `off`, `_job_completed` does not call `attention('gate', ...)` when all of these hold: the output has at least one line that starts with exactly `fm-binding: required check/status pending: ` (with the space after the colon, so the `(missing)` line does not match); the output has no other line that starts with `fm-binding: `; and every name on those pending lines is in `check_names(pr)`. If `check_names(pr)` raises, the wake is queued. The job ends `done` as today.",
+    "Still waking. With `queue_mode` `off`, every other gate result with exit 5 queues the same wake as today, with the same text 'T-xxx: stopped at gate 5 (ci)' and the same identity.",
+    "Self queue unchanged. With `queue_mode` other than `off`, an exit 5 result is handled exactly as today: when the queue guard refuses the result, `_job_completed` returns early with no wake (`bin/lib/fm_autopilot_loop.py` about lines 630-638); when it accepts, the member is marked blocked (about lines 639-646) and the wake is queued.",
+    "Everything else unchanged. Gate exit codes other than 5, protocol results and review results are handled exactly as today. `bin/fm-gate.sh`, `bin/lib/fm_binding.py` and the gate numbering do not change.",
+    "Starting the gate again. No new scheduling is added. While a tracked check runs, `settled_checks()` returns `None`, so `advance()` starts no gate. When it finishes, the inputs `advance()` fingerprints include each check's id and conclusion (about lines 455-481), so the fingerprint changes and `advance()` starts the gate.",
+    "New suite. `tests/gate-ci-pending.test.sh` runs two files, each with the repository root as its only argument: `tests/lib/gate_ci_pending.py`, which imports `tests/lib/autopilot_loop.py`, and `tests/lib/gate_ci_pending_queue.py`, which imports `tests/lib/autopilot_queue.py` for the self queue guard. Both fixture modules take the root argument from `sys.argv` when imported, so each new file imports only one of them. The new test classes copy the fixture helpers they need (for example `setUp = fixture.LoopTests.setUp`, as `tests/lib/autopilot_merge_path.py` about lines 18-30 does) and do not inherit the fixture test classes, so the existing suites do not run twice. `bin/ci.sh` runs every `tests/*.test.sh`, so no CI change is needed.",
+    "Red on base, pending: a gate result with exit 5 whose output holds `  x gate 5 (ci): the required GitHub check is green` and `fm-binding: required check/status pending: ci` queues no wake.",
+    "Red on base, pending line only: an exit 5 whose output has only that pending line queues no wake. The final ready step of `bin/fm-gate.sh` also exits 5 with such output.",
+    "Guards for still waking: with `queue_mode` `off`, exit 5 queues one 'stopped at gate 5 (ci)' wake for each of these outputs: a `failed: ci` line; a `pending (missing): ci` line; a pending line plus a failed line; empty output; and `fm-binding: required check/status pending: lint` where `lint` is not in `check_names(pr)`. Exit 4 still queues 'stopped at gate 4'.",
+    "Guard for the self queue: with the fixture of `tests/lib/autopilot_queue.py`, `queue_mode` `enabled` and this pull request as the accepted front member, exit 5 with a pending line marks the member `blocked` and queues one 'stopped at gate 5 (ci)' wake.",
+    "Guard for starting again: after a skipped pending result, `advance()` called with `CHECKS` plus a run of `ci` with id 2 whose status is `queued` (the shape at `tests/lib/autopilot_loop.py` about line 386) starts no gate, and `advance()` called with a completed `ci` run with id 2 starts one gate."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A gate that stops only because tracked required checks are still running raises no wake."
+        },
+        {
+          "kind": "fact",
+          "text": "A failed, missing or unknown check still raises the same wake as today."
+        },
+        {
+          "kind": "fact",
+          "text": "With the self queue on, gate results follow the current rules."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "After each merge today, every open pull request sent one false gate 5 wake."
+        },
+        {
+          "kind": "fact",
+          "text": "Real problems got lost among these wakes."
+        }
+      ],
+      "scope_in": [
+        "the autopilot loop",
+        "new test suites"
+      ],
+      "scope_out": [
+        "gate 5 itself",
+        "gate numbers",
+        "the self queue rules"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: tests show no wake for an output with only pending lines."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: guards show a wake for failed, missing, mixed and empty output."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: a guard shows the self queue path is unchanged."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "It overlaps T-262, T-276 and T-281 in the autopilot loop."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Gate 5 stops"
+        },
+        {
+          "state": "gone",
+          "label": "Wake firstmate"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Gate 5 stops"
+        },
+        {
+          "state": "new",
+          "label": "No wake, gate again later"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Gate"
+          },
+          {
+            "label": "Firstmate"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "gate",
+            "label": "Gate 5 stops",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "pend",
+            "label": "Check still running",
+            "lane": 0,
+            "kind": "decision",
+            "state": "same"
+          },
+          {
+            "id": "noise",
+            "label": "Wake firstmate",
+            "lane": 1,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "wait",
+            "label": "No wake, gate again later",
+            "lane": 0,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "gate",
+            "to": "pend",
+            "state": "same"
+          },
+          {
+            "id": "e2",
+            "from": "pend",
+            "to": "noise",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "pend",
+            "to": "wait",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e1",
+            "e3"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "Running checks alone no longer wake firstmate.",
+            "intents": [
+              1,
+              2
+            ]
+          }
+        ]
+      }
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "gate 只因追蹤中的必要 check 還在跑而停下時，不發通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "check 失敗、缺少或無法判斷時，照舊發同樣的通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "self queue 開著時，gate 結果照現行規則處理。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "今天每次合併後，每個開著的 PR 都發一則假的 gate 5 通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "真正的問題淹沒在這些通知裡。"
+        }
+      ],
+      "scope_in": [
+        "autopilot 迴圈",
+        "新測試"
+      ],
+      "scope_out": [
+        "gate 5 本身",
+        "gate 編號",
+        "self queue 規則"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：測試證明輸出只有 pending 行時不通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：守門測試證明失敗、缺少、混合和空白輸出都會通知。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：守門測試證明 self queue 的路徑不變。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "它和 T-262、T-276、T-281 都改 autopilot 迴圈。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "gate 5 停下"
+        },
+        {
+          "state": "gone",
+          "label": "通知 firstmate"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "gate 5 停下"
+        },
+        {
+          "state": "new",
+          "label": "不通知，之後重跑 gate"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "gate"
+          },
+          {
+            "label": "firstmate"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "gate",
+            "label": "gate 5 停下",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "pend",
+            "label": "check 還在跑",
+            "lane": 0,
+            "kind": "decision",
+            "state": "same"
+          },
+          {
+            "id": "noise",
+            "label": "通知 firstmate",
+            "lane": 1,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "wait",
+            "label": "不通知，之後重跑 gate",
+            "lane": 0,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "gate",
+            "to": "pend",
+            "state": "same"
+          },
+          {
+            "id": "e2",
+            "from": "pend",
+            "to": "noise",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "pend",
+            "to": "wait",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e1",
+            "e3"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "只是 check 還在跑時，不再通知 firstmate。",
+            "intents": [
+              1,
+              2
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
