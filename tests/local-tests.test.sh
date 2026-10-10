@@ -370,6 +370,26 @@ truncated_scenario() {   # truncated_scenario <none|pr number>
   safe_rm_rf "$d"
 }
 
+# the plain-writing lint reads the note without its block (self, with a PR)
+lint_scenario() {   # lint_scenario <whole|truncated>
+  lt_fixture
+  { printf 'The worker says kept7sentinel here.\n\n'
+    block "$good" | sed 's/| 1 | |/| 1 | exit 1; failing: leak7sentinel |/'; } > "$d/say-in"
+  [ "$1" = whole ] || sed -i.bak '$d' "$d/say-in"
+  FM_LTX_CHANGE="$CHANGE_SUITE" FM_LTX_RUN=0 FM_LTX_AFTER="cp '$d/say-in' .fm-say.md" lt_round --pr 9
+  lint="$(jq -c 'select(.source == "worker-note")' "$r/state/runtime/plain-writing.jsonl" 2>/dev/null)"
+  if [ "$1" = whole ]; then
+    assert_contains "$(cat "$d/bodies" 2>/dev/null)" "leak7sentinel" "lint, self: the note is delivered with its block"
+    assert_contains "$lint" "kept7sentinel" "lint: the results block stays out of the plain-writing log (self, worker words logged)"
+    assert_lacks "$lint" "leak7sentinel" "lint: the results block stays out of the plain-writing log (self)"
+  else
+    assert_contains "$(run_log)" "fm-worker: plain-writing lint skipped: the results block does not read" \
+      "lint: a truncated block skips the lint (self, the log line)"
+    assert_eq "" "$lint" "lint: a truncated block skips the lint (self, no worker-note entry)"
+  fi
+  safe_rm_rf "$d"
+}
+
 # a note that cannot be read: today's paths, plus the valid:false event
 unreadable_scenario() {   # unreadable_scenario <none|pr number>
   lt_fixture
@@ -428,6 +448,8 @@ spawn no_block_scenario
 for kind in extra-key string negative second-block no-end v2; do spawn invalid_block_scenario "$kind"; done
 spawn truncated_scenario none
 spawn truncated_scenario 9
+spawn lint_scenario whole
+spawn lint_scenario truncated
 if [ "$(id -u)" != 0 ]; then
   spawn unreadable_scenario none
   spawn unreadable_scenario 9

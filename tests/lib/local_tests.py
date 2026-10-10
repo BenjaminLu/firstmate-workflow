@@ -671,6 +671,28 @@ def block_checks(root):
               'private-sentinel' not in comments + bodies, comments + bodies)
         if mode == 'comments':
             check('external comments: the worker words are posted', 'Worker words for the reviewer.' in bodies, bodies)
+    # The plain-writing lint reads the note without its block: a glued
+    # sentinel in a Detail cell never reaches the log, one in the words does.
+    lint_log = tmp / 'state/runtime/plain-writing.jsonl'
+    clear()
+    lint_log.unlink(missing_ok=True)
+    (tmp / 'note').write_text('Worker words kept7sentinel here.\n\n'
+                              + results.replace('private-sentinel-assertion', 'leak7sentinel'))
+    p = shell(root, tmp, post + 'post_note "$work/note" 9; echo "rc=$? spoke=$spoke"',
+              'projection=comments; spoke=0; log="$work/log"')
+    logged = lint_log.read_text() if lint_log.exists() else ''
+    check('lint: the results block stays out of the plain-writing log (external comments)',
+          'kept7sentinel' in logged and 'leak7sentinel' not in logged, (logged, p.stdout, p.stderr))
+    clear()
+    lint_log.unlink(missing_ok=True)
+    (tmp / 'note').write_text('Worker words kept7sentinel here.\n\n'
+                              + results.replace('<!-- /fm-local-tests -->\n', ''))
+    p = shell(root, tmp, post + 'post_note "$work/note" 9; echo "rc=$? spoke=$spoke"',
+              'projection=comments; spoke=0; log="$work/log"')
+    log = (tmp / 'log').read_text() if (tmp / 'log').exists() else ''
+    check('lint: a truncated block skips the lint (external comments)',
+          'fm-worker: plain-writing lint skipped: the results block does not read' in log
+          and not lint_log.exists(), (log, p.stdout, p.stderr))
     clear()
     (tmp / 'note').write_text(results)
     p = shell(root, tmp, post + 'post_note "$work/note" 9; echo "rc=$? spoke=$spoke"',

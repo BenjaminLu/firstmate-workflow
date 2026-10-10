@@ -1938,6 +1938,7 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
     if [ -z "$note_body" ] \
         || ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_local_tests.py" strip "$1" > "$note_body" 2>/dev/null </dev/null; then
       printf '%s\n' 'fm-worker: the local test results could not be removed from the note; no comment is posted and the private record is kept' >> "$log"
+      [ "$projection" != comments ] || printf '%s\n' 'fm-worker: plain-writing lint skipped: the results block does not read' >> "$log"
       spoke=1
       return 0
     fi
@@ -1947,11 +1948,23 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
     fi
   fi
   [ "$projection" = comments ] || return 0
-  local body="$note_body" landed=0 retries=0 lookup_rc delay marker_hex
+  local body="$note_body" landed=0 retries=0 lookup_rc delay marker_hex lint_body="$note_body"
   local retry_delays=()
+  # T-275: the lint reads the note without the results block (the external
+  # body is stripped above), so suite paths and assertion names stay out of
+  # the log; a block that does not strip skips the lint.
+  if [ "$FM_EXTERNAL" = 0 ]; then
+    lint_body="$(scratch_new)" || lint_body=''
+    [ -z "$lint_body" ] || scratch_add "$lint_body"
+    if [ -z "$lint_body" ] \
+        || ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_local_tests.py" strip "$1" > "$lint_body" 2>/dev/null </dev/null; then
+      lint_body=''
+      printf '%s\n' 'fm-worker: plain-writing lint skipped: the results block does not read' >> "$log"
+    fi
+  fi
   # Advisory only (T-270): plain-writing findings go to firstmate's log, and
   # the note is posted whatever they say.
-  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plain.py" lint "$note_body" --source worker-note \
+  [ -z "$lint_body" ] || python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plain.py" lint "$lint_body" --source worker-note \
     --log "$FM_STATE_DIR/runtime/plain-writing.jsonl" >/dev/null 2>&1 </dev/null || true
   if [ "$FM_EXTERNAL" = 0 ]; then
     marker_hex="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1")" || return 1
