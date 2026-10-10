@@ -437,6 +437,23 @@ const confirmAnswers = (value: unknown, count: number | undefined): ConfirmAnswe
   }
   return out;
 };
+// T-273: a retrospective card's items, and the captain's choice for each.
+// A is "record my choice for each item" and needs one {index, id, choice} per
+// item, in order; C parks the whole retrospective and takes none.
+const retroItems = (card: Record<string, any> | null | undefined): Array<{ id: string }> | null =>
+  card?.purpose === "retro" && Array.isArray(card?.details?.en?.items) ? card.details.en.items : null;
+type ItemAnswer = { index: number; id: string; choice: "A" | "C" | "D" };
+const itemAnswers = (value: unknown, items: Array<{ id: string }>): ItemAnswer[] | null => {
+  if (!Array.isArray(value) || value.length !== items.length) return null;
+  const out: ItemAnswer[] = [];
+  for (let index = 0; index < items.length; index++) {
+    const a = value[index];
+    if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).length !== 3) return null;
+    if (a.index !== index || a.id !== items[index]?.id || !["A", "C", "D"].includes(a.choice)) return null;
+    out.push({ index, id: a.id, choice: a.choice });
+  }
+  return out;
+};
 const effectOf = (p: Record<string, any>, chosen: string): Effect | null => {
   if (chosen === "custom") return null;
   const named = p?.details?.effect?.[chosen];
@@ -1890,6 +1907,24 @@ const pushWake = (id: string, reason: "answered" | "merge_settled", decision: un
   } catch (e) { console.error(`wake not forwarded for ${id}: ${(e as Error).message}; the project queue carries it`); }
 };
 
+// T-273: the board's "Run retrospective" request wakes firstmate the same
+// way an answer does: one item on the self project's own wake queue, then
+// every doorbell rung. The board never runs a retrospective itself.
+const pushRetroWake = (requestId: string) => {
+  writeGeneration++;
+  const id = `retro-request-${requestId}`;
+  try {
+    const dir = join(ROOT, "state/session");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "wake.jsonl"), JSON.stringify({ id, reason: "retro_requested", line: "retro requested", woken: Date.now() / 1000 }) + "\n");
+  } catch (e) { console.error(`wake queue not written for ${id}: ${(e as Error).message}`); }
+  try {
+    const { FM_PROJECT, FM_STATE_DIR, FM_EXTERNAL, ...env } = childEnv();
+    const r = Bun.spawnSync(["python3", LIFELINE, "ring", ROOT, id], { stdin: "ignore", env });
+    if (r.exitCode !== 0) console.error(`wake not rung for ${id}: ${new TextDecoder().decode(r.stderr).trim()}`);
+  } catch (e) { console.error(`wake not rung for ${id}: ${(e as Error).message}; the queue carries it`); }
+};
+
 // --- Merges run after the answer, not inside it (design sections 5.2, 15.10) ---
 // One merge at a time within a project, any number across projects. The
 // board is the only writer of a decision record's `merge`: it publishes
@@ -2661,6 +2696,33 @@ const server = Bun.serve({
       }).catch(() => doorRefusal(null, null, 400));
     }
 
+    // T-273: the captain asks for a retrospective. The board records the
+    // request through bin/lib/fm_retro.py, the one writer of retro records,
+    // and wakes firstmate; it never runs one. A retrospective covers every
+    // project, so a body that names anything is refused.
+    if (url.pathname === "/retro" && req.method === "POST") {
+      const refused = writeRefusal(req);
+      if (refused) return refused;
+      if (draining) return restarting();
+      return req.json().then((body: any) => {
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 0)
+          return json({ error: "a retrospective covers every project; send an empty body" }, 400);
+        // a retrospective starts only from the self project's context
+        if (process.env.FM_EXTERNAL === "1") return json({ error: "a retrospective runs only with the self project's context" }, 400);
+        const helper = join(ROOT, "bin/lib/fm_retro.py");
+        if (!existsSync(helper)) return json({ error: "this board has no retrospective helper" }, 503);
+        const r = Bun.spawnSync(["python3", helper, "request", "--engine", ROOT], { stdin: "ignore", env: childEnv() });
+        if (r.exitCode === 75) return json({ error: "a retrospective is already waiting or running", code: "retroBusy" }, 409);
+        if (r.exitCode === 64) return json({ error: "a retrospective runs only with the self project's context" }, 400);
+        let requestId = "";
+        try { requestId = String(JSON.parse(new TextDecoder().decode(r.stdout)).request_id ?? ""); } catch { requestId = ""; }
+        if (r.exitCode !== 0 || !/^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/.test(requestId))
+          return json({ error: "the retrospective request was not recorded" }, 500);
+        pushRetroWake(requestId);
+        return json({ ok: true, request: requestId });
+      }).catch(() => json({ error: "bad request" }, 400));
+    }
+
     // The captain answers. The board writes the answer down and, for a merge,
     // calls the one script allowed to merge - it never shells out ad hoc.
     if (url.pathname === "/decisions" && req.method === "POST") {
@@ -2690,6 +2752,16 @@ const server = Bun.serve({
             if (!value || doorFingerprint(value) !== decision.door_confirmation_fingerprint)
               return doorRefusal(decision, body, 409);
           }
+          // a retrospective card's replay repeats the same choice and the
+          // same item answers, or it is a different answer (T-273)
+          if (decision.purpose === "retro") {
+            const items = retroItems(decision) ?? [];
+            const same = decision.chosen === chosen && (chosen === "A"
+              ? JSON.stringify(itemAnswers(body?.item_answers, items)) === JSON.stringify(decision.item_answers)
+              : body?.item_answers === undefined);
+            if (!same) return json({ error: "decision already recorded differently" }, 409);
+            return json({ ok: true, already: true, decision: publicDecision(decision), merge: mergeOf(decision) });
+          }
           const repeated = confirmAnswers(body?.answers, decision.answers?.length);
           const storedAnswers = confirmAnswers(decision.answers, decision.answers?.length);
           if ((decision.chosen === "change" ? decision.picked : decision.chosen) !== chosen
@@ -2699,6 +2771,16 @@ const server = Bun.serve({
           return json({ ok: true, already: true, decision: publicDecision(decision), merge: mergeOf(decision) });
         }
         if (!p) return json({ error: "no pending decision" }, 404);
+        // T-273: a retrospective card takes A with one answer per item, or C
+        let recordedItems: ItemAnswer[] | null = null;
+        if (p.purpose === "retro") {
+          const items = retroItems(p);
+          if (!items || (chosen !== "A" && chosen !== "C")) return json({ error: "bad choice" }, 400);
+          if (chosen === "A") recordedItems = itemAnswers(body?.item_answers, items);
+          else if (body?.item_answers === undefined) recordedItems = items.map((item, index) => ({ index, id: item.id, choice: "C" as const }));
+          if (!recordedItems)
+            return json({ error: "every item needs its own answer: A, C or D, in the card's order", code: "itemAnswersInvalid" }, 400);
+        }
         const questions = p.details?.en?.questions;
         const answers = confirmAnswers(body?.answers, Array.isArray(questions) ? questions.length : undefined);
         if (answers === null) return json({ error: "every question needs an answer and every No needs text", code: "answersInvalid" }, 400);
@@ -2743,6 +2825,7 @@ const server = Bun.serve({
           ...Object.fromEntries(["details", "purpose", "title", "ste"].filter(k => k in p).map(k => [k, p[k]])),
           ...(changeRequested ? { picked: chosen } : {}),
           ...(Array.isArray(questions) ? { answers } : {}),
+          ...(recordedItems ? { item_answers: recordedItems } : {}),
           expected_head: p.expected_head ?? null, binding: p.binding ?? null, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
           ...(project ? { project } : {}),
           ...(chosen === "custom" ? { text } : {}),
