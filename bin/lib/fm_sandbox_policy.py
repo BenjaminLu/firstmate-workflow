@@ -1,5 +1,5 @@
 """Policy reading, profiles, login and proxy for fm-sandbox.sh."""
-import json, os, re, select, shutil, socket, subprocess, sys, threading, time
+import hashlib, json, os, re, select, shutil, socket, subprocess, sys, threading, time
 
 GITHUB = ('github.com', 'github.io', 'github.dev', 'githubusercontent.com', 'githubassets.com',
           'githubapp.com', 'githubcopilot.com', 'ghcr.io', 'ghe.com')
@@ -172,13 +172,22 @@ def pinned_of():
         raise ValueError('pinned folder must have current-user ownership and no group/other writes')
     names = set(os.listdir(path))
     # fm_prompt_context.materialize requires spec; legacy rounds may omit
-    # any of the other three snapshots. Nothing else belongs in this grant.
-    if 'spec.json' not in names or not names <= {'spec.json', 'design.md', 'contract.yaml', 'CONVENTIONS.md'}:
+    # any of the other three snapshots. A spec preflight may also pin the card
+    # and the pull-request draft, each only with the hash the launcher exported
+    # for this run (T-284). Nothing else belongs in this grant.
+    hashes = {name: os.environ[env] for name, env in (('card.json', 'FM_SPEC_PREFLIGHT_CARD'),
+                                                      ('pr-authoring.json', 'FM_SPEC_PREFLIGHT_PR_AUTHORING'))
+              if os.environ.get(env)}
+    if 'spec.json' not in names or not names <= {'spec.json', 'design.md', 'contract.yaml', 'CONVENTIONS.md', *hashes}:
         raise ValueError('invalid pinned folder contents')
     for name in names:
         file = os.path.join(path, name)
         if os.path.islink(file) or not os.path.isfile(file) or os.stat(file).st_mode & 0o7777 != 0o444:
             raise ValueError('pinned file must be regular and mode 0444')
+        if name in hashes:
+            with open(file, 'rb') as handle:
+                if hashlib.sha256(handle.read()).hexdigest() != hashes[name]:
+                    raise ValueError('pinned file does not match its preflight hash')
     run = os.environ.get('FM_RUN_DIR')
     if run and path != os.path.join(real(run), 'pinned'):
         raise ValueError('pinned folder does not belong to this round')

@@ -136,6 +136,12 @@ def structure(answer, task, acceptance_count, previous=None):
             if new['label']:
                 refuse('kept items cannot carry amendment labels')
         for item in parsed[len(prior):]:
+            # A spec that gained acceptance lines may cover each new line
+            # with an unlabelled ok item, up to the line count (T-284).
+            if item['status'] == 'ok' and len(prior) < item['n'] <= acceptance_count:
+                if item['label']:
+                    refuse('appended ok items cannot carry amendment labels')
+                continue
             if item['status'] != 'gap':
                 refuse('appended items must have gap status')
             if item['label'] not in ('NEW-GROUND', 'MISSED'):
@@ -274,6 +280,9 @@ A previous ok or done becomes ok (still satisfied) or open (now a gap).
 Kept items cannot be gap and carry no new-item label.
 Append only at the next numbers: `N. gap NEW-GROUND:` for text the amendment
 changed, or `N. gap MISSED:` for anything the earlier pass should have caught.
+When the spec now has more acceptance lines than the previous list, append
+`N. ok:` items, one per new line that has no gap, up to the acceptance line
+count, and use `gap NEW-GROUND:` or `gap MISSED:` for new lines with a gap.
 A previous SPEC-OK list still governs a later preflight, including a repin.
 """
         refused = refusals(previous)
@@ -352,7 +361,8 @@ the design section named for each design.md edit (check 5); i18n and lint reacha
 of new user-facing keys; privacy of external project text when FM_EXTERNAL=1;
 readability for the target reader in the writing rules below.
 Every gap belongs in this one report. A later pass may add only NEW-GROUND or
-MISSED items, not silently introduce another round of unlabelled gaps.
+MISSED items, not silently introduce another round of unlabelled gaps; the one
+exception is an `N. ok:` item for a new acceptance line, up to the line count.
 {history}
 Readability: read the spec as a backend engineer with three to five years of
 experience who knows git and CI but has never seen this repository. Each
