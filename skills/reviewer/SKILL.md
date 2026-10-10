@@ -240,7 +240,9 @@ nothing but blank lines between the last item, the marker and the verdict.
 Every gap belongs in that report.
 Later preflights, including after SPEC-OK, keep every number: gap/open becomes
 done/open; ok/done becomes ok/open. Append only `gap NEW-GROUND:` for changed
-text or `gap MISSED:` for prior omissions, using the next numbers. SPEC-OK has
+text or `gap MISSED:` for prior omissions, using the next numbers. When the spec
+now has more acceptance lines than the earlier list, also append `N. ok:` items,
+one per new line with no gap, up to the acceptance line count. SPEC-OK has
 no gap/open items; SPEC-GAPS has at least one. The signed `standing` and `missed`
 fields preserve the list and count omissions. This preflight protocol does not
 change the implementation-review standing list below.

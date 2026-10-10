@@ -1,0 +1,416 @@
+{
+  "id": "T-284",
+  "title": "A re-review of a spec that gained acceptance lines can reach SPEC-OK, and the preflight sandbox accepts the pinned card and draft",
+  "public_title": "Let spec re-reviews pass after a rewrite and let the preflight review the card and draft",
+  "milestone": "M2",
+  "depends_on": [],
+  "flow_change": true,
+  "scope": [
+    "bin/lib/fm_spec_preflight.py",
+    "bin/lib/fm_sandbox_policy.py",
+    "skills/firstmate/SKILL.md",
+    "tests/lib/spec_preflight_standing.py",
+    "tests/sandbox-policy.test.sh",
+    "skills/reviewer/SKILL.md",
+    "design/design.md",
+    "bin/adapters/_contract.md",
+    "design/tasks/T-284.json"
+  ],
+  "acceptance": [
+    "Why, words used here. A spec preflight is a review of a task spec by a separate reviewer before work starts; it ends with `SPEC-OK:<task>` (the spec is ready) or `SPEC-GAPS:<task>` (the spec needs changes). The reviewer writes a numbered checklist, one item per finding; the launcher stores the parsed list as the standing list. A re-review is a later preflight of the same task; it must repeat every earlier item number.",
+    "Why, bug 1. The plain-writing rules ask for one requirement per acceptance line, so a rewrite often adds lines. `structure()` in `bin/lib/fm_spec_preflight.py` (about line 116) refuses any answer with fewer items than acceptance lines, and (about lines 138-142) refuses any item appended after the earlier items unless it is `gap` with a NEW-GROUND or MISSED label. When a re-review sees more lines than the earlier list had items, the only answer that passes both rules is SPEC-GAPS, so a correct spec can never reach SPEC-OK.",
+    "Why, bug 1 evidence. On 2026-10-10 the fifth preflight of T-273 was a re-review: the spec had 189 acceptance lines after a rewrite, and the earlier standing list had 47 items. The reviewer answered SPEC-OK with 47 items and was refused with `requires at least one item per acceptance line`. Re-reviews of T-278, T-279 and T-283 were refused the same way several times each.",
+    "Why, bug 2. `bin/lib/fm-spec-preflight.sh` (about lines 63-72) copies the card file to `pinned/card.json` and the pull-request draft to `pinned/pr-authoring.json` when firstmate passes `--card` and `--pr-authoring`. `pinned_of()` in `bin/lib/fm_sandbox_policy.py` (about line 174) accepts only `spec.json`, `design.md`, `contract.yaml` and `CONVENTIONS.md` in that folder, so building the sandbox profile fails on macOS and on Linux (`pinned_of()` is called by both profile builders, about lines 235 and 329), the round stops with exit 65, and the card and the draft are never reviewed.",
+    "How. Bug 1: a re-review whose spec has more acceptance lines than the earlier list has items may append `ok` items to cover the new lines. Bug 2: the sandbox accepts the two extra files only when the launcher pinned them for this run.",
+    "Bug 1 rule. In `structure()`, when `previous` is not None and the acceptance line count is greater than the number of earlier items, an appended item whose number is at most the acceptance line count may have status `ok` with no label.",
+    "Bug 1 rule. An appended item whose number is greater than the acceptance line count still needs status `gap` and a NEW-GROUND or MISSED label, as today.",
+    "Bug 1 rule. When the acceptance line count is not greater than the number of earlier items, every appended item still needs status `gap` and a NEW-GROUND or MISSED label, as today.",
+    "Bug 1 rule. An appended `ok` item still may not carry a NEW-GROUND or MISSED label; the refusal reason is `appended ok items cannot carry amendment labels`.",
+    "Bug 1 rule. The rules for kept items, the first pass, numbering, the marker and the verdict do not change.",
+    "Bug 1 prompt. The re-review text in `prompt()` (about lines 270-277) gains one sentence: when the spec now has more acceptance lines than the previous list, append `N. ok:` items, one per new line that has no gap, up to the acceptance line count, and use `gap NEW-GROUND:` or `gap MISSED:` for new lines with a gap.",
+    "Bug 1 prompt. The sentence near line 354 that says a later pass may add only NEW-GROUND or MISSED items names the same exception.",
+    "Bug 1 docs. In `skills/firstmate/SKILL.md`, the paragraph that starts `Re-preflight re-issues every earlier number` (about line 1603) names the same exception in one sentence.",
+    "Bug 1 docs. In `skills/reviewer/SKILL.md`, the paragraph that says `Append only gap NEW-GROUND: for changed text or gap MISSED: for prior omissions` (about lines 241-243) names the same exception in one sentence.",
+    "Bug 1 docs. In `design/design.md` §6 (Spec preflight and migration, about lines 1682-1684), the sentence that says a re-review appends only `gap NEW-GROUND:` or `gap MISSED:` items is edited in place to name the same exception.",
+    "Bug 2 rule. In `pinned_of()`, `card.json` is accepted in the pinned folder only when the environment variable `FM_SPEC_PREFLIGHT_CARD` is set.",
+    "Bug 2 rule. In `pinned_of()`, `pr-authoring.json` is accepted in the pinned folder only when the environment variable `FM_SPEC_PREFLIGHT_PR_AUTHORING` is set.",
+    "Bug 2 rule. An accepted extra file must pass the same checks as the other pinned files: a regular file, not a link, mode 0444.",
+    "Bug 2 rule. An accepted extra file must have a SHA-256 equal to the value of its environment variable; otherwise `pinned_of()` raises `pinned file does not match its preflight hash`.",
+    "Bug 2 rule. Without the environment variable, a `card.json` or `pr-authoring.json` in the pinned folder is still refused with `invalid pinned folder contents`, as today.",
+    "Bug 2 docs. In `bin/adapters/_contract.md` (about lines 334-335), the list of files allowed in `pinned/` adds `card.json` and `pr-authoring.json`, each allowed only when its preflight hash variable is set and matches.",
+    "Scope note. `tests/lib/t177_sandbox_base.py` is a frozen copy of an older sandbox policy that one suite compares against; it does not change.",
+    "Test, fail-first (red on base). In `tests/lib/spec_preflight_standing.py`, case `test_reissue_more_lines_appends_ok_items`: a store holds a SPEC-GAPS list with two items, both `gap`; the spec now has four acceptance lines; a re-review with items 1-2 `done` and items 3-4 `ok` and verdict SPEC-OK is retained, and the stored standing list has four items.",
+    "Test, fail-first (red on base). In the same file, case `test_reissue_more_lines_mixes_ok_and_gap`: with four acceptance lines after a two-item list, an answer with item 3 `ok` and item 4 `gap NEW-GROUND` and verdict SPEC-GAPS is retained.",
+    "Test, regression (green on base). In the same file, case `test_reissue_same_lines_refuses_appended_ok`: with two acceptance lines after a two-item list, an appended `3. ok:` item is refused with `appended items must have gap status`.",
+    "Test, regression (green on base). In the same file, case `test_reissue_more_lines_refuses_ok_past_count`: with three acceptance lines after a two-item list, an appended `4. ok:` item is refused with `appended items must have gap status`.",
+    "Test, fail-first (red on base). In the same file, case `test_reissue_ok_item_refuses_label`: with four acceptance lines after a two-item list, an appended `3. ok NEW-GROUND:` item is refused with `appended ok items cannot carry amendment labels`.",
+    "Test, fail-first (red on base). In the same file, case `test_prompt_names_new_line_ok_items`: the re-review prompt contains the new sentence about `N. ok:` items for new lines.",
+    "Test, fail-first (red on base). In `tests/sandbox-policy.test.sh`, check `pinned card and draft accepted with matching hashes`: a pinned folder with `spec.json`, `card.json` and `pr-authoring.json`, all mode 0444, and both environment variables set to their hashes, returns the folder from `pinned_of()`.",
+    "Test, fail-first (red on base). In the same suite, check `pinned card with a wrong hash refused`: the same folder with `FM_SPEC_PREFLIGHT_CARD` set to another hash raises `pinned file does not match its preflight hash`.",
+    "Test, regression (green on base). In the same suite, check `pinned card without its variable refused`: a `card.json` with no `FM_SPEC_PREFLIGHT_CARD` raises `invalid pinned folder contents`.",
+    "Migration. Stored standing lists do not change; the new rule applies from the next re-review. Rounds in flight are not affected.",
+    "Overlap. T-283 (reviewers audit firstmate against its skill rules) waits for this task, because its own spec re-reviews hit bug 1."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A re-review of a longer spec can reach SPEC-OK."
+        },
+        {
+          "kind": "fact",
+          "text": "The preflight reviews the card and the pull-request draft on every platform."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "Four specs failed to reach SPEC-OK after a plain-writing rewrite."
+        },
+        {
+          "kind": "fact",
+          "text": "The preflight sandbox stopped when it got a card or a draft."
+        }
+      ],
+      "scope_in": [
+        "the preflight list check and its prompt",
+        "the pinned folder check of the sandbox",
+        "the reviewer skill, design section 6 and the adapter contract",
+        "one paragraph of the firstmate skill",
+        "tests"
+      ],
+      "scope_out": [
+        "stored standing lists",
+        "the first-pass rules",
+        "other sandbox grants"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: tests show a longer re-review with ok items reaches SPEC-OK."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: tests show the sandbox accepts the two files only with a matching hash."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "note",
+          "text": "A re-review of the same length keeps the current rule: new items must be gaps."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Spec gains lines"
+        },
+        {
+          "state": "gone",
+          "label": "New items must be gaps"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Spec gains lines"
+        },
+        {
+          "state": "new",
+          "label": "New lines may be ok"
+        },
+        {
+          "state": "new",
+          "label": "SPEC-OK possible"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Reviewer"
+          },
+          {
+            "label": "Preflight check"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "rev",
+            "label": "Re-review a longer spec",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "chk",
+            "label": "Count new items",
+            "lane": 1,
+            "kind": "decision",
+            "state": "same"
+          },
+          {
+            "id": "rej",
+            "label": "Refuse ok items",
+            "lane": 1,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "acc",
+            "label": "Accept ok items",
+            "lane": 1,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "pin",
+            "label": "Pin card and draft",
+            "lane": 0,
+            "kind": "step",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "rev",
+            "to": "chk",
+            "state": "same"
+          },
+          {
+            "id": "e2",
+            "from": "chk",
+            "to": "rej",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "chk",
+            "to": "acc",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e4",
+            "from": "pin",
+            "to": "rev",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e4",
+            "e1",
+            "e3"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "New acceptance lines may get ok items in a re-review.",
+            "intents": [
+              1
+            ]
+          },
+          {
+            "id": "c2",
+            "text": "The sandbox accepts the pinned card and draft when their hashes match.",
+            "intents": [
+              2
+            ]
+          }
+        ]
+      }
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "較長的 spec 重審後能拿到 SPEC-OK。"
+        },
+        {
+          "kind": "fact",
+          "text": "preflight 在每個平台都能審卡片和 PR 草稿。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "四份 spec 照白話規則重寫後拿不到 SPEC-OK。"
+        },
+        {
+          "kind": "fact",
+          "text": "preflight 的 sandbox 一拿到卡片或草稿就停下。"
+        }
+      ],
+      "scope_in": [
+        "preflight 的清單檢查和提示",
+        "sandbox 的 pinned 資料夾檢查",
+        "reviewer skill、design 第 6 節和 adapter 契約",
+        "firstmate skill 的一段",
+        "測試"
+      ],
+      "scope_out": [
+        "已存的清單",
+        "第一輪的規則",
+        "sandbox 的其他授權"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：測試證明較長的重審加上 ok 項目能拿到 SPEC-OK。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：測試證明 sandbox 只在雜湊相符時接受兩個檔。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "note",
+          "text": "長度不變的重審照舊：新項目必須是 gap。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "spec 多了幾行"
+        },
+        {
+          "state": "gone",
+          "label": "新項目只能是 gap"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "spec 多了幾行"
+        },
+        {
+          "state": "new",
+          "label": "新行可以是 ok"
+        },
+        {
+          "state": "new",
+          "label": "可以拿到 SPEC-OK"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Reviewer"
+          },
+          {
+            "label": "Preflight 檢查"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "rev",
+            "label": "重審較長的 spec",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "chk",
+            "label": "檢查新項目",
+            "lane": 1,
+            "kind": "decision",
+            "state": "same"
+          },
+          {
+            "id": "rej",
+            "label": "拒收 ok 項目",
+            "lane": 1,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "acc",
+            "label": "接受 ok 項目",
+            "lane": 1,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "pin",
+            "label": "pin 卡片和草稿",
+            "lane": 0,
+            "kind": "step",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "rev",
+            "to": "chk",
+            "state": "same"
+          },
+          {
+            "id": "e2",
+            "from": "chk",
+            "to": "rej",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "chk",
+            "to": "acc",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e4",
+            "from": "pin",
+            "to": "rev",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e4",
+            "e1",
+            "e3"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "重審時，新的 acceptance 行可以用 ok 項目。",
+            "intents": [
+              1
+            ]
+          },
+          {
+            "id": "c2",
+            "text": "雜湊相符時，sandbox 接受 pin 好的卡片和草稿。",
+            "intents": [
+              2
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

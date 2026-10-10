@@ -173,6 +173,62 @@ class Standing(unittest.TestCase):
                               text='3. gap MISSED: src/c:3 fix three'), record['standing'][2])
         self.assertEqual(record, self.store.records()[-1])
 
+    def longer(self, count):
+        # T-284: a two-item gap list, then amended spec bytes with `count`
+        # acceptance lines (new bytes, so SPEC-OK is not refused for the old ones).
+        self.retain(self.answer('1. gap: src/a:1 fix one\n2. gap: src/b:2 fix two', 'SPEC-GAPS'))
+        return json.dumps(dict(id='T-X', scope=['src/**'],
+                               acceptance=['one', 'two', 'three', 'four'][:count])).encode() + b'\n'
+
+    def refused_longer(self, data, answer, reason):
+        before = self.store.records()
+        with self.assertRaises(ValueError) as raised:
+            self.retain(answer, data)
+        self.assertEqual('PREFLIGHT-COMPLETE:T-X: ' + reason, str(raised.exception))
+        self.assertEqual(before, self.store.records())
+
+    def test_reissue_more_lines_appends_ok_items(self):
+        data = self.longer(4)
+        record = self.retain(self.answer('1. done: src/a:1 one\n2. done: src/b:2 two\n'
+                                         '3. ok: src/c:3 three\n4. ok: src/d:4 four'), data)
+        self.assertEqual('SPEC-OK', record['verdict'])
+        self.assertEqual(4, len(P.standing(self.store)['standing']))
+        self.assertEqual(['done', 'done', 'ok', 'ok'],
+                         [item['status'] for item in P.standing(self.store)['standing']])
+
+    def test_reissue_more_lines_mixes_ok_and_gap(self):
+        data = self.longer(4)
+        record = self.retain(self.answer('1. done: src/a:1 one\n2. done: src/b:2 two\n'
+                                         '3. ok: src/c:3 three\n4. gap NEW-GROUND: src/d:4 fix four',
+                                         'SPEC-GAPS'), data)
+        self.assertEqual('SPEC-GAPS', record['verdict'])
+        self.assertEqual(record, self.store.records()[-1])
+
+    def test_reissue_same_lines_refuses_appended_ok(self):
+        data = self.longer(2)
+        self.refused_longer(data, self.answer('1. done: src/a:1 one\n2. done: src/b:2 two\n'
+                                              '3. ok: src/c:3 three'),
+                            'appended items must have gap status')
+
+    def test_reissue_more_lines_refuses_ok_past_count(self):
+        data = self.longer(3)
+        self.refused_longer(data, self.answer('1. done: src/a:1 one\n2. done: src/b:2 two\n'
+                                              '3. ok: src/c:3 three\n4. ok: src/d:4 four'),
+                            'appended items must have gap status')
+
+    def test_reissue_ok_item_refuses_label(self):
+        data = self.longer(4)
+        self.refused_longer(data, self.answer('1. done: src/a:1 one\n2. done: src/b:2 two\n'
+                                              '3. ok NEW-GROUND: src/c:3 three\n4. ok: src/d:4 four'),
+                            'appended ok items cannot carry amendment labels')
+
+    def test_prompt_names_new_line_ok_items(self):
+        data = self.longer(4)
+        body = P.prompt('T-X', data, '', P.standing(self.store))
+        self.assertIn('When the spec now has more acceptance lines than the previous list, append\n'
+                      '`N. ok:` items, one per new line that has no gap, up to the acceptance line\n'
+                      'count, and use `gap NEW-GROUND:` or `gap MISSED:` for new lines with a gap.', body)
+
     def test_transition_matrix(self):
         for old in ('gap', 'open', 'ok', 'done'):
             previous = {'standing': [dict(n=1, status=old), dict(n=2, status='ok')]}
