@@ -20,6 +20,7 @@ x="$(safe_tmpdir)"; mkdir -p "$x/bin" "$x/state/pending" "$x/state/runs" "$x/sta
 # fm-herdr.py: the stop path park and drop run (T-144)
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-herdr.py" "$x/bin/"; project_storage_fixture "$x/bin/"
 cp -R "$ROOT/bin/lib" "$x/bin/"   # the lifeline the board starts merges and rounds under (T-151)
+mkdir -p "$x/i18n"; cp "$ROOT/i18n/glossary.json" "$x/i18n/"   # the glossary fm-decide reads (T-270)
 binding_service_fixture "$x"
 merge_source_fixture "$x"
 # Refuse only a dispatch start event when the failure case requests it.
@@ -173,7 +174,8 @@ made() { jq -rs --arg d "$1" "map(select(.type==\"decision_made\" and .data.deci
 card() {   # card <id> <task> <kind> <effect JSON or null> [pr]
   jq -n --argjson effect "$4" '
     ({A:{description:"do A",pros:"p",cons:"c"},B:{description:"do B",pros:"p",cons:"c"},C:{description:"do C",pros:"p",cons:"c"}}) as $o
-    | {title:"judge",explanation:"e",before:"b",after:"a",outcome:"o",options:$o} as $l
+    | {title:"judge",explanation:"e",before:"b",after:"a",outcome:"o",options:$o,
+       why:[{kind:"fact",text:"e"}],how:[{kind:"fact",text:"a"}],glossary:[]} as $l
     | {en:$l,"zh-TW":$l} + (if $effect == null then {} else {effect:$effect} end)' > "$x/details-$1.json"
   local head_args=(); [ "$3" = choice ] || head_args=(--expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
   FM_GH="$x/bin/gh" FM_ROOT="$x" FM_PROJECT='' bash "$x/bin/fm-decide.sh" ${head_args[@]+"${head_args[@]}"} --request "$1" --task "$2" --kind "$3" ${5:+--pr "$5"} \

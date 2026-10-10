@@ -861,7 +861,7 @@ function render(s) {
       (d.task_final ? `<p class="final-note" role="note">${esc(t('finalNote').replace('{task}', d.task || '').replace('{stage}', laneLabel(d.task_final)))}</p>` : '') +
       links(d) +
       (content?.intent ? '' : `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'), d)}</p>`) +
-      (content?.intent ? '' : DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>` : '')) +
+      (content?.intent ? '' : DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>` : '') + plainBlock(content)) +
 
       (d.kind === "merge" && d.gates
         ? `<ul class="gates">${GATES().map(({n,name})=>{const g=t("gate_"+name), warning=gates[name]==="not_runnable", ok=gatePassed(gates,name);return `<li class="${warning?"w":ok?"y":"n"}"><i>${warning?"&#9888;":ok?"&#10003;":"&#8211;"}</i>${n}. ${esc(g)}${warning?` · ${esc(t('gateNotRunnable').replace('{reason}', () => d.not_runnable?.[name] || ''))}`:''}</li>`;}).join("")}</ul>`
@@ -1289,6 +1289,20 @@ function walkHost(d, content, detailOnly) {
   if (!content.scene && (detailOnly || !d.details?.walk)) return '';
   return `<div data-walk-host="${esc(JSON.stringify({id:d.id, scene:content.scene, walk:detailOnly ? null : d.details?.walk, intents:content.intent, pr:d.pr, diffUrl:(latest?.pr_urls_by_project?.[projOf(d) || ""] || prUrls || {})[d.pr], detailOnly}))}"></div>`;
 }
+// T-270: every new card carries why, how and a glossary of the terms it uses.
+// An older card without how or glossary renders exactly as it did before.
+function plainBlock(content) {
+  const items = field => Array.isArray(content?.[field])
+    ? content[field].filter(item => item && typeof item.text === 'string') : [];
+  const glossary = Array.isArray(content?.glossary)
+    ? content.glossary.filter(g => g && typeof g.term === 'string' && typeof g.text === 'string') : [];
+  if (!items('how').length && !glossary.length) return '';
+  const list = field => `<ul>${items(field).map(item => `<li>${esc(words(item.text))}</li>`).join('')}</ul>`;
+  return `<section class="plain-why-how"><div class="plain-why"><h4>${esc(t('whyHeading'))}</h4>${list('why')}</div>` +
+    `<div class="plain-how"><h4>${esc(t('card.how'))}</h4>${list('how')}</div></section>` +
+    (glossary.length ? `<section class="card-glossary"><h4>${esc(t('card.glossary'))}</h4><dl>` +
+      glossary.map(g => `<dt>${esc(words(g.term))}</dt><dd>${esc(words(g.text))}</dd>`).join('') + '</dl></section>' : '');
+}
 function intentBody(d, content, locked, detailOnly = false) {
   const pick = picks.get(d.id);
   const sentence = (field, index, text) => detailOnly ? steSentence(d, field, index, text) : said(words(text), d);
@@ -1299,7 +1313,9 @@ function intentBody(d, content, locked, detailOnly = false) {
   const intent = `<section><h4>${esc(t('intentHeading'))}</h4>${sentences('intent', true)}` +
     (detailOnly && hasItems('why') ? `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${sentence('why',index,item.text)}</span>`)}</div>` : '') + '</section>';
   const how = `<section class="intent-how"><h4>${esc(t('howHeading'))}</h4>` +
-    (d.diagram === false || content.scene ? '' : DIAGRAM.embed(d.diagram_name || d.id)) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>${walkHost(d,content,detailOnly)}</section>`;
+    (d.diagram === false || content.scene ? '' : DIAGRAM.embed(d.diagram_name || d.id)) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>${walkHost(d,content,detailOnly)}</section>` +
+    // T-270: why, how and glossary follow the diagram on cards that carry them
+    plainBlock(content);
   const visibleIntents = revealedSections.has(JSON.stringify([d.id, 'intent'])) ? (content.intent || []) : (content.intent || []).slice(0,6);
   const visibleDone = revealedSections.has(JSON.stringify([d.id, 'done'])) ? (content.done || []) : (content.done || []).slice(0,6);
   const parent = item => {
@@ -1363,7 +1379,7 @@ function decisionSheet(d, content, locked) {
     }) + '</section>' : '';
   return `<div class="decision-sheet" role="dialog" aria-label="${esc(t("decisionDetails"))}" id="sheet-${esc(d.id)}" data-id="${esc(d.id)}" ${openDecisionSheets.has(d.id) ? '' : 'hidden'}>` +
     `<button type="button" data-decision-close data-id="${esc(d.id)}">${esc(t("decisionClose"))}</button><h4>${esc(t('optionsHeading'))}</h4>` +
-    Object.entries(content?.options || {}).map(([key,o]) => `<section><b>${esc(key)} · ${said(words(o.description),d)}</b><p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros),d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons),d)}</p></section>`).join('') + questions + '</div>';
+    Object.entries(content?.options || {}).map(([key,o]) => `<section><b>${esc(key)} · ${said(words(o.description),d)}</b><p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros),d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons),d)}</p></section>`).join('') + questions + plainBlock(content) + '</div>';
 }
 const decisionBarObserver = new ResizeObserver(entries => {
   for (const {target} of entries) {

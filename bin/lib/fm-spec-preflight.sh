@@ -31,7 +31,7 @@ finished() {
   outcome="$(python3 "$preflight_py" outcome --task "$TASK" --state "$FM_STATE_DIR" \
     --project "$(fm_evidence_project)" --actor "$NAME" --sha "${FM_SPEC_PREFLIGHT:-}" \
     --exit-code "$rc" --started "$preflight_started")" || outcome=failed
-  case "$outcome" in spec-ok|spec-gaps) result=ok ;; esac
+  case "$outcome" in spec-ok|spec-gaps|rewrite-refused) result=ok ;; esac
   preflight_emit agent_finished "Spec preflight finished: $outcome" "規格預檢結束：$outcome" \
     "$(jq -cn --arg outcome "$outcome" --arg result "$result" \
       '{preflight_outcome:$outcome,result:$result}')"
@@ -57,6 +57,19 @@ chmod 444 "$FM_RUN_DIR/pinned/spec.json"
 export FM_PINNED_DIR="$FM_RUN_DIR/pinned"
 export FM_SPEC_PREFLIGHT
 FM_SPEC_PREFLIGHT="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$FM_PINNED_DIR/spec.json")" || exit 65
+# T-270: a dispatch or repin card and the pull-request draft are reviewed in
+# the same run, from read-only pinned copies whose hashes the receipt binds.
+preflight_inputs=()
+pin_input() {  # pin_input <file> <pinned name> <flag> <env>
+  [ -n "$1" ] || return 0
+  cp "$1" "$FM_PINNED_DIR/$2" || exit 65
+  chmod 444 "$FM_PINNED_DIR/$2"
+  printf -v "$4" '%s' "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$FM_PINNED_DIR/$2")" || exit 65
+  export "${4?}"
+  preflight_inputs+=("$3" "$FM_PINNED_DIR/$2")
+}
+pin_input "${CARD_FILE:-}" card.json --card FM_SPEC_PREFLIGHT_CARD
+pin_input "${PR_AUTHORING_FILE:-}" pr-authoring.json --pr-authoring FM_SPEC_PREFLIGHT_PR_AUTHORING
 if [ "${FM_EXTERNAL:-0}" = 1 ]; then
   if ! pr_format="$(fm_conventions pr_format 2>/dev/null)"; then
     echo 'fm-spec-preflight: cannot read the PR format' >&2
@@ -65,7 +78,8 @@ if [ "${FM_EXTERNAL:-0}" = 1 ]; then
   FM_PR_TITLE="$(jq -r '.pr_title' <<<"$pr_format")" || exit 65
   export FM_PR_TITLE
 fi
-python3 "$preflight_py" prompt --task "$TASK" --spec "$FM_PINNED_DIR/spec.json" \
+python3 "$preflight_py" prompt --task "$TASK" --spec "$FM_PINNED_DIR/spec.json" --code "$code" \
+  ${preflight_inputs[@]+"${preflight_inputs[@]}"} \
   --base "$base_head" --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" > "$preflight/prompt.md" || exit 65
 # An independent clone has no remote, linked git directory or mutable base ref.
 checkout_root="$(mktemp -d "${TMPDIR:-/tmp}/fm-spec-preflight.XXXXXX")" || exit 70
@@ -106,6 +120,7 @@ fm_record_end "$rc"
 [ "$rc" = 0 ] || exit "$rc"
 python3 "$preflight_py" retain --task "$TASK" --state "$FM_STATE_DIR" \
   --project "$(fm_evidence_project)" --spec "$FM_PINNED_DIR/spec.json" --base "$base_head" \
+  ${preflight_inputs[@]+"${preflight_inputs[@]}"} --out "$preflight/out" \
   --code "$code" --run "$FM_RUN_DIR" --attempt "$FM_CHAIN_ATTEMPT" --vendor "$FM_VENDOR_USED"
 result=$?
 rm -rf "$checkout_root"

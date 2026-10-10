@@ -208,9 +208,9 @@ def validate_change_refs(spec):
             raise ValueError(lang + '.check: correct answer absent from visible evidence')
 
 
-def prompt(task, data, base, previous=None):
-    spec = json.loads(data)
-    if spec.get('id') != task or not spec.get('scope') or not spec.get('acceptance'):
+def validate_spec(task, spec):
+    """Every check a submitted spec meets; a reviewer rewrite meets them too."""
+    if not isinstance(spec, dict) or spec.get('id') != task or not spec.get('scope') or not spec.get('acceptance'):
         raise ValueError('preflight needs the task identity, scope and acceptance lines')
     if 'adopt' in spec:
         if os.environ.get('FM_EXTERNAL') != '1':
@@ -223,6 +223,11 @@ def prompt(task, data, base, previous=None):
                             os.environ.get('FM_PR_TITLE', 'plain'), spec.get('public_changes'))
         if problems:
             raise ValueError('external spec needs a valid public_title: ' + '; '.join(problems))
+        from fm_public_text import plain_problems
+        problems = plain_problems(spec.get('public_title'), spec.get('public_summary'), spec.get('public_changes'))
+        if problems:
+            raise ValueError('external public text is not plain (skills/firstmate/plain-writing.md): '
+                             + '; '.join(problems))
     if 'explain' in spec:
         try:
             import fm_ste
@@ -232,6 +237,30 @@ def prompt(task, data, base, previous=None):
         except (ImportError, ValueError) as error:
             raise ValueError('explain: ' + str(error)) from error
     validate_change_refs(spec)
+
+
+def guide(code=None):
+    """plain-writing.md and glossary.json from the frozen code root (T-270)."""
+    import fm_plain
+    root = Path(code) if code else fm_plain.ROOT
+    rules = root / 'skills/firstmate/plain-writing.md'
+    if not rules.is_file():
+        raise ValueError('missing ' + str(rules))
+    text = fm_plain.read_i18n('glossary.json', root)
+    fm_plain.validate_glossary(json.loads(text))
+    return rules.read_text(encoding='utf-8'), text, fm_plain.tw2cn_rows(root)
+
+
+def refusals(record):
+    rewrite = (record or {}).get('rewrite') or {}
+    return [(kind, entry.get('reason', '')) for kind, entry in sorted(rewrite.items())
+            if isinstance(entry, dict) and entry.get('status') == 'refused']
+
+
+def prompt(task, data, base, previous=None, code=None, card=None, pr_authoring=None):
+    spec = json.loads(data)
+    validate_spec(task, spec)
+    rules, terms, rows = guide(code)
     history = ''
     if previous is not None:
         _, block = _standing_block(previous['text'], task)
@@ -246,6 +275,51 @@ Kept items cannot be gap and carry no new-item label.
 Append only at the next numbers: `N. gap NEW-GROUND:` for text the amendment
 changed, or `N. gap MISSED:` for anything the earlier pass should have caught.
 A previous SPEC-OK list still governs a later preflight, including a repin.
+"""
+        refused = refusals(previous)
+        if refused:
+            history += '\nThe previous preflight refused these rewrites (reasons as recorded):\n'
+            history += ''.join(f'- {kind}: {reason}\n' for kind, reason in refused)
+            history += 'Write a rewrite that avoids each reason, or report the problem as a gap.\n'
+    inputs = ''
+    if card is not None:
+        import fm_plain
+        details = json.loads(card)
+        if not isinstance(details, dict):
+            raise ValueError('--card must hold one JSON object')
+        inputs += f"""
+Captain card under review (SHA-256 {hashlib.sha256(card).hexdigest()}), en and zh-TW as submitted:
+```json
+{card.decode('utf-8')}
+```
+The same card in zh-CN, rendered from zh-TW through i18n/tw2cn.tsv as the board renders it:
+```json
+{json.dumps(fm_plain.card_cn(details, rows), ensure_ascii=False, indent=1)}
+```
+Review the card text in all three languages with the same reader and rules. A
+word left in Traditional characters in the zh-CN text is a readability item:
+reword zh-TW so the table converts it, or list the exact missing tw2cn.tsv rows.
+You may return the improved card in one block that opens with the exact line
+```json fm-reworded-card
+and closes with a line of three backquotes, placed before item 1. Only title,
+explanation, before, after, outcome, option description, pros and cons, the
+text of why, how, notes and questions items, node labels and change_table text
+may change; every other value, glossary id, item kind and list length stays.
+"""
+    if pr_authoring is not None:
+        draft = json.loads(pr_authoring)
+        if not isinstance(draft, dict):
+            raise ValueError('--pr-authoring must hold one JSON object')
+        inputs += f"""
+Pull-request text draft under review (SHA-256 {hashlib.sha256(pr_authoring).hexdigest()}):
+```json
+{pr_authoring.decode('utf-8')}
+```
+You may return improved prose in one block that opens with the exact line
+```json fm-reworded-pr-authoring
+and closes with a line of three backquotes, placed before item 1. Only
+subject, problem, expected_result, approach and intent_notes notes may change;
+the subject still starts with an allowed verb and stays plain ASCII.
 """
     return f'''# Spec preflight for {task}
 You are an isolated reviewer of a proposed spec, on current base {base}.
@@ -275,10 +349,30 @@ callers, fixtures and mirrors of every touched interface; scope completeness
 against every file the changes touch; test labels (new behaviour fails on base
 versus regression); migration of records, pins and tasks already in flight;
 the design section named for each design.md edit (check 5); i18n and lint reachability
-of new user-facing keys; privacy of external project text when FM_EXTERNAL=1.
+of new user-facing keys; privacy of external project text when FM_EXTERNAL=1;
+readability for the target reader in the writing rules below.
 Every gap belongs in this one report. A later pass may add only NEW-GROUND or
 MISSED items, not silently introduce another round of unlabelled gaps.
 {history}
+Readability: read the spec as a backend engineer with three to five years of
+experience who knows git and CI but has never seen this repository. Each
+readability item quotes the exact sentence and says where that reader gets
+stuck. A wording problem your rewrite fixes is `N. ok:` and says the rewrite
+fixes it. A problem a clear rewrite cannot fix without changing meaning is
+`N. gap:` with the expected spec change.
+You may return the whole spec with improved wording in one block that opens
+with the exact line
+```json fm-reworded-spec
+and closes with a line of three backquotes. Put it before item 1, never between
+the last item and the marker. Only title and the text of each acceptance line
+may change; every other key stays identical and the acceptance list keeps its
+length and order. Keep every code span, path, file:line, hash, task number,
+decision id and number in the same string. For each rewritten string, state
+in the checklist that it keeps its meaning; a rewrite that would change a
+condition or obligation is a gap, not a rewrite. Never rewrite public_title,
+public_summary or public_changes: report a readability problem there as a gap,
+and check that public fields contain no private prose.
+{inputs}
 Put any summary sentence before item 1. After the last numbered item, write
 only this standalone marker line and then the verdict, with nothing but blank
 lines between the last item, the marker and the verdict:
@@ -290,6 +384,12 @@ SPEC-GAPS:{task}
 A gap cannot be waived: firstmate must amend the spec and preflight again.
 This review checks the proposal, not CI, gate results or merge permission.
 
+Writing rules (skills/firstmate/plain-writing.md):
+{rules}
+Glossary (i18n/glossary.json):
+```json
+{terms}```
+
 Spec SHA-256: {hashlib.sha256(data).hexdigest()}
 ```json
 {data.decode('utf-8')}
@@ -297,19 +397,134 @@ Spec SHA-256: {hashlib.sha256(data).hexdigest()}
 '''
 
 
+def effective(record):
+    """The receipt's outcome: a refused rewrite wins over the reviewer marker."""
+    if refusals(record):
+        return 'rewrite-refused'
+    return record.get('verdict')
+
+
+def accepted(record, kind):
+    entry = ((record.get('rewrite') or {}).get(kind) or {})
+    return entry if entry.get('status') == 'accepted' else None
+
+
+def authorizes(record, sha):
+    if record.get('verdict') != 'SPEC-OK' or effective(record) == 'rewrite-refused':
+        return False
+    rewrite = accepted(record, 'spec')
+    if (record.get('rewrite') or {}).get('spec') is not None:
+        return rewrite is not None and rewrite.get('sha256') == sha
+    return record.get('spec_sha256') == sha
+
+
 def require_ok(store, data):
     sha = hashlib.sha256(data).hexdigest()
-    matches = [r for r in store.records() if r['kind'] == 'spec-preflight'
-               and r.get('spec_sha256') == sha]
-    if (not matches or any(r.get('verdict') == 'SPEC-GAPS' for r in matches)
-            or matches[-1].get('verdict') != 'SPEC-OK'):
+    receipts = [r for r in store.records() if r['kind'] == 'spec-preflight']
+    matches = [r for r in receipts if r.get('spec_sha256') == sha
+               or (accepted(r, 'spec') or {}).get('sha256') == sha]
+    if (not matches or any(r.get('verdict') == 'SPEC-GAPS' and r.get('spec_sha256') == sha for r in receipts)
+            or not authorizes(matches[-1], sha)):
         raise ValueError(f'no SPEC-OK for exact spec SHA-256 {sha}; run '
                          f'bin/fm-review.sh --spec-preflight --task {store.task} --spec <file> '
                          f'--project {store.project}; amend any SPEC-GAPS first')
     return matches[-1]
 
 
-def retain(store, data, base, actor, round_number, answer, provenance):
+def rewrites(store, task, data, answer, verdict, card=None, pr_authoring=None):
+    """Judge the reviewer's rewrite blocks; the answer itself stays as returned."""
+    import fm_plain
+    found, _ = fm_plain.blocks(answer)
+    spec = json.loads(data)
+    gaps = {r.get('spec_sha256') for r in store.records()
+            if r['kind'] == 'spec-preflight' and r.get('verdict') == 'SPEC-GAPS'}
+    result = {}
+
+    def judge(kind, solicited, check):
+        text, reason = fm_plain.candidate(found, kind, solicited)
+        if text is None and reason is None:
+            return None
+        entry = {}
+        if text is not None:
+            entry['sha256'] = hashlib.sha256(text.encode('utf-8')).hexdigest()
+            try:
+                text = check(json.loads(text), text)
+                entry['sha256'] = hashlib.sha256(text.encode('utf-8')).hexdigest()
+            except (ValueError, KeyError, TypeError) as error:
+                reason = str(error) or type(error).__name__
+        if reason is not None:
+            entry.update(status='refused', reason=reason)
+        elif verdict != 'SPEC-OK':
+            entry.update(status='unused', reason='the reviewer found gaps')
+        else:
+            entry.update(status='accepted', text=text)
+        return entry
+
+    def check_spec(new, text):
+        fm_plain.compare(spec, new, fm_plain.spec_prose, 'spec.')
+        validate_spec(task, new)
+        if hashlib.sha256(text.encode('utf-8')).hexdigest() in gaps:
+            raise ValueError('these bytes were marked SPEC-GAPS before')
+        return text
+
+    entry = judge('fm-reworded-spec', True, check_spec)
+    if entry is not None:
+        result['spec'] = entry
+    rewritten = json.loads(entry['text']) if entry and entry['status'] == 'accepted' else None
+
+    if card is not None or found['fm-reworded-card']:
+        old = json.loads(card) if card is not None else None
+
+        def check_card(new, text):
+            import fm_ste
+            fm_plain.compare(old, new, fm_plain.card_prose, 'card.')
+            report = fm_ste.check_plain(new)
+            if not report['ok']:
+                raise ValueError('check-plain: ' + '; '.join(report['problems']) if report['problems']
+                                 else 'check-plain: STE failure in why or how')
+            return text
+        entry = judge('fm-reworded-card', card is not None, check_card)
+        if entry is None:
+            entry = dict(status='unchanged')
+        if card is not None:
+            entry['submitted_sha256'] = hashlib.sha256(card).hexdigest()
+        result['card'] = entry
+
+    if pr_authoring is not None or found['fm-reworded-pr-authoring']:
+        old = json.loads(pr_authoring) if pr_authoring is not None else None
+
+        def seal_against(new):
+            from fm_self_pr import validate
+            from copy import deepcopy
+            new = deepcopy(new)
+            if rewritten is not None:
+                new['sources']['spec']['sha256'] = result['spec']['sha256']
+            validate(new, rewritten if rewritten is not None else spec, new.get('sources'),
+                     {'decision': new.get('dispatch_reference')}, prose_checks=True)
+            return json.dumps(new, ensure_ascii=False, indent=2) + '\n'
+
+        def check_pr(new, text):
+            fm_plain.compare(old, new, fm_plain.pr_prose, 'pr-authoring.')
+            return seal_against(new)
+        entry = judge('fm-reworded-pr-authoring', pr_authoring is not None, check_pr)
+        if entry is None and rewritten is not None and old is not None:
+            # Only the spec digest changes, so the draft seals against the reviewed spec.
+            try:
+                text = seal_against(old)
+                entry = dict(status='accepted', text=text, sha256=hashlib.sha256(text.encode('utf-8')).hexdigest())
+            except (ValueError, KeyError, TypeError) as error:
+                entry = dict(status='refused', reason=str(error))
+        if entry is None:
+            entry = dict(status='unchanged')
+        elif entry['status'] == 'accepted' and rewritten is not None:
+            entry['machine_change'] = ['sources.spec.sha256']
+        if pr_authoring is not None:
+            entry['submitted_sha256'] = hashlib.sha256(pr_authoring).hexdigest()
+        result['pr-authoring'] = entry
+    return result
+
+
+def retain(store, data, base, actor, round_number, answer, provenance, card=None, pr_authoring=None):
     verdict = decision(answer, store.task)
     sha = hashlib.sha256(data).hexdigest()
     if verdict == 'SPEC-OK' and any(r['kind'] == 'spec-preflight'
@@ -318,9 +533,30 @@ def retain(store, data, base, actor, round_number, answer, provenance):
         raise ValueError('SPEC-GAPS requires amended spec bytes before SPEC-OK')
     items = structure(answer, store.task, len(json.loads(data).get('acceptance') or []),
                       standing(store))
+    extra = {}
+    rewrite = rewrites(store, store.task, data, answer, verdict, card, pr_authoring)
+    if rewrite:
+        extra['rewrite'] = rewrite
     return store.append('spec-preflight', round_number, actor, base, answer,
                         spec_sha256=sha, verdict=verdict, provenance=provenance,
-                        standing=items, missed=sum(item['label'] == 'MISSED' for item in items))
+                        standing=items, missed=sum(item['label'] == 'MISSED' for item in items), **extra)
+
+
+EXPORTS = (('spec', 'spec.reworded.json'), ('card', 'card.reworded.json'),
+           ('pr-authoring', 'pr-authoring.reworded.json'))
+
+
+def export(record, out):
+    """Write each accepted rewrite byte for byte as retained, and say where."""
+    lines = []
+    for kind, name in EXPORTS:
+        entry = accepted(record, kind)
+        if entry is None:
+            continue
+        path = Path(out) / name
+        path.write_bytes(entry['text'].encode('utf-8'))
+        lines.append(f'fm-review: reworded {kind} {path} sha256 {entry["sha256"]}')
+    return lines
 
 
 def outcome(store, actor, sha, exit_code, started):
@@ -329,7 +565,7 @@ def outcome(store, actor, sha, exit_code, started):
                and r.get('actor') == actor and r.get('spec_sha256') == sha
                and r.get('verdict') in ('SPEC-OK', 'SPEC-GAPS')]
     if matches:
-        return matches[-1]['verdict'].lower()
+        return effective(matches[-1]).lower()
     if exit_code in (129, 130, 143):
         return 'interrupted'
     return 'failed' if started else 'refused'
@@ -364,7 +600,8 @@ def selected(code, run, attempt, vendor):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('command', choices=['prompt', 'require', 'retain', 'outcome'])
-    for name in ('task', 'state', 'project', 'spec', 'base', 'code', 'run', 'attempt', 'vendor'):
+    for name in ('task', 'state', 'project', 'spec', 'base', 'code', 'run', 'attempt', 'vendor',
+                 'card', 'pr-authoring', 'out'):
         p.add_argument('--' + name, default='')
     p.add_argument('--actor', default='')
     p.add_argument('--sha', default='')
@@ -377,12 +614,15 @@ def main():
         return
     data = (json.load(sys.stdin)['snapshots']['spec']['text'].encode() if a.pin_stdin
             else Path(a.spec).read_bytes())
+    card = Path(a.card).read_bytes() if a.card else None
+    pr_authoring = Path(a.pr_authoring).read_bytes() if a.pr_authoring else None
     if a.command == 'prompt':
-        body = prompt(a.task, data, a.base)  # Validate before reading any store.
+        # Validate before reading any store.
+        body = prompt(a.task, data, a.base, None, a.code or None, card, pr_authoring)
         if a.state and a.project:
             previous = standing(Store(a.state, a.project, a.task))
             if previous is not None:
-                body = prompt(a.task, data, a.base, previous)
+                body = prompt(a.task, data, a.base, previous, a.code or None, card, pr_authoring)
         print(body)
         return
     store = Store(a.state, a.project, a.task)
@@ -395,10 +635,16 @@ def main():
         raise ValueError('preflight identity mismatch')
     if hashlib.sha256(data).hexdigest() != os.environ.get('FM_SPEC_PREFLIGHT'):
         raise ValueError('preflight spec changed during round')
-    retain(store, data, a.base, identity['actor'] if 'actor' in identity else os.environ['FM_ACTOR'],
-           identity['round'], answer, provenance)
+    for value, env in ((card, 'FM_SPEC_PREFLIGHT_CARD'), (pr_authoring, 'FM_SPEC_PREFLIGHT_PR_AUTHORING')):
+        if value is not None and hashlib.sha256(value).hexdigest() != os.environ.get(env):
+            raise ValueError('preflight input changed during round')
+    record = retain(store, data, a.base, identity['actor'] if 'actor' in identity else os.environ['FM_ACTOR'],
+                    identity['round'], answer, provenance, card, pr_authoring)
     print(answer)
-    if decision(answer, a.task) == 'SPEC-GAPS':
+    if a.out:
+        for line in export(record, a.out):
+            print(line)
+    if effective(record) in ('SPEC-GAPS', 'rewrite-refused'):
         sys.exit(65)
 
 

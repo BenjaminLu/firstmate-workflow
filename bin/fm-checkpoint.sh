@@ -129,6 +129,10 @@ if [ -n "$dirty" ]; then
       "$TASK:"*|"$TASK "*) commit_msg="$MSG" ;;
       *) commit_msg="$TASK: $MSG" ;;
     esac
+    # Advisory only (T-270): plain-writing findings in the message go to
+    # firstmate's log; the commit happens whatever they say.
+    python3 "$(dirname "${BASH_SOURCE[0]}")/lib/fm_plain.py" lint - --source checkpoint-commit \
+      --log "${FM_STATE_DIR:-$REPO/state}/runtime/plain-writing.jsonl" <<<"$commit_msg" >/dev/null 2>&1 || true
     fm_git_commit "$tree" "$commit_msg"
   fi
 fi

@@ -67,6 +67,10 @@ fixture() {
   binding_service_fixture "$d/repo"  # unrelated orchestration cases; real head checks in role-prompts
   stack_base_fixture bin
   cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
+  # T-270: the spec preflight prompt reads the writing rules and glossary
+  mkdir -p "$d/repo/skills/firstmate" "$d/repo/i18n"
+  cp "$ROOT/skills/firstmate/plain-writing.md" "$d/repo/skills/firstmate/"
+  cp "$ROOT/i18n/glossary.json" "$ROOT/i18n/tw2cn.tsv" "$d/repo/i18n/"
   printf 'vendor: mock\n' > config.yaml
   printf '{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}\n' > design/tasks/T-Z.json
   echo base > src/a; git add -A; git commit -qm base

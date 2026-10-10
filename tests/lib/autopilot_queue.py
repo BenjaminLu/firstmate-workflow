@@ -604,10 +604,16 @@ class QueueTests(unittest.TestCase):
                   intent=[dict(kind='step', text='Keep one front.')],
                   done=[dict(kind='fact', text='Intent 1: One front advances.')],
                   notes=[dict(kind='note', text=note)],
+                  why=[dict(kind='fact', text='One PR moves at a time.')],
+                  how=[dict(kind='fact', text='The queue lets the front PR advance and holds the rest.')],
+                  glossary=['scope'],
                   options={k:dict(description='Hold the trial.', pros='Keep control.', cons='Wait for review.') for k in 'ABC'})
         tw = dict(title='佇列試行', explanation='試行保留一個前端。', before='PR 同時前進。', after='一個 PR 前進。',
                   outcome='船長保留每張合併卡。', intent=[dict(kind='step', text='保留一個前端。')],
                   done=[dict(kind='fact', text='意圖 1：一個前端前進。')], notes=[dict(kind='note', text=note)],
+                  why=[dict(kind='fact', text='一次只該有一個 PR 前進。')],
+                  how=[dict(kind='fact', text='佇列讓最前面的 PR 前進，其餘暫停。')],
+                  glossary=['scope'],
                   options={k:dict(description='暫緩試行。', pros='保留控制。', cons='等待審查。') for k in 'ABC'})
         details = self.root / 'rollout.json'
         details.write_text(json.dumps({'en':en, 'zh-TW':tw, 'effect':dict(A='hold', B='hold', C='hold')}))

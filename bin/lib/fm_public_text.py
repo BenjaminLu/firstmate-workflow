@@ -53,6 +53,21 @@ def validate(title, summary, style='plain', changes=None):
     return problems
 
 
+def plain_problems(title, summary, changes=None):
+    """Blocking plain-writing checks (glued numbers, slash chains) on public
+    spec fields; spec preflight alone calls this, never a publishing round."""
+    import fm_plain
+
+    fields = [('public_title', title), ('public_summary', summary)]
+    if isinstance(changes, list):
+        fields.extend((f'public_changes[{i}]', value) for i, value in enumerate(changes))
+    problems = []
+    for field, value in fields:
+        if isinstance(value, str):
+            problems += [f'{field}: {f["check"]} "{f["match"]}"' for f in fm_plain.lint(value, field=field)]
+    return problems
+
+
 if __name__ == '__main__':
     try:
         if len(sys.argv) != 3 or sys.argv[1] != 'check':

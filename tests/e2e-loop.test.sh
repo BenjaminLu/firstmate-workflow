@@ -27,7 +27,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # tests/lib/run_project_turns.py; this suite retains the real launcher chain.
 DETAILS="$(mktemp)"
 cat > "$DETAILS" <<'JSON'
-{"en":{"title":"Merge fixture cache","explanation":"Cache file reads","before":"Repeated reads","after":"One read","outcome":"Cache decision recorded","options":{"A":{"description":"Merge cache","pros":"Less IO","cons":"More memory"},"B":{"description":"Revise cache","pros":"Improve design","cons":"Delay"},"C":{"description":"Hold cache","pros":"Measure","cons":"No improvement"}}},"zh-TW":{"title":"合併快取","explanation":"快取檔案讀取","before":"重複讀取","after":"讀取一次","outcome":"已記錄快取決策","options":{"A":{"description":"合併快取","pros":"減少讀取","cons":"增加記憶體"},"B":{"description":"修訂快取","pros":"改善設計","cons":"延後"},"C":{"description":"保留快取","pros":"測量","cons":"尚未改善"}}}}
+{"en":{"title":"Merge fixture cache","explanation":"Cache file reads","before":"Repeated reads","after":"One read","outcome":"Cache decision recorded","options":{"A":{"description":"Merge cache","pros":"Less IO","cons":"More memory"},"B":{"description":"Revise cache","pros":"Improve design","cons":"Delay"},"C":{"description":"Hold cache","pros":"Measure","cons":"No improvement"}},"why":[{"kind":"fact","text":"Each check reads the same file again."}],"how":[{"kind":"step","text":"Read the file once per run."}],"glossary":[]},"zh-TW":{"title":"合併快取","explanation":"快取檔案讀取","before":"重複讀取","after":"讀取一次","outcome":"已記錄快取決策","options":{"A":{"description":"合併快取","pros":"減少讀取","cons":"增加記憶體"},"B":{"description":"修訂快取","pros":"改善設計","cons":"延後"},"C":{"description":"保留快取","pros":"測量","cons":"尚未改善"}},"why":[{"kind":"fact","text":"每次檢查都重讀同一個檔。"}],"how":[{"kind":"step","text":"只讀一次檔，結果留在記憶體。"}],"glossary":[]}}
 JSON
 d="$(mktemp -d)"; bare="$d/remote.git"; r="$d/repo"
 git init -q --bare "$bare"
@@ -39,6 +39,7 @@ cp "$ROOT"/bin/fm-*.sh bin/
 cp "$ROOT/bin/fm-herdr.py" bin/; project_storage_fixture bin/
 cp -r "$ROOT/bin/adapters" bin/
 cp -r "$ROOT/bin/lib" bin/
+cp -r "$ROOT/i18n" .   # T-270: the frozen code root carries the glossary
 binding_service_fixture "$r"
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/
 cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/

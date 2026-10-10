@@ -34,6 +34,11 @@ NEW_FIELDS = ('intent', 'why', 'scope_in', 'scope_out', 'done', 'notes', 'questi
 WALK_FIELDS = ('change_points', 'door', 'check')
 LEGACY_FIELDS = NEW_FIELDS
 NEW_FIELDS += WALK_FIELDS + ('scene',)
+# why, how and glossary appear on every card (T-270); alone they never make
+# a card an intent card.
+PLAIN_FIELDS = ('why', 'how', 'glossary')
+INTENT_TRIGGERS = tuple(field for field in NEW_FIELDS if field not in PLAIN_FIELDS)
+CARD_LISTS = LEGACY_FIELDS + ('how',)
 LOCALES = ('en', 'zh-TW')
 
 
@@ -293,14 +298,14 @@ def _scene(details):
 def _validate(details):
     if not isinstance(details, dict):
         raise ValueError('details must be an object')
-    if not any(isinstance(details.get(lang), dict) and any(k in details[lang] for k in NEW_FIELDS) for lang in LOCALES):
+    if not any(isinstance(details.get(lang), dict) and any(k in details[lang] for k in INTENT_TRIGGERS) for lang in LOCALES):
         return False
     for lang in LOCALES:
         if not isinstance(details.get(lang), dict) or 'intent' not in details[lang]:
             raise ValueError('intent is required in both locales')
     _walk(details)
     _scene(details)
-    for key in LEGACY_FIELDS:
+    for key in CARD_LISTS:
         if (key in details['en']) != (key in details['zh-TW']):
             raise ValueError(key + ': required in both locales or neither')
         if key not in details['en']:
@@ -414,7 +419,7 @@ def _report(details, explain=False):
                 for field in ('description', 'pros', 'cons'):
                     add('options.' + key + '.' + field, option.get(field),
                         None if field == 'description' else 'fact', sentences=field != 'description')
-        for field in ('intent', 'why', 'done', 'questions', 'notes'):
+        for field in ('intent', 'why', 'how', 'done', 'questions', 'notes'):
             for index, item in enumerate(loc.get(field, [])):
                 add(field, item['text'], 'fact' if field == 'notes' else item['kind'], index)
         for index, point in enumerate(loc.get('change_points', [])):
@@ -433,10 +438,56 @@ def _report(details, explain=False):
     return report
 
 
+def check_plain(details, root=None):
+    """Change 8 of T-270: why, how and glossary on every card, plus the
+    mechanical plain-writing checks and STE for every why and how item.
+
+    Shape problems raise ValueError; findings and STE failures are reported.
+    """
+    import fm_plain
+    glossary = fm_plain.load_glossary(root)
+    if not isinstance(details, dict):
+        raise ValueError('details must be an object')
+    problems = fm_plain.check_card(details, glossary)
+    shape = [p for p in problems if not re.search(r' (glued-number|slash-chain|unexplained-term) "', p)]
+    if shape:
+        raise ValueError('; '.join(shape))
+    report = dict(plain=True, ok=not problems, problems=problems, locales={})
+    for lang in LOCALES:
+        report['locales'][lang] = []
+        for field in ('why', 'how'):
+            for index, item in enumerate(details[lang][field]):
+                for sentence in split(item['text']):
+                    result = check(sentence, item['kind'])
+                    result.pop('lang')
+                    report['locales'][lang].append(dict(field=field, index=index, sentence=sentence, **result))
+                    if any(i['severity'] == 'fail' for i in result['issues']):
+                        report['ok'] = False
+    return report
+
+
 def main(argv):
     if argv == ['rules']:
         print(json.dumps(rules(), ensure_ascii=False))
         return 0
+    if len(argv) == 2 and argv[0] == 'check-plain':
+        try:
+            with open(argv[1], encoding='utf-8') as stream:
+                report = check_plain(json.load(stream))
+        except (ValueError, OSError) as error:
+            print('fm_ste: ' + str(error), file=sys.stderr)
+            return 64
+        print(json.dumps(report, ensure_ascii=False))
+        if report['ok']:
+            return 0
+        for problem in report['problems']:
+            print(problem, file=sys.stderr)
+        for lang, entries in report['locales'].items():
+            for entry in entries:
+                for issue in entry['issues']:
+                    if issue['severity'] == 'fail':
+                        print('{} {}: {} -> {} {}'.format(lang, entry['field'], entry['sentence'], issue['rule'], issue['detail']), file=sys.stderr)
+        return 65
     kind = None
     if len(argv) == 4 and argv[:2] == ['check-details', '--kind'] and not argv[2].startswith('--'):
         kind = argv[2]
@@ -444,7 +495,7 @@ def main(argv):
     elif len(argv) == 2 and argv[0] in ('check-details', 'check-explain') and argv[1] != '--kind':
         filename = argv[1]
     else:
-        print('usage: fm_ste.py rules | check-details [--kind <kind>] <file> | check-explain <spec.json>', file=sys.stderr)
+        print('usage: fm_ste.py rules | check-details [--kind <kind>] <file> | check-explain <spec.json> | check-plain <file>', file=sys.stderr)
         return 64
     try:
         with open(filename, encoding='utf-8') as stream:

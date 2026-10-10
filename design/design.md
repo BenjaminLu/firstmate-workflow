@@ -634,6 +634,26 @@ reviewer provenance and board approval, and coordinate fresh verification when
 the head changes so a stale card is not treated as ready. `fm-autopilot.sh` requests
 cards after gate success; it neither awaits decisions nor performs merges.
 
+#### Why, how and glossary on every card (T-270)
+
+Every new card's details carry, in both `en` and `zh-TW`, a nonempty `why`
+list, a nonempty `how` list with the same `{kind, text}` item shape, and a
+`glossary` list of ids from `i18n/glossary.json` (`{"schema": 1, "terms":
+[...]}`; each term has an id and, per locale, a term, aliases and one plain
+sentence of explanation). `bin/lib/fm_ste.py check-plain <file>` refuses details
+without these lists, a glossary id the file does not hold, or a glossary term
+that appears in any human-visible card field while its id is not listed; it
+also refuses glued numbers and slash chains and reports STE results for every
+why and how item. `bin/fm-decide.sh --request` runs it on every request with
+`--details`, for choice, merge and merge-untracked cards, before anything is
+read or written; then it stores each id as `{id, term, text}` for that locale,
+so a card keeps the explanation it had when it was raised. Code that copies a
+raised card converts those objects back to ids. why, how or glossary alone no
+longer make a card an intent card. The title-only path for `D-SK-*` requests
+stays as a compatibility exception for callers outside this repository; no
+producer here uses it. `fm.sh self-update` writes why, how and glossary into
+its card. Cards already raised are not rewritten and render as before.
+
 ### 5.2a Worktrees, and the one root they live under
 
 Every worktree lives under `state/worktrees/<task-id>` — one root, inside the
@@ -1334,6 +1354,39 @@ that needs to become ready. Draft creation during a question round is unchanged.
 | `REGRESSION:<task-id>` | reviewer | labels a new item on the standing list: newly introduced by the latest change |
 | `NEW-GROUND:<task-id>` | reviewer | labels a new item on the standing list: the latest change touched code the list never covered |
 
+#### Plain text on pull requests, commits and comments (T-270)
+
+All text firstmate or crew writes for a person follows
+`skills/firstmate/plain-writing.md`; machine markers stay exactly as above.
+A self pull request body starts with a Why section (the draft's problem) and a
+How section (its approach), keeps the existing sections, and ends with a
+Glossary section that lists every `i18n/glossary.json` term the title and body
+use. A question draft gets the same Why section and glossary. Sealing a new
+draft refuses glued numbers and slash chains in its prose fields; rendering an
+already sealed envelope keeps only its structural checks. For an external
+project the public fields of the spec supply the text; spec preflight refuses
+glued numbers and slash chains there, while each publishing round keeps
+`fm_public_text.validate()` unchanged, and the project's template and title
+style win over the plain-writing rules.
+
+The round commit subject stays the spec title (self) or the public title
+(external). The generic fallback is `<task>: Save the round's changes`, and the
+stop or recovery checkpoint that `bin/fm-worker.sh` requests is `<task>: Save
+unfinished work after the round stopped (<reason>)`. The adoption check that
+upgrades an untouched fallback pull-request title accepts both this fallback
+and the older `<task>: project work`. The rebuild note, the reviewer comment
+wrapper (its `EVIDENCE:` line stays first) and the external progress summary
+and status are plain sentences; the rebuild note says the worker resolved the
+listed conflicts in the round that just ended. Before a worker note, reviewer
+comment, external comment, external thread reply or the rebuild note is posted,
+and before a checkpoint, round or rebuilt round commit is made,
+`bin/lib/fm_plain.py` writes glued numbers, slash chains and unexplained
+glossary terms to `state/runtime/plain-writing.jsonl`; this never blocks a post
+or a commit. A reviewer's `fm-merge-card` block never leaves local evidence:
+the reviewer comment, external comment and external thread reply projections
+remove it (closed, duplicated or unclosed), and with `FM_EXTERNAL=1` only the
+private store keeps it.
+
 ---
 
 ## 6. Lifecycle and the gates
@@ -1668,6 +1721,48 @@ worker dispatch. Already running rounds finish with frozen code; no live launche
 is edited. Tests cover missing and mismatched receipts, exact-byte admission,
 changed pins, existing pins without receipts, and mode-bound final selection.
 Missing or untested migration in a rule-changing diff is a REJECT finding.
+
+Readability (T-270) is one more standing category. `prompt()` loads
+`skills/firstmate/plain-writing.md` and `i18n/glossary.json` from the frozen
+code root only, and refuses with exit 65, before any model runs, when either is
+missing or unreadable. Each readability item quotes the exact sentence; a wording problem
+fixed by the reviewer's rewrite is `ok`, one no rewrite can fix without changing
+meaning is a `gap`. The rule of at least one item per acceptance line is
+unchanged. `--card <details.json>` and `--pr-authoring <file>` add a dispatch or
+repin card (reviewed in en, zh-TW and the zh-CN text that `i18n/tw2cn.tsv`
+renders) and the pull-request draft to the same run, as read-only pinned copies
+whose SHA-256 the run binds.
+
+The reviewer may return three rewrite blocks before item 1, each opening with an
+exact line ```` ```json fm-reworded-spec ````, ```` ```json fm-reworded-card ````
+or ```` ```json fm-reworded-pr-authoring ```` and closing with a line of three
+backquotes. A second block of one kind is refused as `duplicate`, content that
+is not one JSON object as `not-an-object`, and a card or draft block without that
+input as `unsolicited`; an unclosed block hides the verdict, so the run fails
+and retains nothing. Guards: a spec rewrite may change only `title` and each
+acceptance line's text (never `public_title`, `public_summary` or
+`public_changes`); a card rewrite only its prose fields; a draft rewrite only
+its subject, problem, expected result, approach and intent notes. Every changed
+string keeps the same multiset of protected tokens (code spans, paths,
+file:line references, hexadecimal hashes of seven or more characters in either
+case and with or without a digit, task numbers, decision ids and numbers). The
+result is revalidated: the spec by every check a submitted spec meets, the card
+by `check-plain`, the draft by `fm_self_pr.py` validation against the rewritten
+spec, whose digest the launcher writes into the draft's sources.
+
+The receipt keeps `spec_sha256` of the submitted bytes and the reviewer's own
+verdict, and adds `rewrite`: per kind the rewritten SHA-256, a status
+(`accepted`, `refused`, `unused` under SPEC-GAPS, or `unchanged`), any refusal
+reason and the submitted card or draft SHA-256. Any refused rewrite makes the
+effective outcome `rewrite-refused`, which exits 65 like SPEC-GAPS, authorizes
+nothing, and puts its reasons into the next prompt after the standing list. A
+SPEC-OK receipt with an accepted spec rewrite authorizes only the rewritten
+bytes; one without a spec rewrite authorizes the submitted bytes, as every older
+receipt does. Bytes any receipt marked SPEC-GAPS are never authorized. The
+launcher writes each accepted rewrite byte for byte to
+`spec-preflight/out/{spec,card,pr-authoring}.reworded.json` and prints
+`fm-review: reworded <kind> <path> sha256 <sha>`. Existing receipts are not
+rewritten.
 
 ### Small changes (T-277)
 
@@ -3061,6 +3156,26 @@ The panel sits above the decisions at every width, retaining its DOM home
 below the top bar and above the counts. The frozen 3D application stays outside this integration;
 any 3D follow-up requires its own approved scope.
 
+### Why, how and glossary on the board (T-270)
+
+The main card, the decision sheet, the task detail and the enriched (walk) card
+show a card's `why` and `how` as two titled lists, and its glossary as its own
+section below them, each entry with its term and explanation. The labels are
+`card.how` and `card.glossary`; zh-CN comes from zh-TW through `i18n/tw2cn.tsv`,
+applied in file order. A card without `how` or a glossary renders as before.
+A merge card that the autopilot builds takes its title, why, how, notes and
+glossary from the `fm-merge-card` block of the APPROVE that the six-gate
+readiness record selected: the verdict signature, task, project, pull request
+and head must match, a carried approval counts as for gate 6, and every path
+and code span must appear in the reviewed diff or the bound spec. The block's
+title must be text, its why, how and notes lists of items with text, and its
+glossary a list of ids. Otherwise it falls back to the dispatch card and adds
+the caution "Not reviewed for readability". Either way it adds the glossary ids
+of its own fixed sentences and must pass `check-plain`; any build failure wakes
+firstmate to author the details and never stops the autopilot. The
+captain's click stays the only merge authorization. A verdict without
+`merge_card_status` reads as absent.
+
 ---
 
 T-244 cards remain evidence first. The reading order is intent key points,
@@ -3681,8 +3796,12 @@ firstmate runs is a fuse that should reap zero; anything it reaps is a bug
 to be found by this rule.
 
 The normal `fm-autopilot`, `fm-dispatch`, `fm-worker` and `fm-review` entrypoints freeze
-`bin/` and `skills/` from the entrypoint's own code tree into a private per-launch
-snapshot with a hash manifest before doing work. Invoking a checkout script against
+`bin/`, `skills/` and, when the tree has it, `i18n/` from the entrypoint's own code
+tree into a private per-launch snapshot with a hash manifest before doing work. Frozen
+code reads the glossary and the zh-CN table only from its own `i18n/`, never from the
+live checkout, and a missing file is an error naming it (T-270). The autopilot's reload
+identity stays `bin/` and `skills/`, so a change to `i18n/` alone reaches a running
+autopilot at its next reload, not at once. Invoking a checkout script against
 a sparse `--repo` fixture snapshots the checkout, not the fixture. Nested launches
 use that same frozen execution path. New sessions take a new snapshot; source changes
 cannot replace scripts a running shell is reading. Do not alter retained snapshots.

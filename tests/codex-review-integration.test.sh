@@ -36,6 +36,7 @@ class StockReview(unittest.TestCase):
                         GH_REPO='fixture/project', FM_REVIEW_CI_WAIT='0', FM_GH=str(self.tools / 'gh'))
         shutil.copytree(root / 'bin', self.repo / 'bin')
         shutil.copytree(root / 'skills', self.repo / 'skills')
+        shutil.copytree(root / 'i18n', self.repo / 'i18n')
         (self.repo / 'design/tasks').mkdir(parents=True)
         (self.repo / 'design/tasks/T-Z.json').write_text(json.dumps(dict(
             id='T-Z', title='fixture', scope=['src/**'], acceptance=['pinned review'])))
@@ -207,8 +208,10 @@ else:
         self.assertEqual(invocation['review'], receipt['review'])
         final = (Path(receipt['attempt']) / 'final.txt').read_bytes()
         self.assertEqual(hashlib.sha256(final).hexdigest(), receipt['final_sha256'])
-        envelope, body = published.split('\n\n', 1)
+        envelope, explanation, body = published.split('\n\n', 2)
         self.assertEqual('EVIDENCE:T-Z ' + verdicts[-1]['signature'], envelope)
+        # T-270: one plain sentence explains the EVIDENCE and REVIEWED lines before the verdict.
+        self.assertTrue(explanation.startswith('The EVIDENCE line names the signed review record'))
         self.assertTrue(body.startswith(final.decode().rstrip()))
         self.assertEqual(self.head, verdicts[-1]['binding']['head'])
         self.assertEqual(self.base, verdicts[-1]['binding']['base'])

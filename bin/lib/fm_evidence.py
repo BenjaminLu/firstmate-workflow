@@ -599,6 +599,31 @@ class Store:
         return collect(self, head, base, code)
 
 
+def merge_card_of(answer, decided):
+    """The reviewer's fm-merge-card block (T-270) and its status.
+
+    absent: no block; malformed: unclosed, more than one, or not one JSON
+    object; ignored: a block on a REJECT; present: one object on an APPROVE.
+    The answer text itself is retained unchanged.
+    """
+    from fm_plain import blocks
+    found, _ = blocks(answer)
+    contents = found['fm-merge-card']
+    if not contents:
+        return None, 'absent'
+    if None in contents:
+        return None, 'malformed'
+    if decided != 'APPROVE':
+        return None, 'ignored'
+    if len(contents) > 1:
+        return None, 'malformed'
+    try:
+        card = json.loads(contents[0])
+    except ValueError:
+        return None, 'malformed'
+    return (card, 'present') if isinstance(card, dict) else (None, 'malformed')
+
+
 def retain_verdict(store, args):
     """Launcher selects the vendor; adapter-authored receipts cannot upgrade it.
 
@@ -638,8 +663,10 @@ def retain_verdict(store, args):
     # T-272: check the exact answer's patch proposals before the single append.
     checks = fix_checks(answer, store.task, args.head, os.environ.get('FM_TARGET_ROOT', ''),
                         pinned_scope(run, store.task, args.head))
+    merge_card, merge_card_status = merge_card_of(answer, decided)
     return store.append('verdict', args.round, os.environ['FM_ACTOR'], args.head, answer,
                         verdict=decided, base=args.base, patch=args.patch,
+                        merge_card=merge_card, merge_card_status=merge_card_status,
                         reviewer=identity, login=os.environ.get('FM_REVIEWER_LOGIN', os.environ['FM_ACTOR']),
                         provenance=provenance, binding=binding, attempt=args.attempt, vendor=args.vendor,
                         model=identity.get('model', 'unknown'), fix_protocol=1, fix_checks=checks)

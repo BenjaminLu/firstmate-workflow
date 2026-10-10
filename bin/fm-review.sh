@@ -40,12 +40,14 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
 fm_args=("$@")
 
 REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''; ROUND_GIVEN=''
-SPEC_PREFLIGHT=''; SPEC_FILE=''
+SPEC_PREFLIGHT=''; SPEC_FILE=''; CARD_FILE=''; PR_AUTHORING_FILE=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --spec-preflight) SPEC_PREFLIGHT=1; shift ;;
     --spec) fm_need "fm-review" "$@"; SPEC_FILE="${2-}"; shift 2 ;;
+    --card) fm_need "fm-review" "$@"; CARD_FILE="${2-}"; shift 2 ;;
+    --pr-authoring) fm_need "fm-review" "$@"; PR_AUTHORING_FILE="${2-}"; shift 2 ;;
     --project) fm_need "fm-review" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --task) fm_need "fm-review" "$@"; TASK="${2-}"; shift 2 ;;
     --branch) fm_need "fm-review" "$@"; BRANCH="${2-}"; shift 2 ;;
@@ -68,6 +70,13 @@ CI_WAIT=$((10#$CI_WAIT)); CI_POLL=$((10#$CI_POLL))
 if [ -n "$SPEC_FILE" ]; then
   SPEC_FILE="$(cd -- "$(dirname -- "$SPEC_FILE")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "$SPEC_FILE")")" || exit 64
 fi
+# The card and pull-request draft reviewed in the same preflight (T-270).
+for _input in CARD_FILE PR_AUTHORING_FILE; do
+  [ -n "${!_input}" ] || continue
+  [ -n "$SPEC_PREFLIGHT" ] || { echo 'fm-review: --card and --pr-authoring require --spec-preflight' >&2; exit 64; }
+  [ -f "${!_input}" ] || { echo "fm-review: no file at ${!_input}" >&2; exit 64; }
+  printf -v "$_input" '%s' "$(cd -- "$(dirname -- "${!_input}")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "${!_input}")")" || exit 64
+done
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
@@ -1388,6 +1397,19 @@ if [ "$FM_EXTERNAL" = 1 ]; then
 fi
 projection="$(fm_projection)" || exit 65
 if [ -n "$PR" ] && [ "$projection" = comments ]; then
+  # The reviewer's merge card (T-270) stays in local evidence: no comment
+  # carries an fm-merge-card block, closed, duplicated or unclosed.
+  # Self-contained: no temporary file and no name defined outside this block.
+  plain_helper="${FM_CODE_ROOT:-${REPO:-}}/bin/lib/fm_plain.py"
+  if [ -f "$plain_helper" ]; then
+    public_verdict="$(printf '%s\n' "$verdict" | python3 "$plain_helper" public -)" || {
+      echo 'fm-review: could not remove the merge card from the comment; nothing posted' >&2; public_verdict=''; }
+  elif ! grep -q 'fm-merge-card' <<<"$verdict"; then
+    # Without the helper, only text that names no merge card may be posted.
+    public_verdict="$verdict"
+  else
+    echo 'fm-review: merge card helper unavailable; nothing posted' >&2; public_verdict=''
+  fi
   # Walk text is never published: without a working helper the inline
   # fallback drops the fence and keeps the prose and markers. The block is
   # self-contained (no $work file, no function defined elsewhere), so it
@@ -1421,21 +1443,33 @@ if [ -n "$PR" ] && [ "$projection" = comments ]; then
       fi
     done
   }
-  if ! { [ -r "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_walk.py" ] &&
-    projected_verdict="$(printf '%s\n' "$verdict" | python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_walk.py" comment --file - 2>/dev/null)"; }; then
-    projected_verdict="$(printf '%s\n' "$verdict" | project_without_walk)"
+  projected_verdict=''
+  if [ -n "$public_verdict" ]; then
+    if ! { [ -r "${FM_CODE_ROOT:-${REPO:-}}/bin/lib/fm_walk.py" ] &&
+      projected_verdict="$(printf '%s\n' "$public_verdict" | python3 "${FM_CODE_ROOT:-${REPO:-}}/bin/lib/fm_walk.py" comment --file - 2>/dev/null)"; }; then
+      projected_verdict="$(printf '%s\n' "$public_verdict" | project_without_walk)"
+    fi
   fi
   comment_verdict="EVIDENCE:$TASK $evidence_ref
+
+The EVIDENCE line names the signed review record that firstmate keeps locally. The REVIEWED line at the end names the exact head, base and patch this verdict covers.
 
 $projected_verdict"
   if [ "$project_review" != fm ]; then
     # A local pre-check must not masquerade as gate 6's repository review.
-    comment_verdict="Firstmate local pre-check finished for $TASK at $R_HEAD ($decided). Required external project review remains outstanding; details retained privately. EVIDENCE:$TASK $evidence_ref"
+    comment_verdict="Firstmate local pre-check finished for $TASK at $R_HEAD ($decided). This check runs before the project's own review, which is still required. The review details stay in firstmate's private records. EVIDENCE:$TASK $evidence_ref"
   fi
+  [ -n "$public_verdict" ] || [ "$project_review" != fm ] || comment_verdict=''
   if [ "$FM_EXTERNAL" = 1 ] && [ "$experiment_count" -gt 0 ]; then
-    comment_verdict="Firstmate review finished for $TASK at $R_HEAD ($decided). Details retained privately. EVIDENCE:$TASK $evidence_ref"
+    # Experimental artifacts stay private: the comment carries no verdict text.
+    comment_verdict="Firstmate review finished for $TASK at $R_HEAD ($decided). The review details stay in firstmate's private records. EVIDENCE:$TASK $evidence_ref"
   fi
-  if ! fm_comment_projection "$PR" --body "$comment_verdict" >/dev/null 2>&1; then
+  # Advisory only: findings go to firstmate's log and never stop the post.
+  if [ -f "$plain_helper" ]; then
+    printf '%s\n' "$comment_verdict" | python3 "$plain_helper" lint - --source reviewer-comment \
+      --log "${FM_STATE_DIR:-}/runtime/plain-writing.jsonl" >/dev/null 2>&1 || true
+  fi
+  if [ -z "$comment_verdict" ] || ! fm_comment_projection "$PR" --body "$comment_verdict" >/dev/null 2>&1; then
     echo 'fm-review: optional comment projection failed; local verdict retained' >&2
     FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional verdict comment failed; local verdict retained' \
          --tw '選用的裁決留言發布失敗；本機裁決已保留'

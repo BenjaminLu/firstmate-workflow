@@ -150,7 +150,7 @@ sync_round
 assert_eq 1 "$sync_rc" 'e: new task without worker changes is still no-work'
 sync_bytes 1 e
 assert_eq 1 "$(git --git-dir="$d/remote.git" rev-list --count "main..$branch")" 'e: exactly one checkpoint'
-assert_eq 'T-Z: checkpoint (exit-1)' "$(git --git-dir="$d/remote.git" log -1 --format=%s "$branch")" 'e: existing checkpoint behavior'
+assert_eq 'T-Z: Save unfinished work after the round stopped (exit-1)' "$(git --git-dir="$d/remote.git" log -1 --format=%s "$branch")" 'e: existing checkpoint behavior, in plain words (T-270)'
 head="$(rb_head "$d" "$branch")"
 sync_round
 assert_eq 1 "$sync_rc" 'e: spec-only next round remains no-work'

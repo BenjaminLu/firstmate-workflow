@@ -235,7 +235,7 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
                 assert paths.splitlines() == ['base-content', 'implementation'], paths
                 message = run(['git', '-C', str(target), 'log', '-1', '--format=%s'], env)
                 if public_title is None:
-                    assert message == 'T-051: project work', message
+                    assert message == "T-051: Save the round's changes", message
                 else:
                     assert message == public_title, message
                 calls = [json.loads(line) for line in (scratch / 'gh.jsonl').read_text().splitlines()]

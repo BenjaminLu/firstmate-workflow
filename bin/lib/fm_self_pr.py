@@ -38,7 +38,21 @@ def prose(value, name):
     return value
 
 
-def validate(draft, spec, sources, approval=None):
+def plain(draft):
+    """Blocking plain-writing checks of skills/firstmate/plain-writing.md on
+    the prose fields; only drafts sealed for a new pull request run them."""
+    import fm_plain
+    fields = [('subject', draft.get('subject'))] + [(f, draft.get(f)) for f in ('problem', 'expected_result', 'approach')]
+    fields += [('intent note', note.get('note')) for note in draft.get('intent_notes') or [] if isinstance(note, dict)]
+    problems = []
+    for name, value in fields:
+        if isinstance(value, str):
+            problems += [f'{name}: {f["check"]} "{f["match"]}"' for f in fm_plain.lint(value, field=name)]
+    if problems:
+        raise ValueError('prose is not plain (skills/firstmate/plain-writing.md): ' + '; '.join(problems))
+
+
+def validate(draft, spec, sources, approval=None, prose_checks=False):
     if type(draft.get('schema')) is not int or draft.get('schema') != 1 or draft.get('task') != spec.get('id'):
         raise ValueError('authoring schema/task mismatch')
     if draft.get('sources') != sources or set(sources) != SOURCE_NAMES:
@@ -86,6 +100,8 @@ def validate(draft, spec, sources, approval=None):
     if rollback not in (None, 'not-recorded'):
         if not isinstance(rollback, dict): raise ValueError('invalid rollback')
         for field in ('trigger', 'action', 'owner', 'limits'): prose(rollback.get(field), 'rollback '+field)
+    if prose_checks:
+        plain(draft)
     return draft
 
 
@@ -206,7 +222,7 @@ def seal(task, evidence_project, expected_mode=None, expected_digest=None):
     draft = json.loads(path.read_text())
     sources = source_digests(snapshots)
     approval = dispatch_approval(pins, pin, draft, approval)
-    validate(draft, json.loads(snapshots['spec']['text']), sources, approval)
+    validate(draft, json.loads(snapshots['spec']['text']), sources, approval, prose_checks=True)
     envelope = dict(schema=1, project=pins.project, task=task, sources=sources, draft=draft,
                     dispatch_reference=approval.get('decision') if approval else None,
                     mode='pin-backed' if pin else 'unsealed-legacy')
@@ -247,8 +263,9 @@ def render(envelope, spec, head, files, repository='', created_at=None, question
             if envelope['mode'] == 'unsealed-legacy' else
             'Publication prose is bound to the approved pin; it grants no approval or gate authority.')
     expected = 'Expected result: '+draft['expected_result']
+    why = '## Why\n\n'+draft['problem']
     if question:
-        body = '\n\n'.join([f'Draft awaiting {question} clarification for approved task {spec["id"]}.',
+        body = '\n\n'.join([why, f'Draft awaiting {question} clarification for approved task {spec["id"]}.',
                             expected, status, evidence, decision, mode])
     else:
         approach = 'Proposed approach (until firstmate verifies it): '+draft['approach']
@@ -274,8 +291,9 @@ def render(envelope, spec, head, files, repository='', created_at=None, question
         for note in draft['intent_notes']:
             safe = note['note'].replace('|', '\\|').replace('\n', ' ')
             intents.append(f'| {note["index"]}: {safe} | Pending/not collected |')
+        how = '## How\n\n'+draft['approach']
         if draft['size'] == 'complex':
-            body = '\n\n'.join(['## Problem and result', 'Approved task: '+spec['id']+'. Project: '+envelope.get('project', 'not recorded')+'.\n\n'+draft['problem']+'\n\n'+expected,
+            body = '\n\n'.join([why, how, '## Problem and result', 'Approved task: '+spec['id']+'. Project: '+envelope.get('project', 'not recorded')+'.\n\n'+draft['problem']+'\n\n'+expected,
                                  '## Approach and scope', approach+'\n\n'+scope,
                                  '## Approved intent and evidence', '\n'.join(intents), status, evidence,
                                  '## Decision, migration and rollback', decision, mode,
@@ -283,9 +301,20 @@ def render(envelope, spec, head, files, repository='', created_at=None, question
                                  door_text, rollback_text])
         else:
             purpose = 'Approved purpose: '+'; '.join(note['note'] for note in draft['intent_notes'])+'.'
-            body = '\n\n'.join(['Approved task: '+spec['id']+'. Project: '+envelope.get('project', 'not recorded')+'.\n\n'+draft['problem']+'\n\n'+expected, approach, scope, purpose,
+            body = '\n\n'.join([why, how, 'Approved task: '+spec['id']+'. Project: '+envelope.get('project', 'not recorded')+'.\n\n'+draft['problem']+'\n\n'+expected, approach, scope, purpose,
                                  status, evidence, decision, mode, door_text, rollback_text])
-    return dict(title=title, body=body)
+    return dict(title=title, body=body+'\n\n'+glossary_section(title+'\n'+body))
+
+
+def glossary_section(text):
+    """Every glossary term the title and body use, with its en explanation."""
+    import fm_plain
+    glossary = fm_plain.load_glossary()
+    found = list(dict.fromkeys(fm_plain.find_terms(text, 'en', glossary)))
+    if not found:
+        return '## Glossary\n\nThis text uses no terms from the project glossary.'
+    return '## Glossary\n\n'+'\n'.join('- '+entry['term']+': '+entry['text']
+                                         for entry in fm_plain.expand(found, 'en', glossary))
 
 
 def main():
@@ -312,7 +341,8 @@ def main():
                 pins, pin, snapshots, approval, _ = authority(args.task, args.evidence_project, prospective=True)
                 draft = json.loads(state_path(pins.state, 'pr-authoring/'+args.task+'.json').read_text())
                 approval = dispatch_approval(pins, pin, draft, approval)
-                result = validate(draft, json.loads(snapshots['spec']['text']), source_digests(snapshots), approval)
+                result = validate(draft, json.loads(snapshots['spec']['text']), source_digests(snapshots), approval,
+                                  prose_checks=True)
         else:
             pins, pin, snapshots, approval, reason = authority(args.task, args.evidence_project)
             envelope = json.loads(state_path(pins.state, 'pr-authoring/envelopes/'+args.task+'.json').read_text())

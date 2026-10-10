@@ -422,6 +422,37 @@ M
   safe_rm_rf "$dn"
 done
 
+# T-270: plain-writing findings on a worker note are advisory. The note is
+# posted with its marker unchanged, and the findings reach firstmate's log.
+dp="$(fixture)"; rp="$dp/repo"; GHP="$(ghstub "$dp")"
+cat > "$dp/stub/gh" <<G
+#!/usr/bin/env bash
+echo "gh \$*" >> "$dp/ghcalls"
+case " \$* " in
+  *" pr list "*) echo null; exit 0 ;;
+  *" pr comment "*)
+    while [ \$# -gt 0 ]; do [ "\$1" = --body-file ] && cat "\$2" >> "$dp/posted"; shift; done ;;
+esac
+echo "https://example.invalid/pull/42"
+G
+chmod +x "$dp/stub/gh"
+cat > "$rp/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\nWhich round sets All13 in kind/purpose/chosen?\n' > "$3/.fm-say.md"
+M
+chmod +x "$rp/bin/adapters/mock.sh"
+(cd "$rp" && FM_ROOT="$rp" FM_GH="$GHP" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1)
+assert_eq 0 "$?" 'a note that breaks the plain-writing checks still completes the round'
+assert_contains "$(cat "$dp/posted")" 'ASK-PASS-CRITERIA:T-Z' 'the note is posted with its marker unchanged'
+assert_contains "$(cat "$dp/posted")" 'Which round sets All13 in kind/purpose/chosen?' 'the note text is posted unchanged'
+plain_log="$rp/state/runtime/plain-writing.jsonl"
+assert_eq 'worker-note' "$(jq -r .source "$plain_log" 2>/dev/null | head -1)" 'the advisory findings reach firstmate'"'"'s log'
+assert_eq 'glued-number:All13 slash-chain:kind/purpose/chosen' \
+  "$(jq -r '[.findings[]|select(.check!="unexplained-term")|"\(.check):\(.match)"]|join(" ")' "$plain_log" 2>/dev/null | head -1)" \
+  'the log names the glued number and the slash chain'
+safe_rm_rf "$dp"
+
 cd "$ROOT" || exit 1
 PATH="$suite_original_path"; export PATH
 safe_rm_rf "$suite_tools"

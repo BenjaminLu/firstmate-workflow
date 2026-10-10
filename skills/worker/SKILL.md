@@ -279,6 +279,13 @@ actual GitHub CI and current-head gate evidence and board approval before
 merging; `fm-merge.sh` itself checks neither approval nor the gates. Neither
 lavish nor no-mistakes is a prerequisite; do not add their hooks.
 
+Notes posted to a pull request (`.fm-say.md`) follow
+[plain-writing.md](../firstmate/plain-writing.md) and keep their machine
+markers (`ASK-`, `SCOPE-BLOCKED:`, `WORKER_`, `SWEPT:`) exactly; put a plain
+sentence beside each marker that says what it means. Before posting, the
+launcher writes plain-writing findings to firstmate's log; it never blocks
+the note.
+
 Keep repository prose and `.fm-say.md` in English. Dynamic user-facing board/event
 summaries require both `en` and `zh-TW`; static UI dictionaries do not supply them.
 Do not invent mid-run board progress: scripts emit phase and authored activity

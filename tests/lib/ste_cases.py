@@ -10,8 +10,9 @@ def card():
     for lang, text in [('en', 'The check passes.'), ('zh-TW', '檢查通過。')]:
         result[lang] = {key: text for key in ('title', 'explanation', 'before', 'after', 'outcome')}
         result[lang]['options'] = {key: dict(description=text, pros=text, cons=text) for key in 'ABC'}
-        for key in ('intent', 'why', 'done', 'questions'):
+        for key in ('intent', 'why', 'how', 'done', 'questions'):
             result[lang][key] = [dict(kind='fact', text=text)]
+        result[lang]['glossary'] = []
         alignment = 'Intent 1: The check passes.' if lang == 'en' else '意圖 1：檢查通過。'
         result[lang]['done'].append(dict(kind='fact', text=alignment))
         result[lang].update(scope_in=['checker'], scope_out=[], notes=[dict(kind='caution', text=text)],
@@ -136,7 +137,7 @@ def observations(module):
     for field in ('description', 'pros', 'cons'):
         d = card(); d['en']['options']['B'][field] = 'It will pass.'
         emit('checks option ' + field, not module.check_details(d)['ok'])
-    for field in ('intent', 'why', 'done', 'questions', 'notes'):
+    for field in ('intent', 'why', 'how', 'done', 'questions', 'notes'):
         d = card(); d['en'][field][0]['text'] = 'It passes. It will pass.'
         r = module.check_details(d)
         emit('checks split ' + field, not r['ok'] and any(e['field'] == field and e['sentence'] == 'It will pass.' for e in r['locales']['en']))
@@ -189,7 +190,7 @@ def observations(module):
     d = walk_card('two-way'); d['en']['check'] = walk_card()['en']['check']
     malformed('reject check on two-way', d)
 
-    for field in ('intent', 'why', 'done', 'notes', 'questions', 'before_nodes', 'after_nodes', 'change_table'):
+    for field in ('intent', 'why', 'how', 'done', 'notes', 'questions', 'before_nodes', 'after_nodes', 'change_table'):
         for value in (None, {}, [], [None]):
             d = card(); d['en'][field] = value
             malformed('reject malformed ' + field + ' ' + repr(value), d)
@@ -202,7 +203,7 @@ def observations(module):
     for field in ('before_nodes', 'after_nodes', 'change_table'):
         d = card(); d['en'][field] *= 2
         malformed('reject mismatched ' + field, d)
-    for field in ('intent', 'why', 'done', 'notes', 'questions'):
+    for field in ('intent', 'why', 'how', 'done', 'notes', 'questions'):
         for key, value in [('kind', 'other'), ('text', 'x' * 2001), ('text', ''), ('text', '\x7f')]:
             d = card(); d['en'][field][0][key] = value
             malformed('reject invalid item ' + field + '.' + key, d)
@@ -212,6 +213,16 @@ def observations(module):
     malformed('reject gone after node', d)
     d = card(); d['en']['future_key'] = {'anything': True}
     emit('unknown locale keys survive', module.check_details(d)['ok'])
+    # T-270 Change 8: why, how or glossary alone no longer make an intent card.
+    for keep in (('why',), ('how',), ('glossary',), ('why', 'how', 'glossary')):
+        d = fixture('legacy')
+        for lang, loc in card().items():
+            d[lang].update({key: loc[key] for key in keep})
+        try:
+            emit('plain fields alone are not an intent card: ' + '+'.join(keep),
+                 module.check_details(d) == {'intent_card': False})
+        except ValueError:
+            emit('plain fields alone are not an intent card: ' + '+'.join(keep), False)
 
 
 if __name__ == '__main__':

@@ -690,6 +690,10 @@ cmd_selfupdate() {
         before: (if $before|supplied then $before else "Before text not provided in the proposal." end),
         after: (if $after|supplied then $after else "Proposed text or diff summary not provided in the proposal." end),
         outcome: "A authorizes adoption as a task for implementation and review. B leaves the skill unchanged. C requests revision and another decision.",
+        why: [{kind: "fact", text: (if $why|supplied then $why else "Reason not provided in the proposal." end)}],
+        how: [{kind: "fact", text: "Option A writes the proposal as a task file under design/tasks."},
+              {kind: "fact", text: "A worker changes the skill on a branch, and a reviewer checks the change before any merge."}],
+        glossary: [],
         options: {
           A: {description: ("Adopt proposal " + $p.id), pros: ("Authorizes work on the recorded reason: " + (if $why|supplied then $why else "reason not provided" end)), cons: "Implementation and review are still required; this card does not change the skill."},
           B: {description: "Leave the skill unchanged.", pros: "Keeps the current instructions without implementation work.", cons: "The proposal is not adopted; its stated concern remains unaddressed by this proposal."},
@@ -702,6 +706,10 @@ cmd_selfupdate() {
         before: (if $before|supplied then "提案記錄的修改前文字：" + $before else "提案未提供修改前文字。" end),
         after: (if $after|supplied then "提案記錄的修改內容：" + $after else "提案未提供修改後文字或差異摘要。" end),
         outcome: "A 授權將提案採納為待實作與審查的任務。B 保持技能不變。C 要求修訂後再次決策。",
+        why: [{kind: "fact", text: (if $why|supplied then "提案記錄的原因：" + $why else "提案未提供原因。" end)}],
+        how: [{kind: "fact", text: "選項 A 把提案寫成 design/tasks 下的任務檔案。"},
+              {kind: "fact", text: "工人在分支上修改技能，審查者在合併前檢查這次修改。"}],
+        glossary: [],
         options: {
           A: {description: ("採納提案 " + $p.id), pros: ("授權處理提案記錄的原因：" + (if $why|supplied then $why else "未提供原因" end)), cons: "仍須實作與審查；此卡不會直接修改技能。"},
           B: {description: "保持技能不變。", pros: "保留現有指示，無須進行實作。", cons: "不採納此提案；此提案所述的問題不會因此得到處理。"},
@@ -710,6 +718,26 @@ cmd_selfupdate() {
       }
     }
   ' "$dir/$id.json" > "$details" || die "self-update: could not describe the proposal" 70
+  # The card lists every glossary term its text uses (T-270), so the captain
+  # sees each one explained and fm-decide's plain-writing check accepts it.
+  python3 - "$repo/bin/lib" "$details" <<'PY' || die "self-update: could not list the card's glossary terms" 70
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import fm_plain
+path = sys.argv[2]
+with open(path, encoding='utf-8') as source:
+    details = json.load(source)
+try:
+    glossary = fm_plain.load_glossary()
+except ValueError as error:
+    sys.exit('self-update: ' + str(error))
+for lang in fm_plain.LOCALES:
+    loc = details[lang]
+    loc['glossary'] = list(dict.fromkeys(ident for _, text in fm_plain.card_texts(loc)
+                                         for ident in fm_plain.find_terms(text, lang, glossary)))
+with open(path, 'w', encoding='utf-8') as out:
+    json.dump(details, out, ensure_ascii=False)
+PY
 
   # the captain sees it as a card, through the same script every other
   # decision goes through. Nothing is dispatched: a greenlit event is the

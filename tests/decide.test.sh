@@ -23,8 +23,8 @@ fixture() {
   cp -R "$ROOT/bin/lib" "$d/bin/"
   binding_service_fixture "$d"
   merge_source_fixture "$d"
-  cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
-  jq -n '{en:{title:"Cache index",explanation:"Read once",before:"Repeated reads",after:"One read",outcome:"Choice recorded",options:{A:{description:"Cache",pros:"Fast",cons:"Memory"},B:{description:"Read",pros:"Simple",cons:"Slow"},C:{description:"Wait",pros:"Measure",cons:"Delay"}}},"zh-TW":{title:"快取索引",explanation:"讀取一次",before:"重複讀取",after:"讀取一次",outcome:"已記錄選擇",options:{A:{description:"快取",pros:"快速",cons:"記憶體"},B:{description:"讀取",pros:"簡單",cons:"較慢"},C:{description:"等待",pros:"測量",cons:"延後"}}}}' > "$d/details.json"
+  cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$ROOT/i18n/glossary.json" "$d/i18n/"
+  jq -n '{en:{title:"Cache index",explanation:"Read once",before:"Repeated reads",after:"One read",outcome:"Choice recorded",why:[{kind:"fact",text:"Reads repeat."}],how:[{kind:"fact",text:"A cache keeps one read."}],glossary:[],options:{A:{description:"Cache",pros:"Fast",cons:"Memory"},B:{description:"Read",pros:"Simple",cons:"Slow"},C:{description:"Wait",pros:"Measure",cons:"Delay"}}},"zh-TW":{title:"快取索引",explanation:"讀取一次",before:"重複讀取",after:"讀取一次",outcome:"已記錄選擇",why:[{kind:"fact",text:"讀取重複。"}],how:[{kind:"fact",text:"快取保留一次讀取。"}],glossary:[],options:{A:{description:"快取",pros:"快速",cons:"記憶體"},B:{description:"讀取",pros:"簡單",cons:"較慢"},C:{description:"等待",pros:"測量",cons:"延後"}}}}' > "$d/details.json"
   # A merge request reads its pull request from GitHub (T-119), so every
   # fixture carries a gh that answers as gh does: `gh pr view <n> --json a,b`
   # prints an object of exactly those fields, keys sorted (Go's encoding of a
@@ -110,9 +110,9 @@ for mode in pass fail missing counts state legacy; do
     pass)
       assert_eq 0 "$ste_rc" 'intent request succeeds'
       assert_eq true "$(jq '.ste.intent_card and .ste.ok' "$ste_dir/state/pending/D-2101.json")" 'pending card stores STE report';;
-    legacy)
-      assert_eq 0 "$ste_rc" 'legacy details still succeed'
-      assert_eq false "$(jq 'has("ste")' "$ste_dir/state/pending/D-2106.json")" 'legacy has no STE key';;
+    legacy)  # T-270: a new card without why, how and glossary is refused
+      assert_eq 64 "$ste_rc" 'details without why, how and glossary are refused'
+      assert_contains "$ste_out" 'en.how: expected a nonempty list' 'the refusal names the missing how';;
     *)
       ste_expected=64; [ "$mode" = fail ] && ste_expected=65
       assert_eq "$ste_expected" "$ste_rc" "intent refusal: $mode"
@@ -148,7 +148,7 @@ ste_out="$(FM_ROOT="$ste_dir" "$ste_dir/bin/fm-decide.sh" --request D-2107 --tas
 assert_eq 70 "$?" 'intent request refuses a missing checker'
 assert_fail "test -e '$ste_dir/state/pending/D-2107.json'" 'missing checker writes no record'
 python3 "$ROOT/tests/lib/ste_cases.py" fixture legacy > "$ste_dir/intent.json"
-assert_ok "FM_ROOT='$ste_dir' '$ste_dir/bin/fm-decide.sh' --request D-2108 --task T-210 --details '$ste_dir/intent.json'" 'legacy details need no checker'
+assert_eq 70 "$(FM_ROOT="$ste_dir" "$ste_dir/bin/fm-decide.sh" --request D-2108 --task T-210 --details "$ste_dir/intent.json" >/dev/null 2>&1; echo $?)" 'every details request needs the checker'
 rm -rf "$ste_dir"
 
 # Legacy skill-update path: D-SK-* + matching SK-* + --title, no invented details.

@@ -74,9 +74,13 @@ class MergePath(unittest.TestCase):
                 ('zh-TW', '【合併卡】合併 PR #12：檢查通過。', '這個 head 的 CI、審查和六關全綠。')):
             self.assertEqual(built[lang]['title'], title)
             self.assertEqual(built[lang]['done'], [dict(kind='fact', text=done)] + dispatch[lang]['done'])
-            for field in ('intent', 'why', 'scope_in', 'scope_out', 'notes', 'before_nodes',
+            for field in ('intent', 'why', 'how', 'scope_in', 'scope_out', 'before_nodes',
                           'after_nodes', 'questions', 'before', 'after'):
                 self.assertEqual(built[lang][field], dispatch[lang][field])
+            # T-270: without a reviewed merge card the dispatch text carries a caution.
+            self.assertEqual(built[lang]['notes'], dispatch[lang]['notes'] + [dict(
+                kind='caution', text='Not reviewed for readability.' if lang == 'en' else '未經可讀性審查。')])
+            self.assertEqual(built[lang]['glossary'], ['six-gates', 'board', 'scope'])
             for field in ('pros', 'cons'):
                 self.assertEqual(built[lang]['options']['A'][field], dispatch[lang]['options']['A'][field])
             self.assertEqual(built[lang]['options']['B']['cons'], dispatch[lang]['options']['B']['cons'])
@@ -94,8 +98,9 @@ class MergePath(unittest.TestCase):
                 cons='A change needs a new review, CI and six gates.') if lang == 'en' else dict(
                 description='要求修正', pros='你可以改範圍。', cons='修改需要重新審查、CI 和六關。'))
             self.assertEqual(built[lang]['change_table'], [dict(text=dispatch[lang]['intent'][0]['text'], A='✓', B='—', C='—')])
-        from fm_ste import check_details
+        from fm_ste import check_details, check_plain
         self.assertTrue(check_details(built, 'merge')['ok'])
+        self.assertTrue(check_plain(built)['ok'])
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(len(self.requests()), 1)
         request = self.requests()[0]
@@ -295,6 +300,9 @@ class MergePath(unittest.TestCase):
         self.assertEqual(built['zh-TW']['title'], '【合併卡】合併 PR #12：檢查通過。')
         self.assertEqual(built['en']['questions'], [dict(kind='fact', text='The change stays inside the pinned scope.')])
         self.assertEqual(built['zh-TW']['questions'], [dict(kind='fact', text='改動不超出固定的範圍。')])
+        # The default question's own terms join the glossary (T-270).
+        self.assertEqual(built['en']['glossary'], ['six-gates', 'pin', 'scope', 'board'])
+        self.assertEqual(built['zh-TW']['glossary'], ['six-gates', 'pin', 'scope', 'board'])
 
     def refused(self, reason, reason_tw=None):
         self.gate_result(0)
@@ -351,6 +359,134 @@ class MergePath(unittest.TestCase):
         self.assertFalse(self.built_path().exists())
         request = self.requests()[0]
         self.assertEqual(request[request.index('--details') + 1], str(path))
+
+    # --- T-270: the reviewer's merge card -------------------------------------
+
+    CARD = {lang: dict(title=title, why=[dict(kind='fact', text=why)], how=[dict(kind='fact', text=how)],
+                       notes=[dict(kind='note', text=note)], glossary=['scope'])
+            for lang, title, why, how, note in (
+                ('en', 'Show the plain card.', 'Readers needed the reason.',
+                 'The change edits `src/a.py` inside the scope.', 'The reviewer wrote this card.'),
+                ('zh-TW', '顯示易讀的卡片。', '讀者需要原因。', '這次改動在範圍內編輯 `src/a.py`。', '審查者寫了這張卡。'))}
+
+    def reviewed(self, card=None, readiness=None, carried=False, signature=None, extra_verdicts=0):
+        """A real git head holding the spec, a signed APPROVE with a merge card,
+        and the readiness record that selected it."""
+        from fm_evidence import Store
+        import hashlib
+        def git(*args):
+            return subprocess.run(['git', '-C', str(self.root), *args], check=True,
+                                  capture_output=True, text=True).stdout.strip()
+        git('init', '-q'); git('config', 'user.email', 'f@e.test'); git('config', 'user.name', 'F')
+        spec = (self.root / 'design/tasks/T-001.json')
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(json.dumps(dict(id='T-001', scope=['src/**'], acceptance=['The check passes.'])) + '\n')
+        git('add', 'design'); git('commit', '-qm', 'spec')
+        reviewed_head = git('rev-parse', 'HEAD')
+        spec_sha = hashlib.sha256(spec.read_bytes()).hexdigest()
+        if carried:
+            (self.root / 'carry').write_text('x'); git('add', 'carry'); git('commit', '-qm', 'carry')
+        head = git('rev-parse', 'HEAD')
+        store = Store(str(self.state), 'alpha', 'T-001', external=False)
+        records = []
+        for n, value in enumerate([card or self.CARD] + [dict(self.CARD, en=dict(self.CARD['en'], title='A later card.'))] * extra_verdicts):
+            records.append(store.append('verdict', n + 1, 'reviewer-fixture', reviewed_head, 'APPROVE:T-001',
+                                        verdict='APPROVE', provenance=dict(level='legacy'),
+                                        binding=dict(files=['src/a.py'], spec_sha256=spec_sha),
+                                        merge_card=value, merge_card_status='present'))
+        fields = dict(pr=12, verdict_signature=signature or records[0]['signature'])
+        fields.update(readiness or {})
+        store.append('readiness', 1, 'firstmate', fields.pop('head', head), '', **fields)
+        pr = copy.deepcopy(PR); pr['head']['sha'] = head
+        return pr
+
+    def merge_built(self, pr):
+        self.dispatch()
+        self.pilot.job_completed(dict(kind='gate', task='T-001', pr=pr, base=BASE, round=1, code=0, output=''))
+        return self.built()
+
+    def assert_fallback(self, built):
+        self.assertEqual(built['en']['title'], 'MERGE CARD — merge PR #12: The check passes.')
+        self.assertEqual(built['en']['notes'][-1], dict(kind='caution', text='Not reviewed for readability.'))
+
+    def test_reviewed_merge_card_supplies_title_why_how_notes_glossary(self):
+        built = self.merge_built(self.reviewed())
+        for lang, prefix in (('en', 'MERGE CARD — merge PR #12: '), ('zh-TW', '【合併卡】合併 PR #12：')):
+            self.assertEqual(built[lang]['title'], prefix + self.CARD[lang]['title'])
+            for field in ('why', 'how', 'notes'):
+                self.assertEqual(built[lang][field], self.CARD[lang][field])
+            self.assertEqual(built[lang]['glossary'], ['scope', 'six-gates', 'board'])
+            self.assertEqual(built[lang]['intent'], card()[lang]['intent'])
+        self.assertEqual(len(self.requests()), 1)
+
+    def test_carried_approval_supplies_the_merge_card(self):
+        built = self.merge_built(self.reviewed(carried=True))
+        self.assertEqual(built['en']['title'], 'MERGE CARD — merge PR #12: Show the plain card.')
+
+    def test_card_comes_only_from_the_selected_review(self):
+        built = self.merge_built(self.reviewed(extra_verdicts=1))
+        self.assertEqual(built['en']['title'], 'MERGE CARD — merge PR #12: Show the plain card.')
+
+    def test_unmatched_readiness_falls_back(self):
+        for readiness in (dict(head=BASE), dict(pr=13), dict(verdict_signature='0' * 64)):
+            with self.subTest(readiness=readiness):
+                self.setUp()
+                self.assert_fallback(self.merge_built(self.reviewed(readiness=readiness)))
+
+    def test_readiness_of_another_task_or_project_falls_back(self):
+        from fm_evidence import Store
+        pr = self.reviewed()
+        # The only readiness for this head lives in another task's store.
+        for path in (self.state / 'evidence/alpha/T-001').glob('*.json'):
+            if json.loads(path.read_text())['kind'] == 'readiness': path.unlink()
+        Store(str(self.state), 'alpha', 'T-002', external=False).append(
+            'readiness', 1, 'firstmate', pr['head']['sha'], '', pr=12, verdict_signature='0' * 64)
+        Store(str(self.state), 'beta', 'T-001', external=False).append(
+            'readiness', 1, 'firstmate', pr['head']['sha'], '', pr=12, verdict_signature='0' * 64)
+        self.assert_fallback(self.merge_built(pr))
+
+    def test_invented_path_falls_back(self):
+        invented = copy.deepcopy(self.CARD)
+        invented['en']['how'][0]['text'] = 'The change edits `bin/invented.py` inside the scope.'
+        self.assert_fallback(self.merge_built(self.reviewed(card=invented)))
+
+    def test_malformed_merge_card_fields_fall_back(self):
+        # Each authored field with a wrong shape makes the block unusable; the
+        # build falls back to the dispatch card and never raises TypeError.
+        for field, value in (('glossary', 42), ('why', 'x'), ('how', [1]), ('notes', None)):
+            with self.subTest(field=field):
+                self.setUp()
+                malformed = copy.deepcopy(self.CARD)
+                malformed['en'][field] = value
+                self.assert_fallback(self.merge_built(self.reviewed(card=malformed)))
+
+    def test_any_build_failure_raises_the_details_wake(self):
+        for error in (TypeError('forced type failure'), KeyError('forced key failure')):
+            with self.subTest(error=type(error).__name__):
+                self.setUp()
+                self.dispatch()
+                def fail(*args, **kwargs): raise error
+                with patch('fm_merge_details.build', fail):
+                    self.refused('forced')
+
+    def test_merge_card_keeps_every_hash_form(self):
+        # Shared hash matcher (T-270 Changes 1 and 6): letters-only and
+        # uppercase hashes pass through the reviewed card unchanged.
+        hashed = copy.deepcopy(self.CARD)
+        hashed['en']['why'][0]['text'] = 'Commits abcdefa and ABC123DEF hold the fix.'
+        hashed['zh-TW']['why'][0]['text'] = '提交 abcdefa 和 ABC123DEF 帶有修正。'
+        built = self.merge_built(self.reviewed(card=hashed))
+        for lang in ('en', 'zh-TW'):
+            self.assertEqual(built[lang]['why'], hashed[lang]['why'])
+
+    def test_fallback_without_how_or_glossary_wakes_firstmate(self):
+        for missing in ('how', 'glossary', 'why'):
+            with self.subTest(missing=missing):
+                self.setUp()
+                details = card()
+                for loc in details.values(): loc.pop(missing)
+                self.dispatch(details=details)
+                self.refused(missing)
 
     def test_draft_wakes_once_per_head_for_each_project(self):
         for external in (False, True):

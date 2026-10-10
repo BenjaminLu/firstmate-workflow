@@ -333,5 +333,7 @@
   "walkReasonInvalidBlockChanges": "invalid block changes",
   "walkReasonProvesOnCodeBlock": "proves on code block",
   "walkReasonInvalidProvesTarget": "invalid proves target",
-  "walkReasonWalkCheckFailed": "walk check failed"
+  "walkReasonWalkCheckFailed": "walk check failed",
+  "card.how": "How",
+  "card.glossary": "Glossary"
 }

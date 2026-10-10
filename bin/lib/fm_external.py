@@ -205,6 +205,36 @@ def findings_text(record):
     return '\n'.join(lines)
 
 
+def advise(store, source, text):
+    """Advisory plain-writing lint for crew text (T-270): findings go to
+    firstmate's log and never stop the post. A glossary that cannot be read
+    is logged as a lint failure naming the file, never read as empty."""
+    try:
+        import fm_plain
+    except ImportError:
+        return
+    log = store.state / 'runtime/plain-writing.jsonl'
+    try:
+        findings = fm_plain.lint(text, 'en', fm_plain.load_glossary(), [])
+    except (OSError, ValueError) as error:
+        findings = [dict(check='lint-failed', match=str(error))]
+    fm_plain.log_findings(log, source, findings)
+
+
+def public(text):
+    """Authored text with every fm-merge-card block removed (T-270 Change 11).
+    The reviewer's merge card stays in local evidence; a closed, duplicate or
+    unclosed block never reaches a comment or thread reply. Without the
+    helper, only text that names no merge card may be posted."""
+    try:
+        import fm_plain
+    except ImportError:
+        if 'fm-merge-card' in text:
+            raise ValueError('merge card helper unavailable; nothing posted') from None
+        return text
+    return fm_plain.without(text)
+
+
 def write_api(repo, endpoint, body, method='POST'):
     # JSON stdin preserves newlines and literal shell characters. No model text
     # becomes argv syntax, a shell command, or an implicitly selected repository.
@@ -235,7 +265,8 @@ def _project(store, root, repo, pr, head, policy, stage, replies=None, text=None
     if view['headRefOid'] != sha(head):
         raise ValueError('projection head is stale')
     receipts = [r for r in store.records() if r['kind'] == 'projection' and r.get('repository') == repo and r.get('pr') == int(pr)]
-    summary = f'Firstmate {stage} finished at {head}. Review details and evidence are retained privately. This is a progress projection, not merge approval.'
+    summary = (f'Firstmate finished the {stage} step at commit {head}. The review details and evidence stay '
+               "in firstmate's private records. This comment reports progress only; it does not approve a merge.")
     def receipt(key, result):
         return store.append('projection', 1, 'firstmate-external', head, '', repository=repo,
                             pr=int(pr), mode=mode, key=key, result=result)
@@ -248,10 +279,12 @@ def _project(store, root, repo, pr, head, policy, stage, replies=None, text=None
         # Personal credentials can create commit statuses, but not check runs.
         # This context reports publication progress only, never review approval.
         result = write_api(repo, f'statuses/{head}', dict(context='firstmate local progress',
-            state='success', description=f'Firstmate {stage} finished; evidence retained privately; not merge approval.'))
+            state='success', description=f'Firstmate finished the {stage} step. Evidence stays private. This status does not approve a merge.'))
         receipt('check', result)
     elif mode == 'comments':
-        if text:
+        text = public(text or '')
+        if text.strip():
+            advise(store, 'external-comment', text)
             receipt('comments', write_api(repo, f'issues/{pr}/comments', {'body':text}))
     elif replies:
         record = collect(store, root, repo, pr, head, policy)
@@ -264,7 +297,7 @@ def _project(store, root, repo, pr, head, policy, stage, replies=None, text=None
             seen.add(reply['finding'])
             commit = sha(reply['commit'])
             git(root, 'merge-base', '--is-ancestor', commit, head)
-            if not reply.get('language') or not isinstance(reply.get('body'), str) or not reply['body'].strip():
+            if not reply.get('language') or not isinstance(reply.get('body'), str) or not public(reply['body']).strip():
                 raise ValueError('reply requires authored text in the thread language')
             key = finding['id'] + ':' + commit
             if any(r.get('key') == key and r['mode'] == mode for r in receipts):
@@ -273,7 +306,9 @@ def _project(store, root, repo, pr, head, policy, stage, replies=None, text=None
         for key, finding, reply in prepared:
             if remote_head(repo, pr)['headRefOid'] != head:
                 raise ValueError('PR head moved before thread reply')
-            body = reply['body'].rstrip() + '\n\n' + f"{repo}@{reply['commit']}"
+            authored = public(reply['body'])
+            body = authored.rstrip() + '\n\n' + f"{repo}@{reply['commit']}"
+            advise(store, 'external-thread-reply', authored)
             result = write_api(repo, f"pulls/{pr}/comments/{int(finding['reply_id'])}/replies", {'body':body})
             receipt(key, result)
 

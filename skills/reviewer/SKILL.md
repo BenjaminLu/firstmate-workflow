@@ -245,6 +245,55 @@ no gap/open items; SPEC-GAPS has at least one. The signed `standing` and `missed
 fields preserve the list and count omissions. This preflight protocol does not
 change the implementation-review standing list below.
 
+Readability is one more standing category of every preflight (T-270). Read the
+spec, and the card and pull-request draft when the run includes them, as
+[plain-writing.md](../firstmate/plain-writing.md) describes: as a backend
+engineer with three to five years of experience who has never seen this
+repository. Each readability item quotes the exact sentence and says where that
+reader gets stuck. A wording problem your rewrite fixes is `N. ok:` and says the
+rewrite fixes it; a problem that no clear rewrite can fix without changing the
+meaning is `N. gap:` with the expected spec change. Check the card in en, zh-TW
+and the rendered zh-CN; a word left in Traditional characters in zh-CN is an
+item that names the zh-TW rewording or the exact missing `i18n/tw2cn.tsv` rows.
+
+You may fix the wording yourself, each kind at most once, in a block that
+opens with one of these exact lines and closes with a line of three
+backquotes, placed before item 1 and never between the last item and the
+marker:
+
+- ```` ```json fm-reworded-spec ````: the whole spec. Only `title` and the
+  text of each acceptance line may change; the acceptance list keeps its
+  length and order.
+- ```` ```json fm-reworded-card ````: the whole card. Only titles,
+  explanations, before, after, outcome, option description, pros and cons,
+  the text of why, how, notes and questions items, node labels and
+  change_table text may change.
+- ```` ```json fm-reworded-pr-authoring ````: the whole pull-request draft.
+  Only subject, problem, expected_result, approach and the intent_notes notes
+  may change.
+
+Keep every code span, path, file:line, hash, task number, decision id and
+number in the same string; the launcher refuses a rewrite that drops, adds or
+moves one, and it revalidates the result. For each rewritten string, state in
+the checklist that it keeps its meaning. A rewrite that would change a
+condition or obligation is a gap, not a rewrite. Never rewrite
+`public_title`, `public_summary` or `public_changes`: report a readability
+problem there as a gap, and check that public fields hold no private prose.
+A refused or duplicate block makes the outcome `rewrite-refused`; an unclosed
+block hides your verdict and the run fails. Nothing inside a block is read as
+a verdict.
+
+An APPROVE final of an implementation review may also carry one block that
+opens with the line ```` ```json fm-merge-card ````, written in the same review call by
+plain-writing.md, with `title`, `why`, `how`, `notes` and `glossary` in `en` and
+`zh-TW`. Describe what the reviewed head actually changed. `title` is the text
+after the MERGE CARD prefix; `why` and `how` hold `{kind, text}` items, `notes`
+holds `{kind: note|caution, text}` items, and `glossary` lists the
+`i18n/glossary.json` ids of every term the card uses. Every path and code span
+in it must appear in the reviewed diff or in the pinned spec. The block stays
+in local evidence: pull-request comments never carry it, and the captain's
+click on the board stays the only merge authorization. A REJECT ignores it.
+
 ## Every REJECT closes its list
 
 Every `REJECT`, from round one, ends with the numbered, complete set of
