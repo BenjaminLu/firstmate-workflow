@@ -231,10 +231,17 @@ class MechanicalLoop:
         """T-281: wake once when an approved, green, clean PR waits 30 minutes for a card."""
         number, head = str(pr['number']), pr['head']['sha']
         stuck = self.data.setdefault('stuck', {})
+        # pull() resets this PR's record before advance(), so evidence here is
+        # this poll's own read: reuse it rather than read the verdict and CI twice.
+        evidence = self.data['pulls'].get(number, {}).get('merge_evidence')
+        if not evidence or evidence.get('head') != head or 'verdict' not in evidence:
+            evidence = None
         try:
-            verdict = self.verdict(task)
+            verdict = evidence['verdict'] if evidence else self.verdict(task)
             ready = verdict.get('verdict') == 'APPROVE' and pr.get('mergeable_state') == 'clean'
-            if ready:
+            if ready and evidence:
+                ready = evidence['green']
+            elif ready:
                 checks = self.settled_checks(pr, runs, statuses)
                 ready = checks is not None and all(c[-1] in ('success', 'neutral', 'skipped') for c in checks)
             if ready:
@@ -563,7 +570,8 @@ class MechanicalLoop:
         # Reuse scheduling evidence already read here; reminders never fetch CI.
         self.data['pulls'].setdefault(str(pr['number']), dict(task=task, head=head))['merge_evidence'] = dict(
             head=head, approved=verdict.get('head') == head and verdict.get('verdict') == 'APPROVE',
-            green=bool(checks) and all(row[-1] in ('success', 'neutral', 'skipped') for row in checks))
+            green=bool(checks) and all(row[-1] in ('success', 'neutral', 'skipped') for row in checks),
+            verdict=dict(verdict=verdict.get('verdict'), head=verdict.get('head')))
         if checks is None: return
         details = {p.name: json.loads(p.read_text()) for p in (self.state / 'decision-details').glob(
             'D-' + (self.ctx['project'] or 'firstmate-workflow') + '-' + task.replace('-', '') + '-*.json')}
