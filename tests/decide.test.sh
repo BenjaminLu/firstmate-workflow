@@ -164,14 +164,11 @@ assert_eq "$leg_title" "$(jq -r .title "$leg")" "legacy request persists the giv
 assert_eq "SK-001" "$(jq -r .task "$leg")" "legacy request records the matching skill task"
 assert_eq "null" "$(jq -r .details "$leg")" "legacy request invents no details object"
 assert_eq "choice" "$(jq -r .kind "$leg")" "legacy request records kind"
-assert_contains "$(jq -r .type < "$dleg/state/events.jsonl")" "decision_requested" \
-  "legacy request still emits decision_requested"
-assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-001 --task SK-001 --title 'again'" \
-  "legacy replacement is refused"
+assert_contains "$(jq -r .type < "$dleg/state/events.jsonl")" "decision_requested" "legacy request still emits decision_requested"
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-001 --task SK-001 --title 'again'" "legacy replacement is refused"
 assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-999 --title 'mismatch'" \
   "legacy rejects a task that does not match D-SK id"
-assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002" \
-  "legacy without --title fails"
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002" "legacy without --title fails"
 assert_fail "test -f '$dleg/state/pending/D-SK-002.json'" "legacy without title creates no card"
 assert_ok "HERDR_ENV=0 FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002 --details '$d/details.json'" \
   "skill-update ids take the strict --details path"
@@ -187,8 +184,7 @@ assert_eq "64" "$?" "and a D-SK id is still its own task's only"
 pr_is "$dleg" 95 'sk-004-skill-update-worker' 'SK-004: skill-update: worker'
 leg="$(FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-004 --task SK-004 --kind merge --pr 95 \
   --title "$leg_title" 2>/dev/null)"
-assert_eq "SK-004 95 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$leg" 2>/dev/null)" \
-  "while one for its own pull request goes up"
+assert_eq "SK-004 95 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$leg" 2>/dev/null)" "while one for its own pull request goes up"
 # T-118: a card may name what each option does - the effect the board carries
 # out when the captain picks it. Only an effect the board knows, only for an
 # option the card offers, and a merge only on a merge card; anything else is
@@ -224,8 +220,7 @@ pr_is "$deff" 8 'revert-96-cache' 'Revert "T-105: cache"'
 FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-127 --kind merge-untracked --pr 8 \
   --details "$(with_effect '{"A":"merge","B":"hold"}' untracked)" > "$deff/out" 2>&1
 assert_eq "0" "$?" "an untracked merge card may name merge and hold"
-assert_eq '{"A":"merge","B":"hold"}' "$(jq -c .details.effect "$deff/state/pending/D-127.json" 2>/dev/null)" \
-  "and keeps them on the card"
+assert_eq '{"A":"merge","B":"hold"}' "$(jq -c .details.effect "$deff/state/pending/D-127.json" 2>/dev/null)" "and keeps them on the card"
 for n in 121 122 123 124 125; do
   assert_fail "test -f '$deff/state/pending/D-$n.json'" "a refused effect leaves no card (D-$n)"
 done
@@ -270,8 +265,7 @@ assert_contains "$(jq -r .type < "$d/state/events.jsonl")" "decision_requested" 
 for l in en zh-TW zh-CN; do
   assert_ok "test -s '$d/board/public/diagrams/D-1.$l.html'" "requesting D-1 drew its $l diagram"
 done
-assert_contains "$(cat "$d/board/public/diagrams/D-1.en.html")" "Repeated reads" \
-  "and the drawing is of this decision, not a blank frame"
+assert_contains "$(cat "$d/board/public/diagrams/D-1.en.html")" "Repeated reads" "and the drawing is of this decision, not a blank frame"
 assert_contains "$(cat "$d/board/public/diagrams/D-1.zh-CN.html")" "读取" \
   "with the derived language derived, the same as any other decision"
 
@@ -296,8 +290,7 @@ err5="$(FM_ROOT="$d5" "$d5/bin/fm-decide.sh" --request D-5 --task T-5 --details 
 rc5=$?
 assert_eq "0" "$rc5" "a generator that fails does not fail the decision request"
 assert_ok "test -f '$d5/state/pending/D-5.json'" "the decision is still pending"
-assert_contains "$(jq -r .type < "$d5/state/events.jsonl" | tr '\n' ' ')" "decision_requested" \
-  "and decision_requested is still emitted"
+assert_contains "$(jq -r .type < "$d5/state/events.jsonl" | tr '\n' ' ')" "decision_requested" "and decision_requested is still emitted"
 assert_contains "$err5" "D-5" "while the drawing that failed is reported rather than swallowed"
 assert_contains "$err5" "73"  "with the number the generator exited with"
 
@@ -315,8 +308,7 @@ err8="$(FM_ROOT="$d8" "$d8/bin/fm-decide.sh" --request D-8 --task T-8 --details 
 assert_ok "test -f '$d8/state/pending/D-8.json'" "a real generator failure still leaves the decision pending"
 assert_contains "$err8" "D-8" "and is reported against the decision it was drawing"
 assert_contains "$err8" "66"  "with the generator's own number"
-assert_eq "" "$(find "$d8/board/public" -name 'D-8.*' 2>/dev/null)" \
-  "and nothing half-drawn was left behind"
+assert_eq "" "$(find "$d8/board/public" -name 'D-8.*' 2>/dev/null)" "and nothing half-drawn was left behind"
 
 # a tree with no generator in it is the same shape: recorded, and said
 d6="$(fixture)"; rm -f "$d6/bin/fm-diagram.sh"
@@ -452,13 +444,11 @@ project_fixture_config "$o"
 }
 alloc() { FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate "$@" 2>/dev/null; }
 o="$(owned)"
-assert_eq "D-firstmate-workflow-T047-1" "$(alloc --task T-047)" \
-  "a first card for a task of the default project is n=1"
+assert_eq "D-firstmate-workflow-T047-1" "$(alloc --task T-047)" "a first card for a task of the default project is n=1"
 assert_eq "D-firstmate-workflow-T047-2" "$(alloc --task T-047)" "and a second card for that task is n=2"
 assert_eq "D-example-app-T047-1" "$(alloc --task T-047 --project example-app)" \
   "the same task id in another project is a distinct id, counted from 1"
-assert_eq "D-example-app-T047-2" "$(FM_PROJECT=example-app alloc --task T-047)" \
-  "FM_PROJECT names the project when no flag does"
+assert_eq "D-example-app-T047-2" "$(FM_PROJECT=example-app alloc --task T-047)" "FM_PROJECT names the project when no flag does"
 assert_eq "D-firstmate-workflow-T047-3" "$(alloc --task T-047 --project firstmate-workflow)" \
   "naming the default project explicitly counts in the same place as naming none"
 assert_eq "D-firstmate-workflow-T048-1" "$(alloc --task T-048)" "two tasks never share an id"
@@ -481,8 +471,7 @@ done
 wait
 assert_eq "10" "$(grep -c '^D-firstmate-workflow-T060-' <<<"$(cat "$o"/par.* | sort -u)")" \
   "ten concurrent allocations for one task get ten distinct ids"
-assert_eq "D-firstmate-workflow-T060-10" "$(cat "$o"/par.* | sort -t- -k5 -n | tail -1)" \
-  "numbered 1 to 10 with none skipped"
+assert_eq "D-firstmate-workflow-T060-10" "$(cat "$o"/par.* | sort -t- -k5 -n | tail -1)" "numbered 1 to 10 with none skipped"
 
 # requesting an allocated id publishes it with its project
 id="$(alloc --task T-047 --project example-app)"
@@ -522,21 +511,16 @@ assert_eq "" "$(find "$o/state/pending" "$o/state/decisions" \( -name '*Bad_Name
 # and an archived one each push the next n past them
 mkdir -p "$o/state/runtime/archived-pending"
 printf '{"id":"D-example-app-T051-3","task":"T-051"}\n' > "$(project_fixture_state "$o" example-app)/pending/D-example-app-T051-3.json"
-assert_eq "D-example-app-T051-4" "$(alloc --task T-051 --project example-app)" \
-  "a pending card nobody reserved here is past the next n"
+assert_eq "D-example-app-T051-4" "$(alloc --task T-051 --project example-app)" "a pending card nobody reserved here is past the next n"
 printf '{"id":"D-example-app-T052-7","task":"T-052"}\n' > "$(project_fixture_state "$o" example-app)/runtime/archived-pending/D-example-app-T052-7.json"
-assert_eq "D-example-app-T052-8" "$(alloc --task T-052 --project example-app)" \
-  "and so is an archived one"
-assert_eq "D-firstmate-workflow-T052-1" "$(alloc --task T-052)" \
-  "while another project's cards for the same task count nothing"
+assert_eq "D-example-app-T052-8" "$(alloc --task T-052 --project example-app)" "and so is an archived one"
+assert_eq "D-firstmate-workflow-T052-1" "$(alloc --task T-052)" "while another project's cards for the same task count nothing"
 
 # await reads both forms and refuses anything else before touching a path
 printf '{"id":"%s","task":"T-047","chosen":"B"}\n' "$id" > "$(project_fixture_state "$o" example-app)/decisions/$id.json"
-assert_eq "B" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await "$id" --timeout 2 | jq -r .chosen)" \
-  "await returns a new-form answer"
+assert_eq "B" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await "$id" --timeout 2 | jq -r .chosen)" "await returns a new-form answer"
 printf '{"id":"D-056","task":"T-043","chosen":"A"}\n' > "$o/state/decisions/D-056.json"
-assert_eq "A" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await D-056 --timeout 2 | jq -r .chosen)" \
-  "and still returns an old numeric one"
+assert_eq "A" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await D-056 --timeout 2 | jq -r .chosen)" "and still returns an old numeric one"
 for badid in D-Bad_Name-T047-1 D-abcdefghijklmnopqrstuvwxy-T047-1 D-firstmate-workflow-1 \
   D-firstmate-workflow-T047-0 D-firstmate-workflow-T047-01 D-firstmate-workflow-T047 \
   'D-../x-T047-1' 'D-a/b-T047-1' 'D-firstmate-workflow-T0.47-1' "$(printf 'D-a-T047-1\nx')"; do
@@ -545,8 +529,7 @@ for badid in D-Bad_Name-T047-1 D-abcdefghijklmnopqrstuvwxy-T047-1 D-firstmate-wo
 done
 # an old record for another task at an old id is never read, moved or touched
 before_sum="$(cksum < "$o/state/decisions/D-056.json")"
-assert_eq "D-firstmate-workflow-T056-1" "$(alloc --task T-056)" \
-  "with T-043's old D-056 on disk, T-056's first card is its own id"
+assert_eq "D-firstmate-workflow-T056-1" "$(alloc --task T-056)" "with T-043's old D-056 on disk, T-056's first card is its own id"
 assert_eq "$before_sum" "$(cksum < "$o/state/decisions/D-056.json")" "and D-056 is left exactly as it was"
 # A lock left by a process killed outright (KILL: no trap runs) blocks that
 # task's allocations. They time out rather than hang, name the lock and say
@@ -634,8 +617,7 @@ pr_is "$o" 96 t-117-t-105-again-every-crew-round 'T-117: T-105 again'
 FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id117" --task T-117 --kind merge --pr 96 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "0" "$?" "a pull request whose branch is the card's task's gets its card"
-assert_eq "T-117 96 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$o/state/pending/$id117.json" 2>/dev/null)" \
-  "naming both"
+assert_eq "T-117 96 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$o/state/pending/$id117.json" 2>/dev/null)" "naming both"
 # #96 as it really was is T-105's: it gets T-105's card, and no untracked one
 pr_is "$o" 96 "$R96_BRANCH" "$R96_TITLE"
 id105="$(alloc --task T-105 --kind merge)"
@@ -826,15 +808,13 @@ argv() {  # argv <title> <body> <sound>: the call notify makes, as the stub logs
 # them, with the call notify actually makes: flags, a title with spaces and
 # ' · ', a CJK body. Every "notifies nothing" below is worth only as much as
 # a helper that would have reached a stub that would have logged.
-assert_ok "inherdr sh -c 'test \"\$HERDR_ENV\" = 1 && test -n \"\$HERDR_LOG\"'" \
-  "the Herdr helper sets HERDR_ENV=1 and the stub's log"
+assert_ok "inherdr sh -c 'test \"\$HERDR_ENV\" = 1 && test -n \"\$HERDR_LOG\"'" "the Herdr helper sets HERDR_ENV=1 and the stub's log"
 : > "$hlog"
 probe="$(inherdr herdr notification show 'example-app · T-047 · merge' --body '快取索引' --sound request 2>&1)"
 assert_eq "0" "$?" "the herdr it runs is the stub, which takes notify's own call"
 assert_eq "$shown" "$probe" "and answers it with the line the real CLI printed"
 assert_eq "1" "$(calls)" "logging it once"
-assert_eq "$(argv 'example-app · T-047 · merge' '快取索引' request)" "$(tail -1 "$hlog")" \
-  "argument for argument"
+assert_eq "$(argv 'example-app · T-047 · merge' '快取索引' request)" "$(tail -1 "$hlog")" "argument for argument"
 refused="$(inherdr herdr notification show 'example-app · T-047 · merge' --body '快取索引' --sound loud 2>&1 >/dev/null)"
 assert_eq "2" "$?" "it refuses a sound the real CLI refuses, with its exit code"
 assert_eq "invalid sound: loud (expected none, done, or request)" "$refused" "in its words, on stderr"
@@ -867,8 +847,7 @@ assert_eq "$(argv 'example-app · T-047 · merge' '快取索引' request)" "$(ta
 oid="$(FM_PROJECT=example-app alloc --task T-048)"
 ask FM_PROJECT=example-app "$o" "$oid" T-048 --details "$d/details.json"
 held "$o" "$oid" T-048 "a card filed under FM_PROJECT"
-assert_eq "$(argv 'example-app · T-048 · choice' '快取索引' request)" "$(tail -1 "$hlog")" \
-  "is named by the project FM_PROJECT filed it under"
+assert_eq "$(argv 'example-app · T-048 · choice' '快取索引' request)" "$(tail -1 "$hlog")" "is named by the project FM_PROJECT filed it under"
 sed 's/^default_project:.*/default_project: example-app/' "$o/config.yaml" > "$o/config.new" && mv "$o/config.new" "$o/config.yaml"
 ask FM_PROJECT=firstmate-workflow "$o" D-41 T-41 --details "$d/details.json"
 held "$o" D-41 T-41 "default_project present"
@@ -931,8 +910,7 @@ assert_eq "2" "$(calls)" "so the fixture that stayed quiet for D-31 and D-32 sti
 printf 'vendor: mock\n' > "$n/config.yaml"; : > "$hlog"
 ask "$n" D-42 T-42 --details "$d/details.json"
 held "$n" D-42 T-42 "a config.yaml with no notifications"
-assert_eq "$(argv 'firstmate-workflow · T-42 · choice' '快取索引' request)" "$(tail -1 "$hlog")" \
-  "rings, with the sound"
+assert_eq "$(argv 'firstmate-workflow · T-42 · choice' '快取索引' request)" "$(tail -1 "$hlog")" "rings, with the sound"
 printf 'notifications:\n  herdr: false\n' > "$n/config.yaml"; : > "$hlog"
 ask "$n" D-33 T-33 --details "$d/details.json"
 held "$n" D-33 T-33 "notifications.herdr: false"
@@ -1008,10 +986,8 @@ assert_eq "$nb/state/pending/D-37.json" "$(cat "$nb.out")" "it prints the pendin
 assert_eq "$(sed "s|$na|F|g" "$na.out")" "$(sed "s|$nb|F|g" "$nb.out")" "as before"
 assert_eq "$(sed "s|$na|F|g" "$na.err")" "$(sed "s|$nb|F|g" "$nb.err")" "and says what it said before on stderr"
 assert_ok "cmp -s '$na/state/pending/D-37.json' '$nb/state/pending/D-37.json'" "it writes the card it wrote before"
-assert_eq "$(jq -c 'del(.ts)' "$na/state/events.jsonl")" "$(jq -c 'del(.ts)' "$nb/state/events.jsonl")" \
-  "and the event"
-assert_eq "$(cd "$na" && find state board -print | sort)" "$(cd "$nb" && find state board -print | sort)" \
-  "and nothing else"
+assert_eq "$(jq -c 'del(.ts)' "$na/state/events.jsonl")" "$(jq -c 'del(.ts)' "$nb/state/events.jsonl")" "and the event"
+assert_eq "$(cd "$na" && find state board -print | sort)" "$(cd "$nb" && find state board -print | sort)" "and nothing else"
 assert_fail "test -e '$nb/state/runtime/notified'" "no notified directory is made at all"
 assert_eq "0" "$(calls)" "and nothing calls herdr"
 ask "$nb" D-39 T-39 --details "$d/details.json"
@@ -1044,33 +1020,30 @@ ask "$n" D-38 T-38 --details "$d/details.json"
 held "$n" D-38 T-38 "a decision request after the weather"
 assert_eq "1" "$(calls)" "while a decision request through the same helper does"
 callers="$(git -C "$ROOT" grep -lE 'notification[[:space:]]+show' -- . ':!tests/' ':!design/' ':!*.md' 2>/dev/null)"
-assert_eq "bin/fm-decide.sh" "$callers" \
-  "no tracked file but fm-decide.sh, outside tests and prose, raises a notification"
+assert_eq "bin/fm-decide.sh" "$callers" "no tracked file but fm-decide.sh, outside tests and prose, raises a notification"
 
-# No other suite rings the captain. The gate runs every suite inside Herdr, so
-# a suite that reaches a card with HERDR_ENV=1 inherited would call the real
-# herdr for its fixture cards. The suites are what bin/ci.sh runs, read from
-# its own selectors, in any language. A file raises a card if it names
-# fm-decide and --request anywhere in it, in any spelling: a shell line, an
-# argv array, a variable holding the path.
-# Without -q: under pipefail a grep that stops at its first match can SIGPIPE
-# the reader and turn a hit into a miss, and the empty-list check would pass.
-code() {
-  local helper
-  grep -vE '^[[:space:]]*(#|//)' "$ROOT/$1"
-  while IFS= read -r helper; do code "$helper"; done < <(
-    sed -n 's|^\. "\$ROOT/\(tests/lib/[^" ]*\.sh\)"$|\1|p' "$ROOT/$1"
-  )
-  if grep -q '^from herdr import ' "$ROOT/$1"; then
-    code tests/lib/herdr.py
-  fi
+# No other suite rings the captain: one reaching a card with HERDR_ENV=1 inherited from the gate's Herdr would
+# call the real herdr. A file raises a card if its code names fm-decide and --request, in any spelling,
+# a script it writes through a heredoc included.
+# Without -q: under pipefail an early grep exit can SIGPIPE the reader. Shell and Python are read by their own
+# parsers, once per file (tests/lib/source_scan.py, T-279); a refusal is recorded, never read as text.
+scan="$ROOT/tests/lib/source_scan.py"; scans="$(mktemp -d)"; : > "$scans/refused"
+helpers() {  # helpers <file>: the tests/lib helpers it sources or imports
+  sed -n 's|^\. "\$ROOT/\(tests/lib/[^" ]*\.sh\)"$|\1|p' "$ROOT/$1"; if grep -q '^from herdr import ' "$ROOT/$1"; then echo tests/lib/herdr.py; fi; }
+code() {  # CODE=raw: the raw text, a cheap first pass; CODE=self: the file's own code, without its helpers
+  local helper c="$scans/${1//\//:}.code"
+  case "${CODE-}$1" in
+    raw*) cat "$ROOT/$1" ;;
+    *.sh|*.py) [ -f "$c" ] || python3 "$scan" code --bash "$BASH" "$ROOT/$1" > "$c" 2>> "$scans/refused" || rm -f "$c"; cat "$c" 2>/dev/null ;;
+    *) grep -vE '^[[:space:]]*(#|//)' "$ROOT/$1" ;;
+  esac
+  [ "${CODE-}" = self ] || while IFS= read -r helper; do code "$helper"; done < <(helpers "$1")
 }
-has() { code "$1" | grep -E -- "$2" >/dev/null; }
-both() { grep -E -- 'fm-decide' "$ROOT/$1" >/dev/null && grep -E -- '--request' "$ROOT/$1" >/dev/null; }
+has() { CODE=raw code "$1" | grep -E -- "$2" >/dev/null && code "$1" | grep -E -- "$2" >/dev/null; }
+decides() { grep -E -- 'fm-decide' <<<"$1" >/dev/null && grep -E -- '--request' <<<"$1" >/dev/null; }
+both() { grep -qE -- 'fm-decide' "$ROOT/$1" && grep -qE -- '--request' "$ROOT/$1" && decides "$(CODE=self code "$1")"; }
 names='fm_autopilot|autopilot_turn\.py|(^|[^A-Za-z0-9_-])fm\.sh|fm-retro\.sh'
-# What bin/ci.sh runs: the bash suites, bun on every *.test.ts and *.spec.ts
-# outside tests/e2e, playwright on its testDir, and its own stages. Each
-# selector is pinned, so a new place ci.sh runs from turns this red first.
+# What bin/ci.sh runs: bash suites, bun on *.test.ts/*.spec.ts outside tests/e2e, playwright, its stages; all pinned.
 cisrc="$(code bin/ci.sh)"
 assert_contains "$cisrc" 'suites=(tests/*.test.sh)' "ci.sh runs the bash suites under tests/"
 assert_contains "$cisrc" "-name '*.test.ts' -o -name '*.spec.ts'" "ci.sh runs bun on every *.test.ts and *.spec.ts"
@@ -1083,27 +1056,23 @@ suites="$(git -C "$ROOT" ls-files -- 'tests/*.sh' 'tests/*.py' 'tests/*.ts' \
 review_fixture=tests/lib/fixtures/t180-round1-standing-list.md
 review_fixture_matches="$(grep -cE -- "$names" "$ROOT/$review_fixture")"
 assert_matches "$review_fixture_matches" '^[1-9][0-9]*$' "the review fixture names card-raising scripts"
-assert_eq "" "$(printf '%s\n' "$suites" | grep -F -x "$review_fixture" || true)" \
-  "the card-guard sweep excludes a fixture naming card-raising scripts"
+assert_eq "" "$(printf '%s\n' "$suites" | grep -F -x "$review_fixture" || true)" "the card-guard sweep excludes a fixture naming card-raising scripts"
 for f in tests/decide.test.sh tests/lib.sh tests/ship.spec.ts tests/e2e/board-*.spec.ts tests/e2e/lib/*.ts bin/ci.sh; do
   assert_contains " $(printf '%s ' $suites) " " $f " "the suites hold $f"
 done
-# What raises a card: every tracked file outside the suites and the prose that
-# names both. Nothing else names those two outside a comment, so a suite
-# reaches a card only by naming fm-decide with --request, or one of them.
-raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!bin/fm-decide.sh' \
+# What raises a card: every tracked file outside the suites and the prose (and the rule inventory that
+# quotes it) that names both; a suite reaches a card by naming fm-decide with --request, or them.
+raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!skills/*/rule-inventory.json' ':!bin/fm-decide.sh' \
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
-# Autopilot holds ready tasks and queues firstmate to read the spec against
-# main and author recommendation/evidence; merge cards consume authored details.
+# Autopilot holds ready tasks for firstmate's judgement; merge cards consume authored details.
 assert_eq "bin/fm-retro.sh bin/fm.sh bin/lib/fm_autopilot_loop.py " "$raisers" "only fm.sh, fm-retro.sh's one retro card and the autopilot merge loop raise cards; readiness still needs judgment"
-# A line that is one quoted message and nothing else only prints the name: it
-# tells a reader what to run; it does not run it. Any other non-comment line naming them counts as a call.
-said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(>&2)?[[:space:]]*$'
+# A line that is one quoted message and nothing else only prints the name; any other line naming them
+# is a call. bash prints a parsed >&2 as 1>&2 and ends a command with ;
+said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(1?>&2)?[[:space:]]*;?[[:space:]]*$'
 runs() { code "$1" | grep -E -- "$names" | grep -vE -- "$said" | grep . >/dev/null; }
 assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks'" "a bare call is still a call"
-assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks\" >&2'" \
-  "a printed message is not a call"
-named="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' \
+assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks\" >&2'" "a printed message is not a call"
+named="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' ':!skills/*/rule-inventory.json' \
   ':!bin/lib/fm_autopilot*.py' ':!bin/fm.sh' ':!bin/fm-decide.sh' ':!bin/fm-retro.sh' \
   | while read -r f; do has "$f" "$names" && printf '%s ' "$f"; done)"
 via="$(for f in $named; do runs "$f" && printf '%s ' "$f"; done)"
@@ -1111,54 +1080,83 @@ assert_eq "bin/fm-autopilot.sh " "$via" "only the autopilot wrapper enters its s
 direct="$(for f in $suites; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 assert_contains " $direct" " tests/decide.test.sh " "the sweep sees decide.test.sh raise cards itself"
 assert_contains " $direct" " tests/board-readiness.test.sh " "and board.test.sh, which raises readiness cards"
-# A suite that raises a card itself is held to the same guard as one that
-# reaches the autopilot or fm.sh. decide.test.sh carries its own unset.
-# A function, not a loop inside $(...): bash 3.2 reads a case pattern's ")"
-# in a command substitution as its end, and the loop's own words become the
-# list of suites.
+# A suite raising a card itself is held to the same guard. A function, not a loop in $(...): bash 3.2 reads
+# a case pattern's ")" there as the substitution's end.
 reaching() {
-  local f
-  for f in $suites; do
+  local f; for f in $suites; do
     [ "$f" != tests/decide.test.sh ] && [ -f "$ROOT/$f" ] || continue
     case " $direct " in *" $f "*) printf '%s\n' "$f"; continue ;; esac
     has "$f" "$names" && printf '%s\n' "$f"
-  done
-  return 0
+  done; return 0
 }
 reach="$(reaching)"; assert_contains " $(printf '%s ' $reach)" " tests/retro.test.sh " "the sweep finds a suite that reaches cards through fm-retro.sh, so its guard is checked"
-for f in $reach; do
-  assert_ok "git -C '$ROOT' ls-files --error-unmatch -- '$f' >/dev/null 2>&1" "$f, a suite that reaches a card, is a tracked file"
-done
+for f in $reach; do assert_ok "git -C '$ROOT' ls-files --error-unmatch -- '$f' >/dev/null 2>&1" "$f, a suite that reaches a card, is a tracked file"; done
 assert_contains " $(printf '%s ' $reach)" " tests/e2e-loop.test.sh " "the sweep finds a suite that runs the autopilot"
 assert_contains " $(printf '%s ' $reach)" " tests/selfupdate.test.sh " "and one that runs fm.sh self-update"
-# Each suite that reaches one is held to a guard it carries, whatever its
-# name: the shared loop that unsets every HERDR_* (and FM_*) before anything
-# runs, HERDR_ENV=0 exported (or assigned at Python's top level), or its own
-# herdr first on PATH. Shell exports cannot guard a Python helper directly.
-python_card_guard() {
-  grep -qE "^os\.environ\['HERDR_ENV'\] = '0'[[:space:]]*$"
+# Each carries a guard: the loop unsetting every HERDR_* (and FM_*), HERDR_ENV=0 exported or assigned at its top
+# level, or its own herdr first on PATH. An export inside a function is none: other paths still reach a card.
+python_card_guard() { cat > "$scans/guard.py"; python3 "$scan" py-guard "$scans/guard.py"; }
+guarded() {  # guarded <file>: HERDR_ENV=0 at the top level of it, or of a helper it loads
+  local helper; case "$1" in *.py) python3 "$scan" py-guard "$ROOT/$1" ;; *.sh) python3 "$scan" sh-guard --bash "$BASH" "$ROOT/$1" ;; *) false ;; esac && return 0
+  while IFS= read -r helper; do guarded "$helper" && return 0; done < <(helpers "$1"); return 1
+}
+# A script a file writes is judged as that script, whatever the file's name: each heredoc body naming
+# fm-decide, --request or a card raiser passes sh-guard, and the code outside them reaches no card.
+writes_guarded() {  # writes_guarded <file>: it raises cards only from scripts it writes, each guarded
+  local d b rest helper; [[ "$1" == *.sh ]] && d="$(mktemp -d "$scans/heredocs.XXXXXX")" || return 1
+  rest="$(python3 -c 'import sys; sys.path[:0] = sys.argv[1:2]; import source_scan as s; print(s.heredoc_split(*sys.argv[2:])[0])' \
+    "$(dirname "$scan")" "$BASH" "$ROOT/$1" "$d" 2>/dev/null)" || return 1
+  for b in "$d"/*.sh; do [ -f "$b" ] && grep -E -- "fm-decide|--request|$names" "$b" >/dev/null || continue
+    python3 "$scan" sh-guard --bash "$BASH" "$b" 2>/dev/null || return 1; done
+  while IFS= read -r helper; do rest+=$'\n'"$(code "$helper")"; done < <(helpers "$1")
+  ! decides "$rest" && ! grep -E -- "$names" <<<"$rest" >/dev/null
+}
+card_guard() {  # card_guard <file>: prints how the file is guarded; fails when it is not
+  local src; src="$(code "$1")"
+  # shellcheck disable=SC2016
+  if grep -qF 'HERDR_[^=]*)=' <<<"$src" && grep -qF 'unset "$_fm_k"' <<<"$src"; then
+    echo "unsets every HERDR_* before it runs anything"
+  elif guarded "$1"; then
+    if [[ "$1" == *.py ]]; then echo "sets HERDR_ENV=0 at Python's top level"; else echo "exports HERDR_ENV=0"; fi
+  elif grep -qE "executable\\('herdr'" <<<"$src" && grep -qF 'PATH=str(self.fake)' <<<"$src"; then
+    echo "puts its own herdr first on PATH"
+  elif writes_guarded "$1"; then
+    echo "raises cards only from scripts it writes, each exporting HERDR_ENV=0 at its top level"
+  else
+    echo "runs a script that raises a card, with no guard against an inherited HERDR_ENV"; return 1
+  fi
 }
 assert_ok "python_card_guard <<<\"os.environ['HERDR_ENV'] = '0'\"" "Python top-level disabled Herdr guard is recognised"
 assert_fail "python_card_guard <<<\"os.environ['HERDR_ENV'] = '1'\"" "Python enabled Herdr is not a guard"
-assert_fail "python_card_guard <<<\"    os.environ['HERDR_ENV'] = '0'\"" "conditional Python assignment is not a top-level guard"
+assert_fail "python_card_guard <<<\$'if FLAG:\\n    os.environ[\\'HERDR_ENV\\'] = \\'0\\''" "conditional Python assignment is not a top-level guard"
 assert_fail "python_card_guard <<<\"# os.environ['HERDR_ENV'] = '0'\"" "commented Python assignment is not a guard"
+# A guarded function beside an unguarded indirect card raiser fails the sweep; a top-level export passes it.
+probe="$scans/probe"; mkdir -p "$probe/tests/lib"
+printf '%s\n' 'safe() { export HERDR_ENV=0; run fm-decide --request; }' 'bin/fm.sh self-update' > "$probe/tests/fn-guard.test.sh"
+printf '%s\n' 'export HERDR_ENV=0' 'safe() { run fm-decide --request; }' 'bin/fm.sh self-update' > "$probe/tests/top-guard.test.sh"
+cp "$probe/tests/fn-guard.test.sh" "$probe/tests/lib/project-storage.sh"
+assert_fail "ROOT='$probe' scans='$probe' card_guard tests/fn-guard.test.sh" "a suite that exports HERDR_ENV=0 only inside a function, beside an unguarded bin/fm.sh call, fails the sweep"
+assert_ok "ROOT='$probe' scans='$probe' card_guard tests/top-guard.test.sh" "the same suite with the export at its top level passes it"
+assert_fail "ROOT='$probe' scans='$probe' card_guard tests/lib/project-storage.sh" "so does tests/lib/project-storage.sh with that guarded function and unguarded call"
+# No file name is exempt. Sourcing project-storage.sh keeps the caller's Herdr (T-242); its forwarder is guarded.
+fwd="$scans/forwarder"; mkdir -p "$fwd/bin"; : > "$fwd/bin/fm-decide.sh"; ( merge_source_fixture "$fwd" ) >/dev/null 2>&1
+assert_ok "python3 '$scan' sh-guard --bash '$BASH' '$fwd/bin/fm-decide.sh'" "the forwarder merge_source_fixture writes exports HERDR_ENV=0 at its top level"
+assert_contains " $direct" " tests/lib/project-storage.sh " "the sweep sees project-storage.sh write a card-raising forwarder"
+assert_eq "raises cards only from scripts it writes, each exporting HERDR_ENV=0 at its top level" "$(card_guard tests/lib/project-storage.sh)" "and accepts it only because the forwarder it writes is guarded"
+# A suite that writes a card-raising script through a heredoc and runs it is held to a guard like any other.
+hd() { printf '%s\n' 'cat > "$tmp/raise" <<'"'EOF'" "$@" '"$ROOT/bin/fm-decide.sh" --request D-1' EOF 'bash "$tmp/raise"'; }
+hd > "$probe/tests/heredoc-raise.test.sh"; hd 'export HERDR_ENV=0' > "$probe/tests/heredoc-guarded.test.sh"
+{ hd 'export HERDR_ENV=0'; echo 'bin/fm.sh self-update'; } > "$probe/tests/heredoc-leak.test.sh"
+assert_ok "ROOT='$probe' scans='$probe' both tests/heredoc-raise.test.sh" "a suite writing fm-decide --request through a heredoc raises a card"
+assert_fail "ROOT='$probe' scans='$probe' card_guard tests/heredoc-raise.test.sh" "a suite that writes an unguarded fm-decide --request script through a heredoc and runs it fails the sweep"
+assert_ok "ROOT='$probe' scans='$probe' card_guard tests/heredoc-guarded.test.sh" "the same suite passes it when the script it writes exports HERDR_ENV=0 at its top level"
+assert_fail "ROOT='$probe' scans='$probe' card_guard tests/heredoc-leak.test.sh" "but not beside an unguarded bin/fm.sh call of its own"
 for f in $reach; do
-  src="$(code "$f")"
-  # shellcheck disable=SC2016
-  if grep -qF 'HERDR_[^=]*)=' <<<"$src" && grep -qF 'unset "$_fm_k"' <<<"$src"; then
-    ok=0; how="unsets every HERDR_* before it runs anything"
-  elif grep -qE '^export HERDR_ENV=0' <<<"$src"; then
-    ok=0; how="exports HERDR_ENV=0"
-  elif [[ "$f" == *.py ]] && python_card_guard <<<"$src"; then
-    ok=0; how="sets HERDR_ENV=0 at Python's top level"
-  elif grep -qE "executable\\('herdr'" <<<"$src" && grep -qF 'PATH=str(self.fake)' <<<"$src"; then
-    ok=0; how="puts its own herdr first on PATH"
-  else
-    ok=1; how="runs a script that raises a card, with no guard against an inherited HERDR_ENV"
-  fi
+  if how="$(card_guard "$f")"; then ok=0; else ok=1; fi
   assert_eq "0" "$ok" "$f $how"
 done
-rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub"
+assert_eq "" "$(cat "$scans/refused")" "the sweep parses every shell and Python file it reads"
+rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub" "$scans"
 
 # no dependency on a watcher that has to be installed
 # the words may appear in a comment explaining the absence; a call may not

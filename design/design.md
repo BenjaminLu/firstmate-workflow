@@ -3556,6 +3556,45 @@ It also pins the single bash timings read, assignment uploads, coverage on
 both events, and the default checkout ref; mutations that reintroduce a
 per-shard download or a head-ref override must fail those pins.
 
+### Rule inventory (T-279)
+
+`skills/firstmate/rule-inventory.json` lists every rule of
+`skills/firstmate/SKILL.md`. A rule sentence is a sentence outside a fenced
+code block that holds the whole word must, never, always, `do not` or `don't`.
+Each entry has an ID (`R-001`), the file, the nearest heading above the rule
+and a verbatim quote of at least 20 characters, and one of three classes:
+
+- `enforced`: a check in code already refuses a breach. The entry cites the
+  exact refusal or assertion message as `evidence` (`{file, text}`).
+- `enforceable`: no check exists yet, but a program could make one. The entry
+  has a `proposal` of one or two sentences.
+- `judgement`: the rule needs a person's or a model's judgement and stays prose.
+
+The inventory stores no line numbers. A removed entry's ID moves to `retired`
+and is not used again; the checker sees only the current tree, so it enforces
+only that no ID is both live and retired.
+
+The fast group of `bin/ci.sh` has a `rule inventory` stage. It runs
+`bin/lib/fm_rules.py check --root <tree>` from beside `ci.sh` against the tree
+under test, and passes with the number of rules in each class. It refuses an
+inventory that cannot be read or is not version 1; an entry with a missing or
+mistyped field, a malformed or repeated ID, an ID that is also retired, an
+unknown class, an `enforced` entry without evidence or an `enforceable` entry
+without a proposal; a quote that is missing, repeated, or not under its
+heading; evidence whose file is missing or whose text sits only in a comment;
+a path that is absolute, holds `..` or resolves outside the tree; and every
+rule sentence that no quote covers, printed with its line and a stub entry
+to paste. The stage skips without reading the tree when the tree has no
+`skills/firstmate/SKILL.md`, or when `FM_EXTERNAL=1`, so an external
+project's text never reaches this repository's gate output. Evidence proves
+only that the cited message exists in code; whether that check enforces the
+rule is the reviewer's judgement.
+
+Phase 2, a later task, rewrites the skill file against this inventory into
+judgement principles and pointers, moves each removed rule into a versioned
+reference file or a code check with a test, builds the checks the
+`enforceable` entries propose, and points the coverage check at the new files.
+
 ---
 
 ## 11. Self-update

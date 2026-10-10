@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "rules": [
+    {"id": "R-001", "file": "skills/firstmate/SKILL.md", "heading": "", "quote": "the crew must read this line first", "class": "judgement"},
+    {"id": "R-002", "file": "skills/firstmate/SKILL.md", "heading": "Sample startup contract", "quote": "a worker never pushes to the main branch", "class": "enforced", "evidence": [{"file": "tools/guard.py", "text": "refusing a push to the main branch"}]},
+    {"id": "R-003", "file": "skills/firstmate/SKILL.md", "heading": "Duties", "quote": "Every round always ends with a written report", "class": "enforceable", "proposal": "A check refuses a round that ends without a report."},
+    {"id": "R-004", "file": "skills/firstmate/SKILL.md", "heading": "Duties", "quote": "the reviewer must read the whole diff", "class": "judgement"},
+    {"id": "R-005", "file": "skills/firstmate/SKILL.md", "heading": "Details", "quote": "Do not merge a red gate", "class": "enforced", "evidence": [{"file": "tools/merge.txt", "text": "refusing to merge a red gate"}]}
+  ],
+  "retired": ["R-006"]
+}

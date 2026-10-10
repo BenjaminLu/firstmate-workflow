@@ -11,7 +11,7 @@
 #   --stage fast|bash|bun|e2e   run only that group of stages (with neither
 #                        --stage nor --shard, every stage runs, exactly as a
 #                        plain `bin/ci.sh` always has); "fast" is shellcheck,
-#                        lint, hygiene, stdin, assertions and dag
+#                        lint, hygiene, stdin, assertions, dag and rule inventory
 #   --shard i/n          within --stage bash, run only the i-th of n shards
 #                        of tests/*.test.sh, balanced by duration in seconds
 #   FM_CI_TIMINGS_IN=path  previous per-suite durations ("path seconds" per
@@ -1211,6 +1211,23 @@ else
   if [ "$self_checked" = 0 ] && { [ -e design/tasks ] || [ -e design/tasks.json ]; }; then
     dag_check 'self: ' design/tasks
   fi
+fi
+
+stage "rule inventory"
+# T-279: every rule sentence of the firstmate skill has an entry in
+# skills/firstmate/rule-inventory.json. The checker lives beside this script,
+# as the library does, and judges the tree under test. An external project's
+# gate run never has its text printed here, so it is skipped before anything
+# of the tree is read; a tree without the skill has nothing to check.
+if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+  skip "rule inventory: an external project's gate run"
+elif [ ! -f skills/firstmate/SKILL.md ]; then
+  skip "rule inventory: no skills/firstmate/SKILL.md"
+elif rules_out="$(python3 "$_fm_code_dir/lib/fm_rules.py" check --root "$PWD" 2>&1)"; then
+  pass "rule inventory: $rules_out"
+else
+  flunk "rule inventory: skills/firstmate/SKILL.md and its rule inventory disagree:"
+  printf '%s\n' "$rules_out" | sed 's/^/      /'
 fi
 fi # want_stage fast
 

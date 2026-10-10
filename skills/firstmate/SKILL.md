@@ -1617,6 +1617,11 @@ a test proving that migration. Include affected callers and mirrored fixtures,
 not just the implementation path. Structural checks do not prove that the model
 inspected each acceptance line; firstmate must inspect the recorded evidence.
 
+`skills/firstmate/rule-inventory.json` lists every rule sentence of this file
+(T-279), and the gate's `rule inventory` stage refuses a rule sentence with no
+entry. A spec that adds or rewords such a sentence must list
+`skills/firstmate/rule-inventory.json` in its scope and add or update the entry.
+
 Migration of preflight itself: existing pins and evidence stay immutable. Already
 running rounds finish on their frozen launchers; their next worker dispatch needs
 an exact-byte preflight, even if the pin predates this rule. There is no automatic

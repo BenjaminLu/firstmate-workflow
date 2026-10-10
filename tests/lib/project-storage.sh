@@ -3,15 +3,13 @@
 # shellcheck source=tests/lib/config-modules.sh
 . "$ROOT/tests/lib/config-modules.sh"
 
+# The set, and every bin/lib module it imports, is declared in
+# tests/lib/fixture-modules.json. Repeated storage setup must preserve an
+# installed binding-service fixture: fm_binding.py is in its keep_existing list.
 project_storage_fixture() {
   local dest="$1"
-  config_modules_fixture "$dest"
   mkdir -p "$dest/lib"
-  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$dest/"
-  cp "$ROOT/bin/lib/fm_git_transfer.py" "$ROOT/bin/lib/fm-ssh-transfer.sh" "$ROOT/bin/lib/fm-task-grammar.sh" "$ROOT/bin/lib/fm_adopt.py" "$ROOT/bin/lib/fm_origin.py" "$ROOT/bin/lib/fm_concurrent.py" "$ROOT/bin/lib/fm_spec_pins.py" "$ROOT/bin/lib/fm_merge_outcome.py" "$ROOT/bin/lib/fm_project_paths.py" "$ROOT/bin/lib/fm-stack.sh" "$ROOT/bin/lib/fm-carry-base.sh" "$ROOT/bin/lib/fm_stack.py" "$ROOT/bin/lib/fm_conventions.py" "$dest/lib/"
-  # Repeated storage setup must preserve an installed binding-service fixture.
-  cp "$ROOT/bin/lib/fm_gates.json" "$dest/lib/"
-  [ -f "$dest/lib/fm_binding.py" ] || cp "$ROOT/bin/lib/fm_binding.py" "$dest/lib/"
+  python3 "$ROOT/tests/lib/fixture_modules.py" copy project-storage "$dest"
 }
 
 project_fixture_config() {
