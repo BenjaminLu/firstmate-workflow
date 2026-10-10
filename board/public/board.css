@@ -181,3 +181,16 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 .card-glossary dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}
 .card-glossary dt{font-weight:600}
 .card-glossary dd{margin:0}
+/* T-273: a retrospective card lists its items, each with its own choice */
+#retroRun{margin-left:8px;font:inherit;font-size:13px;padding:4px 10px;min-height:32px;
+  border:1px solid var(--line);border-radius:var(--r-chip);background:var(--bg3);
+  color:var(--fg);cursor:pointer}
+#retroRun:disabled{cursor:default}
+#retroSaid { margin-left: 8px; color: var(--fg2); }
+.retro-items { padding: 0; list-style: none; }
+.retro-item { margin-block: .75rem; padding-inline-start: 1rem; border-inline-start: 2px solid var(--kelp); }
+.retro-item h4 { margin: .25rem 0; }
+.retro-item p { margin: .25rem 0; overflow-wrap: anywhere; }
+.retro-choice { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
+.retro-choice button[aria-pressed="true"] { outline: 2px solid var(--kelp); }
+.retro-notes { color: var(--fg2); }

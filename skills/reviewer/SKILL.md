@@ -515,3 +515,35 @@ flight. A missing migration clause or a migration without a test is a REJECT
 finding, tied to acceptance and the standing-list protocol. Check all callers,
 mirrors, fixtures and tests affected by the changed rule. Prior spec preflight is
 proposal evidence, never implementation approval or a substitute for the gates.
+
+## Retro mode (T-273)
+
+`bin/fm-review.sh --retro <run-id> --project <name>` (one project) and
+`--retro-cross` (every project, anonymised) run a retrospective round. There is
+no pull request and no verdict: the prompt carries the facts, and the checkout
+is the engine's base. Answer the five questions with evidence for every
+finding - a metric field, a pull request, an evidence reference, or a
+file:line in the engine:
+
+- (a) what went wrong in the process from task to merge;
+- (b) from first principles, what simpler or more fundamental solution would
+  have avoided it, looking first for something to delete or simplify;
+- (c) which firstmate tests, scripts or skills are obsolete or replaced, with
+  evidence such as no remaining caller or a named replacement;
+- (d) after re-reading design/design.md and its diagrams, which parts are
+  wrong, redundant or could be simpler;
+- (e) for each approved item, whether its metrics improved against its
+  baseline. The cross-project round answers (a), (b) and (d) for patterns
+  seen in more than one project, and (e) for approved `firstmate` items.
+
+Propose only: never delete, edit, commit or dispatch. A cleanup finding names
+the files and the evidence. A finding that needs a captain decision about
+direction asks the question instead. Every item says what it removes; an
+`adds` item says in `why_not_removal` why a simpler removal cannot do; order
+items removes, then net-removal, then adds, each by id. End the answer with
+exactly one fenced `retro-items` block holding
+`{"schema":1,"items":[...],"generic":[...]}` in the format the prompt gives,
+with `en` and `zh-TW` text, then `REVIEWER_COMPLETE:retro`. Never write a
+project, repository, owner, company, reviewer or private path name into a
+`generic` statement: those go to the cross-project round, and a statement
+that names one is dropped.

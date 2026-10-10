@@ -225,9 +225,53 @@ def observations(module):
             emit('plain fields alone are not an intent card: ' + '+'.join(keep), False)
 
 
+def retro_card(mode, count=2):
+    """T-273: a retrospective card's details, and malformed variants."""
+    def item(lang, label, n, effect='removes'):
+        en = lang == 'en'
+        entry = dict(id=f'{label}/R{n}', project=label, effect=effect,
+                     removes=[] if effect == 'adds' else ['tests/old.test.sh'],
+                     title='Delete the old suite.' if en else '刪除舊的測試。',
+                     why='Another suite covers the same checks.' if en else '另一組測試已涵蓋同樣的檢查。',
+                     how='Remove the file.' if en else '移除檔案。', evidence=['tests/a.sh:1'], scope=['tests/old.test.sh'])
+        if effect == 'adds':
+            entry['why_not_removal'] = 'No file holds this check today.' if en else '目前沒有檔案做這個檢查。'
+        return entry
+    d = {}
+    for lang, text in [('en', 'The check passes.'), ('zh-TW', '檢查通過。')]:
+        d[lang] = {key: text for key in ('title', 'explanation', 'before', 'after', 'outcome')}
+        d[lang]['options'] = {key: dict(description=text, pros=text, cons=text) for key in 'AC'}
+        # why, how and glossary on every card (T-270)
+        d[lang].update(why=[dict(kind='fact', text=text)], how=[dict(kind='fact', text=text)], glossary=[])
+        d[lang]['items'] = [item(lang, 'self' if n % 2 else 'P-0a1b2c3d', n) for n in range(1, count + 1)]
+    if mode == 'dup':
+        for loc in d.values():
+            loc['items'][1]['id'] = loc['items'][0]['id']; loc['items'][1]['project'] = loc['items'][0]['project']
+    elif mode == 'substituted':
+        d['zh-TW']['items'][1] = item('zh-TW', 'self', 9)
+    elif mode == 'reordered':
+        d['zh-TW']['items'].reverse()
+    elif mode == 'too-many':
+        for lang in d:
+            d[lang]['items'] = [item(lang, 'self', n) for n in range(1, 62)]
+    elif mode == 'adds-without-why':
+        for lang in d:
+            d[lang]['items'][0] = item(lang, 'self', 1, 'adds')
+            del d[lang]['items'][0]['why_not_removal']
+    elif mode == 'with-b':
+        for loc in d.values():
+            loc['options']['B'] = dict(loc['options']['A'])
+    elif mode == 'with-questions':
+        for loc in d.values():
+            loc['questions'] = [dict(kind='fact', text=loc['title'])]
+    return d
+
+
 if __name__ == '__main__':
     if sys.argv[1] == 'fixture':
         print(json.dumps(fixture(sys.argv[2])))
+    elif sys.argv[1] == 'retro':
+        print(json.dumps(retro_card(sys.argv[2])))
     else:
         spec = importlib.util.spec_from_file_location('fm_ste', Path(__file__).resolve().parents[2] / 'bin/lib/fm_ste.py')
         module = importlib.util.module_from_spec(spec)
