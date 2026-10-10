@@ -250,6 +250,12 @@ class MechanicalLoop:
             ready = ready and not self.landed(task, pr) and not any(
                 job.get('task') == task and job.get('state') in ('running', 'consuming')
                 for job in self.data.get('jobs', {}).values())
+            if ready:
+                # advance() already wakes for a held budget or an open question.
+                import fm_round_budget
+                budget = self.round_budget(task, pr)
+                ready = (budget is not None and budget['state'] not in fm_round_budget.HELD
+                         and not self.open_asks(task, head))
         except Exception:
             # Any read error is a condition that does not hold.
             ready = False
@@ -271,6 +277,26 @@ class MechanicalLoop:
             en += f'; the approval is for {approved[:12]}'
             tw += f'；核准針對 {approved[:12]}'
         self.queue(f'stuck-{number}-{head}', task, en, tw)
+
+    def open_asks(self, task, head):
+        """Fresh ask records at this head that no later authorized brief answered, as advance() reads them."""
+        from fm_evidence import Store
+        asks = []
+        for record in Store(str(self.state), self.ctx['evidence_project'], task,
+                            external=self.ctx['external']).records():
+            if (record.get('kind') == 'brief' and record.get('authorized') is True
+                    and record.get('actor') == 'firstmate'):
+                asks.clear()
+            if record.get('kind') != 'ask' or record.get('head') != head:
+                continue
+            try:
+                written = datetime.datetime.fromisoformat(record['time'].replace('Z', '+00:00'))
+                fresh = written.tzinfo is not None and written.timestamp() > self.data['tracking_started']
+            except (KeyError, AttributeError, ValueError, TypeError):
+                fresh = False
+            if fresh:
+                asks.append(record)
+        return asks
 
     def stuck_reason(self, task, pr):
         for job in self.data.get('jobs', {}).values():

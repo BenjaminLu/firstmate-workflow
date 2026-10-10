@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import autopilot_loop as fixture
+import fm_evidence
 
 A, PR, HEAD, BASE, CHECKS = fixture.A, fixture.PR, fixture.HEAD, fixture.BASE, fixture.CHECKS
 OLD = 'd' * 40
@@ -334,6 +335,14 @@ class StuckCheck(unittest.TestCase):
         def queue_on():
             self.pilot.queue_mode = 'hold'
             self.pilot.queue_guard = lambda *a, **kw: False
+        def parked():
+            self.pilot.round_budget = lambda task, pr: dict(state='parked', card='D-alpha-T001-9')
+        def open_ask():
+            # advance() is stubbed here, so only the stuck check reads these records.
+            asking = patch.object(fm_evidence.Store, 'records', return_value=[dict(
+                kind='ask', head=HEAD, time='2099-01-01T00:00:00Z', text='Which file?')])
+            asking.start(); self.addCleanup(asking.stop); stops.append(asking.stop)
+        stops = []
         cases = dict(
             pending_card=(pending_card, PR, None),
             pending_check=(lambda: None, PR, [dict(CHECKS[0], status='in_progress', conclusion=None)]),
@@ -342,11 +351,15 @@ class StuckCheck(unittest.TestCase):
             reject=(lambda: self.approve(verdict='REJECT'), PR, None),
             running_job=(lambda: self.job(head=HEAD, state='running'), PR, None),
             consuming_job=(lambda: self.job(head=HEAD, state='consuming'), PR, None),
+            parked_budget=(parked, PR, None),
+            open_ask=(open_ask, PR, None),
             queue_mode=(queue_on, PR, None))
         for name, (arrange, pr, runs) in cases.items():
             with self.subTest(case=name):
+                while stops: stops.pop()()
                 self.approve()
-                self.pilot.__dict__.pop('queue_guard', None); self.pilot.queue_mode = 'off'
+                for attr in ('queue_guard', 'round_budget'): self.pilot.__dict__.pop(attr, None)
+                self.pilot.queue_mode = 'off'
                 self.pilot.data['jobs'] = {}; self.pilot.data['wakes'] = {}
                 self.pilot.data.setdefault('stuck', {}).clear()
                 for path in (self.state / 'pending').glob('*.json'): path.unlink()
