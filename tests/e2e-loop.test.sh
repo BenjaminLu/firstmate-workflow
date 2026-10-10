@@ -70,7 +70,8 @@ cat > bin/adapters/mock.sh <<'M'
 [ "$1" = "run" ] || exit 64
 echo "mock ran" >> "$4"
 if grep -q "Find the reason to reject" "$2"; then
-  printf '%s\n1. open name the helper\n2. open cover the empty case\nCRITERIA-COMPLETE:T-101\nREJECT:T-101\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
+  # T-272: each open item carries one fix proposal.
+  printf '%s\n1. open name the helper\n```text fix-1\nfile: src/thing:1\nchange: name the helper\nfixes: tests/a.test.sh\nfail-first: tests/a.test.sh fails without the helper\n```\n2. open cover the empty case\n```text fix-2\nfile: src/thing:1\nchange: cover the empty case\nfixes: tests/a.test.sh\nfail-first: tests/a.test.sh fails on an empty thing\n```\nCRITERIA-COMPLETE:T-101\nREJECT:T-101\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
   exit 0
 fi
 printf 'implemented\n' > "$3/src/thing"

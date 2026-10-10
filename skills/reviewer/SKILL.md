@@ -283,6 +283,54 @@ violation; report them to [firstmate](../firstmate/SKILL.md) for the board.
 Write the first list as if it is your one chance to be exhaustive, because it
 is: T-126 took ten rounds, one new finding per round from round seven on.
 
+Every open item of a REJECT's standing list carries exactly one fix proposal
+or exactly one decision line (T-272). You have read the whole diff, so you are
+the cheapest place to say how to fix what you found. An open item is one whose
+first line starts with `open`, a REGRESSION or NEW-GROUND item, or, in the
+task's first list, any item not marked done. A fix proposal sits inside the
+list, after its item and before `CRITERIA-COMPLETE:<task-id>`, as a fenced
+block:
+
+- `diff fix-<N>`: a non-empty unified diff against the reviewed head, with
+  `a/` and `b/` paths relative to the repository root;
+- `text fix-<N>`, when a patch is impractical: four labelled, non-empty lines,
+  `file:` (path and line), `change:`, `fixes:` (the failing assertion it
+  fixes) and `fail-first:` (the assertion it expects to fail on the old code
+  for a real reason).
+
+When an open item needs a decision only the captain can make, such as a
+conflict between spec and code or a fix that needs a path outside the task's
+pinned scope, write instead one indented line inside that item:
+`DECISION:<task-id> <question>`, with this task's ID and a non-empty question.
+
+~~~
+1. done: <an item the latest change settled>
+2. open: <an item this head still needs, with its evidence and class>
+   ```diff fix-2
+   --- a/src/parse.py
+   +++ b/src/parse.py
+   @@ -10 +10 @@
+   -    return None
+   +    return []
+   ```
+3. open: <an item that needs the captain>
+   DECISION:<task-id> <the question only the captain can answer>
+
+CRITERIA-COMPLETE:<task-id>
+REJECT:<task-id>
+~~~
+
+Two fix blocks for one item, a fix block and a DECISION for one item, two
+DECISION lines for one item (even identical ones), an empty patch, a text
+block missing a labelled line, or a proposal for a number that is not an open
+item of the same list is a protocol error, and so is an open item with
+neither. firstmate checks each patch against the reviewed head; a patch that
+does not apply is reported, not refused. You stay read-only: propose the fix
+in your answer and never edit, commit or push a file, because a reviewer that
+wrote the code would be approving its own work. This rule is for code review
+only, not spec preflight, and an APPROVE needs no fix proposals. The review
+after your REJECT goes to another reviewer name.
+
 `ASK-PASS-CRITERIA:<task-id>` may come from a worker who finds no list or an
 unclear one, or from a genuine firstmate operator requesting clarification.
 When the launcher delivers that exact standalone marker, before any truthful

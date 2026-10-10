@@ -2081,6 +2081,67 @@ A missing report remains unknown; a receipt alone never proves green gates. The 
 and the `  + gate N (name): …` / `  x gate N (name): …` lines of `fm-gate.sh`'s own `say()`
 are the contract that writer must follow.
 
+**Fix proposals (T-272).** Every open item of a REJECT's standing list
+carries exactly one fix proposal or exactly one decision line. An open item
+is one whose first line starts with `open` (optionally bold), a REGRESSION or
+NEW-GROUND item, or, in a task's first list, any item not marked done. A fix
+proposal is a fenced block inside the list whose info string is `diff fix-<N>`
+(a non-empty unified diff against the reviewed head, with `a/` and `b/` paths
+relative to the repository root) or `text fix-<N>` (four non-empty labelled
+lines: `file:`, `change:`, `fixes:` and `fail-first:`). An item that needs a
+decision only the captain can make carries instead one indented continuation
+line `DECISION:<task-id> <question>` with its own task ID and a non-empty
+question; an unindented line, another task's ID or an empty question is not a
+decision line. Reviewers stay read-only: they propose and never edit, commit
+or push. The rule binds code review only, not spec preflight, and an APPROVE
+needs no proposals. `fm-review.sh` says so in every round's prompt, round one
+included.
+
+`fixes()` in `bin/lib/fm_evidence.py` reads proposals from the verdict's raw
+text, counting only fenced blocks and DECISION lines between the first item of
+the final standing list (the block `criteria()` selects) and the closing
+marker. `protocol()` reports, naming the item, an open item with no proposal or
+DECISION, two fix blocks, a fix block plus a DECISION, two DECISION lines
+(even identical), an empty patch, a text block with a missing or empty
+labelled line, and a proposal whose number is not an open item of the same
+list. These rules apply only to verdicts retained with `fix_protocol: 1`;
+verdicts retained before T-272, including a round launched on an old frozen
+launcher, keep the old rules, and no existing record, pin or brief is
+rewritten. `fm-protocol.sh check --signature <sig>` judges the lists up to and
+including that verdict, so a later record cannot mask it.
+
+Before its single append, `retain_verdict` checks every patch in the exact
+answer it retains: it reads the reviewed head into a temporary index in a new
+system temporary directory (`GIT_INDEX_FILE=<temp> git read-tree <head>`) and
+runs `git apply --cached --check`, touching no index file, ref or worktree of
+the target repository. The verdict record gains `fix_checks` (`version`,
+`status` complete or unavailable, `reason`, and per item `kind`, `apply`
+applies, does-not-apply or not-a-patch, Git's first error `message`, and the
+patch paths `outside_scope` of the pinned scope). A check that cannot run is
+`unavailable` and the verdict is still retained; a patch that does not apply
+is reported, never a protocol error. Every patch block is checked, duplicates
+included; an item's row is its worst block's result with the union of their
+outside-scope paths. Patch paths are read per file header outside hunks, with
+Git's quoting decoded, so spaced or quoted names and header-like hunk lines
+keep their real paths.
+
+Both autopilot REJECT paths run the bound protocol check first, in every
+round and again after a restart; only the wake is deduplicated, by the
+existing once-per-head key (reason, pull request, head), so a replacement
+verdict on the same head raises no second wake. A violation raises the protocol-violation wake. Otherwise `fm_evidence
+fixes-brief --round <next> --head <head>` writes a draft to
+`<project state>/briefs/<task>-r<next>-<head12>-<sig8>-review-fixes.md`: per
+item `<N>. fix: <finding>` with its proposal copied byte for byte and its
+check result, `<N>. deferred: captain decision needed: <question>`, or
+`<N>. deferred: done in the reviewed round; keep as is`, then the source
+reviewer, round, head and signature. It refuses (exit 65, writing nothing) a
+missing REJECT, a wrong round, a legacy verdict or protocol errors, and never
+overwrites an existing draft. With no decision item the wake names the draft
+(for an external project, only that it is in the private project state);
+otherwise it stays "REJECT: brief needed". firstmate may append "Context from
+firstmate" and records the draft with `fm-evidence brief`; the draft passes
+the reject coverage check because every item has a fix or deferred line.
+
 The point is to end the loop where each round fixes one thing and surfaces
 another.
 
@@ -3835,7 +3896,9 @@ under `rosters:`, or an inline `rosters: {…}`, is refused by name; a pinned li
 replaces that role's drawn names, a drawn name pinned to the other role is
 dropped, and a name in both lists is refused with a message naming it. The
 old single `roster:` is still read: its names are workers, with one warning
-line.
+line. The review round after a REJECT uses a different reviewer name from the
+one that rejected (T-272); a retry of that round moves on too, and an explicit
+`--name` for the rejecting reviewer is refused.
 
 A worker takes a name only from the worker roster and a reviewer only from the
 reviewer roster; an explicit `--name` on the other role's roster is refused.

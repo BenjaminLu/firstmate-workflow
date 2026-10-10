@@ -6,7 +6,11 @@
 # 2026-09-29; SK-007). This decides mechanically whether that happened, so
 # "the reviewer is drip-feeding" becomes a finding rather than a feeling.
 #
-#   fm-protocol.sh check --task T-004 [--pr 9] [--round 3] [--repo .]
+#   fm-protocol.sh check --task T-004 [--pr 9] [--round 3] [--repo .] [--signature S]
+#
+# --signature judges the standing lists up to and including that verdict
+# record, so a later record cannot mask the REJECT that triggered the check
+# (T-272). Without it every local verdict is judged, as before.
 #
 # Exit 0 for valid local standing-list syntax, 3 for missing/invalid evidence.
 # The diagnostic names the violated rule. Syntax does not establish semantics.
@@ -21,7 +25,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; PR=''; ROUND=1; MODE=''
+REPO="${FM_ROOT:-$(pwd)}"; TASK=''; PR=''; ROUND=1; MODE=''; SIGNATURE=''; SIGNED=''
 while [ $# -gt 0 ]; do
   case "$1" in
     check) MODE=check; shift ;;
@@ -30,17 +34,18 @@ while [ $# -gt 0 ]; do
     --pr) fm_need "fm-protocol" "$@"; PR="${2-}"; shift 2 ;;
     --round) fm_need "fm-protocol" "$@"; ROUND="${2-}"; shift 2 ;;
     --repo) fm_need "fm-protocol" "$@"; REPO="${2-}"; shift 2 ;;
+    --signature) fm_need "fm-protocol" "$@"; SIGNATURE="${2-}"; SIGNED=1; shift 2 ;;
     *) echo "fm-protocol: unknown argument $1" >&2; exit 64 ;;
   esac
 done
 [ "$MODE" = check ] && [ -n "$TASK" ] || {
-  echo "usage: fm-protocol.sh check --task <id> [--pr <n>] [--round n] [--repo path] [--project name]" >&2; exit 64; }
+  echo "usage: fm-protocol.sh check --task <id> [--pr <n>] [--round n] [--repo path] [--project name] [--signature sig]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-protocol: no repo at $REPO" >&2; exit 64; }
 
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --pr "$PR" "$@" >/dev/null 2>&1 </dev/null || true; }
 
 fm_storage_init "$REPO" || exit 65
-if ! result="$(fm_evidence protocol --round "$ROUND" 2>&1)"; then
+if ! result="$(fm_evidence protocol --round "$ROUND" ${SIGNED:+--signature "$SIGNATURE"} 2>&1)"; then
   printf '%s\n' "$result" >&2
   emit --type protocol_violation --en "$result" --tw "本機審查協定檢查失敗：$result"
   exit 3
