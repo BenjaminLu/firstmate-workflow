@@ -49,6 +49,10 @@ policy:                 # what every crew round may do, whichever vendor runs it
                         # never a key here.
 
 concurrency: 3          # workers in flight at once
+review_budget:          # T-276: when a task's review loop stops for the captain
+  rounds: 3             # review rounds before the captain decides
+  stall: 2              # consecutive review rounds a must-fix item may stay open
+  extend: 2             # rounds added by a 'continue' answer
 # host: herdr           # none|herdr|cmux|tmux: a terminal host opens a labelled
 #                       # window that follows each round's log. Rounds run
 #                       # headless either way; unset, the host is detected.
