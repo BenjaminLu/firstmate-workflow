@@ -5289,6 +5289,86 @@ version, and prints both next to the verdict; a model that vendor refuses is
 reported `refused` with the message named, the same as any other
 before-the-round refusal.
 
+#### Local test runs (T-275)
+
+A worker used to get its only test feedback from GitHub CI, 10 to 20
+minutes after its round ended, and most red runs were failures one local run
+of the changed suite would have shown. Since T-275 the worker runs the tests
+related to its change inside its own round, and only those: the whole
+project check stays CI's (captain, 2026-10-09 and 2026-10-10).
+
+**The folder.** After the round's policy file is written and before the
+adapter starts, `bin/fm-worker.sh` builds `<run directory>/local-tests/`
+beside `pinned/`: mode 0755, owned by the current user, holding exactly
+`runner.py` (a byte copy of `bin/lib/fm_local_tests.py` from the code the
+launcher runs) and `plan.json`, both mode 0444. The plan holds the merge-base
+of the base branch and the round's head (or null), the contract's `tests`,
+`test`, `check_env`, `docs` and `unrunnable` (from the approved pin, else the
+project's contract through `fm_project`; never `check`), the policy's
+`test_budget` and declared registries, a 300-second limit per suite, and at
+most 3 parallel jobs. The launcher unsets any inherited `FM_LOCAL_TESTS_DIR`
+and exports this run's folder; a folder it cannot build is removed, named in
+the round's log and prompt, and the round runs as before. The prompt gains a
+`# Local tests` section naming `python3 <run directory>/local-tests/runner.py
+run`.
+
+**The grant.** `local_tests_of()` in `bin/lib/fm_sandbox_policy.py` accepts
+the folder only when it is this run's real `local-tests` path with exactly
+those two files in that shape, and refuses the round otherwise. macOS adds
+`(allow file-read* (subpath <dir>))` and `(deny file-write* (subpath <dir>))`
+right after the pinned folder's rules; Linux adds `--ro-bind <dir> <dir>`
+right after the pinned bind. Nothing else changes: no write root, network,
+socket or environment rule. Without the variable both profiles are
+byte-identical to before.
+
+**The budget.** `test_budget` is a crew policy key, a whole number of seconds
+from 60 to 7200, flat or under `worker:`, at the top level or in a project's
+`policy:`; the resolved policy always holds it, 900 by default. Only the
+worker launcher reads it. The runner stops starting suites when it is used
+up, and gives each suite at most 300 seconds or what is left of it.
+
+**Selection.** The changed files are what `git diff --name-only --no-renames
+<base>` and the untracked files list (against `HEAD`, with a note, when the
+base is unknown), leaving out `.fm-say.md` and `.fm-prompt.md`. A suite is a
+file matching the contract's `tests` globs, by fail-first's rule. The runner
+selects every `--suite` the worker names, then every changed suite, then
+every other suite whose text names a changed file's name on fail-first's
+helper boundary; a changed file matching `docs` selects nothing. That last
+group is capped at 3: when more suites name a changed file, none of them
+runs, each is reported `not run` (`more than 3 suites name a changed file; CI
+runs them`), since running them all would be the whole check in disguise.
+`--case <name>` records a test case the worker added or changed; the contract's
+`test` template has only `{file}`, so each selected suite still runs as a
+whole file and its row says `case filter not supported:` with the names.
+
+**Running.** Each suite runs the `test` template from the worktree under
+`bash -c`, as fail-first's runner does: its shell is `FIRSTMATE_CI_SESSION`
+and `FM_SESSION_PID`, with `FM_ROOT`, `LC_MESSAGES=C`, `check_env` and no
+standard input. Each runs in a process group of its own (`os.setpgrp`, never a
+new session); the runner ends the group with SIGTERM, then SIGKILL 5 seconds
+later, when the suite exits or passes its limit, and ends every group and
+writes nothing when it is itself stopped. Beyond that, the round's own
+teardown ends what is left.
+
+**Not runnable here.** Before the first suite the runner probes, once and
+within 10 seconds each, for a pseudo-terminal, `ps`, a nested sandbox and
+Docker. A failed suite counts as `not runnable here` only when a line of its
+output matches the runner's fixed pattern for a capability and that
+capability's probe failed, or, for the network, when the line names a host
+the policy does not declare. Anything else non-zero is `failed`. A contract
+`unrunnable` reason marks every selected suite `not runnable here`.
+
+**Evidence, not a gate.** The runner writes one block into `.fm-say.md`,
+between `<!-- fm-local-tests v1 -->` and `<!-- /fm-local-tests -->`, with a
+summary line of whole-number counts and a table of one row per suite. The
+launcher keeps the whole note as the round's report, reads the summary with
+`fm_local_tests.py summary` and emits one `crew_status` event holding only the
+validated counts (or `{"valid":false}`). A note that holds only the block is
+not the worker speaking: delivery and exits treat it as an empty note. An
+external project's public comment never carries the block (`strip`). No gate,
+review, pull request body or exit reads any of it; CI and the six gates still
+decide.
+
 ### 13.2 A round cannot destroy its own work (T-128)
 
 **Why, from first principles.** On 2026-09-27, four crew rounds lost their
@@ -6547,7 +6627,7 @@ assertions/logs/source, authentic standing-list findings, acceptance mapping and
 merge/conflict facts. T-135 warns visibly for missing coverage without inventing
 facts; cancelled and pending CI are distinct.
 
-Workers never commit/push/checkpoint or run suites. Frozen outside-round launcher
+Workers never commit, push or checkpoint; they run the suites that cover their change through the launcher's runner (section 13.1). Frozen outside-round launcher
 publishes. T-163 Codex run mode requires genuine isolated checkout, trusted
 context, OS confinement and final-assistant-output provenance; no marker-only
 admission, silent diff/vendor fallback or unsafe flags. T-167 binds availability
@@ -6715,8 +6795,8 @@ the unchanged base name remain required, without base-tip freshness (T-213).
 Legacy self review without a PR remains local-only and establishes no remote
 readiness. The isolated checkout must match the named head and merge-base. Gate/candidate binding remains
 the shared T-138 boundary. These structural guarantees do not prove a model
-followed its role or inspected omitted design. Workers leave publication and
-suites to the outside launcher and CI; reviewer context excludes worker reports
+followed its role or inspected omitted design. Workers leave publication to
+the outside launcher, and CI and the gates decide; reviewer context excludes worker reports
 and reasoning.
 
 ### 15.8 Pilot and advanced integration
