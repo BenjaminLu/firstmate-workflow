@@ -1,0 +1,429 @@
+{
+  "id": "T-281",
+  "title": "The autopilot settles a stale unfinished job by itself and wakes firstmate when an approved, green pull request waits 30 minutes for a merge card",
+  "public_title": "Stop the autopilot from waiting forever on an old unfinished job",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_autopilot_loop.py",
+    "bin/lib/fm_autopilot.py",
+    "tests/autopilot-stale-jobs.test.sh",
+    "tests/lib/autopilot_stale_jobs.py",
+    "tests/lib/autopilot_stale_jobs_queue.py",
+    "design/tasks/T-281.json"
+  ],
+  "acceptance": [
+    "Why. Firstmate is the supervising agent that briefs workers and answers the captain. The autopilot (`bin/lib/fm_autopilot.py` and `bin/lib/fm_autopilot_loop.py`) is the background loop beside it that runs gates and reviews and asks the captain for merge cards. When the autopilot needs firstmate, it queues a wake, a short message firstmate must act on. The autopilot records each child job it starts in `state/autopilot/state.json`. When the autopilot restarts while a job is running, `recover_jobs()` (`bin/lib/fm_autopilot_loop.py` about line 584) marks that job `uncertain` and queues one wake, 'Autopilot stopped during a child; reconcile its log'. Nothing ever clears an `uncertain` job, and no command exists to clear it.",
+    "Why, the stall seen on 2026-10-10. A restart left a gate job `uncertain` at an old head (`5299b555`) for the task that stops overlapping firstmate tasks from running side by side (T-278), after its pull request had moved on. That task also had a merge card whose merge GitHub refused. `advance()` (about lines 402-404 and 491-493) raises no replacement merge card while any job of the task is running, consuming or `uncertain`. So an approved pull request with every check green and GitHub state CLEAN got no merge card for 10 hours, and no second wake said why.",
+    "How. The autopilot settles an `uncertain` job by itself once its result can no longer matter, and it wakes firstmate once when an approved, green, clean pull request waits 30 minutes with no merge card. A job on the current head of an open pull request stays `uncertain` and keeps blocking, as today.",
+    "Terms. A job is one gate, protocol or review child process. A protocol job runs `fm-protocol.sh check`, which runs in place of the gate from review round 3 on, or in any round when the latest `APPROVE` verdict for the current head is marked for the protocol check (`bin/lib/fm_autopilot_loop.py` about lines 419-420 and 513). A merge card is the card on the captain's board that asks the captain to approve one merge. Each job is a child process that the autopilot started and recorded under `jobs` in `state/autopilot/state.json`, with `kind`, `task`, `number` (the pull request number), `head` (the commit it ran on) and `state`. One wake identity passed to `queue()` (`bin/lib/fm_autopilot.py` about line 608) raises at most one wake. CLEAN is GitHub's `mergeable_state` value `clean`. A self pull request is a pull request on firstmate's own repository, not on an external project (`ctx['external']` false). The self queue is the opt-in mode (`queue_mode` other than `off`) in which the autopilot lets self pull requests reach merge one at a time.",
+    "Settling, which jobs. Add one method to the loop, for example `settle_stale_jobs`. It considers only jobs whose `state` is `uncertain`, whose `kind` is `gate`, `protocol` or `review`, and that carry no `queue_binding`. A job with no `kind` field (an older record) and a job that carries `queue_binding` (owned by the self queue, checked at `bin/lib/fm_autopilot.py` about line 359) are left as they are. Pull request numbers are compared as integers, as `job_for` does (about line 595), so a job stored with the string `'12'` matches pull request 12. Four code paths mark a job `uncertain`, and the same rule settles each: a restart in `recover_jobs()`; a result that fails while it is consumed (`consume_jobs()`, about line 580); a failed review launch (about lines 624 and 627), which may write a record with `path` empty; and the one-time state upgrade (`bin/lib/fm_autopilot.py` about lines 92-94), which also writes review records with `path` empty.",
+    "Settling, moved head. During `pull()` (`bin/lib/fm_autopilot.py` about line 896), before the `try` that calls `advance()`, the method settles each considered job of that pull request whose `head` differs from the head `pull()` just read. An `uncertain` job whose `head` equals that head stays `uncertain`.",
+    "Settling, closed pull requests. During `poll()`, right after it builds the set of open pull request numbers (`open_numbers`, about line 1054), the method settles each considered job whose number is not in that set. This also covers pull requests that closed before this change, because it does not depend on `closed_pull()`.",
+    "Settling, the record. A settled job gets `state` `superseded`, `superseded_at` set to the loop clock (`self.clock()`), and `superseded_by` set to the current head, or to the word `closed` when its pull request is not open.",
+    "Settling, never run again. The job's command is never started again. Its packet and log files, when it has any, are not deleted.",
+    "Settling, effect on the self queue. A settled job no longer counts as outstanding where the queue counts every `running`, `consuming` or `uncertain` job: the drain check (`bin/lib/fm_autopilot.py` about lines 192-194) and the activation check (about line 317). This takes effect no later than the next poll. It can take effect in the same poll, because `start_job` (about line 528) and `job_completed` (about line 633) also refresh the queue.",
+    "Settling, event. For each settled job the autopilot emits one event of the existing type `crew_status` with actor `autopilot`, the task and the pull request number. The English text is `Settled a stale <kind> job of <task> at <first 12 characters of the old head>; the pull request is now at <first 12 characters of the current head>`, or ends with `; the pull request is closed`; the zh-TW text carries the same facts. No new event type is added, so `bin/fm-emit.sh` and `bin/fm-diagram.sh` do not change.",
+    "Settling, event delivery. `bin/fm-emit.sh` drops repeated `crew_status` events from one actor within a short window unless `FM_CREW_STATUS_SECS=0` is set (about lines 204-252). The settle event is sent with `FM_CREW_STATUS_SECS=0`, for example through a new optional environment argument to `emit()` (`bin/lib/fm_autopilot.py` about line 601) whose default keeps today's behaviour. If the emit fails, the job stays settled and the autopilot queues one wake naming the task, the job kind and the error.",
+    "Stuck check, when it runs. Add one method, for example `stuck_check(task, pr, runs, statuses)`. `pull()` calls it after the `advance()` attempt, only for a self pull request and only when `queue_mode` is `off`.",
+    "Stuck check, conditions. All must hold: the task's latest review verdict (`verdict(task)`, about line 256) is `APPROVE`, at any head, because gate 6 (approval) carries an approval across an update when the patch is unchanged; `settled_checks(pr, runs, statuses)` returns a list, not `None`, whose conclusions are all `success`, `neutral` or `skipped`; `mergeable_state` is `clean`; no file in `state/pending/` has `kind` `merge` and this task; `landed(task, pr)` is false; no job of the task is `running` or `consuming`; `round_budget(task, pr)` (the round budget added by T-276) returns a state that is not held, that is, not `None` and with `state` not in `fm_round_budget.HELD` (`stop`, `waiting`, `parked`, `narrow`; `advance()` returns early for these at about lines 407-418 and already queues its own wake); and no ask record of the task is open at the current head (the records `advance()` reads at about lines 431-457). Any error while reading them counts as a condition that does not hold.",
+    "Stuck check, timer. The state data gets a `stuck` map, keyed by pull request number, holding the head and the time the conditions were first seen together. A state file without `stuck` starts with an empty map, through the default list in `Pilot.__init__` (`bin/lib/fm_autopilot.py` about line 64). When any condition fails, the entry is removed. When the head changes, the entry restarts with the new head and the current time. In `poll()`, an entry whose number is not in `open_numbers` is removed.",
+    "Stuck check, wake. When the conditions have held on the same head for 1800 seconds or more by the loop clock, the autopilot queues one wake with the identity `stuck-<number>-<head>`, so one head raises at most one wake. The English line is `<task> #<number> is approved, green and clean with no merge card for 30 minutes: <reason>`, plus `; the approval is for <first 12 characters of the verdict head>` when the verdict head differs from the pull request head. The zh-TW summary carries the same facts.",
+    "Stuck check, reason. The reason is the first that applies, in this order: `an uncertain <kind> job at <first 12 characters of its head>` for an `uncertain` job of the task; `replacement held: <reason>` when `failed_card_evidence(task, pr)` returns a hold reason; `a worker round is live` when `fm_concurrent.live_rounds` lists the task; otherwise `no reason found`.",
+    "Unchanged behaviour. `advance()`, `recover_jobs()` and `consume_jobs()` do not change. The existing 'Autopilot stopped during a child; reconcile its log' wake still fires once per job when it becomes `uncertain`.",
+    "New suite. `tests/autopilot-stale-jobs.test.sh` runs two files, each with the repository root as its only argument: `tests/lib/autopilot_stale_jobs.py`, which imports `tests/lib/autopilot_loop.py` (`LoopTests.setUp`, stub commands and a stub `emit`) and patches the loop clock, and `tests/lib/autopilot_stale_jobs_queue.py`, which imports `tests/lib/autopilot_queue.py` for the self queue drain case. Both fixture modules take the root argument from `sys.argv` when imported, so each new file imports only one of them. The new test classes copy the fixture helpers they need (for example `setUp = fixture.LoopTests.setUp`, as `tests/lib/autopilot_merge_path.py` about lines 18-30 does) and do not inherit the fixture test classes, so the existing suites do not run twice. `bin/ci.sh` runs every `tests/*.test.sh`, so no CI change is needed.",
+    "Red on base, settling: an `uncertain` gate job at an old head becomes `superseded` with `superseded_by` equal to the new head, also when stored with the string number `'12'`; a review-launch record with `path` empty at an old head becomes `superseded`; the settled job is not started again; exactly one `crew_status` event names the task, the kind and both heads and is sent with `FM_CREW_STATUS_SECS=0`; a failing emit leaves the job `superseded` and queues one wake naming the task, the kind and the error; a job whose pull request number is not open becomes `superseded` with `superseded_by` `closed`.",
+    "Red on base, effects of settling: after settling, a task with a failed merge card and a stale `uncertain` job gets a gate started by `advance()`; with the self queue in `drain`, a settled job without `queue_binding` no longer holds the drain on the next poll.",
+    "Red on base, stuck timer: conditions held for 1799 seconds queue no wake; at 1800 seconds exactly one wake with identity `stuck-<number>-<head>` names the task and the pull request; a later poll on the same head queues no second wake; a condition that fails after the timer started removes the entry, so the next wake needs another full 1800 seconds; an entry for a pull request that is no longer open is removed by `poll()`; a state file without a `stuck` key loads and the timer works.",
+    "Red on base, stuck wake text: each of the four reasons appears when it is the first that applies (`an uncertain gate job at <head>`, `replacement held: <reason>`, `a worker round is live`, `no reason found`); an `APPROVE` verdict at an older head still starts the timer, and the wake names that head.",
+    "Guards (green on base and after): an `uncertain` job on the current head stays `uncertain`, and `advance()` still raises no replacement merge card for its task; a job with no `kind` field and a job that carries `queue_binding` are untouched; the stuck timer does not start with a pending merge card, a pending check, a `mergeable_state` other than `clean`, a `REJECT` verdict, a running job of the task, a held round budget (a `parked` budget state), an open ask record at the current head, or `queue_mode` other than `off`; a head change restarts the timer."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "The autopilot settles an unfinished job on an old head or a closed pull request and never runs it again."
+        },
+        {
+          "kind": "fact",
+          "text": "An unfinished job on the current head still blocks a new merge card, as today."
+        },
+        {
+          "kind": "fact",
+          "text": "A ready pull request with no merge card for 30 minutes wakes firstmate once with a reason."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "A restart left an unfinished job that kept T-278 without a merge card for 10 hours."
+        },
+        {
+          "kind": "fact",
+          "text": "The only warning was one wake in the morning."
+        }
+      ],
+      "scope_in": [
+        "the autopilot loop",
+        "the autopilot service",
+        "new test suites"
+      ],
+      "scope_out": [
+        "the six gates",
+        "the merge card text",
+        "the self queue rules"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: tests show an old-head job and a closed pull request job become superseded."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: a guard shows a current-head job stays uncertain and still blocks."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: tests show one wake at 30 minutes, none before, and the reason text."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "It overlaps T-262 in the autopilot files."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Autopilot restarts"
+        },
+        {
+          "state": "gone",
+          "label": "Old job blocks card"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Autopilot restarts"
+        },
+        {
+          "state": "new",
+          "label": "Settle old job"
+        },
+        {
+          "state": "new",
+          "label": "Wake after 30 minutes"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Autopilot"
+          },
+          {
+            "label": "Firstmate"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "restart",
+            "label": "Autopilot restarts",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "stale",
+            "label": "Old job blocks card",
+            "lane": 0,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "settle",
+            "label": "Settle old job",
+            "lane": 0,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "card",
+            "label": "Merge card",
+            "lane": 1,
+            "kind": "step",
+            "state": "same"
+          },
+          {
+            "id": "ready",
+            "label": "Ready pull request",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "wake",
+            "label": "Wake after 30 minutes",
+            "lane": 1,
+            "kind": "focal",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "restart",
+            "to": "stale",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e2",
+            "from": "restart",
+            "to": "settle",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "settle",
+            "to": "card",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e4",
+            "from": "ready",
+            "to": "wake",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1"
+          ],
+          "after": [
+            "e2",
+            "e3"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "The autopilot settles an unfinished job whose head is old or whose pull request is closed.",
+            "intents": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": "c2",
+            "text": "A ready pull request with no merge card for 30 minutes wakes firstmate once.",
+            "intents": [
+              3
+            ]
+          }
+        ]
+      }
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "autopilot 結掉舊 head 或已關閉 PR 上的未完成 job，且不再執行它。"
+        },
+        {
+          "kind": "fact",
+          "text": "目前 head 上的未完成 job 照舊擋住新的 merge 卡。"
+        },
+        {
+          "kind": "fact",
+          "text": "就緒的 PR 30 分鐘沒有 merge 卡時，通知 firstmate 一次並寫明原因。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "重啟留下的未完成 job，讓 T-278 等了 10 小時都沒有 merge 卡。"
+        },
+        {
+          "kind": "fact",
+          "text": "唯一的警告是早上那一次通知。"
+        }
+      ],
+      "scope_in": [
+        "autopilot 迴圈",
+        "autopilot 服務",
+        "新測試"
+      ],
+      "scope_out": [
+        "六道關卡",
+        "merge 卡內容",
+        "self queue 規則"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：測試證明舊 head 和已關閉 PR 的 job 會標成 superseded。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：守門測試證明目前 head 的 job 仍是 uncertain 並照舊擋卡。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：測試證明 30 分鐘時通知一次、之前不通知，並寫明原因。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "它和 T-262 都改 autopilot 檔案。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "autopilot 重啟"
+        },
+        {
+          "state": "gone",
+          "label": "舊 job 擋住卡片"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "autopilot 重啟"
+        },
+        {
+          "state": "new",
+          "label": "結掉舊 job"
+        },
+        {
+          "state": "new",
+          "label": "30 分鐘後通知"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "autopilot"
+          },
+          {
+            "label": "firstmate"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "restart",
+            "label": "autopilot 重啟",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "stale",
+            "label": "舊 job 擋住卡片",
+            "lane": 0,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "settle",
+            "label": "結掉舊 job",
+            "lane": 0,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "card",
+            "label": "merge 卡",
+            "lane": 1,
+            "kind": "step",
+            "state": "same"
+          },
+          {
+            "id": "ready",
+            "label": "就緒的 PR",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "wake",
+            "label": "30 分鐘後通知",
+            "lane": 1,
+            "kind": "focal",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "restart",
+            "to": "stale",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e2",
+            "from": "restart",
+            "to": "settle",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "settle",
+            "to": "card",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e4",
+            "from": "ready",
+            "to": "wake",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1"
+          ],
+          "after": [
+            "e2",
+            "e3"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "autopilot 結掉 head 已過期或 PR 已關閉的未完成 job。",
+            "intents": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": "c2",
+            "text": "就緒的 PR 30 分鐘沒有 merge 卡時，通知 firstmate 一次。",
+            "intents": [
+              3
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
