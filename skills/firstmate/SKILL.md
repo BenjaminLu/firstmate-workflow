@@ -285,7 +285,8 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 - `bin/fm-autopilot.sh ensure --all --repo <root>` starts the session-owned
   supervisor for each registered project. A merged autopilot change reloads itself
   after its running jobs finish, so firstmate never kills the service. It observes PR events, runs gates on
-  worker heads, checks the standing-list protocol from round three, launches
+  worker heads, checks the standing-list protocol from round three (and before
+  the gate for an approval under the severity rule), launches
   review after gate exit 6, and reruns gates when approval or CI changes.
   After all six gates pass it requests the merge card with the gated head bound
   to the request. Your authored `state/decision-details/<id>.json` has priority;
@@ -301,6 +302,31 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   It never relaunches a worker or dispatches a new task. Dispatch stays with
   the board intent card or an explicit `bin/fm-dispatch.sh` call; a new worker
   round still needs your approved brief. Avoid competing loop owners.
+- Severity tags and the review round budget (T-276). Reviewers tag each
+  standing-list item `[must-fix]` or `[follow-up]`; an approval may leave
+  follow-ups open, and the autopilot checks the protocol before the gate for
+  such an approval. On the wake "approved with <n> open follow-ups", read
+  `fm_evidence.py follow-ups --task <id>`, group the items into proposed
+  tasks and raise one choice card with `--purpose decision` that lists them;
+  nothing is dispatched until the captain answers, as for every other
+  proposal. Each task gets `review_budget:` from the engine `config.yaml`
+  (`rounds`, `stall`, `extend`). A marked REJECT that uses up the rounds, or
+  leaves one must-fix item open for `stall` consecutive rounds, stops the task:
+  the autopilot raises a captain card (narrow the scope, park, or continue
+  `extend` more rounds) and wakes you with "round budget reached ... captain
+  card <id>". For an external project the wake says "author the round budget
+  card": raise that choice card yourself with no private text in public
+  output, then run `fm_round_budget.py record-card --task <id> --id <decision
+  id>` inside the project environment (`fm_storage_init`). Other wakes are
+  "round budget card failed" (raise the card by hand and run `record-card`),
+  "parked by the captain" (answer B) and "captain chose to narrow the scope"
+  (answer A). Do not brief or dispatch a stopped, parked or narrowed task:
+  `bin/fm-worker.sh` refuses it with exit 65. For answer A, write a smaller
+  spec, preflight it and raise the usual repin card; the repin, approved after
+  the answer, with a SPEC-OK for its exact bytes, releases the task. A task
+  with no spec pin resumes only through a new budget card the captain answers
+  C. `fm_round_budget.py history --task <id>` prints the full round history
+  from private state.
 - `bin/fm-gate.sh` checks six gates, numbered 1 branch, 2 rebase, 3 scope, 4 fail-first, 5 ci and 6 approval. Gate 4 runs
   only the suites the diff touches, falling back to the whole `check` only
   when it cannot tell which, and says so. Gate runs on one machine are

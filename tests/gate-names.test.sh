@@ -108,7 +108,8 @@ with patch.dict(os.environ,FM_TARGET_ROOT=str(work),FM_STATE_DIR=str(state),FM_E
 calls=[]
 fake=SimpleNamespace(landed=lambda *a:False,policy={'review':'fm'},
     authoritative_head=lambda *a:head, launch_review=lambda *a:calls.append(('review',a)),
-    attention=lambda *a:calls.append(('attention',a)),merge_card=lambda *a:calls.append(('merge',a)))
+    attention=lambda *a:calls.append(('attention',a)),merge_card=lambda *a:calls.append(('merge',a)),
+    round_budget=lambda *a:{'state':'within','card':None})
 for code, expected in [(6,'review'),(0,'merge'),(3,'stopped at gate 3 (scope)'),(5,'stopped at gate 5 (ci)'),(70,'gate run failed (exit 70)')]:
     Loop.job_completed(fake,dict(kind='gate',task='T-X',pr={'head':{'sha':head}},code=code,round=1,base=base))
     assert expected==calls[-1][0] or expected in calls[-1][1][3], (code,calls)

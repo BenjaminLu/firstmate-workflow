@@ -76,6 +76,11 @@ preflight_source=()
 [ -z "$preflight_ref" ] || preflight_source=(--spec-ref "$preflight_ref")
 fm_pin preflight --task "$TASK" --require-preflight "$(fm_evidence_project)" \
   ${preflight_source[@]+"${preflight_source[@]}"} || exit 65
+# T-276: a task stopped at its review round budget, parked or waiting for a
+# narrowed repin starts no round; the captain's card decides. The engine
+# checkout's own config.yaml holds the budget.
+python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_round_budget.py" check --state "$FM_STATE_DIR" \
+  --project "$(fm_evidence_project)" --task "$TASK" --config "$REPO/config.yaml" || exit 65
 
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 fm_external_prepare || exit 65

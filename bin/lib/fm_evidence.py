@@ -118,6 +118,12 @@ def item_is_open(body, task, earlier):
     return any(label + ':' + task in head for label in ('REGRESSION', 'NEW-GROUND'))
 
 
+def severity(body):
+    """T-276: `follow-up` when the item's first line carries only that tag; else `must-fix`."""
+    head = body.splitlines()[0] if body else ''
+    return 'follow-up' if '[follow-up]' in head and '[must-fix]' not in head else 'must-fix'
+
+
 GIT_ESCAPES = {'a': 7, 'b': 8, 'f': 12, 'n': 10, 'r': 13, 't': 9, 'v': 11, '"': 34, '\\': 92}
 
 
@@ -373,25 +379,37 @@ def fixes_brief(store, next_round, head):
         raise Refused('the REJECT fails the review protocol: ' + '; '.join(errors))
     earlier = any(criteria(r['text'], store.task) for r in verdicts[:positions[-1]])
     proposals = fixes(record['text'], store.task, earlier)
-    decision = any(entry['kind'] == 'decision' for entry in proposals.values())
+    items = criteria(record['text'], store.task)
+    # T-276: a follow-up's decision does not hold the must-fix work.
+    later = {number for number, body in items if severity(body) == 'follow-up'}
+    decision = any(entry['kind'] == 'decision' and number not in later for number, entry in proposals.items())
     folder = store.state / 'briefs'
     path = folder / f'{store.task}-r{next_round}-{head[:12]}-{record["signature"][:8]}-review-fixes.md'
     if path.exists():
         return path, decision
+
+    def proposal(number, entry):
+        content = entry['content']
+        longest = max((len(run) for run in re.findall(r'`+', content)), default=0)
+        fence = '`' * max(3, longest + 1)
+        info = ('diff' if entry['kind'] == 'patch' else 'text') + f' fix-{number}'
+        return f'\n{fence}{info}\n{content}{fence}\n\n{check_line(record.get("fix_checks"), number)}\n'
     output = []
-    for number, body in criteria(record['text'], store.task):
+    for number, body in items:
         entry = proposals.get(number, {})
         if not entry.get('open'):
             output.append(f'{number}. deferred: done in the reviewed round; keep as is\n')
+        elif number in later:
+            # Fixed after the must-fix items; the reviewer's proposal stays below.
+            output.append(f'{number}. deferred: follow-up, not needed for approval: {body.splitlines()[0]}\n')
+            if entry['kind'] == 'decision':
+                output.append(f'   proposed captain question: {entry["content"]}\n')
+            elif entry['kind']:
+                output.append(proposal(number, entry))
         elif entry['kind'] == 'decision':
             output.append(f'{number}. deferred: captain decision needed: {entry["content"]}\n')
         else:
-            content = entry['content']
-            longest = max((len(run) for run in re.findall(r'`+', content)), default=0)
-            fence = '`' * max(3, longest + 1)
-            info = ('diff' if entry['kind'] == 'patch' else 'text') + f' fix-{number}'
-            output.append(f'{number}. fix: {body.splitlines()[0]}\n\n{fence}{info}\n{content}{fence}\n\n'
-                          f'{check_line(record.get("fix_checks"), number)}\n')
+            output.append(f'{number}. fix: {body.splitlines()[0]}\n' + proposal(number, entry))
     output.append(f'\nSource: reviewer {record["actor"]}, round {record["round"]}, '
                   f'head {record["head"]}, signature {record["signature"]}\n')
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -440,6 +458,19 @@ def protocol(records, task):
             # T-272: verdicts retained before the field are judged by the old rules.
             for entry in fixes(record['text'], task, earlier=bool(previous)).values():
                 errors.extend(entry['errors'])
+        if record.get('severity_protocol') == 1:
+            # T-276: verdicts retained before the field keep the old rules.
+            must = []
+            for n, body in items:
+                head = body.splitlines()[0] if body else ''
+                if '[must-fix]' in head and '[follow-up]' in head:
+                    errors.append(f'item {n} has two severity tags')
+                if item_is_open(body, task, bool(previous)) and severity(body) == 'must-fix':
+                    must.append(n)
+            if record['verdict'] == 'REJECT' and not must:
+                errors.append('REJECT has no open must-fix item')
+            if record['verdict'] == 'APPROVE':
+                errors.extend(f'APPROVE leaves must-fix item {n} open' for n in must)
         previous.update(current)  # a dropped item remains standing until restored
     return errors
 
@@ -669,7 +700,8 @@ def retain_verdict(store, args):
                         merge_card=merge_card, merge_card_status=merge_card_status,
                         reviewer=identity, login=os.environ.get('FM_REVIEWER_LOGIN', os.environ['FM_ACTOR']),
                         provenance=provenance, binding=binding, attempt=args.attempt, vendor=args.vendor,
-                        model=identity.get('model', 'unknown'), fix_protocol=1, fix_checks=checks)
+                        model=identity.get('model', 'unknown'), fix_protocol=1, fix_checks=checks,
+                        severity_protocol=1)
 
 
 def pinned_scope(run, task, head):
@@ -701,6 +733,23 @@ def avoided_reviewer(store):
         found = re.match(r'^reviewer-(.+)-([a-z0-9]+)-r([0-9]+)([a-z]*)$', rejects[-1].get('actor', ''))
         name = found[1] if found else ''
     return name or ''
+
+
+def follow_ups(store):
+    """Open follow-up items left by the task's latest verdict when it is an APPROVE (T-276).
+
+    From that APPROVE's own list, else from the latest earlier list.
+    """
+    verdicts = store.verdicts()
+    if not verdicts or verdicts[-1].get('verdict') != 'APPROVE':
+        return []
+    for index in range(len(verdicts) - 1, -1, -1):
+        items = criteria(verdicts[index]['text'], store.task)
+        if items:
+            earlier = any(criteria(r['text'], store.task) for r in verdicts[:index])
+            return [dict(number=n, line=body.splitlines()[0]) for n, body in items
+                    if item_is_open(body, store.task, earlier) and severity(body) == 'follow-up']
+    return []
 
 
 def summary(store):
@@ -745,7 +794,7 @@ def summary(store):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin', 'summary',
-                                            'experiment-retain', 'fixes-brief', 'avoid-reviewer'])
+                                            'experiment-retain', 'fixes-brief', 'avoid-reviewer', 'follow-ups'])
     parser.add_argument('--state', required=True)
     parser.add_argument('--project', required=True)
     parser.add_argument('--task', required=True)
@@ -798,6 +847,8 @@ def main():
         print(path)
     elif args.command == 'avoid-reviewer':
         print(avoided_reviewer(store))
+    elif args.command == 'follow-ups':
+        print(json.dumps(follow_ups(store), ensure_ascii=False))
     elif args.command == 'history':
         print(store.history(args.reviewer))
     elif args.command == 'protocol':
