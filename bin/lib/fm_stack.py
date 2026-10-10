@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 
-from fm_binding import command, fetch_ref, git, github, remote_head, sha
+from fm_binding import command, fetch_ref, transfer, git, github, remote_head, sha
 from fm_conventions import read_policy
 import fm_adopt
 
@@ -83,7 +83,7 @@ def release_parent(root, repository, branch, expected, policy, adopted_branch=Fa
     # A final downstream check immediately precedes the expected-head deletion.
     if not deletable(repository, branch):
         return
-    git(root, 'push', '--force-with-lease=refs/heads/' + branch + ':' + sha(expected),
+    transfer(root, 'push', '--force-with-lease=refs/heads/' + branch + ':' + sha(expected),
         'https://github.com/' + repository + '.git', ':refs/heads/' + branch)
     worktrees = git(root, 'worktree', 'list', '--porcelain')
     if 'branch refs/heads/' + branch + '\n' not in worktrees + '\n':
@@ -201,7 +201,7 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
             # A failed push is ambiguous: the remote may already have accepted it.
             push_attempted = True
             try:
-                git(tree, 'push', '--force-with-lease=refs/heads/' + branch + ':' + expected,
+                transfer(tree, 'push', '--force-with-lease=refs/heads/' + branch + ':' + expected,
                     url, 'HEAD:refs/heads/' + branch)
             except (ValueError, OSError, subprocess.SubprocessError) as error:
                 raise RestackPushUnknown('push outcome unknown for ' + branch +
@@ -224,7 +224,7 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
                 if attached:
                     git(attached, 'checkout', branch)
                 # Update only the tracking ref; never overwrite a local base's work.
-                git(root, 'fetch', '--no-tags', url,
+                transfer(root, 'fetch', '--no-tags', url,
                     'refs/heads/' + target + ':refs/remotes/origin/' + target)
                 release = 'retained by policy or open dependents'
                 try:

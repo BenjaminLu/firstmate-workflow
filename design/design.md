@@ -4419,14 +4419,62 @@ Git network calls inherit stall bounds from `fm-config.sh`: SSH appends
 `-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4`
 to an existing `GIT_SSH_COMMAND` unless it already contains
 `ServerAliveInterval`. An explicit `GIT_SSH` executable is left alone.
-Otherwise the base is `git config --get core.sshCommand`, or `ssh`.
+Otherwise config exports a quoted frozen `bin/lib/fm-ssh-transfer.sh` command
+without running Git or reading the helper. Named engine network calls use
+`fm_git_transfer` or `fm_git_transfer.prepare(argv,cwd,env,code_root)` before
+starting Git. Each call resolves `core.sshCommand` with the actual cwd, Git
+global options (`-C`, `-c`, `--config-env`), `GIT_DIR` and inherited
+`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_COUNT` configuration intact. Git clears
+these variables before SSH; fetch, push and `ls-remote` helpers dispatch the
+prepared child-only command without querying again. Preparation adds the three
+OpenSSH options only when the resolved SSH variant is `ssh` (OpenSSH):
+`GIT_SSH_VARIANT=ssh`; or, with it unset, `ssh.variant=ssh`; or, with both
+unset or `auto`, a resolved program named `ssh` (or `ssh.exe`). Simple, plink,
+putty and tortoiseplink, and an unrecognized program that Git probes with `-G`,
+receive no options, because they reject them. Preparation still sets
+`GIT_SSH_VARIANT` from the resolved configuration or recognized program name,
+so Git and the helper agree.
+
+A clone gets no firstmate SSH time limit. Its named boundary only removes
+firstmate's generated `GIT_SSH_COMMAND` (the value equal to
+`FM_SSH_GENERATED_COMMAND`) and internal `FM_SSH_` variables from the clone's
+child environment, then runs Git with the clone arguments unchanged. An
+operator `GIT_SSH_COMMAND` or `GIT_SSH` passes through exactly as config
+sourcing left it. Git alone reads every configuration layer, applies
+`ssh.variant` and starts the transport, as for a clone the operator types;
+preparation reads no configuration and never touches the destination. If the
+remote stops answering, a clone waits until SSH itself or the operator gives up:
+this is the accepted tradeoff.
+
+Unknown contexts and unavailable configuration refuse before actual SSH. Only config exit 1 means absent/default `ssh`;
+other config errors refuse. Operator `GIT_SSH_COMMAND` then `GIT_SSH` retain
+precedence. Quoted identities, explicit SSH variants and transport failure
+status are preserved with the same timeout policy.
+
+The audited shell callers are worker ls-remote/fetch/push (including rebuild),
+checkpoint push, carry-base self/external fetch, project clone/fetch, review clone/fetch and spec-preflight
+clone/fetch. Python callers are binding private fetch, stack push/fetch,
+autopilot review fetch and onboarding clone; Pilot checked/probe/command
+forward prepared child environments. Local Git calls and raw operator Git
+are unchanged. Preparation uses each caller's frozen code, never a live
+replacement or cached source-time repository selection.
 HTTPS defaults to `GIT_HTTP_LOW_SPEED_LIMIT=1000` and
 `GIT_HTTP_LOW_SPEED_TIME=60`, preserving values already set. A stalled
 transfer typically ends within 60–80 seconds; a slow but live transfer can
-run longer. The SSH base is resolved once in the repository sourcing config:
-a later `git -C` call overrides that clone's own `core.sshCommand` with the
-exported value. Managed clones set none today; a project needing a deploy key
-uses `GIT_SSH_COMMAND` or a global `core.sshCommand` instead.
+run longer.
+
+`FM_SSH_GENERATED_COMMAND` equals the exact generated command. Config sourcing
+rebinds it to that config copy's helper only when the current command still
+equals the marker. Changed operator commands clear stale ownership and retain
+precedence. Freeze, reload and updated-owner fallback therefore use their own
+copied helper without altering retained snapshots or pins. Unmarked commands
+inherited from an older engine remain explicit bounded commands: their old
+repository selection cannot be recovered automatically. Start a clean
+environment or unset `GIT_SSH_COMMAND` to obtain lazy repository selection.
+An old owner's failed candidate changes only its child environment; fallback
+keeps the original legacy owner environment. An unmodified old snapshot does
+not understand the new marker or gain per-call behavior; its raw Git calls
+retain their old behavior.
 
 `fm_github` and the round launchers' direct `fm_gh_read` calls bound each gh
 attempt to `FM_GH_TIMEOUT` seconds (default 120). The foreground Perl runner
@@ -4486,7 +4534,8 @@ calls retain their limits. Short operator calls in `fm-merge.sh`,
   credential, the board's own Origin and a JSON body (section 8, the board's
   trust boundary; T-122). The secret lives in the operator's config
   directory, never in the repository or `state/`.
-- Adapters may not run git or gh; a worker never holds a GitHub token.
+- Adapters may not run git or gh, including startup config sourcing; a worker
+  never holds a GitHub token.
 - The board binds `127.0.0.1` and opens no external port.
 - The engine repository is public; credentials, customer content and private
   external designs/task lists must not enter it. The former public-only project

@@ -568,13 +568,13 @@ class Pilot(BranchUpdates, MechanicalLoop):
             self.queue('conventions-invalid-' + key(str(error)), '',
                        'Conventions unavailable: ' + str(error), '專案慣例無法驗證；需要判斷')
 
-    def probe(self, argv):
+    def probe(self, argv, *, env=None):
         result = subprocess.run(argv, stdin=subprocess.DEVNULL, text=True,
-                                capture_output=True, timeout=120)
+                                capture_output=True, timeout=120, **({} if env is None else {"env": env}))
         return result.returncode, result.stdout, result.stderr
 
-    def checked(self, argv):
-        rc, stdout, stderr = self.probe(argv)
+    def checked(self, argv, *, env=None):
+        rc, stdout, stderr = self.probe(argv, **({} if env is None else {"env": env}))
         if rc:
             raise self.probe_error(argv, stderr)
         return stdout

@@ -236,10 +236,10 @@ class ReviewerWakeCases:
     def test_external_refused_name_does_not_block_other_requests(self):
         pr = self.external_request_setup()
         original = self.pilot.probe
-        def probe(argv):
+        def probe(argv, *, env=None):
             self.review_answer = (recheck_response(422, 'Unprocessable Entity', {'message':'not a collaborator'})
                                   if 'reviewers[]=Rev' in argv else recheck_response(201, 'Created', pr))
-            return original(argv)
+            return original(argv, env=env)
         self.pilot.probe = probe
         self.pull_at(pr); self.pull_at(pr)
         self.assertEqual(len(self.review_posts), 2)
