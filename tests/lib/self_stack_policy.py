@@ -355,7 +355,9 @@ def restacked(policy, parent_base, tmp):
     run = subprocess.run
     def rebase(argv, **kwargs):
         if argv[0] != 'git': return run(argv, **kwargs)
-        return subprocess.CompletedProcess(argv, 0, '', '')
+        empty = '' if kwargs.get('text') or kwargs.get('universal_newlines') else b''
+        if 'config' in argv: return subprocess.CompletedProcess(argv, 1, empty, empty)
+        return subprocess.CompletedProcess(argv, 0, empty, empty)
     import fm_adopt
     with patch.object(fm_stack, 'adopted_child', return_value=(None, None)), \
          patch.object(fm_adopt, 'scan', return_value=({}, {}, {})), \
