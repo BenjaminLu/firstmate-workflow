@@ -22,7 +22,8 @@ Existing user authorization persists across turns for routine, already-authorize
 coordination of work already dispatched, without repeated confirmation.
 Dispatching a task is not routine: propose it and wait for the captain's go
 before dispatching (Standing orders, below). Scope and product decisions,
-proposal green lights and every merge remain board decisions. A request to
+proposal green lights and every merge remain board decisions; the one
+exception is the small-change tier below (Small changes, T-277). A request to
 finish all PRs and elapsed time are neither captain merge approval nor
 permission to widen scope. Continue independent authorized tasks while a
 decision waits.
@@ -70,7 +71,9 @@ The captain's own rules, restated here where they are easy to find:
 3. A hand-raised decision id (`D-<digits>`, for the one card with no owning
    task) is picked from `D-1000` up, never an id below it.
 4. A task's `scope` lists every file its acceptance criteria need changed;
-   sweep for one that does not before dispatch.
+   sweep for one that does not before dispatch. The one exception is a
+   small-change record (Small changes, T-277): exact test or documentation
+   paths within the fixed budget, or a typo fix, need no scope card.
 5. Route no round to a vendor that is out of quota until its quota resets;
    T-124 will automate that check.
 6. codex is a supported vendor that was out of quota on 2026-09-27, not a
@@ -1606,3 +1609,37 @@ that both edit §15.10 itself can still meet at the end of the file. Every other
 home is mid-file. Existing specs that list design/design.md without naming a
 section are checked at their next preflight; a SPEC-OK already recorded for a
 spec's exact current bytes stays valid.
+
+## Small changes (T-277)
+
+A small change skips spec preflight and the captain's repin card. It is either
+a path record (1 to 5 exact files under `tests/`, `docs/` or `README.md` that
+the pinned scope does not cover) or an erratum (a typo fix in the pinned title
+or one acceptance line). A pin version takes at most 3 records.
+
+- When a worker's `SCOPE-BLOCKED` or `ASK` request (a standalone marker line in
+  `.fm-say.md` that wakes you), a review finding, or your own reading needs only
+  test or documentation lines in exact paths within the budget (+20 -20 lines in
+  total across all record paths, no binary file), or only a typo fix, create
+  the record from the operator shell, outside any round:
+
+  ```
+  bin/fm-project.sh small-change --project <p> --task <t> --origin <worker-ask|review-finding|firstmate> \
+    --ref <source> --reason-en <text> --reason-tw <text> (--path <path>... | --erratum <title|acceptance:N> --after <text>)
+  ```
+
+  It prints the record. Brief the next round with the record number. Raise no
+  card. The worker and reviewer prompts list the record, gate 3 accepts its
+  paths within the budget, and the merge card lists every record with its
+  review status.
+- The command refuses (exit 65) inside a round, while a merge card for the task
+  is pending, after the captain answered A and the merge did not fail, past the
+  limit, and for any path, typo or reason text outside the rules. Write the
+  reason in plain STE text: the merge card shows it.
+- An erratum must keep the meaning. The typo guard only filters mechanically;
+  the meaning check is your judgment and the reviewer's. A record never lifts a
+  B, C or failed-merge hold.
+- Anything else stays a board scope card, as today: any production file, glob,
+  change of meaning, external project, or a fourth record. At that repin, fold
+  the earlier records into the amended spec: the record paths join `scope` and
+  the errata are applied to the text.
