@@ -18,11 +18,17 @@ isolate_tmpdir
 
 # This suite itself may run under a wrapper (the workflow step's, or the
 # gate's on CI). Every folder holding one leaves PATH here, or the probes
-# would see its settings on the base too and prove nothing.
+# would see its settings on the base too and prove nothing. A wrapper is the
+# `#!/bin/sh` script fm_git_quiet writes; a real git binary (which holds the
+# text maintenance.auto too) is never one, so its folder stays.
+is_git_quiet_wrapper() {
+  [ -f "$1" ] && [ "$(head -n 1 "$1" 2>/dev/null)" = '#!/bin/sh' ] \
+    && grep -q -- '-c maintenance\.autoDetach=false' "$1" 2>/dev/null
+}
 unwrapped=''
 IFS=: read -r -a path_dirs <<< "$PATH"
 for dir in "${path_dirs[@]}"; do
-  if [ -f "$dir/git" ] && grep -q 'maintenance\.auto' "$dir/git" 2>/dev/null; then continue; fi
+  if is_git_quiet_wrapper "$dir/git"; then continue; fi
   unwrapped="${unwrapped:+$unwrapped:}$dir"
 done
 PATH="$unwrapped"; export PATH
