@@ -138,9 +138,9 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.pilot.data['jobs'] = {'legacy': dict(state='done', path=str(path))}
         self.gate_result()
         self.assertEqual([c[0] for c in self.calls], ['review'])
-    def probe(self, argv):
+    def probe(self, argv, *, env=None):
         self.calls.append(('probe', argv))
-        return self.branch_probe(argv)
+        return self.branch_probe(argv, env=env)
     def command(self, argv, **kwargs):
         self.calls.append(('command', argv))
         if argv[:2] == ['bash', '-c']:
@@ -591,11 +591,11 @@ class LoopTests(BranchFixture, unittest.TestCase):
         self.lagging(); self.worktree = None
         # Limit the failure to the public-ref CAS, leaving private cleanup intact.
         original = self.pilot.probe
-        def racing(argv):
+        def racing(argv, *, env=None):
             if argv[3] == 'update-ref' and argv[4].startswith('refs/heads/'):
                 self.calls.append(('probe', argv))
                 return 1, '', 'fatal: ref changed'
-            return original(argv)
+            return original(argv, **({} if env is None else {"env": env}))
         self.pilot.probe = racing
         self.sync_poll()
         expected = ['git', '-C', str(self.root), 'update-ref',

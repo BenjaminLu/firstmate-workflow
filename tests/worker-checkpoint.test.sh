@@ -16,6 +16,7 @@ mkdir -p "$rc/bin" "$rc/design" "$rc/state/worktrees"
 . "$ROOT/tests/lib/config-modules.sh"
 cp "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-config.sh" \
    "$ROOT/bin/fm-emit.sh" "$rc/bin/"; config_modules_fixture "$rc/bin/"
+cp "$ROOT/bin/lib/fm_git_transfer.py" "$ROOT/bin/lib/fm-ssh-transfer.sh" "$rc/bin/lib/"
 printf 'base\n' > "$rc/README"; git -C "$rc" add README; git -C "$rc" commit -qm base
 git -C "$rc" remote add origin "$barec"; git -C "$rc" push -q -u origin main
 git -C "$rc" branch -q t-ck-branch

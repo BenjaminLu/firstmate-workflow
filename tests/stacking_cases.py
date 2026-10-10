@@ -5,7 +5,7 @@ import tempfile
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from stacking_fixture import restack_fixture, record_conflict_stderr
+from stacking_fixture import restack_fixture, record_conflict_stderr, network_fixture
 from unittest.mock import patch
 import fm_stack as stack
 import fm_binding as binding
@@ -29,9 +29,11 @@ class Stacking(unittest.TestCase):
     def test_local_gate_unstacked_base_needs_no_remote_sha_check(self):
         with patch.object(binding, 'repository', return_value='owner/repo'), \
              patch.object(binding, 'remote_head', return_value={'baseRefName': 'main'}), \
-             patch.object(binding, 'git') as git:
+             patch.object(binding, 'git') as git, network_fixture() as network:
             self.assertEqual(binding.local_gate_base('/repo', 9, 'main'), 'main')
             git.assert_not_called()
+            network.assert_not_called()
+            network.prepared.assert_not_called()
 
     def test_local_gate_stacked_base_still_refuses_stale_ref(self):
         with patch.object(binding, 'repository', return_value='owner/repo'), \
@@ -143,21 +145,27 @@ class Stacking(unittest.TestCase):
         policy = dict(delete_branch=True, base='main')
         with patch.object(stack, 'deletable', return_value=True), \
              patch.object(stack, 'github', return_value=dict(protected=False)), \
-             patch.object(stack, 'git', return_value='') as git:
+             patch.object(stack, 'git', return_value='') as git, \
+             network_fixture() as network:
             # REGRESSION: arbitrary human branches cannot be released.
             with self.assertRaisesRegex(ValueError, 'non-task parent'):
                 stack.release_parent('/repo', 'owner/repo', 'human-parent', A, policy)
             # FAIL-FIRST: pinned adoption permits expected-head parent release.
             stack.release_parent('/repo', 'owner/repo', 'human-parent', A, policy, adopted_branch=True)
-            self.assertTrue(any('push' in c.args for c in git.call_args_list))
+            network.assert_called_once_with('/repo', 'push',
+                '--force-with-lease=refs/heads/human-parent:' + A,
+                'https://github.com/owner/repo.git', ':refs/heads/human-parent')
+            git.assert_any_call('/repo', 'update-ref', '-d', 'refs/heads/human-parent', A)
 
     def test_unadopted_human_parent_release_refused(self):
         # REGRESSION: human branch deletion without adoption is refused on base.
-        with patch.object(stack, 'deletable', return_value=True), patch.object(stack, 'git') as git:
+        with patch.object(stack, 'deletable', return_value=True), patch.object(stack, 'git') as git, network_fixture() as network:
             with self.assertRaisesRegex(ValueError, 'non-task parent'):
                 stack.release_parent('/repo', 'owner/repo', 'human-parent', A,
                                      dict(delete_branch=True, base='main'))
             git.assert_not_called()
+            network.assert_not_called()
+            network.prepared.assert_not_called()
 
     def test_adopted_restack_identity_authorization(self):
         # FAIL-FIRST against round-one head: metadata projection must retain safety fields.
@@ -171,14 +179,18 @@ class Stacking(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, reason): run()
                 self.assertFalse(any(call.args[1] in ('push', 'worktree', 'update-ref') for call in git.call_args_list))
                 edit.assert_not_called()
+                git.network.assert_not_called()
+                git.network.prepared.assert_not_called()
         for identity in ({}, {'headRefName': 'feature/t-002-child', 'title': 'T-002: child'}):
             with restack_fixture(adopted=True, identity=identity) as (run, git, edit, tmp):
                 self.assertEqual(run()['adopt_pr'], 2)
         for identity in ({'title': 'T-999: changed'}, {'isCrossRepository': True}):
             with restack_fixture(adopted=True, changed_identity=identity) as (run, git, edit, tmp):
                 with self.assertRaises(ValueError): run()
-                self.assertFalse(any(call.args[1] == 'push' for call in git.call_args_list))
+                self.assertFalse(any(call.args[1] == 'push' for call in git.network.call_args_list))
                 edit.assert_not_called()
+                git.network.assert_not_called()
+                git.network.prepared.assert_not_called()
 
     def test_adopted_restack_guards_and_retarget(self):
         for retargeted in (False, True):
@@ -194,6 +206,8 @@ class Stacking(unittest.TestCase):
             with restack_fixture(adopted=True, **options) as (run, git, edit, tmp):
                 with self.assertRaisesRegex(ValueError, reason): run()
                 self.assertFalse(any('push' in c.args or 'worktree' in c.args for c in git.call_args_list))
+                git.network.assert_not_called()
+                git.network.prepared.assert_not_called()
         # FAIL-FIRST: no previous round means no local child ref or objects.
         with restack_fixture(adopted=True, local=ValueError('absent')) as (run, git, edit, tmp):
             self.assertEqual(run()['adopt_pr'], 2)
@@ -202,6 +216,8 @@ class Stacking(unittest.TestCase):
         with restack_fixture(adopted=True, local=ValueError('absent'), fetched=A) as (run, git, edit, tmp):
             with self.assertRaisesRegex(ValueError, 'fetched child head differs'): run()
             self.assertFalse(any('push' in c.args or 'update-ref' in c.args for c in git.call_args_list))
+            git.network.assert_not_called()
+            git.network.prepared.assert_not_called()
         for adopted_parent in (False, True):
             with restack_fixture(adopted=True, parent_adopted=adopted_parent) as (run, git, edit, tmp), \
                  patch.object(stack, 'release_parent') as release:
@@ -275,7 +291,8 @@ class Stacking(unittest.TestCase):
              patch.object(stack, 'fetch_ref', side_effect=[base, A]) as fetch, \
              patch.object(stack, 'git', side_effect=git_answer) as git, \
              patch.object(stack.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as rebase, \
-             patch.object(stack, 'command') as command:
+             patch.object(stack, 'command') as command, \
+             network_fixture() as network:
             result = stack.restack('/repo', 'owner/repo', 2, 1, B,
                 {'force_with_lease': True, 'base': 'main', 'stacking': 'allowed', 'delete_branch': False}, tmp)
             self.assertEqual(result['head'], new)
@@ -283,12 +300,13 @@ class Stacking(unittest.TestCase):
                 ('/repo', 'https://github.com/owner/repo.git', 'refs/heads/main'),
                 ('/repo', 'https://github.com/owner/repo.git', 'refs/pull/1/head')])
             calls = [call.args[1:] for call in git.call_args_list]
+            network_calls = [call.args[1:] for call in network.call_args_list]
             tree = next(c.args[4] for c in git.call_args_list if c.args[1:3] == ('worktree', 'add'))
             rebase.assert_called_once_with(['git', '-C', tree, '-c', 'core.hooksPath=/dev/null',
                 'rebase', '--onto', base, A], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
             self.assertEqual(list(Path(tmp).glob('restack-*')), [])
             self.assertIn(('push', '--force-with-lease=refs/heads/t-2-child:' + B,
-                           'https://github.com/owner/repo.git', 'HEAD:refs/heads/t-2-child'), calls)
+                           'https://github.com/owner/repo.git', 'HEAD:refs/heads/t-2-child'), network_calls)
             self.assertIn(('update-ref', 'refs/heads/t-2-child', new, B), calls)
             self.assertEqual(command.call_args.args[0][-2:], ['--base', 'main'])
 
@@ -312,7 +330,8 @@ class Stacking(unittest.TestCase):
              patch.object(stack, 'fetch_ref', side_effect=[base, A]) as fetch, \
              patch.object(stack, 'git', side_effect=git_answer) as git, \
              patch.object(stack.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as rebase, \
-             patch.object(stack, 'command') as command:
+             patch.object(stack, 'command') as command, \
+             network_fixture() as network:
             result = stack.restack('/repo', 'owner/repo', 2, 1, B,
                 {'force_with_lease': True, 'base': 'main', 'stacking': 'allowed', 'delete_branch': False}, tmp)
             self.assertEqual(result['head'], new)
@@ -320,12 +339,13 @@ class Stacking(unittest.TestCase):
                 ('/repo', 'https://github.com/owner/repo.git', 'refs/heads/main'),
                 ('/repo', 'https://github.com/owner/repo.git', 'refs/pull/1/head')])
             calls = [call.args[1:] for call in git.call_args_list]
+            network_calls = [call.args[1:] for call in network.call_args_list]
             tree = next(c.args[4] for c in git.call_args_list if c.args[1:3] == ('worktree', 'add'))
             rebase.assert_called_once_with(['git', '-C', tree, '-c', 'core.hooksPath=/dev/null',
                 'rebase', '--onto', base, A], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
             self.assertEqual(list(Path(tmp).glob('restack-*')), [])
             self.assertIn(('push', '--force-with-lease=refs/heads/feature/t-2-child:' + B,
-                           'https://github.com/owner/repo.git', 'HEAD:refs/heads/feature/t-2-child'), calls)
+                           'https://github.com/owner/repo.git', 'HEAD:refs/heads/feature/t-2-child'), network_calls)
             self.assertIn(('update-ref', 'refs/heads/feature/t-2-child', new, B), calls)
             self.assertEqual(command.call_args.args[0][-2:], ['--base', 'main'])
 
@@ -350,21 +370,26 @@ class Stacking(unittest.TestCase):
                  patch.object(stack, 'fetch_ref', side_effect=['d' * 40, A]), \
                  patch.object(stack, 'git', side_effect=answer) as git, \
                  patch.object(stack.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')), \
-                 patch.object(stack, 'command') as command:
+                 patch.object(stack, 'command') as command, \
+                 network_fixture() as network:
                 with self.assertRaisesRegex(ValueError, 'dirty'):
                     stack.restack('/repo', 'owner/repo', 2, 1, B,
                         {'force_with_lease': True, 'base': 'main', 'stacking': 'allowed'}, tmp)
-                self.assertFalse(any(call.args[1] == 'push' for call in git.call_args_list))
+                self.assertFalse(any(call.args[1] == 'push' for call in network.call_args_list))
                 command.assert_not_called()
+                network.assert_not_called()
+                network.prepared.assert_not_called()
 
     def test_restack_remote_move_precedes_local_ref_read(self):
         child = dict(headRefName='t-2-child', headRefOid='c' * 40)
-        with patch.object(stack, 'remote_head', return_value=child), patch.object(stack, 'git') as git:
+        with patch.object(stack, 'remote_head', return_value=child), patch.object(stack, 'git') as git, network_fixture() as network:
             with self.assertRaisesRegex(stack.RestackMoved, 'task head changed on GitHub') as caught:
                 stack.restack('/repo', 'owner/repo', 2, 1, B,
                               dict(base='main', stacking='allowed', force_with_lease=True), '/unused')
             self.assertIsInstance(caught.exception, ValueError)
             self.assertFalse(any(c.args[1] == 'rev-parse' for c in git.call_args_list))
+            network.assert_not_called()
+            network.prepared.assert_not_called()
 
     def test_restack_stale_and_missing_local_refs(self):
         for local in ('d' * 40, ValueError('unknown revision')):
@@ -383,7 +408,9 @@ class Stacking(unittest.TestCase):
             with self.assertRaises(stack.RestackConflict) as caught: run()
             self.assertIsInstance(caught.exception, ValueError)
             self.assertEqual(str(caught.exception), 'rebase conflict restacking onto main: ' + last)
-            self.assertFalse(any(c.args[1] == 'push' for c in git.call_args_list))
+            self.assertFalse(any(c.args[1] == 'push' for c in git.network.call_args_list))
+            git.network.assert_not_called()
+            git.network.prepared.assert_not_called()
             self.assertEqual(list(scratch.glob('restack-*')), [])
             command.assert_not_called()
 
@@ -398,7 +425,9 @@ class Stacking(unittest.TestCase):
             with self.assertRaisesRegex(stack.RestackMoved, 'child moved during restack; nothing published') as caught:
                 run()
             self.assertIsInstance(caught.exception, ValueError)
-            self.assertFalse(any(c.args[1] == 'push' for c in git.call_args_list))
+            self.assertFalse(any(c.args[1] == 'push' for c in git.network.call_args_list))
+            git.network.assert_not_called()
+            git.network.prepared.assert_not_called()
 
     def test_restack_push_failure_is_unknown_even_when_cleanup_fails(self):
         for error in (ValueError("error: failed to push some refs to 'https://github.com/owner/repo.git'"),
@@ -488,51 +517,61 @@ class Stacking(unittest.TestCase):
             self.assertTrue((Path(tmp) / 'runs/.worker-T-2.lock').exists())
 
     def test_last_dependent_release_obeys_policy(self):
-        with patch.object(stack, 'deletable', return_value=False), patch.object(stack, 'git') as git:
+        with patch.object(stack, 'deletable', return_value=False), patch.object(stack, 'git') as git, network_fixture() as network:
             stack.release_parent('/repo', 'owner/repo', 't-1-parent', A,
                                  {'delete_branch': True, 'base': 'main'})
             git.assert_not_called()
-        with patch.object(stack, 'deletable', return_value=True), patch.object(stack, 'git') as git:
+            network.assert_not_called()
+            network.prepared.assert_not_called()
+        with patch.object(stack, 'deletable', return_value=True), patch.object(stack, 'git') as git, network_fixture() as network:
             stack.release_parent('/repo', 'owner/repo', 't-1-parent', A,
                                  {'delete_branch': False, 'base': 'main'})
             git.assert_not_called()
+            network.assert_not_called()
+            network.prepared.assert_not_called()
 
     def test_last_dependent_release_uses_parent_lease(self):
         with patch.object(stack, 'deletable', return_value=True), \
              patch.object(stack, 'github', return_value={'protected': False}), \
-             patch.object(stack, 'git', return_value='') as git:
+             patch.object(stack, 'git', return_value='') as git, \
+             network_fixture() as network:
             stack.release_parent('/repo', 'owner/repo', 't-1-parent', A,
                                  {'delete_branch': True, 'base': 'main'})
-            git.assert_any_call('/repo', 'push', '--force-with-lease=refs/heads/t-1-parent:' + A,
+            network.assert_any_call('/repo', 'push', '--force-with-lease=refs/heads/t-1-parent:' + A,
                                 'https://github.com/owner/repo.git', ':refs/heads/t-1-parent')
             git.assert_any_call('/repo', 'update-ref', '-d', 'refs/heads/t-1-parent', A)
 
     def test_prefixed_parent_release_uses_parent_lease(self):
         with patch.object(stack, 'deletable', return_value=True), \
              patch.object(stack, 'github', return_value={'protected': False}), \
-             patch.object(stack, 'git', return_value='') as git:
+             patch.object(stack, 'git', return_value='') as git, \
+             network_fixture() as network:
             stack.release_parent('/repo', 'owner/repo', 'feature/t-1-parent', A,
                                  {'delete_branch': True, 'base': 'main'})
-            git.assert_any_call('/repo', 'push', '--force-with-lease=refs/heads/feature/t-1-parent:' + A,
+            network.assert_any_call('/repo', 'push', '--force-with-lease=refs/heads/feature/t-1-parent:' + A,
                                 'https://github.com/owner/repo.git', ':refs/heads/feature/t-1-parent')
             git.assert_any_call('/repo', 'update-ref', '-d', 'refs/heads/feature/t-1-parent', A)
 
     def test_prefixed_release_still_refuses_non_task_and_base(self):
-        with patch.object(stack, 'deletable', return_value=True), patch.object(stack, 'git') as git:
+        with patch.object(stack, 'deletable', return_value=True), patch.object(stack, 'git') as git, network_fixture() as network:
             for branch in ('feature', 'main', 'master', 'HEAD', 'feature/t-1-base', 'a/b/t-1-parent'):
                 with self.subTest(branch=branch), self.assertRaisesRegex(ValueError, 'protected/non-task'):
                     stack.release_parent('/repo', 'owner/repo', branch, A,
                                          {'delete_branch': True, 'base': 'feature/t-1-base'})
             git.assert_not_called()
+            network.assert_not_called()
+            network.prepared.assert_not_called()
 
     def test_unknown_parent_protection_retains_branch(self):
         with patch.object(stack, 'deletable', return_value=True), \
              patch.object(stack, 'github', return_value={}), \
-             patch.object(stack, 'git') as git:
+             patch.object(stack, 'git') as git, network_fixture() as network:
             with self.assertRaisesRegex(ValueError, 'protection'):
                 stack.release_parent('/repo', 'owner/repo', 't-1-parent', A,
                                      {'delete_branch': True, 'base': 'main'})
             git.assert_not_called()
+            network.assert_not_called()
+            network.prepared.assert_not_called()
 
 
 if __name__ == '__main__':

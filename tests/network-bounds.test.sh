@@ -8,11 +8,11 @@ d="$(safe_tmpdir)"
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 git init -q "$d/repo"
 cd "$d/repo" || exit 1
-unset GIT_SSH_COMMAND GIT_SSH GIT_HTTP_LOW_SPEED_LIMIT GIT_HTTP_LOW_SPEED_TIME
+unset FM_SSH_GENERATED_COMMAND GIT_SSH_COMMAND GIT_SSH GIT_HTTP_LOW_SPEED_LIMIT GIT_HTTP_LOW_SPEED_TIME
 # shellcheck source=bin/fm-config.sh
 . "$ROOT/bin/fm-config.sh"
 opts='-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4'
-assert_eq "ssh $opts" "${GIT_SSH_COMMAND:-}" 'default ssh is bounded'
+assert_eq "$FM_SSH_GENERATED_COMMAND" "$GIT_SSH_COMMAND" 'default ssh is lazy and owned'
 assert_eq 1000 "${GIT_HTTP_LOW_SPEED_LIMIT:-}" 'https minimum speed default'
 assert_eq 60 "${GIT_HTTP_LOW_SPEED_TIME:-}" 'https stall duration default'
 assert_eq '1000|60' "$(bash -c 'printf "%s|%s" "${GIT_HTTP_LOW_SPEED_LIMIT:-}" "${GIT_HTTP_LOW_SPEED_TIME:-}"')" 'https defaults are exported to child commands'
@@ -23,7 +23,7 @@ assert_eq 'custom -o ServerAliveInterval=9|7|8' "$(
 )" 'explicit keepalive and https settings survive'
 assert_eq "foo $opts" "$(export GIT_SSH_COMMAND=foo; . "$ROOT/bin/fm-config.sh"; printf '%s' "$GIT_SSH_COMMAND")" 'custom ssh gains bounds'
 git -C "$d/repo" config core.sshCommand 'ssh -i /tmp/key'
-assert_eq "ssh -i /tmp/key $opts" "$(cd "$d/repo" || exit 1; unset GIT_SSH_COMMAND; . "$ROOT/bin/fm-config.sh"; printf '%s' "$GIT_SSH_COMMAND")" 'repository ssh identity survives'
+
 assert_eq unset "$(unset GIT_SSH_COMMAND; export GIT_SSH=custom; . "$ROOT/bin/fm-config.sh"; printf '%s' "${GIT_SSH_COMMAND-unset}")" 'GIT_SSH executable is left alone'
 mkdir "$d/tools"
 cat > "$d/tools/ssh" <<'SH'
@@ -33,8 +33,8 @@ exit 255
 SH
 chmod +x "$d/tools/ssh"
 export NET_DIR="$d"
-PATH="$d/tools:$PATH" git ls-remote ssh://git@example.invalid/repo >/dev/null 2>&1
-assert_contains "$(cat "$d/ssh-args")" "$opts" 'git passes the timeout options to ssh'
+PATH="$d/tools:$PATH" fm_git_transfer git ls-remote ssh://git@example.invalid/repo >/dev/null 2>&1
+assert_contains "$(cat "$d/ssh-args")" "-i /tmp/key $opts" 'actual transfer preserves repository identity and timeout options'
 cat > "$d/gh" <<'SH'
 #!/usr/bin/env bash
 echo "$$" >> "$NET_DIR/calls"

@@ -26,9 +26,10 @@ class GitStub:
         self.failure = None
         self.deleted = []
 
-    def command(self, argv):
+    def command(self, argv, *, env=None):
         assert argv[:3] == ['git', '-C', '/repo'], argv
         args = argv[3:]
+        assert env == ({'FM_FIXTURE_TRANSFER': 'private'} if args[0] == 'fetch' else None), env
         if args[:1] == ['fetch']:
             assert args[:3] == ['fetch', '--no-tags', 'https://github.com/owner/repo.git'], args
             source, sep, dest = args[3].lstrip('+').partition(':')
@@ -61,6 +62,11 @@ class GitStub:
 
 
 class PrivateFetch(unittest.TestCase):
+    def setUp(self):
+        preparation = patch.object(binding, 'prepare', side_effect=lambda argv, **kw:
+                                   (argv, {'FM_FIXTURE_TRANSFER': 'private'}))
+        preparation.start(); self.addCleanup(preparation.stop)
+
     def test_interleaved_authoritative_prs_keep_their_own_heads(self):
         stub = GitStub()
         results = {}
@@ -105,9 +111,9 @@ class PrivateFetch(unittest.TestCase):
         pilot.ctx = dict(target='/repo', repository='owner/repo')
         stub = GitStub()
         stub.failure = 'fetch'
-        def command(argv):
+        def command(argv, *, env=None):
             try:
-                return stub.command(argv).decode()
+                return stub.command(argv, env=env).decode()
             except ValueError as error:
                 raise RuntimeError('autopilot fetch refused') from error
         pilot.command = command

@@ -145,7 +145,7 @@ touch "$2/launched"
         for name in ('build_checkout', 'rebuild_checkout'):
             with self.subTest(name=name):
                 body = function(root / 'bin/fm-review.sh', name)
-                clone = body[body.index('  git clone '):body.rfind('\n}')]
+                clone = body[body.index('  fm_git_transfer git clone '):body.rfind('\n}')]
                 checkout = self.path / name
                 p = self.shell('REPO="$2/engine-without-git"; FM_TARGET_ROOT="$2/target"; '
                                'CHECKOUT="$2/' + name + '"; R_HEAD=' + head +

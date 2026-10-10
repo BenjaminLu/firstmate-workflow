@@ -447,8 +447,8 @@ build_checkout() {
   OWNER_LOCK_HELD=1
   printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   CHECKOUT="$CHECKOUT_ROOT/checkout"
-  git clone -q --no-checkout --no-hardlinks "${FM_TARGET_ROOT:-$REPO}" "$CHECKOUT" &&
-    git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
+  fm_git_transfer git clone -q --no-checkout --no-hardlinks "${FM_TARGET_ROOT:-$REPO}" "$CHECKOUT" &&
+    fm_git_transfer git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
     git -C "$CHECKOUT" remote remove origin
@@ -510,8 +510,8 @@ rebuild_checkout() {
   OWNER_LOCK_HELD=1
   printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   CHECKOUT="$CHECKOUT_ROOT/checkout"
-  git clone -q --no-checkout --no-hardlinks "${FM_TARGET_ROOT:-$REPO}" "$CHECKOUT" &&
-    git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
+  fm_git_transfer git clone -q --no-checkout --no-hardlinks "${FM_TARGET_ROOT:-$REPO}" "$CHECKOUT" &&
+    fm_git_transfer git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
     git -C "$CHECKOUT" remote remove origin

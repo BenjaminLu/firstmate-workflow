@@ -24,17 +24,24 @@ class Checks(unittest.TestCase):
         self.env.start(); self.addCleanup(self.env.stop)
         for target, kwargs in [('remote_head', dict(side_effect=lambda *a: dict(self.view))),
                                ('command', dict(side_effect=self.fetch)),
+                               ('prepare', dict(side_effect=self.prepare)),
                                ('git', dict(return_value=B)), ('github', dict(side_effect=self.github))]:
             p = patch.object(m, target, **kwargs); p.start(); self.addCleanup(p.stop)
-    def fetch(self, argv):
+    def prepare(self, argv, *, cwd, env, code_root):
+        self.assertIsNone(cwd)
+        self.assertEqual(argv[:4], ['git', '-C', '/fixture', 'fetch'])
+        return argv, dict(env, FM_TEST_TRANSFER='required-check')
+    def fetch(self, argv, *, env=None):
         self.assertEqual(argv[:3], ['git', '-C', '/fixture'])
         args = argv[3:]
         if args[0] == 'fetch':
+            self.assertEqual(env, dict(os.environ, FM_TEST_TRANSFER='required-check'))
             self.assertEqual(args[:3], ['fetch', '--no-tags', 'https://github.com/owner/repo.git'])
             source, self.fetched_ref = args[3].split(':')
             self.assertEqual(source, '+refs/heads/' + self.view['baseRefName'])
             self.assertTrue(self.fetched_ref.startswith('refs/fm/fetch/'))
             return b''
+        self.assertIsNone(env, 'local ref reads and cleanup retain ordinary environment')
         if args[0] == 'rev-parse':
             self.assertEqual(args, ['rev-parse', self.fetched_ref])
             return B.encode()
