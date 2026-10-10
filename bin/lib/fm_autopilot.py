@@ -1006,15 +1006,41 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     self.branch_failure('update', number, head, task, str(error))
         self.save()
 
+    def retro_due(self, rows=None):
+        """T-273: the self project's poll asks bin/lib/fm_retro.py whether a
+        retrospective is due and queues one wake per window. It never starts a
+        retro, runs a model or raises a card; external projects never ask."""
+        if self.ctx['external'] or Path(self.ctx['state']).resolve() != Path(self.ctx['engine']).resolve() / 'state':
+            return
+        try:
+            import fm_retro
+        except ImportError:
+            return
+        try:
+            now = time.monotonic()
+            cached = getattr(self, '_retro_projects', None)
+            if cached is None or now - cached[0] > 600:
+                cached = (now, fm_retro.load_projects(fm_retro.Retro(self.ctx['engine'])))
+                self._retro_projects = cached
+            events = None if rows is None else {str(Path(self.ctx['state']).resolve()): rows}
+            due = fm_retro.due_state(self.ctx['engine'], now=self.clock(), projects=cached[1], events=events)
+        except Exception:  # a retro problem never stops the poll
+            return
+        if due.get('due'):
+            self.queue(due['identity'], None, 'retro due', '回顧到期')
+
     def poll(self):
         self.data['poll_seq'] += 1
         self.refresh_queue()
         self._queue_snapshot_ready = False
         if self.policy_error:
+            self.retro_due()
             self.data['next_poll'] = self.clock() + self.policy['watch_seconds']
             return
         try:
             self._poll_rows = self.rows()
+            # the retro due check shares this poll's one read of the event log
+            self.retro_due(self._poll_rows)
             if self.ctx['external']:
                 self.adoptions()
             pulls = self.pages('pulls?state=open')

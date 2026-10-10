@@ -18,6 +18,9 @@
 # nothing in the prompt is what stops it.
 #
 #   fm-review.sh --task T-004 --branch <name> [--repo .] [--pr 9] [--round 1]
+#   fm-review.sh --retro <run-id> --project <name> | --retro <run-id> --retro-cross
+#     (T-273: one retrospective round; routed to bin/lib/fm-retro-review.sh
+#     before any pull request, pin or verdict logic)
 #   FM_REVIEW_CI_WAIT=<seconds, default 1200>  FM_REVIEW_CI_POLL=<seconds, default 30>
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
@@ -40,11 +43,13 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
 fm_args=("$@")
 
 REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''; ROUND_GIVEN=''
-SPEC_PREFLIGHT=''; SPEC_FILE=''; CARD_FILE=''; PR_AUTHORING_FILE=''
+SPEC_PREFLIGHT=''; SPEC_FILE=''; CARD_FILE=''; PR_AUTHORING_FILE=''; RETRO=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --spec-preflight) SPEC_PREFLIGHT=1; shift ;;
+    --retro) fm_need "fm-review" "$@"; RETRO="${2-}"; shift; shift ;;
+    --retro-cross) RETRO=${RETRO:-cross}; shift ;;
     --spec) fm_need "fm-review" "$@"; SPEC_FILE="${2-}"; shift 2 ;;
     --card) fm_need "fm-review" "$@"; CARD_FILE="${2-}"; shift 2 ;;
     --pr-authoring) fm_need "fm-review" "$@"; PR_AUTHORING_FILE="${2-}"; shift 2 ;;
@@ -59,6 +64,11 @@ while [ $# -gt 0 ]; do
     *) echo "fm-review: unknown argument $1" >&2; exit 64 ;;
   esac
 done
+# A retrospective round has its own launcher, reached before anything here
+# reads a task, a pull request, a pin or a verdict (T-273).
+if [ -n "$RETRO" ]; then
+  exec bash "${FM_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}/bin/lib/fm-retro-review.sh" ${fm_args[@]+"${fm_args[@]}"}
+fi
 [ -n "$TASK" ] && { [ -n "$BRANCH" ] || [ -n "$SPEC_PREFLIGHT" ]; } || {
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
 # How long a round given --pr waits for the head's required checks before it

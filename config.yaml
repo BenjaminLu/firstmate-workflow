@@ -18,6 +18,9 @@ reviewer:               # the reviewer's engine is the captain's choice
                         # models.claude above
   mode:   run           # diff: the reviewer reads the diff; run: it also runs
                         # the tests in a fresh checkout of the pull request
+retro:                  # the periodic retrospective's rounds (T-273): their own
+  vendor: claude        # vendor and model, so reviewer and worker settings stay
+  model:  claude-opus-5-5   # as they are; missing either, a retro refuses (65)
 # worker:               # the same override exists for the worker; without it
 #   vendor: codex       # the worker uses the top-level vendor above. A role's
 #   model:  o1          # model: overrides models.<vendor> for its own vendor only
