@@ -552,6 +552,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
 
     def reload_policy(self):
         if not self.ctx['external']:
+            self.reload_self_stack_policy()
             return
         try:
             policy = read_policy(self.state.parent / 'CONVENTIONS.md', self.ctx['repository'], self.ctx['base'])
@@ -567,6 +568,17 @@ class Pilot(BranchUpdates, MechanicalLoop):
             self.policy_error = str(error)
             self.queue('conventions-invalid-' + key(str(error)), '',
                        'Conventions unavailable: ' + str(error), '專案慣例無法驗證；需要判斷')
+
+    def reload_self_stack_policy(self):
+        """T-278: the captain-written runtime file sets stacking and force_with_lease only."""
+        from fm_stack import read_self_policy
+        fields, problems = read_self_policy(self.state)
+        for identity, en, tw in problems:
+            self.queue('self-stack-policy-' + key(identity), '',
+                       'Self stack policy invalid; stacking held: ' + en,
+                       '自身堆疊政策無效；暫停堆疊：' + tw)
+        for name in ('stacking', 'force_with_lease'):
+            self.policy[name] = (fields or DEFAULTS)[name]
 
     def probe(self, argv, *, env=None):
         result = subprocess.run(argv, stdin=subprocess.DEVNULL, text=True,
