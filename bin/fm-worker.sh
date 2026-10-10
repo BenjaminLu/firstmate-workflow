@@ -1575,7 +1575,17 @@ worker_changed_files() {
       ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]
 }
 worker_did_work() {
-  worker_changed_files || [ -s "$tree/.fm-say.md" ]
+  worker_changed_files || say_has_words "$tree/.fm-say.md"
+}
+# The local test results (T-275) are not the worker speaking: a note is read
+# with its results block removed. A block that does not strip (truncated, or
+# a file that does not read) leaves the whole note counting, as before, so a
+# malformed block never hides what the worker wrote.
+say_has_words() {   # say_has_words <note>
+  local out
+  [ -s "$1" ] || return 1
+  out="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_local_tests.py" strip "$1" 2>/dev/null </dev/null && printf x)" || return 0
+  [ "$out" != x ]
 }
 # A rebuild that applied - nothing unresolved handed to the worker - is
 # this round's work on its own, and is published whatever the worker did
@@ -1613,6 +1623,81 @@ policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
 fm_policy worker "" "$FM_CONFIG" > "$policy_file" || {
   echo "fm-worker: config.yaml's crew policy does not read; no round runs without one" >&2; exit 65; }
 export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
+# Local test runs (T-275; design 13.1): a read-only folder beside pinned/
+# with the runner and its plan, which the sandbox grants the round. Only
+# what this run built is ever granted, so an inherited folder is dropped
+# first; a folder that cannot be built leaves the round as it was before.
+unset FM_LOCAL_TESTS_DIR
+local_tests_why=''
+local_tests_contract() {   # the approved pin's contract, else the project's
+  local template tests docs unrunnable kv envs=()
+  if [ -n "$FM_SPEC_PIN_JSON" ] && jq -e '.contract | type == "object"' <<<"$FM_SPEC_PIN_JSON" >/dev/null 2>&1; then
+    jq -c '.contract' <<<"$FM_SPEC_PIN_JSON"
+    return
+  fi
+  template="$(fm_project test)" && tests="$(fm_project tests)" && docs="$(fm_project docs)" \
+    && unrunnable="$(fm_project unrunnable)" || return 1
+  while IFS= read -r -d '' kv; do envs+=("$kv"); done < <(fm_project check_env)
+  jq -cn --arg test "$template" --arg tests "$tests" --arg docs "$docs" --arg unrunnable "$unrunnable" '
+    {test:$test, tests:($tests | split("\n") | map(select(length > 0))),
+     docs:($docs | split("\n") | map(select(length > 0))), unrunnable:$unrunnable,
+     check_env:($ARGS.positional | map(capture("^(?<key>[^=]*)=(?<value>.*)$"; "s")) | from_entries)}
+  ' --args ${envs[@]+"${envs[@]}"}
+}
+local_tests_build() {
+  local dir="$FM_RUN_DIR/local-tests" contract base jobs
+  rm -rf "$dir" 2>/dev/null
+  mkdir -m 0755 "$dir" 2>/dev/null || { local_tests_why="the folder $dir could not be created"; return 1; }
+  if ! cp "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_local_tests.py" "$dir/runner.py" 2>/dev/null \
+      || ! chmod 0444 "$dir/runner.py"; then
+    local_tests_why='the runner could not be copied'; return 1
+  fi
+  base="$(git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null)" || base=''
+  jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null)" || jobs=1
+  [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || jobs=1
+  [ "$jobs" -le 3 ] || jobs=3
+  if ! contract="$(local_tests_contract)" || [ -z "$contract" ] \
+      || ! jq -n --argjson c "$contract" --arg base "$base" --argjson jobs "$jobs" \
+           --slurpfile policy "$policy_file" '
+        # fm-local-tests-plan: never the contract check, which CI runs
+        def text: if type == "string" and length > 0 then . else null end;
+        {schema:1, base:($base | text), tests:($c.tests // []), test:($c.test | text),
+         check_env:($c.check_env // {}), docs:($c.docs // []), unrunnable:($c.unrunnable | text),
+         budget_seconds:($policy[0].test_budget // 900), network:($policy[0].network // []),
+         suite_seconds:300, jobs:$jobs}' > "$dir/plan.json" 2>/dev/null \
+      || ! chmod 0444 "$dir/plan.json"; then
+    local_tests_why='the plan could not be written'; return 1
+  fi
+}
+if local_tests_build && local_tests_dir="$(cd "$FM_RUN_DIR/local-tests" && pwd -P)"; then
+  export FM_LOCAL_TESTS_DIR="$local_tests_dir"
+else
+  rm -rf "$FM_RUN_DIR/local-tests" 2>/dev/null
+  local_tests_why="${local_tests_why:-the folder path could not be resolved}"
+  printf 'fm-worker: local tests are unavailable in this round: %s\n' "$local_tests_why" >> "$log"
+fi
+{
+  printf '\n---\n\n# Local tests\n\n'
+  if [ -n "${FM_LOCAL_TESTS_DIR:-}" ]; then
+    printf 'Before you finish, run the tests related to your change, from the worktree:\n\n'
+    printf '    python3 %s/runner.py run\n\n' "$FM_LOCAL_TESTS_DIR"
+    if [ "$(jq -r '.test // empty' "$FM_LOCAL_TESTS_DIR/plan.json")" = '' ]; then
+      printf 'This project declares no way to run one suite, so the runner runs nothing.\n\n'
+    fi
+    printf 'The runner picks the suites your change touches, runs them in this sandbox within\n'
+    printf 'the time budget, and writes the results into `.fm-say.md`.\n\n'
+    printf -- '- Name with `--case <name>` the test cases you added or changed, so firstmate can\n'
+    printf '  see what you meant to test (each selected suite still runs as a whole file).\n'
+    printf -- '- Add `--suite <path>` for a suite the brief names.\n'
+    printf -- '- Fix a failing suite and run the runner again.\n'
+    printf -- '- Never run `bin/ci.sh`, the project check or a whole test folder: CI does that.\n'
+    printf -- '- A suite reported as `not runnable here` needs something this sandbox does not\n'
+    printf '  give. Leave it to CI and do not work around it.\n'
+    printf -- '- Do not edit the results block in `.fm-say.md` by hand.\n'
+  else
+    printf 'Local tests are unavailable in this round: %s. CI still runs the tests.\n' "$local_tests_why"
+  fi
+} >> "$prompt"
 # config.yaml's model, applied (T-127): each vendor's own (T-146), which
 # fm_run_chain resolves for whichever vendor an attempt runs - --vendor's,
 # or a fallback's - and hands it as FM_MODEL; a refusal it writes is
@@ -1770,10 +1855,34 @@ rm -f "$prompt"
 if [ -n "$pin_warning" ]; then
   printf '\n%s\n' "$pin_warning" >> "$say"
 fi
+# The round's local test results (T-275): counts only on the board, never a
+# path or a name from the report, and never a gate input or an exit.
+local_tests_record() {
+  local got rc p f t n s
+  if [ ! -e "$say" ]; then rc=3; else
+    got="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_local_tests.py" summary "$say" 2>/dev/null </dev/null)"; rc=$?
+  fi
+  case "$rc" in
+    0)
+      p="$(jq -r .passed <<<"$got")"; f="$(jq -r .failed <<<"$got")"
+      t="$(jq -r .timed_out <<<"$got")"; n="$(jq -r .not_runnable <<<"$got")"
+      s="$(jq -r .not_run <<<"$got")"
+      FM_CREW_STATUS_SECS=0 emit --type crew_status \
+        --data "$(jq -cn --argjson summary "$got" '{evidence_event:"local_tests",local_tests:$summary}')" \
+        --en "Local tests: $p passed, $f failed, $t timed out, $n not runnable here, $s not run" \
+        --tw "本機測試：通過 ${p}、未通過 ${f}、執行過久 ${t}、無法在此執行 ${n}、未執行 ${s}" ;;
+    3) printf '%s\n' 'fm-worker: the round reported no local test results' >> "$log" ;;
+    *) FM_CREW_STATUS_SECS=0 emit --type crew_status \
+         --data '{"evidence_event":"local_tests","local_tests":{"valid":false}}' \
+         --en 'Local tests: the results block does not read' --tw '本機測試：結果無法讀取' ;;
+  esac
+}
+local_tests_record
 asked=0
-[ -s "$say" ] && asked=1
+say_has_words "$say" && asked=1
 # Retain first, even when no PR exists or optional publication later fails.
-if [ "$asked" = 1 ]; then
+# The whole note, results block included, whenever it is not empty.
+if [ -s "$say" ]; then
   fm_evidence report --round "$round_number" --actor "$NAME" --head "$round_head" --file "$say" || {
     echo "fm-worker: local report retention failed; preserving the note for recovery" >&2
     mkdir -p "$FM_STATE_DIR/unsent"
@@ -1809,6 +1918,7 @@ plain_lint() {  # plain_lint <source> <text>: advisory plain-writing lint (T-270
 post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
+  local note_body="$1"
   if [ "$FM_EXTERNAL" = 1 ]; then
     fm_private_note worker-report "$TASK" "$1" || return 1
     if [ "$projection" != comments ]; then
@@ -1824,13 +1934,40 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
       spoke=1
       return 0
     fi
+    # T-275: the public comment never carries the local test results; the
+    # private record above keeps them. No block that strips, no comment.
+    note_body="$(scratch_new)" || note_body=''
+    [ -z "$note_body" ] || scratch_add "$note_body"
+    if [ -z "$note_body" ] \
+        || ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_local_tests.py" strip "$1" > "$note_body" 2>/dev/null </dev/null; then
+      printf '%s\n' 'fm-worker: the local test results could not be removed from the note; no comment is posted and the private record is kept' >> "$log"
+      [ "$projection" != comments ] || printf '%s\n' 'fm-worker: plain-writing lint skipped: the results block does not read' >> "$log"
+      spoke=1
+      return 0
+    fi
+    if [ ! -s "$note_body" ]; then
+      spoke=1
+      return 0
+    fi
   fi
   [ "$projection" = comments ] || return 0
-  local body="$1" landed=0 retries=0 lookup_rc delay marker_hex
+  local body="$note_body" landed=0 retries=0 lookup_rc delay marker_hex lint_body="$note_body"
   local retry_delays=()
+  # T-275: the lint reads the note without the results block (the external
+  # body is stripped above), so suite paths and assertion names stay out of
+  # the log; a block that does not strip skips the lint.
+  if [ "$FM_EXTERNAL" = 0 ]; then
+    lint_body="$(scratch_new)" || lint_body=''
+    [ -z "$lint_body" ] || scratch_add "$lint_body"
+    if [ -z "$lint_body" ] \
+        || ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_local_tests.py" strip "$1" > "$lint_body" 2>/dev/null </dev/null; then
+      lint_body=''
+      printf '%s\n' 'fm-worker: plain-writing lint skipped: the results block does not read' >> "$log"
+    fi
+  fi
   # Advisory only (T-270): plain-writing findings go to firstmate's log, and
   # the note is posted whatever they say.
-  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plain.py" lint "$1" --source worker-note \
+  [ -z "$lint_body" ] || python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plain.py" lint "$lint_body" --source worker-note \
     --log "$FM_STATE_DIR/runtime/plain-writing.jsonl" >/dev/null 2>&1 </dev/null || true
   if [ "$FM_EXTERNAL" = 0 ]; then
     marker_hex="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1")" || return 1

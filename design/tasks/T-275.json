@@ -1,0 +1,491 @@
+{
+  "id": "T-275",
+  "title": "Workers run only the tests related to their change inside the round's sandbox and report the results as local evidence",
+  "public_title": "Let workers run only the tests for their change before they finish",
+  "milestone": "M2",
+  "depends_on": [
+    "T-270"
+  ],
+  "scope": [
+    "bin/lib/fm_local_tests.py",
+    "bin/fm-worker.sh",
+    "bin/lib/fm_registry.py",
+    "bin/fm-config.sh",
+    "bin/lib/fm_sandbox_policy.py",
+    "bin/adapters/_contract.md",
+    "skills/worker/SKILL.md",
+    "skills/firstmate/SKILL.md",
+    "design/design.md",
+    "design/tasks/T-275.json",
+    "tests/local-tests.test.sh",
+    "tests/lib/local_tests.py",
+    "tests/sandbox-kernel.test.sh"
+  ],
+  "acceptance": [
+    "Why. Today a worker never runs a test. The worker instructions say so twice (`skills/worker/SKILL.md` about line 49, 'Workers do not run suites', and about line 266), and so do the firstmate instructions (`skills/firstmate/SKILL.md` rule 5 about line 595 and rule 6 about line 609) and the design (`design/design.md` section 15.7, about lines 6385 and 6553). So the only feedback a worker gets is GitHub CI: the round ends, the launcher pushes, CI takes 10 to 20 minutes, firstmate reads the logs and writes a brief, and a new round starts. Most red runs in recent rounds were failures that one local run of the changed suite would have shown. The captain approved this change on 2026-10-09 as part of the improvement plan, and on 2026-10-10 added one limit: a worker runs only the tests related to what it changed. The whole project check stays the job of CI, because it takes 10 minutes or more and most of it tests code the round did not touch.",
+    "How. The launcher (`bin/fm-worker.sh`, the script that starts a worker round) gives each round a small test runner and a plan file in a read-only folder. The worker runs that runner before it finishes. The runner finds the test suites that cover the changed files, runs them inside the round's sandbox (the operating-system jail that a round runs in) within a time limit, and writes one result per suite into `.fm-say.md` (the file a worker uses to talk to firstmate). The launcher keeps that file as the round's report, as today, and adds one status event with the counts. These results are local evidence only: CI and the six gates still decide whether a change can merge.",
+    "Runner. A new file, `bin/lib/fm_local_tests.py`, holds the runner. It uses only the Python standard library and starts no network connection. It has three commands: `run`, which the worker starts inside the round, and `summary` and `strip`, which the launcher starts outside the round. The runner never imports another firstmate module, because inside the round only its own folder is readable. It is a file of its own, not a program embedded in a shell script, so the five-line limit for embedded programs (`tests/lib/launcher_python.py`) is not affected.",
+    "Runner folder. After the round's policy file is written (`bin/fm-worker.sh` about line 1610) and before the adapter starts, the launcher creates `<run directory>/local-tests/` (`FM_RUN_DIR/local-tests`), beside the existing `pinned/` folder. It holds exactly two regular files, both mode 0444: `runner.py`, a byte copy of `bin/lib/fm_local_tests.py` from the code the launcher runs (`${FM_CODE_ROOT:-$REPO}`), and `plan.json`. The folder is mode 0755 and owned by the current user. The launcher exports its path as `FM_LOCAL_TESTS_DIR`.",
+    "Plan file. `plan.json` holds: `schema` 1; `base`, the merge-base of the base branch and the round's head, computed as `fm_prompt_identity` already computes it (`git -C \"$tree\" merge-base \"$BASE\" HEAD`, `bin/fm-worker.sh` about line 1412), or `null` when that fails; `tests`, `test`, `check_env`, `docs` and `unrunnable` from the project contract (not `check`: the runner never runs the whole project check); `budget_seconds` from the policy (see the policy requirement); `network`, the policy's declared registries; `suite_seconds` 300; and `jobs`, the number of online CPUs capped at 3. The runner refuses a plan that is not this shape with exit 70.",
+    "Contract source. The contract fields in `plan.json` come from the approved pin's contract (`.contract` in `FM_SPEC_PIN_JSON`, the same source `bin/fm-worker.sh` about line 2255 reads for `unrunnable`). When the pin has no contract, they come from the project's contract through `fm_project` in `bin/fm-config.sh`, as `bin/fm-failfirst.sh` does when it runs without `--contract` (about line 166). The worker never reads `config.yaml` for this.",
+    "When the folder cannot be built. The launcher first unsets any `FM_LOCAL_TESTS_DIR` it inherited, so a failed build can never grant another round's folder. If it then cannot create the folder, copy the runner or write the plan, it removes what it made, does not export `FM_LOCAL_TESTS_DIR`, writes one line to the round's log that names the reason, and the round runs as today. The prompt then says that local tests are unavailable in this round and why. A failure here never stops or fails the round and never changes what the adapter receives or what is published.",
+    "Prompt. After the folder is built, the launcher appends a section `# Local tests` to the round's prompt (`.fm-prompt.md`). It names the exact command, `python3 <run directory>/local-tests/runner.py run`, run from the worktree, and says: run it before you finish; name with `--case <name>` the test cases you added or changed, so firstmate can see what you meant to test (each selected suite still runs as a whole file); add `--suite <path>` for a suite the brief names; fix a failing suite and run it again; never run `bin/ci.sh`, the project check or a whole test folder, because CI does that; a suite reported as not runnable here needs something this sandbox does not give, so leave it to CI and do not work around it; do not edit the results block by hand. When the plan has no `test` template, the section says that this project declares no way to run one suite, so the runner runs nothing.",
+    "Changed files. The runner lists the changed files as the union of `git --no-optional-locks diff --name-only --no-renames <base>` (staged and unstaged changes against the plan's base) and `git --no-optional-locks ls-files --others --exclude-standard` (new untracked files), run in the worktree. It leaves out `.fm-say.md` and `.fm-prompt.md`. `--no-optional-locks` keeps git from writing the index, which the sandbox does not allow. When `base` is `null`, the runner compares against `HEAD` and says in its output that only uncommitted changes were counted.",
+    "Selection. A suite is a file that matches the plan's `tests` globs, with the same matching rule as `matches` in `bin/fm-failfirst.sh` (about line 178: shell patterns, and a leading `**/` also matches at the top level). The runner selects, in this order: first every suite named with `--suite`; then every changed suite that still exists; then every suite in the worktree whose text names the file name (the last path part) of a changed file, with the same boundary rule `bin/fm-failfirst.sh` uses for helper files (about line 236: `(^|[^A-Za-z0-9._-])<name>([^A-Za-z0-9._-]|$)`). The last group is capped. It counts only suites that no earlier group selected; a `--suite` suite or a changed suite that also names a changed file stays in its earlier group, runs, and has exactly one row. When more than 3 suites are left in the last group, the runner runs none of them and reports each as `not run` with the exact reason `more than 3 suites name a changed file; CI runs them`. A changed file that matches the plan's `docs` globs selects no suite. Each suite is selected once.",
+    "Why selection is narrow. The captain asked that a worker run only the tests related to its change (2026-10-10). A changed suite and a suite the brief names are related by definition. A suite that only mentions a changed file name may be related, so the runner runs it only when few suites do (3 or fewer); when a widely used file changes, many suites mention it, and running them all would be the whole check in disguise, which is CI's job. This differs from the fail-first check (gate 4, which runs in CI): that check selects an unchanged suite only when a changed test helper names it (`bin/fm-failfirst.sh` about line 228). `bin/fm-failfirst.sh` does not change.",
+    "Order. Within the last group (when it runs at all), suites that name more changed files run first; ties go to the smaller file, then to the path in byte order. Suites named with `--suite` and changed suites keep their group order and are sorted by path.",
+    "Running a suite. The runner fills the `test` template with the shell-quoted path, as `fill` in `bin/fm-failfirst.sh` does, and runs it the way the fail-first runner `ONE_SH` does (`bin/fm-failfirst.sh` about line 523): from the worktree, under `bash -c`, with `FIRSTMATE_CI_SESSION` and `FM_SESSION_PID` set to the pid of the shell that runs the suite, `FM_ROOT` set to the worktree, `LC_ALL` empty, `LC_MESSAGES=C`, the plan's `check_env` added, and standard input from `/dev/null`. It runs at most `jobs` suites at once.",
+    "Test cases. `--case <name>` may be given more than once. Each `--case` applies to the `--suite` right before it, or, when no `--suite` comes before it, to every changed suite. A test case is one named test inside a suite file (for example a unittest method or a Playwright test title). In this task the runner records the names but cannot run one case alone: the contract's `test` template has only the `{file}` placeholder, which gate 4 (`fill` in `bin/fm-failfirst.sh` about line 203) and the contract checks also read, and this repository's shell suites are a list of assertions with no named cases. So a suite with `--case` names runs as one whole suite file, and its row's Detail starts with `case filter not supported:` followed by the names. A `{case}` placeholder, and case names inside the shell suites, are a separate task that must also change gate 4. The worker still names its cases, so firstmate can see what the round meant to test. `--case` names that apply to no selected suite (no `--suite` before them and no changed suite) run nothing and add no row; `run` prints one line, `--case names matched no suite`, and the exit code does not change. The runner never runs a suite that no rule above selected.",
+    "Processes. Each suite runs in a process group of its own, made with `os.setpgrp` in the child. The runner never starts a new session and never uses `start_new_session`, `setsid`, `nohup` or `disown`, matching the rule that `tests/lifeline.test.sh` enforces elsewhere. A suite is a foreground child of the runner with a deadline. When a suite's shell exits, the runner sends SIGTERM to that suite's process group, then SIGKILL 5 seconds later, so a descendant it left behind does not outlive it. When the runner receives SIGTERM, SIGINT or SIGHUP, it does the same for every running suite and probe, writes no block, and exits 143, 130 or 129. The runner holds no lifeline of its own (`bin/lib/fm_lifeline.py` is not readable inside the round): if the runner itself is killed with SIGKILL, the round's existing teardown, which ends the round's whole process tree when the round ends (design section 13.1), is what ends its suites. The runner promises nothing beyond that.",
+    "Time limits. The whole run stops starting new suites when `budget_seconds` is used up. Each suite gets at most `suite_seconds` or the time left in the budget, whichever is smaller. When a suite passes its limit, the runner sends SIGTERM to its process group, then SIGKILL 5 seconds later, and reports it as timed out. A selected suite that never started is reported as not run because the budget was used up.",
+    "Results. The runner reads assertion lines with the same pattern the fail-first report uses (`bin/fm-failfirst.sh` about line 279: `^    (.+?) *(ok|FAIL)$`). Each suite gets exactly one of these results: `passed` (exit 0); `failed` (non-zero exit, with up to 5 failing assertion names); `timed out`; `not runnable here` (see the next two requirements); `not run` (budget used up, or left out by the 3-suite cap in the selection requirement; the Detail says which); or `not a suite` (the template ran, printed nothing and exited 0, which is what this project's template does for a helper file such as a `.py` file under `tests/lib/`). `not a suite` rows are listed but not counted.",
+    "Sandbox probes. Before it runs any suite, the runner checks once what this sandbox gives: a pseudo-terminal (`os.openpty()`); `ps` (`ps -o pid= -p <own pid>` exits 0); a nested sandbox (on macOS `sandbox-exec -p '(version 1)(allow default)' true`, on Linux `bwrap --ro-bind / / --unshare-all true`, the same probes as `real_sandbox_ok` in `tests/sandbox-kernel.test.sh` about line 15); and Docker (`docker info`). Every probe command runs in its own process group with a 10-second deadline; one that does not finish is ended like a timed-out suite and counts as failed with the reason `no answer in 10 seconds`. Probe time counts against `budget_seconds`. The network has no probe: any host outside the plan's `network` list is unreachable by design. Each probe that fails keeps its first line of output as its reason.",
+    "Not runnable here. A suite that exits non-zero is reported as `not runnable here`, not `failed`, only when both are true: its output has a line that matches the runner's fixed pattern for a missing capability (pseudo-terminal, `ps`, nested sandbox, Docker or network), and the probe for that same capability failed. For the network there is no probe; instead a matching line counts only when it names a host and that host is not in the plan's `network` list, so a failure to reach a declared registry stays `failed`. The network patterns are only the resolver and proxy refusals that curl, git and Python print (for example `Could not resolve host: <host>`); a line that names no host does not count. The detail names the capability, the probe's reason and the first matching output line. In every other case a non-zero exit is `failed`. A suite that passes is `passed` whatever its output says. The patterns are one fixed table in `bin/lib/fm_local_tests.py`.",
+    "Project-level unrunnable. When the contract's `unrunnable` field is set (a one-line reason why this project's tests cannot run on this machine), the runner runs nothing and reports every selected suite as `not runnable here` with that reason.",
+    "Precedence. When no file changed, nothing runs and no block is written. Otherwise, when the plan has no `test` template, nothing runs and the block holds all-zero counts and one uncounted row that says `no test template declared`; otherwise the selected suites run. The contract's `unrunnable` field wins over all of these except `no changed file`.",
+    "Report block. The runner writes its results into `.fm-say.md` in the worktree root, between the lines `<!-- fm-local-tests v1 -->` and `<!-- /fm-local-tests -->`. The version lives only in the start marker. The first line after the start marker is `<!-- fm-local-tests-summary <JSON> -->`, with no version of its own, where the JSON is an object with exactly these keys, each a whole number: `passed`, `failed`, `timed_out`, `not_runnable` and `not_run` (0 to 10000 each), `budget_seconds` (60 to 7200), `used_seconds` (0 to 86400) and `changed_files` (0 to 100000, a count, never a list of names). Then follows a heading `## Local tests` and a table with the columns Suite, Result, Seconds and Detail, one row per selected suite.",
+    "One block per round. When `.fm-say.md` already holds a block, the runner replaces it, so only the last run counts. All other text in `.fm-say.md`, such as an `ASK-` or `SCOPE-BLOCKED` marker, stays byte for byte. When `.fm-say.md` does not exist, the runner creates it. When no file changed, the runner writes nothing to `.fm-say.md` and only prints that no file changed.",
+    "Text in the block. Paths are relative to the worktree. The runner replaces the run directory with `<round>` and the home directory with `~`, removes control characters and terminal escape sequences, and cuts every Detail cell to 200 characters. A `|` inside a cell is escaped, so the table stays one row per suite.",
+    "Exit codes and output. `run` prints the same table to standard output. It exits 0 when no suite failed or timed out, 1 when one did, 64 for wrong arguments, and 70 when its plan is missing or does not read. The worker reads the table; the exit code is for scripts.",
+    "Launcher record. After the round, where the launcher already reads `.fm-say.md` (`bin/fm-worker.sh` about line 1771, before the report is kept with `fm_evidence report`), it runs `python3 <code>/bin/lib/fm_local_tests.py summary <worktree>/.fm-say.md` outside the sandbox. A start marker is any line of the form `<!-- fm-local-tests v<digits> -->`. `summary` exits 3 when the file has no start marker. It exits 0 and prints the summary, re-serialized from the validated keys only, when the file has exactly one start marker, that marker says `v1`, exactly one end marker follows it, the line right after the start marker is the summary line, and the JSON has exactly the keys and ranges above. Anything else (a second block, a missing end marker, a start marker with another version, an extra or missing key, a string, a negative or too-large number) exits 65 and prints nothing. The report file itself is kept unchanged as the round's `worker-report` (or `ask`) record whenever it is not empty, so the results reach firstmate with no new record kind.",
+    "Results do not count as the worker speaking. Today any non-empty `.fm-say.md` sets `asked=1` (`bin/fm-worker.sh` about line 1771), which decides note delivery and exits (for example the asked exit about line 2069, the unchanged-work failure about line 2097, and exit 73 after a failed delivery about line 1922). After this change `asked` is set from the note with the block removed by `strip`, so a note that holds only results leaves `asked=0` and every delivery and exit decision is the same as for an empty note. Retention is the one difference: the full file is still kept with `fm_evidence report` when it is not empty. A note with worker-written text besides the block behaves as today, and its delivery carries the block for the self project and the stripped copy for an external one. When `strip` fails on a readable file (a truncated block), `asked` is set exactly as today from the whole file, so a malformed block can never hide text the worker wrote; the self project then delivers the original note as today, an external project posts no comment (as the strip contract says), the private record keeps the full file, and the launcher emits the `valid: false` event. When the file exists but cannot be read, retention, recovery, delivery and exit follow today's existing paths for a note that cannot be read (`fm_evidence report` failure and the unsent copy, `bin/fm-worker.sh` about line 1774; external private-note failure and exit 65 without a pull request, about line 2020); the only additions are that an external project posts no comment and the launcher emits the `valid: false` event. Full retention is promised only for a readable file.",
+    "Status event. For a valid block, the launcher emits one `crew_status` event with `data` `{\"evidence_event\":\"local_tests\",\"local_tests\":<the summary JSON>}` and the summaries `Local tests: <p> passed, <f> failed, <t> timed out, <n> not runnable here, <s> not run` (en) and `本機測試：通過 <p>、未通過 <f>、執行過久 <t>、無法在此執行 <n>、未執行 <s>` (zh-TW). The event data holds only the validated numbers, so no path or name from the report can reach it. For a block that does not read (`summary` exit 65), the launcher emits exactly one event whose data carries `{\"evidence_event\":\"local_tests\",\"local_tests\":{\"valid\":false}}` and no other field from the report, with `Local tests: the results block does not read` and `本機測試：結果無法讀取`. With no block, the launcher emits nothing and writes one line to the round's log, `fm-worker: the round reported no local test results`.",
+    "Plain-writing lint of the note. The advisory plain-writing lint that the launcher runs on the worker note (`bin/fm-worker.sh` about lines 1828 to 1831, `fm_plain.py lint ... --source worker-note`) reads the note after `strip` has removed the results block, for the self project and for an external project, so suite paths and assertion names from the block never reach `state/runtime/plain-writing.jsonl`. When `strip` fails on the note (a truncated block), the launcher skips the lint for that note and writes one line to the round log, `fm-worker: plain-writing lint skipped: the results block does not read`, so no text of the note reaches the log. A named fail-first assertion, `lint: the results block stays out of the plain-writing log`, places a sentinel word that the lint logs on the current code (an assertion name with a letter and a digit glued together, such as `leak7sentinel`, written outside backquotes and not shaped like a path) in a Detail cell of the block. In that case the note also holds worker-written text outside the block with a second sentinel of the same shape (such as `kept7sentinel`), and the round has a pull request, so the launcher posts the note and runs the lint on both the current code and the new code. The assertion checks that `state/runtime/plain-writing.jsonl` contains the worker-text sentinel and does not contain the block sentinel; on the current code the log contains both. The assertion covers the self project and an external project with the `comments` projection, and a second named assertion, `lint: a truncated block skips the lint`, checks the skip line and an unchanged log.",
+    "Not a gate input. The block and the event never change the round's exit code, publication, the pull request body, or any gate. `bin/fm-gate.sh`, `bin/fm-failfirst.sh`, `bin/fm-review.sh` and the autopilot do not read them. Reviewers still receive no worker report (`design/design.md` section 15.7, about line 6553): for an `ask` record, `Store.history` passes only the `ASK-PASS-CRITERIA:<task>` line (`bin/lib/fm_evidence.py` about line 621), so the block does not reach a reviewer even inside a report that asks a question.",
+    "Policy key. The crew policy gains one key, `test_budget`, in `POLICY_KEYS` in `bin/lib/fm_registry.py` (about line 136). It takes a whole number of seconds from 60 to 7200, flat or under `worker:`, at the top level or in a project's `policy:`, like `procs` and `cpu`. Any other value is refused with exit 65 and a message that names the key and the allowed range. The resolved policy JSON always holds `test_budget`, 900 when no layer sets it. Only the worker launcher reads it; a reviewer round ignores it.",
+    "Policy readers. `load` in `bin/lib/fm_sandbox_policy.py` keeps its list of required keys, so a policy file without `test_budget`, for example one a round started on older code wrote, still loads. The comment block that documents the keys in `bin/fm-config.sh` (about lines 166 to 201) names `test_budget`. `config.yaml` does not change: the default applies, and the captain has uncommitted local edits in that file that a change here would collide with.",
+    "Sandbox grant. `bin/lib/fm_sandbox_policy.py` gains `local_tests_of()`, built like `pinned_of()` (about line 162). It reads `FM_LOCAL_TESTS_DIR` and accepts it only when the path is absolute, equals its real path, is named `local-tests`, equals `<real FM_RUN_DIR>/local-tests`, is owned by the current user with no group or other write bit, and holds exactly `runner.py` and `plan.json`, each a regular file, not a symlink, with mode 0444. Any other value raises the same kind of error `pinned_of()` raises, so the round is refused rather than started with a wrong grant.",
+    "Profile rules. On macOS, `darwin()` adds `(allow file-read* (subpath <dir>))` and `(deny file-write* (subpath <dir>))` right after the pinned folder's two rules, so the grant also holds for an external project whose home folder is otherwise hidden. On Linux, `linux()` adds `--ro-bind <dir> <dir>` right after the pinned folder's bind. The grant adds read access only: no write root, network, socket or environment rule changes. When `FM_LOCAL_TESTS_DIR` is not set, both functions return byte-identical output to today. `bin/fm-sandbox.sh` does not change, because it reads the profile from these functions and the variable reaches them through the adapter's environment (the herdr transport keeps every `FM_` variable, `bin/fm-herdr.py` about line 1427).",
+    "Adapter contract. `bin/adapters/_contract.md`, where it documents `FM_PINNED_DIR` (about line 324), documents `FM_LOCAL_TESTS_DIR` the same way: the launcher exports it, the sandbox grants it read-only to every vendor, and an adapter never adds it or its parent to a write root or an extra-directory flag. No adapter script changes.",
+    "Worker instructions. In `skills/worker/SKILL.md`, the sentence 'Workers do not run suites.' (about line 49) and the paragraph that starts 'Workers do not run the test suite or `ci.sh`' (about line 266) are replaced. The new text says: run the runner the prompt names before you finish; name with `--case` the test cases you added or changed, so firstmate can see what you meant to test (each selected suite still runs as a whole file); fix what it reports as failed; never run `bin/ci.sh`, the project check or a whole test folder, because CI runs those; treat `not runnable here` as a limit of the sandbox and leave it to CI; never edit the results block; and still name, in the pull request, the assertion that should go red when the change is reverted, because gate 4 and CI still decide.",
+    "Firstmate instructions. In `skills/firstmate/SKILL.md`, rule 5 (about line 595) is replaced: workers run only the tests related to their change through the runner, within the policy's `test_budget`; CI and the six gates still decide; a worker acceptance line or brief never asks for `bin/ci.sh` or the whole project check. In rule 6 (about line 609), 'and workers still do not run the suites' is removed, and the brief recipe gains two points: read the round's local results first, and name in the brief any suite to add with `--suite`, and its failing cases with `--case` so the results name them, when the failing suite would not be selected by the changed files.",
+    "Design. `design/design.md` gains a subsection `#### Local test runs (T-275)` at the end of section 13.1 (13.1 has no numbered children), before section 13.2. It describes the runner folder and its read-only grant, the `test_budget` key, selection and its cap of 3, test cases, the probes and the not-runnable rule, and the fact that the results are evidence, not a gate. In section 15.7, the sentence 'Workers never commit/push/checkpoint or run suites.' (about line 6385) becomes 'Workers never commit, push or checkpoint; they run the suites that cover their change through the launcher's runner (section 13.1).', and 'Workers leave publication and suites to the outside launcher and CI' (about line 6553) becomes 'Workers leave publication to the outside launcher, and CI and the gates decide'. No text is added at the end of the file.",
+    "Languages. The two zh-TW summaries in the event requirement use only characters that are the same in simplified Chinese or already have an entry in `i18n/tw2cn.tsv` (機, 測, 試, 過, 無, 執, 結 and 讀 do; the wording avoids 時, which has none), so the board's zh-CN view converts them with no table change. No board, `i18n/ui.*.json` or `i18n/tw2cn.tsv` file changes. Runner output and the block are English only, like other repository text and `.fm-say.md`. A test converts both summaries with the table, by longest match as the board does, and compares them with expected text written in the test: `本机测试：通过 <p>、未通过 <f>、执行过久 <t>、无法在此执行 <n>、未执行 <s>` and `本机测试：结果无法读取`.",
+    "External projects. For an external project, the plan's contract comes from that project's pin, the runner reads only the worktree and its own folder, and nothing goes over the network. The full `.fm-say.md`, block included, is kept as the private record (`fm_private_note`, `bin/fm-worker.sh` about line 1810). Today `post_note` then also sends the same body through `fm_comment_projection` when the projection is `comments` (about lines 1825 to 1841), which posts a GitHub comment (`bin/fm-config.sh` about line 1234). For an external project, `post_note` instead sends a copy with the block removed, made by a third runner command, `strip <file>`, run outside the sandbox; when nothing is left after removal, it posts no comment.",
+    "Strip contract. `strip <file>` prints the file with every block removed, from each start marker line (any version) through its end marker line, and keeps every other byte exactly as it was. A file with no start marker comes out byte-identical. It exits 0 on success and 65 when the file cannot be read or a start marker has no end marker after it; then it prints nothing. When `strip` fails, `post_note` posts no external comment at all, never the original body, keeps the private record, and writes one line to the round's log. Every other projection mode (`summary`, `check`, `threads`, `local`) keeps its current behaviour, which publishes no report text. The self project keeps posting the full note, because its paths are its own public repository's. The event carries counts only, never a path, a suite name or an assertion name.",
+    "Records and tasks in flight. No pin, evidence record kind, event type, decision or stored format changes; the policy JSON gains one field. A round already running finishes on its frozen code, without the section or the folder. A task in flight (for example T-273, T-278 and T-279) gets the section on its next round launched from code that has this change; a later fallback attempt that keeps an older frozen `FM_CODE_ROOT` does not. Firstmate's instructions say not to expect a block from a round launched on older code. A test shows that a round whose `.fm-say.md` has no block emits no `local_tests` event and publishes exactly as before.",
+    "Tests, new behaviour. A new suite, `tests/local-tests.test.sh`, with its helper `tests/lib/local_tests.py`, drives everything through entry points that exist on the current base: `bin/fm-worker.sh` in the fixture from `tests/lib/worker.sh` with a test adapter, `bin/fm-sandbox.sh profile`, and `fm_policy` from `bin/fm-config.sh`. The test adapter reads the runner command from the round's prompt and runs it. Each new-behaviour assertion fails on the current base for a behavioural reason: the prompt has no `# Local tests` section, the profile has no grant, or the policy refuses `test_budget`. No assertion fails because a file is missing or an import fails. Fixture suites are generated in a temporary directory by the helper; no fixture `*.test.sh` file is committed under `tests/`, so `bin/ci.sh` and the fail-first job never run one.",
+    "Named new-behaviour assertions. The suite has a named assertion for each of these: the prompt names the runner and its `# Local tests` section holds the `--case` sentence; the folder holds exactly the two files with mode 0444; the plan's contract comes from the pin, and from `fm_project` when the pin has none; selection of a changed suite, of a suite that names a changed implementation file, and of a `--suite` suite; 4 suites that name a changed file all reported `not run` with the reason `more than 3 suites name a changed file; CI runs them`, and 3 such suites run; a changed suite that also names a changed file not counted toward the cap and shown in exactly one row; `--case` after `--suite` and `--case` with no `--suite` running the whole suite with a Detail that starts `case filter not supported:` and lists the names; `--case` with no `--suite` and no changed suite printing `--case names matched no suite`, adding no row and leaving the exit code; no suite outside the selection rules ever run; a docs-only change selects nothing; order; passed, failed with assertion names, timed out with the process group gone, not run after the budget, and not a suite; the `unrunnable` field; `--full` refused as an unknown option (exit 64); block replacement that keeps an `ASK-` marker byte for byte; no write when no file changed; path and control-character cleanup; `summary` exit codes 0, 3 and 65; the event and both summaries for a valid and an invalid block; the log line and no event with no block; and `test_budget` default, accepted value and refused values 59, 7201 and `abc`.",
+    "More named new-behaviour assertions. The suite also names: `run` exit codes 64 for an unknown option and 70 for a missing plan and for a plan of the wrong shape; the `null` base falling back to uncommitted changes with its note; the changed-file union of a staged file, an unstaged file and an untracked file; at most `jobs` suites at once (each fixture suite records its start and end time); the suite environment (`FIRSTMATE_CI_SESSION` and `FM_SESSION_PID` equal to the suite shell's pid, `FM_ROOT`, `LC_MESSAGES`, a `check_env` value, empty standard input); a descendant left by a suite ended after the suite exits; every suite and probe ended and no block written after SIGTERM to the runner; a hanging probe stub ended after 10 seconds with its time counted; the absent `test` template row; no `check` key in `plan.json`; policy layering (a project's `test_budget` over the top level, and `worker:` over flat, as `resolve_policy` in `bin/lib/fm_registry.py` about line 453 layers other keys); folder-build failure (an unwritable run directory, a failed copy, and a failed plan write after the folder and runner exist, which also removes the partial folder), with the reason in both the log and the prompt, no `FM_LOCAL_TESTS_DIR` in the adapter's environment even when the launcher inherited one, and unchanged publication; `summary` rejecting a block with an extra path-bearing key, a string count, a negative count, a second block, a missing end marker and a `v2` start marker, each followed by exactly the one `valid: false` event and no field from the report; a round trip in which the block `run` writes is read back by `summary` with the same numbers; `strip` on a file with no block (byte-identical), a block-only file (empty, so no external comment), two blocks, a truncated block (exit 65 and no external comment), a `v2` block, and text before and after a block (kept byte for byte), with private suite and assertion-name sentinels absent from every comment body; a results-only note leaving exits and publication as for an empty note, with no pull request, with a pull request, and with a failed comment delivery; a truncated block beside worker text in a readable file, for the self project and an external project, with and without a pull request, showing `asked` and the exit as today, the self note delivered as today, no external comment, the full private record and the `valid: false` event; and a `.fm-say.md` made unreadable (mode 000), for the same four cases, showing the same retention-failure, recovery and exit outcomes as on base, no external comment, and the `valid: false` event; a `ps` stub that answers after 7 seconds counted as working; and an external round in each projection mode (`comments`, `summary`, `check`, `threads`, `local`) with a private sentinel suite name in the block, showing the sentinel in the private record and in no comment body.",
+    "Reviewer filtering assertion. The suite records an `ASK-PASS-CRITERIA` report that holds a block through `bin/lib/fm-evidence.sh report`, then reads `bin/lib/fm-evidence.sh history` and checks that only the marker line appears and no suite name from the block. This is labelled regression: it already holds on base, and it guards the claim that the block never reaches a reviewer.",
+    "Tests, sandbox probes. The not-runnable rule is tested with stub `ps`, `sandbox-exec`, `bwrap` and `docker` placed first on `PATH`, and with a pseudo-terminal probe the test turns off through `FM_LOCAL_TESTS_NO_PTY=1`. That variable only changes the probe's answer, which only changes a label in the report. Each refusal text in a stub or a fixture suite, the pseudo-terminal one included (`python3 -c 'import os; os.openpty()'`), is the text the real tool prints inside a round sandbox, captured from a real `bin/fm-sandbox.sh run` on macOS or Linux and kept verbatim in the helper with a comment naming the platform and command it came from, not text written to match the runner's pattern; the real-sandbox case below re-checks the `ps` and pseudo-terminal samples live where it can run. The tests cover, for each of pseudo-terminal, `ps`, nested sandbox and Docker: a matching line with a failed probe gives `not runnable here`, and a matching line with a working probe gives `failed`. They also cover: a suite that exits 0 with a matching line gives `passed`; a non-zero exit with a failed probe but no matching line gives `failed`; `Could not resolve host: <undeclared host>` gives `not runnable here`; the same line for a host in the plan's `network` list gives `failed`; and a refusal line that names no host gives `failed`.",
+    "Tests, profile. The new suite checks, through `bin/fm-sandbox.sh profile` with `FM_SANDBOX_OS` set to `darwin` and to `linux`, that a valid folder adds exactly the rules above in that position, and that each invalid folder is refused: a relative path, a symlinked folder, the wrong name, a folder of another run, an unset `FM_RUN_DIR`, an extra file, a missing file, a child that is a symlink, a child that is a directory, a file with mode 0644, a group-writable folder and an other-writable folder. A folder owned by another user is tested by running the same profile command as root where the test can `chown` (the Linux CI container), and otherwise by running `bin/lib/fm_sandbox_policy.py` from the helper with `os.getuid` replaced by a stub that returns another uid; that substitution lives only in the test helper, and this case is labelled a guard. It also checks that the output with `FM_LOCAL_TESTS_DIR` unset is byte-identical to the output of the same command on the current base (the expected text is generated from the base copy in the test, not written by hand).",
+    "Tests, real sandbox. `tests/sandbox-kernel.test.sh` gains a case inside its existing `real_sandbox_ok` block, which skips when this host cannot apply a real sandbox: inside a real `bin/fm-sandbox.sh run`, the round can read and run `runner.py`, cannot write or delete anything in the folder, and gets a report from `run`. When `ps -o pid= -p $$` fails inside that sandbox, the case checks that its real output matches the runner's `ps` pattern. Likewise, when `python3 -c 'import os; os.openpty()'` fails inside it, the case checks that its real output matches the runner's pseudo-terminal pattern; when either command succeeds there, the case checks that the runner's probe reports that capability as present. This case is a guard, not a fail-first assertion, because CI may skip it.",
+    "Tests, regressions. These existing suites pass unchanged and are not edited: `tests/sandbox-policy.test.sh`, `tests/lib/pinned_context.py` (through its suite), `tests/launcher-python.test.sh`, `tests/lifeline.test.sh`, `tests/worker.test.sh` and its split suites, including `tests/worker-notes.test.sh` and `tests/worker-policy.test.sh`, `tests/adapter-login.test.sh`, `tests/adapter-policy.test.sh` (adapter profile behaviour), `tests/external-review-launchers.test.sh` (external note projection, about line 45), `tests/herdr-credentials.test.sh` (which reads the resolved policy through `tests/herdr/credentials.py`, about line 18) and `tests/i18n.test.sh`. The frozen base copy `tests/lib/t177_sandbox_base.py` is not edited. These cover the unchanged profile, the embedded-program limit, process rules, note publication and policy reading, and are labelled regression, not new behaviour.",
+    "Overlap and order. The anchor base is `5f1f946a`. The plain-writing task (T-270), the live round view (T-271), the reviewer-fix task (T-272), the flaky-test record (T-274), the small-change task (T-277) and the round budget task (T-276) have merged, and this spec's anchors are updated for them. They changed some of the same files: T-276 added a round-budget check to `bin/fm-worker.sh` (about lines 79 to 83), T-277 edited `skills/worker/SKILL.md` (about lines 41 to 44 and 256 to 257), and T-270 added plain-writing lint calls in `bin/fm-worker.sh` (about lines 1802 to 1805 and 1828 to 1831). The replacement text of this task leaves those additions in place. The open retrospective task (T-273, pull request #265) lists `skills/firstmate/SKILL.md` and `design/design.md` but no launcher, sandbox, policy or test file of this task.",
+    "Reconciliation. The line numbers in this spec are anchors on `5f1f946a`, the base that includes T-270 and T-276. If a later merge moves a cited anchor or changes its text before this task merges, firstmate re-checks it and asks for an authorized repin.",
+    "Out of scope. No change to the six gates, `bin/ci.sh`, `bin/fm-failfirst.sh`, the reviewer and its run mode, the adapters' scripts, the pull request body, the board, `config.yaml`, or what a round may write or reach on the network. The runner never runs the contract's `check` or `setup`; when a suite fails because a dependency is not installed, that is reported as `failed`, and the worker may run `setup` as it can today."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "A worker runs only the tests that cover its change before it finishes."
+        },
+        {
+          "kind": "fact",
+          "text": "The results go into the worker note and one status event as local evidence."
+        },
+        {
+          "kind": "fact",
+          "text": "CI and the six gates still decide whether a change can merge."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "Today a worker never runs a test, so every mistake waits for CI."
+        },
+        {
+          "kind": "fact",
+          "text": "The captain asked that a worker run only the tests related to its change."
+        }
+      ],
+      "scope_in": [
+        "the local test runner",
+        "the worker launcher",
+        "the read-only sandbox grant",
+        "the test_budget policy key",
+        "worker and firstmate skill text",
+        "design section 13.1",
+        "new tests"
+      ],
+      "scope_out": [
+        "the six gates",
+        "bin/ci.sh",
+        "the reviewer",
+        "the pull request body"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: tests show the runner picks only related suites and caps suites found by name."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: tests show the results block in the note and one status event."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: tests show the results never change the exit code or a gate."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "Selection works per suite file; a named test case is recorded, not filtered."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Worker edits code"
+        },
+        {
+          "state": "gone",
+          "label": "No local test run"
+        },
+        {
+          "state": "same",
+          "label": "CI runs all tests"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Worker edits code"
+        },
+        {
+          "state": "new",
+          "label": "Runner runs related suites"
+        },
+        {
+          "state": "new",
+          "label": "Results in worker note"
+        },
+        {
+          "state": "same",
+          "label": "CI runs all tests"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Worker round"
+          },
+          {
+            "label": "CI"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "edit",
+            "label": "Worker edits code",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "runner",
+            "label": "Related suites run",
+            "lane": 0,
+            "kind": "step",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "note",
+            "label": "Results in note",
+            "lane": 0,
+            "kind": "store",
+            "state": "new",
+            "change": "c2"
+          },
+          {
+            "id": "push",
+            "label": "Round pushes branch",
+            "lane": 0,
+            "kind": "step",
+            "state": "same"
+          },
+          {
+            "id": "ci",
+            "label": "CI and six gates",
+            "lane": 1,
+            "kind": "focal",
+            "state": "same"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "edit",
+            "to": "push",
+            "state": "same"
+          },
+          {
+            "id": "e2",
+            "from": "edit",
+            "to": "runner",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "runner",
+            "to": "note",
+            "state": "new",
+            "change": "c2"
+          },
+          {
+            "id": "e4",
+            "from": "note",
+            "to": "push",
+            "state": "new",
+            "change": "c2"
+          },
+          {
+            "id": "e5",
+            "from": "push",
+            "to": "ci",
+            "state": "same"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e5"
+          ],
+          "after": [
+            "e2",
+            "e3",
+            "e4",
+            "e5"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "The worker runs the suites that cover its change.",
+            "intents": [
+              1
+            ]
+          },
+          {
+            "id": "c2",
+            "text": "The runner writes the results into the worker note.",
+            "intents": [
+              2
+            ]
+          }
+        ]
+      }
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "worker 收工前只跑涵蓋自己改動的測試。"
+        },
+        {
+          "kind": "fact",
+          "text": "結果寫進 worker 的回報，另發一則狀態事件。"
+        },
+        {
+          "kind": "fact",
+          "text": "能否合併仍由 CI 和六道關卡決定。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "現在 worker 從不跑測試，每個錯誤都要等 CI。"
+        },
+        {
+          "kind": "fact",
+          "text": "船長要求 worker 只跑跟改動有關的測試。"
+        }
+      ],
+      "scope_in": [
+        "本機測試 runner",
+        "worker 啟動器",
+        "sandbox 唯讀授權",
+        "test_budget 政策鍵",
+        "worker 與 firstmate 技能文字",
+        "設計文件 13.1 節",
+        "新測試"
+      ],
+      "scope_out": [
+        "六道關卡",
+        "bin/ci.sh",
+        "reviewer",
+        "PR 內文"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：測試證明 runner 只選有關的 suite。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：測試證明回報裡有結果區塊和一則事件。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：測試證明結果不改 exit code 和關卡。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "選擇以 suite 檔為單位；點名的測試案例只記錄，不過濾。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "worker 改程式"
+        },
+        {
+          "state": "gone",
+          "label": "沒有本機測試"
+        },
+        {
+          "state": "same",
+          "label": "CI 跑全部測試"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "worker 改程式"
+        },
+        {
+          "state": "new",
+          "label": "跑有關的 suite"
+        },
+        {
+          "state": "new",
+          "label": "結果寫進回報"
+        },
+        {
+          "state": "same",
+          "label": "CI 跑全部測試"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "worker 回合"
+          },
+          {
+            "label": "CI"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "edit",
+            "label": "worker 改程式",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "runner",
+            "label": "有關的 suite 執行",
+            "lane": 0,
+            "kind": "step",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "note",
+            "label": "結果寫進回報",
+            "lane": 0,
+            "kind": "store",
+            "state": "new",
+            "change": "c2"
+          },
+          {
+            "id": "push",
+            "label": "回合推送分支",
+            "lane": 0,
+            "kind": "step",
+            "state": "same"
+          },
+          {
+            "id": "ci",
+            "label": "CI 和六道關卡",
+            "lane": 1,
+            "kind": "focal",
+            "state": "same"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "edit",
+            "to": "push",
+            "state": "same"
+          },
+          {
+            "id": "e2",
+            "from": "edit",
+            "to": "runner",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "runner",
+            "to": "note",
+            "state": "new",
+            "change": "c2"
+          },
+          {
+            "id": "e4",
+            "from": "note",
+            "to": "push",
+            "state": "new",
+            "change": "c2"
+          },
+          {
+            "id": "e5",
+            "from": "push",
+            "to": "ci",
+            "state": "same"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e5"
+          ],
+          "after": [
+            "e2",
+            "e3",
+            "e4",
+            "e5"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "worker 執行涵蓋改動的 suite。",
+            "intents": [
+              1
+            ]
+          },
+          {
+            "id": "c2",
+            "text": "runner 把結果寫進 worker 回報。",
+            "intents": [
+              2
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
