@@ -1,0 +1,26 @@
+[fm] worker-cora-t035-r1 worker started on T-035 (pid 7171)
+{
+  "response": "Gemini finished: the header shows the pull request.",
+  "stats": {
+    "models": {
+      "gemini-2.5-pro": {
+        "api": {
+          "totalRequests": 3,
+          "totalErrors": 0,
+          "totalLatencyMs": 9120
+        },
+        "tokens": {
+          "prompt": 10234,
+          "candidates": 402,
+          "total": 10636
+        }
+      }
+    },
+    "tools": {
+      "totalCalls": 2,
+      "totalSuccess": 2,
+      "totalFail": 0
+    }
+  }
+}
+[fm] worker-cora-t035-r1 finished exit=0 after 12s

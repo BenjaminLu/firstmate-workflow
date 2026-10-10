@@ -3981,7 +3981,40 @@ the host that opens a window. The window is opened before the round starts, is
 labelled with the canonical actor, and runs `fm-herdr.py follow <attempt>`: the
 run's log from its start, followed until the round ends. It is the same stream a
 pane showed before, now read from the log; `bin/fm.sh follow <actor>` runs the
-same follower on the actor's latest round for anyone without a window. Opening a
+same follower on the actor's latest round for anyone without a window.
+
+Since T-271 the follower shows that log formatted, through
+`bin/lib/fm_follow_view.py`, which `follow` loads lazily (a tree without it
+copies the log raw, as before). A header names the actor, task, round, the pull
+request (the newest event of this task and project with a `pr`, from the event
+log beside the attempt's own record root, an event naming no project being the
+default project's; else `no PR yet`), the attempt's elapsed time from its
+`invocation.json`, and what the round does now; on a terminal it stays at the top
+and refreshes each second. Each command is one `$ <command>` line with its exit
+code and its output collapsed to the first and last `FM_FOLLOW_LINES` lines (5);
+each changed file is shown as its diff against `HEAD`, staged and unstaged, as
+the file is now, with built-in highlighting only; the model's messages
+(`agent_message`, `result`, `response`) are wrapped and marked; fm's status
+lines, the sandbox's notices and this actor's events are single marked lines.
+A vendor that has been silent past `FM_FOLLOW_QUIET` seconds (30) of watching
+shows as `waiting for <vendor>`, so a buffered claude, cursor-agent or gemini
+round does not look stuck. Colour and screen control need a terminal without
+`NO_COLOR`; every log-derived string is stripped of control sequences.
+`--raw` (or `FM_FOLLOW_RAW=1`) keeps the byte-for-byte copy for debugging the
+view. `bin/fm.sh follow --all` prints one line per live round of the selected
+project (actor, task, elapsed time, activity, log age, observed vendor
+silence), refreshing every 2 seconds on a terminal and marking a round silent
+past `FM_FOLLOW_STUCK` seconds (300) as possibly stuck, or one snapshot
+otherwise. The view is read-only: it runs outside the round's sandbox, writes no
+file and no bytecode, judges liveness with `round_live_readonly` (which opens
+`execution.lock` read-only and only if it exists, where `round_live` could
+create it), and starts only `git` (no optional locks, filesystem monitor,
+pager, rename detection, external diff, text converter, lazy fetch or
+transport) and the liveness helpers' `ps`. It ends exactly when the raw
+follower ends, so a window shows events up to the round's result and not the
+publication after it; a later `fm.sh follow` shows them. Its labels are English
+only, from the view's own fixed table: it is command-line output like the rest
+of `bin/`, outside section 9's board dictionaries. Opening a
 window is best effort. Every attempt's `window.json` records the window it got:
 `{"host": "none", "status": "none"}` when there is no host, so no window is
 recorded, never inferred from a missing file. Any failure or uncertainty is

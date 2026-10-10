@@ -224,7 +224,9 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    `window.json` records the window, `none` included. `FM_TRANSPORT=direct`
    only asks for no window. Stop a round with `bin/fm.sh stop <actor>` or
    `bin/fm.sh stop --task <id>` (the same `bin/fm-herdr.py stop` the board's
-   park and drop run), and watch one with `bin/fm.sh follow <actor>`. Reuse
+   park and drop run), watch one with `bin/fm.sh follow <actor>` (formatted;
+   `--raw` for the log as written), and every live round with
+   `bin/fm.sh follow --all`. Reuse
    existing live agents. An internal conversation subagent is not a crew
    round. Never fabricate lifecycle events. In a user-managed Herdr session
    (`HERDR_ENV=1`), read the installed `herdr --skill` and help, and do not

@@ -128,10 +128,21 @@ usage: fm.sh <command> [options]
         stop. Prints what it stopped and what it could not, as JSON, and
         exits 1 when something could not be stopped.
 
-  follow <actor> [--repo DIR]
-        Print the actor's latest round's log (state/runs/<actor>/<attempt>/
-        run.log) and follow it until the round ends. This is what a
-        window runs; closing it stops nothing.
+  follow <actor> [--raw] [--project NAME] [--repo DIR]
+  follow --all [--project NAME] [--repo DIR]
+        Show the actor's latest round (state/runs/<actor>/<attempt>/run.log)
+        readably and follow it until the round ends: a header (actor, task,
+        round, PR, elapsed time, what it is doing now), each command with
+        its exit code and collapsed output (FM_FOLLOW_LINES, 5), each
+        changed file's diff against HEAD, the model's messages, fm's status
+        lines and the actor's events. A quiet vendor shows as waiting after
+        FM_FOLLOW_QUIET seconds (30). This is what a window runs; it only
+        reads, and closing it stops nothing. --raw (or FM_FOLLOW_RAW=1)
+        copies the log byte for byte instead. --all prints one line per
+        live round of the project; on a terminal it refreshes every 2
+        seconds until Ctrl-C and marks a round silent for FM_FOLLOW_STUCK
+        seconds (300) as possibly stuck. Colour only on a terminal without
+        NO_COLOR.
 
   sync-skills <source-dir> [--name NAME] [--repo DIR]
         Import external skills into skills/vendor/, read-only. One way:
@@ -963,18 +974,26 @@ cmd_hooks() {
 }
 
 cmd_follow() {
-  local repo="$REPO" actor=''
+  local repo="$REPO" actor='' raw='' every=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
       --repo) need "$@"; repo="${2-}"; shift 2 ;;
+      --raw) raw=--raw; shift ;;
+      --all) every=--all; shift ;;
       -*) die "follow: unknown argument $1" ;;
       *) [ -z "$actor" ] || die "follow: one actor at a time"; actor="$1"; shift ;;
     esac
   done
-  [ -n "$actor" ] || die "follow: name an actor"
   repo="$(abs "$repo")" || die "no repo at $repo"
-  python3 "$HERE/fm-herdr.py" follow "$repo" "$actor"
+  if [ -n "$every" ]; then
+    [ -z "$actor" ] || die "follow: --all takes no actor"
+    [ -z "$raw" ] || die "follow: --raw follows one actor, not --all"
+    python3 "$HERE/fm-herdr.py" follow "$repo" --all
+    return
+  fi
+  [ -n "$actor" ] || die "follow: name an actor, or --all"
+  python3 "$HERE/fm-herdr.py" follow "$repo" "$actor" ${raw:+"$raw"}
 }
 
 # `fm doctor` / `fm setup` (T-121): thin passthroughs, so the operator's one
