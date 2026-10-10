@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # fm:sourced
 _fm_stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Call only after fm_storage_init. Empty self conventions keep stacking held.
+# Call only after fm_storage_init. Empty self conventions keep stacking held
+# unless the captain-written self-stack-policy.json says otherwise.
 fm_stack_repository() {
   if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
     fm_project_get "$FM_PROJECT" github "$FM_CONFIG"
@@ -22,12 +23,22 @@ fm_stack_deletable() {
 }
 fm_stack() {
   local repository
+  # select asks for the repository only when it must read GitHub (T-278).
+  if [ "${1:-}" = select ]; then
+    python3 "$_fm_stack_dir/fm_stack.py" "$@"
+    return
+  fi
   repository="$(fm_stack_repository)" || return 65
   FM_STACK_REPOSITORY="$repository" python3 "$_fm_stack_dir/fm_stack.py" "$@"
 }
 
 fm_stack_policy() {
   if [ "${FM_EXTERNAL:-0}" = 1 ]; then fm_conventions "$1"
+  # The self runtime policy file governs these two fields only (T-278).
+  elif { [ "$1" = stacking ] || [ "$1" = force_with_lease ]; } && [ -n "${FM_STATE_DIR:-}" ] \
+       && { [ -e "$FM_STATE_DIR/autopilot/self-stack-policy.json" ] || [ -L "$FM_STATE_DIR/autopilot/self-stack-policy.json" ] \
+            || [ -L "$FM_STATE_DIR/autopilot" ]; }; then
+    python3 "$_fm_stack_dir/fm_stack.py" policy --field "$1"
   elif [ -s "$FM_TARGET_ROOT/CONVENTIONS.md" ]; then
     local repository
     repository="$(fm_stack_repository)" || return 65

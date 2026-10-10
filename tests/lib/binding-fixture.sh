@@ -7,7 +7,7 @@ binding_service_fixture() {
   cp "$ROOT/bin/lib/fm_gates.json" "$1/bin/lib/"
   cp "$ROOT/bin/lib/fm_binding.py" "$1/bin/lib/fm_binding_real.py"
   cat > "$1/bin/lib/fm_binding.py" <<'PY'
-from fm_binding_real import gate_list, gate_entry, source_binding, git, command, github, remote_head, sha, repository
+from fm_binding_real import gate_list, gate_entry, source_binding, git, command, github, remote_head, sha, repository, transfer
 def fetch_ref(*args, **kwargs):
     from fm_binding_real import fetch_ref as fetch
     return fetch(*args, **kwargs)
