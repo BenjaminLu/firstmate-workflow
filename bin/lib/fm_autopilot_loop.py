@@ -19,6 +19,13 @@ from fm_watch import Locked, read_json, save_json
 from fm_autopilot_branches import ERRORS
 
 BIN = Path(__file__).resolve().parents[1]
+# Fixed hold categories of failed_card_evidence and their zh-TW text.
+HOLD_TW = {'outstanding card': '已有待處理決策卡',
+    'unverified identity': '身分無法驗證', 'final or unknown answer': '回答已定案或結果未知',
+    'unverified settlement': '結算紀錄無法驗證', 'same failed head': '仍是失敗的版本',
+    'not an open card candidate': '不是可提出決策卡的開啟 PR',
+    'unverified old readiness': '舊關卡證據無法驗證',
+    'unverified failed history': '失敗歷史無法驗證'}
 
 
 class MechanicalLoop:
@@ -176,15 +183,108 @@ class MechanicalLoop:
 
     def failed_card_hold(self, task, pr, reason):
         # Fixed categories only: never project private reasons/details/evidence.
-        translations = {'outstanding card': '已有待處理決策卡',
-            'unverified identity': '身分無法驗證', 'final or unknown answer': '回答已定案或結果未知',
-            'unverified settlement': '結算紀錄無法驗證', 'same failed head': '仍是失敗的版本',
-            'not an open card candidate': '不是可提出決策卡的開啟 PR',
-            'unverified old readiness': '舊關卡證據無法驗證',
-            'unverified failed history': '失敗歷史無法驗證'}
         self.attention('failed-card-' + reason, task, pr,
             f'{task} #{pr["number"]} replacement held: {reason}',
-            f'{task} #{pr["number"]} 新決策卡暫緩：{translations[reason]}')
+            f'{task} #{pr["number"]} 新決策卡暫緩：{HOLD_TW[reason]}')
+
+    def settle_stale_jobs(self, number=None, head=None, open_numbers=None):
+        """T-281: supersede an uncertain job whose result can no longer matter.
+
+        pull() passes its PR and current head; poll() passes the open PR
+        numbers. A job at an open PR's current head stays uncertain and keeps
+        blocking. Self-queue jobs and unlabelled older records are left alone.
+        The command never runs again and its packet and log stay on disk.
+        """
+        for ident, job in list(self.data.get('jobs', {}).items()):
+            if (job.get('state') != 'uncertain' or job.get('kind') not in ('gate', 'protocol', 'review')
+                    or 'queue_binding' in job):
+                continue
+            try:
+                job_number = int(job['number'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if open_numbers is not None:
+                if str(job_number) in open_numbers: continue
+                by = 'closed'
+            elif job_number != int(number) or job.get('head') == head:
+                continue
+            else:
+                by = head
+            job.update(state='superseded', superseded_at=self.clock(), superseded_by=by)
+            self.save()
+            task, kind, old = job.get('task', ''), job['kind'], str(job.get('head') or '')[:12]
+            if by == 'closed':
+                en_tail, tw_tail = '; the pull request is closed', '；PR 已關閉'
+            else:
+                en_tail, tw_tail = f'; the pull request is now at {by[:12]}', f'；PR 現在位於 {by[:12]}'
+            try:
+                # The throttle would drop a second settle event from this actor.
+                self.emit('crew_status', task, f'Settled a stale {kind} job of {task} at {old}' + en_tail,
+                          f'已結清 {task} 在 {old} 的過期 {kind} 工作' + tw_tail,
+                          pr=job_number, env={'FM_CREW_STATUS_SECS': '0'})
+            except ERRORS as error:
+                self.queue('settle-emit-' + ident, task,
+                           f'{task}: settled a stale {kind} job but could not record the event: {error}',
+                           f'{task}：已結清過期的 {kind} 工作，但事件無法記錄：{error}')
+
+    def stuck_check(self, task, pr, runs, statuses):
+        """T-281: wake once when an approved, green, clean PR waits 30 minutes for a card."""
+        number, head = str(pr['number']), pr['head']['sha']
+        stuck = self.data.setdefault('stuck', {})
+        try:
+            verdict = self.verdict(task)
+            ready = verdict.get('verdict') == 'APPROVE' and pr.get('mergeable_state') == 'clean'
+            if ready:
+                checks = self.settled_checks(pr, runs, statuses)
+                ready = checks is not None and all(c[-1] in ('success', 'neutral', 'skipped') for c in checks)
+            if ready:
+                ready = not any(read_json(path).get('kind') == 'merge' and read_json(path).get('task') == task
+                                for path in (self.state / 'pending').glob('*.json'))
+            ready = ready and not self.landed(task, pr) and not any(
+                job.get('task') == task and job.get('state') in ('running', 'consuming')
+                for job in self.data.get('jobs', {}).values())
+        except Exception:
+            # Any read error is a condition that does not hold.
+            ready = False
+        if not ready:
+            if stuck.pop(number, None) is not None: self.save()
+            return
+        now = self.clock()
+        entry = stuck.get(number)
+        if not entry or entry.get('head') != head:
+            entry = stuck[number] = dict(head=head, since=now)
+            self.save()
+        if now - entry['since'] < 1800:
+            return
+        reason, reason_tw = self.stuck_reason(task, pr)
+        en = f'{task} #{number} is approved, green and clean with no merge card for 30 minutes: {reason}'
+        tw = f'{task} #{number} 已核准、檢查全綠且可乾淨合併，但 30 分鐘仍沒有合併決策卡：{reason_tw}'
+        approved = verdict.get('head')
+        if approved and approved != head:
+            en += f'; the approval is for {approved[:12]}'
+            tw += f'；核准針對 {approved[:12]}'
+        self.queue(f'stuck-{number}-{head}', task, en, tw)
+
+    def stuck_reason(self, task, pr):
+        for job in self.data.get('jobs', {}).values():
+            if job.get('task') == task and job.get('state') == 'uncertain':
+                kind, at = job.get('kind', 'unlabelled'), str(job.get('head') or '')[:12]
+                return f'an uncertain {kind} job at {at}', f'{at} 有一個未確定的 {kind} 工作'
+        try:
+            hold = self.failed_card_evidence(task, pr)[1]
+        except Exception:
+            hold = ''
+        if hold:
+            return f'replacement held: {hold}', '新決策卡暫緩：' + HOLD_TW.get(hold, hold)
+        try:
+            from fm_concurrent import live_rounds
+            live = any(r.get('task') == task for r in live_rounds([dict(state=str(self.state),
+                                                                         name=self.ctx['project'])]))
+        except Exception:
+            live = False
+        if live:
+            return 'a worker round is live', '有 worker 回合正在執行'
+        return 'no reason found', '找不到原因'
 
     def adoption_env(self):
         return dict(FM_ENGINE_ROOT=str(self.root), FM_TARGET_ROOT=self.ctx['target'],
