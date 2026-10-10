@@ -623,10 +623,13 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
 fi
 
 # Existing PRs own their base. New allowed stacks start at the verified parent.
+# A new self PR is checked against approved-scope overlap whatever the
+# stacking policy, so a reservation made under another policy never starts
+# overlapping work from main (T-278).
 stack_base=''
 if [ -n "$PR" ]; then
   BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 65
-elif [ "$(fm_stack_policy stacking)" = allowed ]; then
+elif [ "${FM_EXTERNAL:-0}" != 1 ] || [ "$(fm_stack_policy stacking)" = allowed ]; then
   stack_base="$(fm_stack select --task "$TASK")" || exit 65
   BASE="$(jq -r .name <<<"$stack_base")"
   if [ "$(jq -r '.head // empty' <<<"$stack_base")" != '' ]; then

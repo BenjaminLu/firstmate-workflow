@@ -605,8 +605,16 @@ set by the captain.
    checks' logs and the review, open the code, and prepare an approved brief naming per
    item the failing assertion with its log lines, the file:line and source
    around it, the verified root cause, the expected change and what must not
-   change; update a BEHIND branch first, and do not run rounds with
-   overlapping scope in parallel. That branch update is the same
+   change; update a BEHIND branch first. Overlapping self rounds are held or
+   stacked by the stock overlap hold (T-278, design 15.8 "T-143: operating a
+   stack"), not by judgement: read its `overlaps ...` or `waits for stacked
+   PR ...` reason instead of re-deciding it. Self stacking stays held until
+   the captain answers A on the T-278 activation card. Raise that choice card
+   with complete bilingual A, B and C details: A writes stacking `allowed`
+   and `force_with_lease` true through `python3 bin/lib/fm_stack.py
+   self-policy --decision <id> --payload <file>`, and the details carry the
+   payload's SHA-256; B means firstmate revises the proposal; C writes
+   nothing. That branch update is the same
    `gh pr update-branch` from rule 2, run only when GitHub reports the pull
    request BEHIND and MERGEABLE. A brief that only relays symptoms ("CI is
    red, find out why") is not a brief: rounds with such briefs converged in
