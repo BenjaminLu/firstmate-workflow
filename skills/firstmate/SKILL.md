@@ -592,8 +592,13 @@ set by the captain.
 4. Before dispatching, sweep the spec for paths that no longer exist, such as
    `design/tasks.json` after T-090. That one cost T-066 a round and would have
    cost T-094 one; fix the spec through a scoped task before the worker starts.
-5. Workers do not run the test suite: GitHub CI and the gates verify, and no
-   worker acceptance says to run `ci.sh` (captain's rule).
+5. Workers run only the tests related to their change, through the local
+   test runner the launcher gives each round, within the policy's
+   `test_budget` (T-275, captain 2026-10-09 and 2026-10-10). CI and the six
+   gates still decide; the round's results block and its `local_tests` event
+   are evidence, never a gate input. No worker acceptance line or brief asks
+   for `bin/ci.sh` or the whole project check. Do not expect a block from a
+   round launched on code older than T-275.
 6. A worker round needs a brief, not a symptom: firstmate coordinates and
    must hand every worker round the evidence to fix its problem, never make
    the worker hunt (captain, 2026-09-28). Before each round, read the failing
@@ -613,8 +618,11 @@ set by the captain.
    `gh pr update-branch` from rule 2, run only when GitHub reports the pull
    request BEHIND and MERGEABLE. A brief that only relays symptoms ("CI is
    red, find out why") is not a brief: rounds with such briefs converged in
-   ~20 minutes, rounds without took 30-70 minutes and 150-290 turns, and
-   workers still do not run the suites. Under T-135, keep the approved
+   ~20 minutes, rounds without took 30-70 minutes and 150-290 turns. Read
+   the round's local test results in its report first (T-275). When the
+   failing suite would not be selected by the files the round changes, name
+   it in the brief for `--suite <path>`, with its failing cases for
+   `--case <name>`, so the next round's results name them. Under T-135, keep the approved
    brief in project-local evidence and supply it to the worker; GitHub is an
    optional projection controlled by the project comments/local setting (self defaults
    to comments). A brief recorded for a round still applies after the autopilot

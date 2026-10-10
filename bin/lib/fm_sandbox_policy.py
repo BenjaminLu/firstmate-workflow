@@ -194,6 +194,31 @@ def pinned_of():
     return path
 
 
+def local_tests_of():
+    """The round's local test runner folder (T-275), read-only like pinned/:
+    exactly runner.py and plan.json, mode 0444, in <FM_RUN_DIR>/local-tests."""
+    path = os.environ.get('FM_LOCAL_TESTS_DIR', '')
+    if not path:
+        return None
+    if not os.path.isabs(path) or real(path) != path or os.path.basename(path) != 'local-tests':
+        raise ValueError('invalid local tests folder path')
+    run = os.environ.get('FM_RUN_DIR')
+    if not run or path != os.path.join(real(run), 'local-tests'):
+        raise ValueError('local tests folder does not belong to this round')
+    if not os.path.isdir(path):
+        raise ValueError('missing local tests folder')
+    info = os.stat(path)
+    if info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise ValueError('local tests folder must have current-user ownership and no group/other writes')
+    if set(os.listdir(path)) != {'runner.py', 'plan.json'}:
+        raise ValueError('invalid local tests folder contents')
+    for name in ('runner.py', 'plan.json'):
+        file = os.path.join(path, name)
+        if os.path.islink(file) or not os.path.isfile(file) or os.stat(file).st_mode & 0o7777 != 0o444:
+            raise ValueError('local tests file must be regular and mode 0444')
+    return path
+
+
 def pinned_state(path):
     # runs/<actor>/pinned; only the selected child is ever exposed.
     state = os.path.dirname(os.path.dirname(os.path.dirname(path)))
@@ -268,6 +293,10 @@ def darwin(p, roots, reads, own, port, listening, *, root):
     if pinned:
         lines += ['(allow file-read* %s)' % sub([pinned]),
                   '(deny file-write* %s)' % sub([pinned])]
+    local = local_tests_of()
+    if local:
+        lines += ['(allow file-read* %s)' % sub([local]),
+                  '(deny file-write* %s)' % sub([local])]
     git_own = own_git(roots[0]) if roots else None
     if roots and p.get('review_root_readonly'):
         lines.append('(deny file-write* (subpath %s))' % sbpl(roots[0]))
@@ -360,6 +389,9 @@ def linux(p, roots, reads, own, sock):
             a += ['--ro-bind', '/dev/null', n]
     if pinned:
         a += ['--ro-bind', pinned, pinned]
+    local = local_tests_of()
+    if local:
+        a += ['--ro-bind', local, local]
     if sock:
         a += ['--bind', sock, sock]
     a += ['--chdir', roots[0], '--']

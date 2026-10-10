@@ -133,7 +133,7 @@ def registry():
 
     # --- the crew's permission policy (T-105, T-117; see fm_policy above) -----
     ROLES = ('worker', 'reviewer')
-    POLICY_KEYS = ('network', 'read', 'never_read', 'procs', 'cpu')
+    POLICY_KEYS = ('network', 'read', 'never_read', 'procs', 'cpu', 'test_budget')
     # every dimension a round is confined in; an adapter enforces some with its
     # CLI's own flags and bin/fm-sandbox.sh the rest, or the adapter refuses
     DIMENSIONS = ['write', 'read', 'network', 'sockets', 'env', 'repo-config', 'refuse', 'ulimit']
@@ -404,6 +404,11 @@ def registry():
                         or any(c in path for c in '"\\()*?[]'):
                     raise Refused("%s.%s: '%s' is not an absolute path a sandbox profile can hold"
                                   % (where, key, path))
+        elif key == 'test_budget':
+            # the seconds a worker's local test runs may take (T-275)
+            if not re.fullmatch(r'[0-9]+', value) or not 60 <= int(value) <= 7200:
+                raise Refused("%s.test_budget: must be a whole number of seconds from 60 to 7200, not '%s'"
+                              % (where, value))
         elif not re.match(r'[1-9][0-9]*$', value):
             raise Refused("%s.%s: must be a positive whole number, not '%s'" % (where, key, value))
 
@@ -447,7 +452,8 @@ def registry():
         if name and projects:
             layers.append(policy_layer(registered(projects, name).get('policy', []),
                                        'projects.%s.policy' % name))
-        got = dict(read=list(TOOLCHAIN), never_read=list(NEVER_READ), procs='2048', cpu='14400')
+        got = dict(read=list(TOOLCHAIN), never_read=list(NEVER_READ), procs='2048', cpu='14400',
+                   test_budget='900')
         for layer in layers:
             for scope in (layer, layer.get(role) or {}):
                 for key, value in scope.items():
@@ -474,7 +480,7 @@ def registry():
             network=got.get('network', '').split(),
             known_refused=KNOWN_REFUSED,
             refuse=REFUSE, sockets='none', env_scrub=SCRUB, repo_config=REPO_CONFIG,
-            procs=int(got['procs']), cpu=int(got['cpu']),
+            procs=int(got['procs']), cpu=int(got['cpu']), test_budget=int(got['test_budget']),
             vendors={v: vendor_of(d, engine) for v, d in VENDORS.items()})
 
 
