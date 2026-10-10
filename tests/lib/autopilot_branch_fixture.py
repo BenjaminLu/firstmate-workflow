@@ -1,5 +1,6 @@
 """Explicit git refs and HTTP responses for autopilot branch transitions."""
 import json
+from unittest.mock import patch
 
 
 def response(status='202 Accepted', message='Updating pull request branch.'):
@@ -22,6 +23,14 @@ def recheck_response(code, reason, body, message=''):
 
 class BranchFixture:
     def branch_setup(self):
+        self.prepared_env = {'FM_FIXTURE_TRANSFER': 'branches'}
+        self.prepared_calls = []
+        def prepare(argv, cwd=None, env=None, code_root=None):
+            self.prepared_calls.append((list(argv), cwd, code_root))
+            return list(argv), self.prepared_env
+        for target in ('fm_binding.prepare', 'fm_git_transfer.prepare'):
+            preparation = patch(target, side_effect=prepare)
+            preparation.start(); self.addCleanup(preparation.stop)
         self.local_refs = {}
         self.fetch_head = None
         self.ancestor = 0
@@ -35,7 +44,7 @@ class BranchFixture:
         self.git_error = None
         self.restack_answer = (0, json.dumps(dict(head="c" * 40)), "")
 
-    def branch_probe(self, argv):
+    def branch_probe(self, argv, *, env=None):
         if argv[1:3] == ['api', 'graphql']:
             return self.graphql_answer
         if argv[1:4] == ['api', '-X', 'PUT']:
@@ -46,12 +55,15 @@ class BranchFixture:
             return self.restack_answer
         assert argv[0] == 'git', argv
         args = argv[3:]
+        if args[0] != 'fetch':
+            assert env is None, env
         if self.git_error and self.git_error[0] in args:
             return self.git_error[1:]
         if args[:3] == ['rev-parse', '--verify', '--quiet']:
             head = self.local_refs.get(args[3].removeprefix('refs/heads/'))
             return (0, head + '\n', '') if head else (1, '', '')
         if args[0] == 'fetch':
+            assert env is self.prepared_env, env
             assert args[1] == '--no-tags' and args[3].startswith(('+refs/pull/', '+refs/heads/')), argv
             self.last_fetch = args[3]
             return 0, '', ''

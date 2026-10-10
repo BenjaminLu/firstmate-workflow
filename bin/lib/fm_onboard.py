@@ -595,7 +595,10 @@ def main(argv=None):
                 scratch=home/'state/onboarding'
                 scratch.mkdir(parents=True,exist_ok=True,mode=0o700)
                 with tempfile.TemporaryDirectory(prefix='history-',dir=scratch) as temp:
-                    result=subprocess.run(['git','clone','--no-checkout','--depth','30',expected,temp],
+                    from fm_git_transfer import prepare
+                    argv, child_env = prepare(['git','clone','--no-checkout','--depth','30',expected,temp],
+                                              env=os.environ, code_root=os.environ.get('FM_CODE_ROOT', Path(__file__).resolve().parents[2]))
+                    result=subprocess.run(argv, env=child_env,
                                           stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=120)
                     if result.returncode: e['commit_history']='unknown: '+result.stderr.strip()
                     else: e['commits']=git(temp,'log','-30','--format=%s').splitlines()

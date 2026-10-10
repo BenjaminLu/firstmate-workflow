@@ -18,7 +18,7 @@ fm_carry_sync_base() {
   [ -n "$base" ] || { echo 'the PR base name is unreadable' >&2; return 75; }
   [ "$base" = "$project_base" ] || { echo 'not the project base' >&2; return 75; }
   if [ "${FM_EXTERNAL:-0}" = 1 ]; then
-    git -C "$root" fetch -q --no-tags --no-write-fetch-head origin "+refs/heads/$FM_BASE:refs/remotes/origin/$FM_BASE" || {
+    fm_git_transfer git -C "$root" fetch -q --no-tags --no-write-fetch-head origin "+refs/heads/$FM_BASE:refs/remotes/origin/$FM_BASE" || {
       echo 'cannot fetch the live base' >&2; return 75; }
     fm_external_base || return 75
     return 0
@@ -27,7 +27,7 @@ fm_carry_sync_base() {
   FM_CARRY_PRIVATE_ROOT="$root"
   FM_CARRY_PRIVATE_REF="refs/fm/carry-base/$$-$RANDOM-$RANDOM"
   url="$(git -C "$root" remote get-url origin)" || url=''
-  if [ -z "$url" ] || ! git -C "$root" fetch -q --no-tags --no-write-fetch-head "$url" "+refs/heads/$base:$FM_CARRY_PRIVATE_REF"; then
+  if [ -z "$url" ] || ! fm_git_transfer git -C "$root" fetch -q --no-tags --no-write-fetch-head "$url" "+refs/heads/$base:$FM_CARRY_PRIVATE_REF"; then
     fm_carry_base_cleanup || true
     echo 'cannot fetch the live base' >&2; return 75
   fi

@@ -141,7 +141,7 @@ fi
 # push is the end-of-run-only black box this helper exists to end. Lifecycle
 # events stay with the producer (fm-worker / fm-review); checkpoint never
 # invents an actor on the board.
-git -C "$tree" push -q -u origin "$branch" </dev/null || {
+fm_git_transfer git -C "$tree" push -q -u origin "$branch" </dev/null || {
   echo "fm-checkpoint: push failed for $branch" >&2
   exit 71
 }

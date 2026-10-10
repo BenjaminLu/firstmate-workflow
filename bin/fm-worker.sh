@@ -274,7 +274,7 @@ publish_wip_if_dirty() {
     return 1
   fi
   local_tip="$(git -C "$tree" rev-parse HEAD 2>/dev/null || true)"
-  remote_tip="$(git -C "$tree" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null | awk '{print $1}')"
+  remote_tip="$(fm_git_transfer git -C "$tree" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null | awk '{print $1}')"
   if [ -z "$local_tip" ] || [ -z "$remote_tip" ] || [ "$local_tip" != "$remote_tip" ]; then
     echo "fm-worker: checkpoint remote tip mismatch for $branch ($reason) local=$local_tip remote=$remote_tip" >&2
     return 1
@@ -297,7 +297,7 @@ rebuild_settle() {
   local pending ls lsrc origin_head
   [ -n "${branch:-}" ] && [ -n "${REPO:-}" ] || return 0
   pending="$(git -C "$FM_TARGET_ROOT" rev-parse -q --verify "refs/fm-rebuilt/$branch^{commit}" 2>/dev/null)" || return 0
-  ls="$(git -C "$FM_TARGET_ROOT" ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; lsrc=$?
+  ls="$(fm_git_transfer git -C "$FM_TARGET_ROOT" ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; lsrc=$?
   if [ "$lsrc" != 0 ] && [ "$lsrc" != 2 ]; then
     echo "fm-worker: could not ask origin whether the rebuilt $branch (${pending}) reached it; the next round asks again" >&2
     return 1
@@ -443,10 +443,10 @@ fi
 branch_guess="$(git for-each-ref --format='%(refname:short)' refs/heads \
   | grep -Ei "$branch_pattern" | head -1)"
 if [ -z "$branch_guess" ]; then
-  remote_guess="$(git ls-remote --heads origin 2>/dev/null \
+  remote_guess="$(fm_git_transfer git ls-remote --heads origin 2>/dev/null \
     | sed -n 's#.*[[:space:]]refs/heads/##p' \
     | grep -Ei "$branch_pattern" | head -1)"
-  if [ -n "$remote_guess" ] && git fetch -q origin "$remote_guess:$remote_guess" 2>/dev/null; then
+  if [ -n "$remote_guess" ] && fm_git_transfer git fetch -q origin "$remote_guess:$remote_guess" 2>/dev/null; then
     branch_guess="$remote_guess"
   fi
 fi
@@ -630,7 +630,7 @@ elif [ "$(fm_stack_policy stacking)" = allowed ]; then
   stack_base="$(fm_stack select --task "$TASK")" || exit 65
   BASE="$(jq -r .name <<<"$stack_base")"
   if [ "$(jq -r '.head // empty' <<<"$stack_base")" != '' ]; then
-    git fetch --no-tags origin "refs/heads/$BASE:refs/remotes/origin/$BASE" || exit 65
+    fm_git_transfer git fetch --no-tags origin "refs/heads/$BASE:refs/remotes/origin/$BASE" || exit 65
     parent_head="$(jq -r .head <<<"$stack_base")"
     [ "$(git rev-parse "refs/remotes/origin/$BASE")" = "$parent_head" ] || exit 65
     # Do not replace a local parent's unpublished work.
@@ -675,18 +675,18 @@ else
   if git show-ref --verify --quiet "refs/heads/$branch"; then
     round_two=1
     branch_existed=1
-    git fetch -q origin "refs/heads/$branch:refs/heads/$branch" >/dev/null 2>&1 || true
-  elif git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+    fm_git_transfer git fetch -q origin "refs/heads/$branch:refs/heads/$branch" >/dev/null 2>&1 || true
+  elif fm_git_transfer git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
     round_two=1
     branch_existed=1
-    git fetch -q origin "$branch:$branch" 2>/dev/null || {
+    fm_git_transfer git fetch -q origin "$branch:$branch" 2>/dev/null || {
       echo "fm-worker: could not fetch existing branch $branch" >&2; exit 70; }
   fi
   fresh_base="$BASE"
   if [ "$round_two" = 1 ] && [ -z "$PR" ] && [ "$leftover_dirty" = 0 ]; then
     # Only an ancestor can be empty. A divergent commit, even one whose
     # final diff happens to be empty, remains earlier work.
-    if git fetch -q origin "refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null; then
+    if fm_git_transfer git fetch -q origin "refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null; then
       fresh_base="refs/remotes/origin/$BASE"
     fi
     if git merge-base --is-ancestor "$branch" "$fresh_base"; then
@@ -1166,7 +1166,7 @@ bring_up_to_date() {
     echo "fm-worker: $tree is not clean; $branch is not rebuilt this round" >&2
     return 0
   fi
-  git fetch -q origin "+refs/heads/$BASE:$base_ref" 2>/dev/null || {
+  fm_git_transfer git fetch -q origin "+refs/heads/$BASE:$base_ref" 2>/dev/null || {
     echo "fm-worker: could not fetch $BASE; $branch is not checked against it this round" >&2
     return 0; }
   if [ "$FM_EXTERNAL" = 0 ]; then
@@ -1188,7 +1188,7 @@ bring_up_to_date() {
   # the head the push will lease against: the remote's, as it is now. A
   # remote head this branch does not contain is work the rebuild would
   # overwrite, and nothing here has seen it.
-  ls="$(git ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; rc=$?
+  ls="$(fm_git_transfer git ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; rc=$?
   case "$rc" in
     0) rebuild_lease="$(printf '%s\n' "$ls" | awk 'NR == 1 { print $1 }')" ;;
     2) rebuild_lease='' ;;
@@ -1381,7 +1381,7 @@ fi
 log_err="$(scratch_new)" || log_err=''
 [ -z "$log_err" ] || scratch_add "$log_err"
 if [ -n "$PR" ]; then
-  git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null || true
+  fm_git_transfer git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null || true
 fi
 if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_context_pack.py" \
     --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" --task "$TASK" \
@@ -2458,7 +2458,9 @@ if [ "$rebuilt" = 1 ]; then
     fi
     fm_publication_policy "$tree" "$branch" || exit 65
   fi
-  if ! git -C "$tree" push -q --force-with-lease="refs/heads/$branch:$rebuild_lease" \
+  # Keep this an external command: a redirected shell function can hide
+  # parent EXIT settlement diagnostics when TERM arrives during the push.
+  if ! python3 "$_fm_code_dir/lib/fm_git_transfer.py" git -C "$tree" push -q --force-with-lease="refs/heads/$branch:$rebuild_lease" \
        origin "$rebuilt_head:refs/heads/$branch" 2>/dev/null; then
     # refused: the local branch never moved; the rebuilt commit stays
     # reachable by the id printed here
@@ -2478,7 +2480,7 @@ if [ "$rebuilt" = 1 ]; then
   echo "fm-worker: $branch rebuilt on $BASE; the previous head was ${rebuild_prev}" >&2
 else
   fm_publication_policy "$tree" || exit 65
-  git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
+  fm_git_transfer git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
     echo "fm-worker: could not push $branch" >&2; exit 71; }
 fi
 # Only now: a push that was refused - a lease above, or a plain one - left

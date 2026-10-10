@@ -30,9 +30,10 @@ class TaskResolution(unittest.TestCase):
                         evidence_project='firstmate-workflow', external=False, repository='owner/repo', base='main')
         stub = self.root / 'git'
         stub.write_text('''#!/usr/bin/env python3
-import json, pathlib, sys
+import json, os, pathlib, sys
 root = pathlib.Path(__file__).resolve().parent
 args = sys.argv[1:]
+with (root / 'git-envs').open('a') as out: out.write(json.dumps(os.environ.get('FM_FIXTURE_TRANSFER')) + '\\n')
 with (root / 'git-calls').open('a') as out: out.write(json.dumps(args) + '\\n')
 assert args[:2] == ['-C', str(root)], args
 if args[2] == 'show':
@@ -64,6 +65,12 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
         env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
         env.update(PATH=str(self.root) + os.pathsep + os.environ['PATH'], FM_GH=str(gh), HERDR_ENV='0')
         p = patch.dict(os.environ, env, clear=True); p.start(); self.addCleanup(p.stop)
+        self.prepared_calls = []
+        def prepare(argv, cwd=None, env=None, code_root=None):
+            self.prepared_calls.append((list(argv), cwd, dict(env), code_root))
+            return list(argv), dict(env, FM_FIXTURE_TRANSFER='head-spec')
+        preparation = patch('fm_binding.prepare', side_effect=prepare)
+        preparation.start(); self.addCleanup(preparation.stop)
         (self.root / 'head-spec').write_text('{"id":"T-179"}')
         self.jobs = []
         self.pilot = self.start(1000)
@@ -103,6 +110,14 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
         self.assertEqual(self.pilot.task(PR), 'T-179')
         calls = [json.loads(line) for line in (self.root / 'git-calls').read_text().splitlines()]
         self.assertEqual([a[2] for a in calls], ['cat-file', 'fetch', 'rev-parse', 'update-ref', 'show'])
+        envs = [json.loads(line) for line in (self.root / 'git-envs').read_text().splitlines()]
+        self.assertEqual(envs, [None, 'head-spec', None, None, None])
+        self.assertEqual(len(self.prepared_calls), 1)
+        argv, cwd, env, code = self.prepared_calls[0]
+        self.assertEqual(argv, ['git', *calls[1]])
+        self.assertIsNone(cwd)
+        self.assertEqual(str(code), os.environ.get('FM_CODE_ROOT', str(ROOT)))
+        self.assertNotIn('FM_FIXTURE_TRANSFER', env)
         (self.root / 'missing-object').touch()
         (self.root / 'moved-head').touch()
         self.assertEqual(self.pilot.task(PR), '')

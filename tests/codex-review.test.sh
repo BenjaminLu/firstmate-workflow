@@ -234,7 +234,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'id':'0'
         env = dict(PATH=os.environ['PATH'], HOME=str(self.home), TMPDIR=str(self.home),
                    REPO=str(self.tree), FM_RUN_DIR=str(run), FM_CODE_ROOT=str(root),
                    R_HEAD=self.head, R_BASE=self.head, BRANCH='moving', BASE='moving')
-        command = build + '\n' + rebuild + '\n' + check + '''
+        command = '. "$FM_CODE_ROOT/bin/fm-config.sh"\n' + build + '\n' + rebuild + '\n' + check + '''
 build_checkout || exit 1
 git -C "$CHECKOUT" rev-parse HEAD
 rebuild_checkout || exit 1

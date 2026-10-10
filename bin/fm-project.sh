@@ -175,7 +175,7 @@ sync_clone() {
     fi
     local deepen=()
     if [ "$(git -C "$clone" rev-parse --is-shallow-repository)" = true ]; then deepen=(--unshallow); fi
-    git -C "$clone" fetch -q --prune ${deepen[@]+"${deepen[@]}"} origin || {
+    fm_git_transfer git -C "$clone" fetch -q --prune ${deepen[@]+"${deepen[@]}"} origin || {
       echo "fm-project: could not fetch $origin into $clone" >&2; exit 1; }
     # Old onboarding created --no-checkout clones. Populate only an absent
     # index with a committed HEAD: an empty remote has neither yet.
@@ -187,7 +187,7 @@ sync_clone() {
     echo "fm-project: fetched and pruned $NAME"
   else
     mkdir -p "$project_home" && place_ok || exit 65
-    git clone -q "$origin" "$clone" || { echo "fm-project: could not clone $origin" >&2; exit 1; }
+    fm_git_transfer git clone -q "$origin" "$clone" || { echo "fm-project: could not clone $origin" >&2; exit 1; }
     is_clone || { echo "fm-project: $clone did not come out a clone of its own" >&2; exit 70; }
     echo "fm-project: cloned $github into $clone"
   fi
