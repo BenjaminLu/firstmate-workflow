@@ -35,5 +35,363 @@
     "Regression assertion `wrapper: exit code passes through`: `git rev-parse --verify no-such-ref` exits with the same nonzero code through the wrapper as with the real `git`.",
     "Regression assertion `wrapper: standard input passes through`: `printf x | git hash-object --stdin` prints the same object id through the wrapper as with the real `git`.",
     "Fail-first assertion `workflow: direct suites use the wrapper`: in `.github/workflows/ci.yml`, each step that runs `bash tests/pinned-context.test.sh` also runs `fm_git_quiet` earlier in the same step. The test reads the workflow file and checks this for every such step (two today), so a new direct step without the wrapper fails it."
-  ]
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "On Linux CI, every Git call runs with background maintenance and automatic gc turned off."
+        },
+        {
+          "kind": "fact",
+          "text": "The fail-first job and the two workflow steps that run suites directly use the same wrapper."
+        },
+        {
+          "kind": "fact",
+          "text": "On macOS, the CI script and the fail-first script run Git exactly as today."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "Git 2.55 on the CI runner starts a background job after each commit."
+        },
+        {
+          "kind": "fact",
+          "text": "A test that deletes its folder during that job fails at random."
+        }
+      ],
+      "scope_in": [
+        "the shared config helper",
+        "the CI script",
+        "the fail-first script",
+        "two workflow steps",
+        "one new test suite"
+      ],
+      "scope_out": [
+        "Git settings on a Mac",
+        "the round sandbox",
+        "other flaky tests"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: tests show maintenance and gc are off and a commit starts no maintenance job."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: tests show the fail-first job and both workflow steps use the wrapper."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: a test shows nothing changes on macOS."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "The experiment proved the late Git job but did not catch the delete error itself."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "Test makes a commit"
+        },
+        {
+          "state": "gone",
+          "label": "Git job runs late"
+        },
+        {
+          "state": "same",
+          "label": "Test deletes its folder"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "Test makes a commit"
+        },
+        {
+          "state": "new",
+          "label": "Wrapper turns job off"
+        },
+        {
+          "state": "same",
+          "label": "Test deletes its folder"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Test"
+          },
+          {
+            "label": "Git"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "commit",
+            "label": "Test makes a commit",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "bg",
+            "label": "Git job runs late",
+            "lane": 1,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "quiet",
+            "label": "Wrapper turns job off",
+            "lane": 1,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "rm",
+            "label": "Test deletes its folder",
+            "lane": 0,
+            "kind": "step",
+            "state": "same"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "commit",
+            "to": "bg",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e2",
+            "from": "bg",
+            "to": "rm",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "commit",
+            "to": "quiet",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e4",
+            "from": "quiet",
+            "to": "rm",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e3",
+            "e4"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "On Linux CI, a wrapper runs every Git call with background maintenance turned off.",
+            "intents": [
+              1,
+              2
+            ]
+          }
+        ]
+      }
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "在 Linux CI 上，每次呼叫 Git 都關掉背景整理和自動 gc。"
+        },
+        {
+          "kind": "fact",
+          "text": "fail-first job 和兩個直接跑測試的 workflow 步驟，用同一個包裝腳本。"
+        },
+        {
+          "kind": "fact",
+          "text": "在 macOS 上，CI 腳本和 fail-first 腳本照舊呼叫 Git。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "CI 上的 Git 2.55 每次 commit 後都會啟動背景工作。"
+        },
+        {
+          "kind": "fact",
+          "text": "測試在這段時間刪資料夾，就會隨機失敗。"
+        }
+      ],
+      "scope_in": [
+        "共用設定函式",
+        "CI 腳本",
+        "fail-first 腳本",
+        "兩個 workflow 步驟",
+        "一支新測試"
+      ],
+      "scope_out": [
+        "Mac 上的 Git 設定",
+        "round 的 sandbox",
+        "其他 flaky 測試"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：測試證明整理和 gc 已關，commit 不會啟動整理工作。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：測試證明 fail-first job 和兩個 workflow 步驟都用包裝腳本。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：測試證明 macOS 上沒有任何改變。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "實驗證明 Git 工作晚結束，但沒有直接抓到刪除錯誤。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "same",
+          "label": "測試做 commit"
+        },
+        {
+          "state": "gone",
+          "label": "Git 背景工作晚結束"
+        },
+        {
+          "state": "same",
+          "label": "測試刪除資料夾"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "same",
+          "label": "測試做 commit"
+        },
+        {
+          "state": "new",
+          "label": "包裝腳本關掉工作"
+        },
+        {
+          "state": "same",
+          "label": "測試刪除資料夾"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "測試"
+          },
+          {
+            "label": "Git"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "commit",
+            "label": "測試做 commit",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "bg",
+            "label": "Git 背景工作晚結束",
+            "lane": 1,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "quiet",
+            "label": "包裝腳本關掉工作",
+            "lane": 1,
+            "kind": "focal",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "rm",
+            "label": "測試刪除資料夾",
+            "lane": 0,
+            "kind": "step",
+            "state": "same"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "commit",
+            "to": "bg",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e2",
+            "from": "bg",
+            "to": "rm",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "commit",
+            "to": "quiet",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e4",
+            "from": "quiet",
+            "to": "rm",
+            "state": "new",
+            "change": "c1"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e3",
+            "e4"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "在 Linux CI 上，包裝腳本呼叫 Git 時都關掉背景整理。",
+            "intents": [
+              1,
+              2
+            ]
+          }
+        ]
+      }
+    }
+  }
 }
