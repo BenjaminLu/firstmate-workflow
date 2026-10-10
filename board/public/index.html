@@ -78,6 +78,7 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .k-scope{background:var(--k-scope);color:#080f17}
 .k-skill{background:var(--k-skill);color:#080f17}
 .k-decision{background:var(--k-decision);color:#080f17}
+.k-retro{background:var(--k-decision);color:#080f17}
 .dstrip[open]>summary{border-bottom:1px solid var(--line)}
 .dstrip>.dcard{margin:0;border:0}
 .links{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
@@ -289,6 +290,9 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <span class="vend" id="engine" hidden></span>
   <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
   <button id="themeToggle" type="button"><span aria-hidden="true">◐</span></button>
+  <!-- T-273: the captain asks for a retrospective; firstmate runs it -->
+  <button id="retroRun" type="button"></button>
+  <span id="retroSaid" aria-live="polite"></span>
   <span class="langs" id="langs"></span>
 </div>
 <!-- T-122: a tab without the captain's credential says so, once, and writes nothing.
@@ -465,7 +469,7 @@ document.getElementById('logLoadOlder').onclick = async () => {
 // Recorded classification wins; old cards keep their authored title fallback.
 function cardKind(d) {
   if (d.kind === 'merge' || d.kind === 'merge-untracked') return 'merge';
-  if (['dispatch','repin','scope','skill','decision'].includes(d.purpose)) return d.purpose;
+  if (['dispatch','repin','scope','skill','decision','retro'].includes(d.purpose)) return d.purpose;
   if (/^D-SK-/.test(d.id || '')) return 'skill';
   const en = String(d.details?.en?.title || d.title || '');
   const tw = String(d.details?.['zh-TW']?.title || d.title || '');
@@ -528,6 +532,7 @@ function showWritable() {
   const button = document.getElementById('relogin');
   button.textContent = t("reloginButton"); button.title = t("reloginHint");
   document.getElementById('reloginSaid').textContent = reloginSaid ? t(reloginSaid) : '';
+  if (typeof showRetro === 'function') showRetro();
 }
 // The banner's button: the board opens a new sign-in for this browser, into
 // the tab already on the board when it finds one. The code goes from the
@@ -547,6 +552,51 @@ async function relogin() {
   reloginAgain = setTimeout(() => { button.disabled = false; }, 10_000);
 }
 document.getElementById('relogin').onclick = relogin;
+// T-273: "Run retrospective" records a request and wakes firstmate, which
+// runs the retrospective; the board itself runs nothing. Writes need the
+// same signed-in credential an answer needs.
+let retroSaidKey = '', retroSending = false;
+function showRetro() {
+  const button = document.getElementById('retroRun');
+  button.textContent = t("retroRun");
+  button.disabled = readOnly() || retroSending;
+  button.title = readOnly() ? readOnlyTip() : t("retroRunHint");
+  document.getElementById('retroSaid').textContent = retroSaidKey ? t(retroSaidKey) : '';
+}
+async function requestRetro() {
+  if (readOnly() || retroSending) return;
+  retroSending = true; retroSaidKey = 'retroSending'; showRetro();
+  const r = await fetch('/retro', { method: 'POST', headers: credential({ 'content-type': 'application/json' }), body: '{}' })
+    .then(x => x.status === 403 ? refusedFor(x) : x.json().catch(() => ({}))).catch(() => ({ code: 'unreachable' }));
+  retroSending = false;
+  retroSaidKey = r?.ok ? 'retroRequested' : r?.code === 'retroBusy' ? 'retroBusy' : 'retroFailed';
+  showRetro();
+}
+document.getElementById('retroRun').onclick = requestRetro;
+// A retrospective card's per-item choices, by card id: {index: 'A'|'C'|'D'}
+const itemPicks = new Map();
+const retroItemAnswers = d => (d?.details?.en?.items || []).map((item, index) => ({index, id:item.id, choice:(itemPicks.get(d.id) || {})[index]}));
+const RETRO_EFFECT = {'removes':'retroEffectRemoves','net-removal':'retroEffectNetRemoval','adds':'retroEffectAdds'};
+// Every renderer of a retrospective card - the card, its intent layout and its
+// details sheet - shows the same items with the same per-item choices, kept
+// in one itemPicks entry, so a choice made in one shows in the others.
+function retroItemsHtml(d, content, locked, place = 'card') {
+  if (d.purpose !== 'retro') return '';
+  const mine = itemPicks.get(d.id) || {};
+  // the card's own notes appear once: other layouts already show them
+  const notes = place !== 'card' ? '' : (content?.notes || []).map(note => `<p class="retro-notes">${said(words(note.text), d)}</p>`).join('');
+  return notes + `<ol class="retro-items" data-place="${place}" aria-label="${esc(t("retroItems"))}">` + (content?.items || []).map((item, index) =>
+    `<li class="retro-item" data-item="${esc(item.id)}"><div class="retro-head"><b>${esc(item.id)}</b> · <span class="retro-effect">${esc(t(RETRO_EFFECT[item.effect] || 'retroEffectAdds'))}</span></div>` +
+    `<h4>${said(words(item.title), d)}</h4>` +
+    `<p><b>${esc(t("retroWhy"))}</b> ${said(words(item.why), d)}</p><p><b>${esc(t("retroHow"))}</b> ${said(words(item.how), d)}</p>` +
+    ((item.removes || []).length ? `<p class="retro-removes"><b>${esc(t("retroRemoves"))}</b> ${item.removes.map(r => said(words(r), d)).join(' · ')}</p>` : '') +
+    (item.why_not_removal ? `<p class="retro-why-not"><b>${esc(t("retroWhyNotRemoval"))}</b> ${said(words(item.why_not_removal), d)}</p>` : '') +
+    `<p class="retro-evidence"><b>${esc(t("retroEvidence"))}</b> ${(item.evidence || []).map(e => said(words(e), d)).join(' · ')}</p>` +
+    ((item.scope || []).length ? `<p class="retro-scope"><b>${esc(t("scopeHeading"))}</b> ${item.scope.map(x => esc(x)).join(' · ')}</p>` : '') +
+    `<div class="retro-choice" role="group" aria-label="${esc(item.id)}">` + ['A','C','D'].map(k =>
+      `<button type="button" class="opt" data-id="${esc(d.id)}" data-item-index="${index}" data-item-choice="${k}" aria-pressed="${mine[index] === k}" ${locked ? 'disabled' : ''}${tipAttr()}>${k} · ${esc(t(k === 'A' ? "retroApprove" : k === 'C' ? "retroPark" : "retroDrop"))}</button>`).join('') +
+    '</div></li>').join('') + '</ol>';
+}
 function checkSession() {
   return fetch('/api/session', { headers: credential({}) }).then(r => r.json()).then(s => { writable = s.writable === true; })
     .catch(() => {}).finally(() => { showWritable(); if (latest) render(latest); });
@@ -580,6 +630,7 @@ function pose() {
 
 function chrome() {
   const themeToggle = document.getElementById("themeToggle"); themeToggle.title = t("themeToggle"); themeToggle.setAttribute("aria-label", t("themeToggle"));
+  showRetro();
   document.getElementById("h-brand").innerHTML =
     esc(t("brand")) + "<small>" + esc(t("sub")) + "</small>";
   document.getElementById("awaiting").textContent = t("awaiting");
@@ -845,8 +896,10 @@ function render(s) {
     const gates = d.gates || [], content = localized(d), pick = picks.get(d.id);
     // an answered card, or a tab that cannot write (T-122), takes no choice
     const locked = sent.has(d.id) || answered.has(d.id) || readOnly();
-    // D only where the card offers it: a readiness card's drop (T-059)
-    const options = ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
+    // D only where the card offers it: a readiness card's drop (T-059);
+    // a retrospective card offers A and C only (T-273)
+    const options = ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])]
+      .filter(k => d.purpose !== 'retro' || k === 'A' || k === 'C').map(k => {
       const o = content?.options?.[k];
       // T-118: what the option does when chosen, as the server will carry it out
       const eff = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
@@ -869,9 +922,10 @@ function render(s) {
       (d.kind === "merge" && GATES().some(({name}) => gates?.[name] === "not_runnable")
         ? `<p class="ci-only-evidence" role="note">${esc(t('ciOnlyEvidence'))}</p>` : '') +
       (content?.intent ? `</section>${intentBody(d, content, locked)}` :
+      retroItemsHtml(d, content, locked) +
       `<div class="decision-bar">${decisionDetailsButton(d)}<div class="acts">${options}
-         <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
-         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>
+         ${d.purpose === 'retro' ? '' : `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
+         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>`}
          <span class="validation" id="validation-${esc(d.id)}"></span>
          ${refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : ''}
          <button class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(t(sent.has(d.id) ? 'sending' : 'confirmOrder'))}</button>
@@ -931,6 +985,11 @@ function render(s) {
   });
   deck.querySelectorAll('[data-change-code]').forEach(section => section.ontoggle = () => {
     if (section.open) openChangeCode.add(section.dataset.changeCode); else openChangeCode.delete(section.dataset.changeCode);
+  });
+  deck.querySelectorAll('[data-item-choice]').forEach(b => b.onclick = () => {
+    if (sent.has(b.dataset.id) || answered.has(b.dataset.id) || readOnly()) return;
+    itemPicks.set(b.dataset.id, {...(itemPicks.get(b.dataset.id) || {}), [Number(b.dataset.itemIndex)]: b.dataset.itemChoice});
+    render(latest);
   });
   deck.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
     if (sent.has(b.dataset.id) || answered.has(b.dataset.id) || readOnly()) return;
@@ -1339,14 +1398,14 @@ function intentBody(d, content, locked, detailOnly = false) {
   if (detailOnly && hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,true)}${how}${alignment}${scope}${notes}</div>`;
   if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`;
   const options = `<section class="acts intent-options">` +
-    ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
+    (d.purpose === 'retro' ? ['A','C'] : ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])]).map(k => {
       const o = content.options?.[k];
       const eff = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
       return `<button class="opt option-box" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked || (mergeDoorNeeded(d,k) && !doorReady(d)) ? 'disabled' : ''}${tipAttr()}><span><b>${k}</b> · ${esc(o ? words(o.description) : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}${eff ? ` <i class="eff">→ ${esc(effectLabel(eff))}</i>` : ''}</span>` +
         (o ? `<span class="tradeoffs"><b>${esc(t('pros'))}</b> ${esc(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${esc(words(o.cons))}</span>` : '') + '</button>';
-    }).join('') +
+    }).join('') + (d.purpose === 'retro' ? '' :
     `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t('customChoice'))}</button>` +
-    `<label ${pick === 'custom' ? '' : 'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label></section>`;
+    `<label ${pick === 'custom' ? '' : 'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>`) + `</section>`;
   const footer = `<footer class="acts intent-footer"><span class="validation" id="validation-${esc(d.id)}"></span>` +
     (refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : '') +
     `<button class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(sent.has(d.id) ? t('sending') : t('confirmOrder'))}</button></footer>`;
@@ -1358,8 +1417,9 @@ function intentBody(d, content, locked, detailOnly = false) {
     `<p class="explanation">${said(words(content.explanation || ''),d)}</p>` +
     (hasItems('why') ? `<div class="intent-why">${sentences('why')}</div>` : '') +
     (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome),d)}</p>` : '') + '</details>';
-  if (hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,false)}${how}${scope}${notes}</div>${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
-  return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
+  const items = retroItemsHtml(d, content, locked, 'intent');
+  if (hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,false)}${how}${scope}${notes}</div>${items}${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
+  return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>${items}${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
 }
 function decisionDetailsButton(d) {
   return `<button type="button" data-decision-details data-id="${esc(d.id)}" aria-controls="sheet-${esc(d.id)}" aria-expanded="${openDecisionSheets.has(d.id)}">${esc(t("decisionDetails"))}</button>`;
@@ -1379,7 +1439,8 @@ function decisionSheet(d, content, locked) {
     }) + '</section>' : '';
   return `<div class="decision-sheet" role="dialog" aria-label="${esc(t("decisionDetails"))}" id="sheet-${esc(d.id)}" data-id="${esc(d.id)}" ${openDecisionSheets.has(d.id) ? '' : 'hidden'}>` +
     `<button type="button" data-decision-close data-id="${esc(d.id)}">${esc(t("decisionClose"))}</button><h4>${esc(t('optionsHeading'))}</h4>` +
-    Object.entries(content?.options || {}).map(([key,o]) => `<section><b>${esc(key)} · ${said(words(o.description),d)}</b><p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros),d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons),d)}</p></section>`).join('') + questions + plainBlock(content) + '</div>';
+    Object.entries(content?.options || {}).map(([key,o]) => `<section><b>${esc(key)} · ${said(words(o.description),d)}</b><p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros),d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons),d)}</p></section>`).join('') + questions + plainBlock(content) +
+    retroItemsHtml(d, content, locked, 'sheet') + '</div>';
 }
 const decisionBarObserver = new ResizeObserver(entries => {
   for (const {target} of entries) {
@@ -1412,11 +1473,13 @@ function validate(id) {
   const validQuestions = !replies || replies.every(a => a.ok === true || (a.ok === false && validAnswerText(a.text)));
   const decision = latest?.pending?.find(d => d.id === id);
   const validDoor = !mergeDoorNeeded(decision,chosen) || doorReady(decision);
-  const valid = validPick && validQuestions && validDoor;
+  // T-273: A on a retrospective card records one choice for every item
+  const validItems = !(decision?.purpose === 'retro' && chosen === 'A') || retroItemAnswers(decision).every(a => ['A','C','D'].includes(a.choice));
+  const valid = validPick && validQuestions && validDoor && validItems;
   const button = document.querySelector(`.confirm[data-id="${id}"]`);
   if (button) button.disabled = !valid || sent.has(id) || answered.has(id) || readOnly();
   const label = document.getElementById('validation-' + id);
-  if (label) label.textContent = chosen === 'custom' && !validPick ? t('customInvalid') : !validQuestions ? t('answersInvalid') : !validDoor ? t("doorUnconfirmed") : '';
+  if (label) label.textContent = chosen === 'custom' && !validPick ? t('customInvalid') : !validQuestions ? t('answersInvalid') : !validDoor ? t("doorUnconfirmed") : !validItems ? t("itemAnswersInvalid") : '';
   return valid;
 }
 // a write refused for want of the credential turns the tab read-only
@@ -1430,7 +1493,7 @@ async function answer(id) {
   refused.delete(id); sent.add(id); feedback = {key:'sending'}; render(latest);
   let r = await fetch("/decisions", {
     method: "POST", headers: credential({ "content-type": "application/json" }),
-    body: JSON.stringify({ id, chosen, ...(mergeDoorNeeded(decision,chosen) ? {reviewed_intents:doorInput(id).reviewed,check_answer:doorInput(id).answer,locale:lang} : {}), ...(decision?.project ? {project:decision.project} : {}), ...(chosen === 'custom' ? {text} : {}), ...(decision?.details?.en?.questions ? {answers:questionAnswers(decision)} : {}) }),
+    body: JSON.stringify({ id, chosen, ...(mergeDoorNeeded(decision,chosen) ? {reviewed_intents:doorInput(id).reviewed,check_answer:doorInput(id).answer,locale:lang} : {}), ...(decision?.project ? {project:decision.project} : {}), ...(chosen === 'custom' ? {text} : {}), ...(decision?.details?.en?.questions ? {answers:questionAnswers(decision)} : {}), ...(decision?.purpose === 'retro' && chosen === 'A' ? {item_answers:retroItemAnswers(decision)} : {}) }),
   }).then(x => x.status === 403 ? refusedFor(x) : x.json()).catch(() => ({ error: t("unreachable") }));
   if (r?.ok === false) r = {...r,error:r.why || t("doorUnconfirmed")};
   if (!r.error) answered.add(id);
@@ -1442,7 +1505,7 @@ async function answer(id) {
     refused.set(id, {error:String(r.error), announced:false});
   }
   else {
-    picks.delete(id); drafts.delete(id); answers.delete(id); doorInputs.delete(id); doorVerified.delete(id); doorRequests.delete(id); doorMessages.delete(id);
+    picks.delete(id); drafts.delete(id); answers.delete(id); itemPicks.delete(id); doorInputs.delete(id); doorVerified.delete(id); doorRequests.delete(id); doorMessages.delete(id);
     // a merge answers at once while it runs; its outcome arrives in the record
     const merge = r.decision?.merge ?? r.merge ?? null;
     // T-118: an effect that failed says so, with its reason, and is never

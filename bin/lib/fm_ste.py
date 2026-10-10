@@ -34,12 +34,17 @@ NEW_FIELDS = ('intent', 'why', 'scope_in', 'scope_out', 'done', 'notes', 'questi
 WALK_FIELDS = ('change_points', 'door', 'check')
 LEGACY_FIELDS = NEW_FIELDS
 NEW_FIELDS += WALK_FIELDS + ('scene',)
+# A retrospective card's per-item list (T-273); it makes no card an intent card.
+ITEM_FIELDS = ('items',)
+NEW_FIELDS += ITEM_FIELDS
 # why, how and glossary appear on every card (T-270); alone they never make
 # a card an intent card.
 PLAIN_FIELDS = ('why', 'how', 'glossary')
 INTENT_TRIGGERS = tuple(field for field in NEW_FIELDS if field not in PLAIN_FIELDS)
 CARD_LISTS = LEGACY_FIELDS + ('how',)
 LOCALES = ('en', 'zh-TW')
+ITEM_KEYS = {'id', 'project', 'title', 'why', 'how', 'evidence', 'scope', 'effect', 'removes', 'why_not_removal'}
+ITEM_ID = r'(firstmate|self|P-[0-9a-f]{8})/R[1-9][0-9]{0,3}'
 
 
 def rules():
@@ -295,16 +300,77 @@ def _scene(details):
         raise ValueError('scene: locale structure must match (ids, lanes, states, tokens, counter and intents)')
 
 
+def _items(details):
+    """A retrospective card's items: 1 to 60, unique ids, the same ids,
+    projects and effects at the same position in both locales."""
+    for lang in LOCALES:
+        if not isinstance(details.get(lang), dict) or 'items' not in details[lang]:
+            raise ValueError('items: required in both locales or neither')
+        items = details[lang]['items']
+        field = lang + '.items'
+        if not isinstance(items, list) or not 1 <= len(items) <= 60:
+            raise ValueError(field + ': expected 1-60 items')
+        for item in items:
+            if not isinstance(item, dict) or not set(item) <= ITEM_KEYS:
+                raise ValueError(field + ': expected item objects with known fields')
+            if not isinstance(item.get('id'), str) or not re.fullmatch(ITEM_ID, item['id']):
+                raise ValueError(field + '.id: expected <label>/R<n>')
+            if item.get('project') != item['id'].split('/')[0]:
+                raise ValueError(field + '.project: expected the label of the id')
+            for key in ('title', 'why', 'how'):
+                _text(item.get(key), field + '.' + key)
+            if item.get('effect') not in ('removes', 'net-removal', 'adds'):
+                raise ValueError(field + '.effect: expected removes, net-removal or adds')
+            for key, low, high, maximum in (('evidence', 1, 10, 2000), ('scope', 0, 20, 200),
+                                            ('removes', 0 if item['effect'] == 'adds' else 1, 20, 2000)):
+                values = item.get(key)
+                if not isinstance(values, list) or not low <= len(values) <= high:
+                    raise ValueError(field + '.' + key + ': expected {}-{} entries'.format(low, high))
+                for value in values:
+                    _text(value, field + '.' + key, maximum)
+            if (item['effect'] == 'adds') != ('why_not_removal' in item):
+                raise ValueError(field + '.why_not_removal: required on an adds item and only there')
+            if 'why_not_removal' in item:
+                _text(item['why_not_removal'], field + '.why_not_removal')
+        ids = [item['id'] for item in items]
+        if len(set(ids)) != len(ids):
+            raise ValueError(field + ': duplicate item id')
+    en, zh = details['en']['items'], details['zh-TW']['items']
+    if [(i['id'], i['project'], i['effect'], i['removes']) for i in en] != [(i['id'], i['project'], i['effect'], i['removes']) for i in zh]:
+        raise ValueError('items: locale ids, projects, effects and removals must match position by position')
+
+
 def _validate(details):
     if not isinstance(details, dict):
         raise ValueError('details must be an object')
     if not any(isinstance(details.get(lang), dict) and any(k in details[lang] for k in INTENT_TRIGGERS) for lang in LOCALES):
         return False
+    if any(isinstance(details.get(lang), dict) and 'items' in details[lang] for lang in LOCALES):
+        _items(details)
+        intent = [k for k in INTENT_TRIGGERS if k not in ITEM_FIELDS + ('notes',)]
+        if not any(isinstance(details.get(lang), dict) and any(k in details[lang] for k in intent) for lang in LOCALES):
+            _notes(details)
+            return True
     for lang in LOCALES:
         if not isinstance(details.get(lang), dict) or 'intent' not in details[lang]:
             raise ValueError('intent is required in both locales')
     _walk(details)
     _scene(details)
+    _intent_fields(details)
+    return True
+
+
+def _notes(details):
+    if ('notes' in details['en']) != ('notes' in details['zh-TW']):
+        raise ValueError('notes: required in both locales or neither')
+    for lang in LOCALES:
+        for item in details[lang].get('notes', []) if isinstance(details[lang].get('notes', []), list) else [None]:
+            if not isinstance(item, dict) or item.get('kind') not in ('note', 'caution'):
+                raise ValueError(lang + '.notes: expected note or caution items')
+            _text(item.get('text'), lang + '.notes.text')
+
+
+def _intent_fields(details):
     for key in CARD_LISTS:
         if (key in details['en']) != (key in details['zh-TW']):
             raise ValueError(key + ': required in both locales or neither')
@@ -340,7 +406,6 @@ def _validate(details):
                         raise ValueError(field + ': invalid kind')
         if key in ('questions', 'before_nodes', 'after_nodes', 'change_table') and len(details['en'][key]) != len(details['zh-TW'][key]):
             raise ValueError(key + ': locale counts must match')
-    return True
 
 
 def check_explain(explain):
@@ -354,7 +419,7 @@ def check_explain(explain):
         for field in ('intent', 'done', 'before_nodes', 'after_nodes'):
             if field not in loc:
                 raise ValueError(lang + '.' + field + ': required in explain')
-        if any(field not in NEW_FIELDS or field in ('questions', 'change_table') for field in loc):
+        if any(field not in NEW_FIELDS or field in ('questions', 'change_table') + ITEM_FIELDS for field in loc):
             raise ValueError(lang + ': unknown explain field')
     _validate(explain)
     _alignment(explain)
@@ -371,9 +436,15 @@ def _alignment(details):
                 raise ValueError(lang + '.done: no alignment item for ' + name)
 
 
+def _intent(details):
+    return any('intent' in details.get(lang, {}) for lang in LOCALES)
+
+
 def check_details(details, kind=None):
     if not _validate(details):
         return {'intent_card': False}
+    if not _intent(details):
+        return _report(details, intent=False)
     for lang in LOCALES:
         loc = details[lang]
         if kind in ('merge', 'merge-untracked'):
@@ -388,9 +459,11 @@ def check_details(details, kind=None):
     return _report(details)
 
 
-def _report(details, explain=False):
+def _report(details, explain=False, intent=True):
     report = dict(ok=True, locales={}, labels={})
-    report['explain' if explain else 'intent_card'] = True
+    report['explain' if explain else 'intent_card'] = intent
+    if any('items' in details.get(lang, {}) for lang in LOCALES):
+        report['items'] = True
     for lang in LOCALES:
         loc = details[lang]
         report['locales'][lang] = []
@@ -435,6 +508,11 @@ def _report(details, explain=False):
         for field in ('before_nodes', 'after_nodes'):
             for index, item in enumerate(loc.get(field, [])):
                 add(field, item['label'], index=index, sentences=False, node=True)
+        for index, item in enumerate(loc.get('items', [])):
+            add('items.title', item['title'], 'fact', index, sentences=False)
+            for field in ('why', 'how', 'why_not_removal'):
+                if field in item:
+                    add('items.' + field, item[field], 'fact', index)
     return report
 
 
