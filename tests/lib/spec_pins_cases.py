@@ -393,6 +393,34 @@ class SpecPins(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already used'):
             self.p.create(decision='D-1')
 
+    def test_scope_widening_needs_authorized_repin(self):
+        # T-279 rollout: a change that adds a file its pin does not scope -
+        # an inventory entry beside a reworded skill rule - is refused until
+        # an amended spec is committed and an authorized repin writes pin
+        # version 2. Pin version 1 stays on disk byte for byte.
+        self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json"]}')
+        git(self.root, 'add', '.')
+        git(self.root, 'commit', '-qm', 'narrow scope')
+        self.event()
+        first = self.p.create()
+        base = first['target_base_commit']
+        first_bytes = (self.state / 'pins/T-X/1.json').read_bytes()
+        (self.root / 'skills').mkdir()
+        (self.root / 'skills/rule-inventory.json').write_text('{}\n')
+        git(self.root, 'add', 'skills')
+        git(self.root, 'commit', '-qm', 'inventory entry')
+        with self.assertRaisesRegex(ValueError, 'out of scope: skills/rule-inventory.json'):
+            self.p.scope('HEAD', base)
+        self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json",'
+                             '"skills/rule-inventory.json"]}')
+        git(self.root, 'add', str(self.spec))
+        git(self.root, 'commit', '-qm', 'amended spec widens scope')
+        self.decision()
+        second = self.p.create(decision='D-1')
+        self.assertEqual(second['version'], 2)
+        self.assertEqual(self.p.scope('HEAD', base)['version'], 2)
+        self.assertEqual((self.state / 'pins/T-X/1.json').read_bytes(), first_bytes)
+
     def test_repin_requires_strictly_newer_approval(self):
         self.event()
         first = self.p.create()

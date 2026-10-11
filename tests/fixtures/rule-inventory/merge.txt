@@ -1,0 +1,3 @@
+# shell comment marker: this line is a comment
+  // slash comment marker: so is this one
+[ "$1" = green ] || { echo "refusing to merge a red gate" >&2; exit 1; }

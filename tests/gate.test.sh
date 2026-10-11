@@ -473,14 +473,20 @@ done
 # refused. A line that only reads the script (sed, grep, cat) does not run it.
 # Every source read here and below goes through code(), so a comment that says
 # what an assertion looks for can neither satisfy it nor put a suite in a list.
-code() {  # code <file> ; its lines with shell, // and one-line HTML comments emptied
-  sed -E -e 's@^[[:space:]]*(#|//).*$@@' -e 's@[[:space:]](#|//)[[:space:]].*$@@' -e 's@<!--.*-->@@g' "$1"
+# Shell and Python are read by their own parsers (tests/lib/source_scan.py,
+# T-279); a file they refuse is recorded, never read as text instead.
+code() {  # code <file> ; else its lines with shell, // and one-line HTML comments emptied
+  case "$1" in
+    *.sh|*.py) python3 "$ROOT/tests/lib/source_scan.py" code --bash "$BASH" "$1" 2>> "$cmt.refused" ;;
+    *) sed -E -e 's@^[[:space:]]*(#|//).*$@@' -e 's@[[:space:]](#|//)[[:space:]].*$@@' -e 's@<!--.*-->@@g' "$1" ;;
+  esac
 }
-cmt="$(mktemp)"
+cmt="$(mktemp)"; : > "$cmt.refused"
 printf '# FM_GATE_LOCK=x\n  // GATE_NUMBERS=[1];\nrun ok # FM_GATE_LOCK=y\n<!-- gates[n-1] -->\nkept\n' > "$cmt"
 assert_eq "run ok kept" "$(code "$cmt" | tr -s '\n' ' ' | sed 's/^ //; s/ $//')" \
   "a comment line, a trailing comment and an HTML comment are not code"
-reaching="$(cd "$ROOT" && for f in tests/*.sh; do
+# The raw text first: code is a subset of it, and most suites never name the gate.
+reaching="$(cd "$ROOT" && for f in tests/*.sh; do grep -E 'ROOT"?/bin/fm-(gate|run|\*)\.sh' "$f" >/dev/null &&
   code "$f" | grep -E 'ROOT"?/bin/fm-(gate|run|\*)\.sh' >/dev/null && printf '%s\n' "$f"; done)"
 assert_contains " $(tr '\n' ' ' <<<"$reaching")" " tests/e2e-loop.test.sh " "the sweep finds a suite that runs the gate through a copy"
 while IFS= read -r f; do
@@ -489,6 +495,7 @@ while IFS= read -r f; do
   [ -n "$runs" ] || continue
   assert_contains "$(code "$ROOT/$f")" "FM_GATE_LOCK=" "$f runs the real gate, and sets its own FM_GATE_LOCK"
 done <<<"$reaching"
+assert_eq "" "$(cat "$cmt.refused")" "the gate sweep parses every shell file it reads"
 
 # --- canonical list agreement, labels and stale prose (T-232) -----------
 nums="$(sed -n 's/^g \([0-9]*\) .*/\1/p' "$GATE" | paste -sd ' ' -)"

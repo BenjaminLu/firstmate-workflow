@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "sets": {
+    "config": {
+      "files": [
+        "bin/lib/fm_registry.py",
+        "bin/lib/fm_config_values.py",
+        "bin/lib/fm_config_tasks.py",
+        "bin/lib/fm_config_runtime.py",
+        "bin/lib/fm_ci_checks.py"
+      ]
+    },
+    "project-storage": {
+      "include": ["config"],
+      "files": [
+        "bin/fm-config.sh",
+        "bin/fm-emit.sh",
+        "bin/fm-herdr.py",
+        "bin/lib/fm_git_transfer.py",
+        "bin/lib/fm-ssh-transfer.sh",
+        "bin/lib/fm-task-grammar.sh",
+        "bin/lib/fm_adopt.py",
+        "bin/lib/fm_origin.py",
+        "bin/lib/fm_concurrent.py",
+        "bin/lib/fm_spec_pins.py",
+        "bin/lib/fm_merge_outcome.py",
+        "bin/lib/fm_project_paths.py",
+        "bin/lib/fm-stack.sh",
+        "bin/lib/fm-carry-base.sh",
+        "bin/lib/fm_stack.py",
+        "bin/lib/fm_conventions.py",
+        "bin/lib/fm_gates.json",
+        "bin/lib/fm_binding.py"
+      ],
+      "keep_existing": ["bin/lib/fm_binding.py"]
+    }
+  }
+}
