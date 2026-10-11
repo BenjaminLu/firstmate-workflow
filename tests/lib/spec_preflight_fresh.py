@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+os.environ['HERDR_ENV'] = '0'
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 from fm_evidence import Store  # noqa: E402
