@@ -1,0 +1,5 @@
+fm-worker: publishing dirty worktree (exit-143)
+/private/var/folders/6b/32w8qcqs7rn381gmnsvpw7jc0000gn/T/fm-round.Yw3AqJ/fm-test.0en4Je/worker-exit.sh: line 85: checkpoint_env[@]: unbound variable
+cat: 143: No such file or directory
+cat: 143: No such file or directory
+cat: confirmed external worker EXIT retains interruption status: No such file or directory

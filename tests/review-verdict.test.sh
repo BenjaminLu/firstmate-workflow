@@ -452,9 +452,13 @@ d9="$(fixture)"; r9="$d9/repo"; GH9="$(ghstub "$d9")"
        > design/tasks/T-NEW.json
   git add -A && git -c user.email=a@b.c -c user.name=t commit -qm "add T-NEW"
   git checkout -q main )
+# A branch-only spec is unavailable; reviewers use local or pinned bytes.
+( cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-review.sh --task T-NEW --branch newtask >/dev/null 2>&1 )
+assert_eq "65" "$?" "a spec only on the reviewed branch is not read"
+git -C "$r9" show newtask:design/tasks/T-NEW.json > "$r9/design/tasks/T-NEW.json"
 out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-review.sh --task T-NEW --branch newtask 2>&1)"
 rc9=$?
-assert_ne "65" "$rc9" "a task defined on the branch under review is found"
+assert_ne "65" "$rc9" "a locally defined task is found"
 assert_lacks "$out9" "no task T-NEW" "and not reported as missing"
 assert_eq "Work description unavailable|尚無工作說明" \
   "$(jq -r 'select(.type=="review_opened" and .task=="T-NEW")|[.data.activity.en,.data.activity["zh-TW"]]|join("|")' "$r9/state/events.jsonl")" \

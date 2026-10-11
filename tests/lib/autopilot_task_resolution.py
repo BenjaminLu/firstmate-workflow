@@ -71,7 +71,8 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
             return list(argv), dict(env, FM_FIXTURE_TRANSFER='head-spec')
         preparation = patch('fm_binding.prepare', side_effect=prepare)
         preparation.start(); self.addCleanup(preparation.stop)
-        (self.root / 'head-spec').write_text('{"id":"T-179"}')
+        Path(self.ctx['tasks']).mkdir(parents=True, exist_ok=True)
+        (Path(self.ctx['tasks']) / 'T-179.json').write_text('{"id":"T-179"}')
         self.jobs = []
         self.pilot = self.start(1000)
         self.store = Store(self.ctx['state'], 'firstmate-workflow', 'T-179', external=False)
@@ -96,37 +97,29 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
         self.pilot.advance(pr, [], [])
 
     def test_head_only_spec_gates_and_failed_ci_wakes_once(self):
-        self.assertFalse(Path(self.ctx['tasks']).exists())
+        self.assertTrue(Path(self.ctx['tasks']).exists())
         checks = [dict(id=1, name='ci', head_sha=HEAD, status='completed', conclusion='failure')]
         self.pilot.pull(PR, [], [], checks, [])
         self.pilot.pull(PR, [], [], checks, [])
         self.assertEqual([j[0] for j in self.jobs], ['gate'], 'head-only task must reach gates')
         self.assertEqual(len(self.pilot.data['wakes']), 1, 'failed CI must wake once')
         self.assertEqual(self.pilot.data['pulls']['168']['task'], 'T-179')
-        self.assertIn(HEAD + ':design/tasks/T-179.json', (self.root / 'git-calls').read_text())
+        calls = self.root / 'git-calls'
+        for args in (json.loads(line) for line in calls.read_text().splitlines()) if calls.exists() else []:
+            self.assertFalse('show' in args and any(':design/tasks/' in a for a in args),
+                             'local spec resolution never reads the PR head')
 
-    def test_missing_head_fetches_private_ref_and_checks_observed_sha(self):
+    def test_missing_head_never_fetches_spec(self):
         (self.root / 'missing-object').touch()
         self.assertEqual(self.pilot.task(PR), 'T-179')
-        calls = [json.loads(line) for line in (self.root / 'git-calls').read_text().splitlines()]
-        self.assertEqual([a[2] for a in calls], ['cat-file', 'fetch', 'rev-parse', 'update-ref', 'show'])
-        envs = [json.loads(line) for line in (self.root / 'git-envs').read_text().splitlines()]
-        self.assertEqual(envs, [None, 'head-spec', None, None, None])
-        self.assertEqual(len(self.prepared_calls), 1)
-        argv, cwd, env, code = self.prepared_calls[0]
-        self.assertEqual(argv, ['git', *calls[1]])
-        self.assertIsNone(cwd)
-        self.assertEqual(str(code), os.environ.get('FM_CODE_ROOT', str(ROOT)))
-        self.assertNotIn('FM_FIXTURE_TRANSFER', env)
-        (self.root / 'missing-object').touch()
-        (self.root / 'moved-head').touch()
-        self.assertEqual(self.pilot.task(PR), '')
-        self.assertIn('head moved', self.pilot.data['pulls']['168']['reason'])
+        self.assertFalse((self.root / 'git-calls').exists())
+        self.assertEqual(self.prepared_calls, [], 'local spec resolution prepares no Git transfer')
 
-    def test_committed_spec_precedes_pin(self):
+    def test_pin_precedes_local_file(self):
         from fm_spec_pins import Pins
-        with patch.object(Pins, 'resolve', side_effect=AssertionError('head must resolve first')):
-            self.assertEqual(self.pilot.task(PR), 'T-179')
+        pin = dict(snapshots=dict(spec=dict(text='{"id":"T-179","title":"pinned"}')))
+        with patch.object(Pins, 'resolve', return_value=pin):
+            self.assertEqual(self.pilot.read_head_spec(PR, 'T-179')['title'], 'pinned')
 
     def test_boundary_and_missing_timestamp_do_not_wake(self):
         self.record('ask', 1000)
@@ -195,14 +188,14 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
         self.assertEqual(len(self.pilot.data['wakes']), 3, 'other PR/head wakes cannot suppress this ASK')
 
     def test_unresolvable_reason_persisted_once_and_retried(self):
-        (self.root / 'head-spec').write_text('{"id":"T-999"}')
+        (Path(self.ctx['tasks']) / 'T-179.json').write_text('{"id":"T-999"}')
         self.pilot.pull(PR, [], [], [], [])
         before = copy.deepcopy(self.pilot.data['pulls'])
         self.pilot.pull(PR, [], [], [], [])
         self.assertEqual(self.pilot.data['pulls'], before)
         self.assertIn('reason', before['168'])
         self.assertEqual(self.pilot.data['wakes'], {})
-        (self.root / 'head-spec').write_text('{"id":"T-179"}')
+        (Path(self.ctx['tasks']) / 'T-179.json').write_text('{"id":"T-179"}')
         self.assertEqual(self.pilot.task(PR), 'T-179')
 
     def test_local_event_tracks_new_task_without_checkout_spec(self):
@@ -211,7 +204,7 @@ print('HTTP/2.0 200 OK\\n\\n' + json.dumps(dict(contexts=['ci'], checks=[])))
 
     def test_latest_authorized_pin_is_fallback(self):
         from fm_spec_pins import Pins
-        (self.root / 'head-spec').unlink()
+        (Path(self.ctx['tasks']) / 'T-179.json').unlink()
         pin = dict(snapshots=dict(spec=dict(text='{"id":"T-179"}')))
         with patch.object(Pins, 'resolve', return_value=pin) as resolve:
             self.assertEqual(self.pilot.task(PR), 'T-179')

@@ -13,7 +13,7 @@ One agent runs the crew. Three things make it up:
 
 The agent CLI is a replaceable engine, not the system.
 
-Spec: [`design/design.md`](design/design.md). Task DAG: [`design/tasks/`](design/tasks/),
+Spec: [`design/design.md`](design/design.md). Task DAG: [`design/tasks/`](design/tasks/) (new specs are local and git-ignored, bound by approved pins),
 one file per task; `bin/fm.sh tasks` prints it as a table.
 
 ## Starting a session
@@ -531,3 +531,6 @@ Build Live with `python3 games/voyage-2d/tools/build.py --live`. The generated
 `board/public/voyage2d/` bundle is gitignored. CI builds it before game and browser
 tests; `fm-session.sh start` builds it before starting the board. If that build
 fails, startup reports the failure and the board opens without the game panel.
+
+New task specs are ignored by Git and never committed; specs committed before T-256 stay tracked.
+Reviewers read the pinned spec supplied in their prompt.

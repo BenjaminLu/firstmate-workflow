@@ -224,7 +224,8 @@ if [ "$MODE" != judged ]; then
   # trip to backlog can leave both as they were: a dependency added and taken
   # away again before it merged. So a judgment ends when this script sees its
   # task out of ready, or ready on another episode, and does not come back.
-  # firstmate runs `list` after every merge, which is how the task files change,
+  # firstmate runs `list` after every merge and after it edits a local,
+  # git-ignored task file, which is how the task files change (T-256),
   # and fm-dispatch.sh runs `cleared` on every tick; a trip made between two
   # runs is not seen. An adoption ends the same way once the skill update's
   # dependencies differ from its proposal's.
@@ -248,7 +249,7 @@ if [ "$MODE" != judged ]; then
     if [ -f "$rec" ]; then
       decision="$(jq -r --arg ep "$episode" 'select(.episode == $ep) | .decision' "$rec" 2>/dev/null)"
     fi
-    # A skill update reaches design/tasks/ only through bin/fm.sh self-update
+    # A skill update reaches local, git-ignored design/tasks/ through bin/fm.sh self-update
     # --adopt, after the captain answered its D-SK-* card A. That card was
     # the judgment, so no readiness card is raised for it.
     if [ -z "$decision" ] && adopted "$id" "$episode"; then

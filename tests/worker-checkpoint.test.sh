@@ -120,7 +120,7 @@ publish="$(awk '/^publish_wip_if_dirty\(\) \{/{on=1} on{print} on&&/^}/{exit}' "
 assert_contains "$publish" 'publish_wip_if_dirty' 'the stop checkpoint function is found'
 printf 'three\n' > "$wt/three.txt"
 (cd "$rp" && FM_CODE_ROOT="$rp" REPO="$rp" tree="$wt" branch=t-cs-branch TASK=T-CS _fm_wip_done=0 bash -c \
-  'fm_publication_policy() { return 0; }; eval "$1"; publish_wip_if_dirty exit-1' _ "$publish") >/dev/null 2>&1
+  'fm_publication_policy() { return 0; }; self_specs_unstage() { return 0; }; eval "$1"; publish_wip_if_dirty exit-1' _ "$publish") >/dev/null 2>&1
 assert_eq 'T-CS: Save unfinished work after the round stopped (exit-1)' "$(git -C "$wt" log -1 --pretty=%s)" \
   'the stop checkpoint subject says the round stopped and why'
 # The round commit and the rebuild commit-tree share one subject; its

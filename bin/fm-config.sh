@@ -410,9 +410,11 @@ _fm_registry() {  # _fm_registry <file> <mode> [args...]
 #                                      an array, or a single task
 #   fm_tasks_check [dir]            -> one problem per line; 1 when any
 #
-# <dir> defaults to design/tasks. <rev> reads a commit or branch instead of
-# the working copy: the gate, the worker and the reviewer read the branch
-# under test, which is how a task defined on its own branch is seen at all.
+# <dir> defaults to design/tasks. <rev> reads a commit instead of the working
+# copy; it stays for other callers (history, external repositories). Since
+# T-256 no caller in bin/ passes a branch revision for a self task spec: the
+# gates, the worker and the reviewer read the approved pin or the local,
+# git-ignored file.
 # A name starting with a dot (.DS_Store, a scratch directory) is not a task.
 _fm_task_id() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; }
 
@@ -1366,3 +1368,6 @@ fm_pin_prompt() {
   [ -n "${FM_SPEC_PIN_JSON:-}" ] || return 0
   python3 "$_fm_code_dir/lib/fm_prompt_context.py" pin "${1:-}" <<<"$FM_SPEC_PIN_JSON"
 }
+
+# fm_tasks/fm_task retain an optional revision for compatibility. Production
+# task-spec readers use approved pins or FM_TASKS_DIR local files (T-256).

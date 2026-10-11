@@ -91,7 +91,7 @@ assert_fail "git -C '$r8' cat-file -e '$b8:.fm-say.md'" "the transient note is n
 assert_fail "ls '$r8'/state/unsent/T-Z-*.md" "the first-round question is not stranded unsent"
 rm -rf "$d8"
 
-# New tasks can use the spec alone as the draft's diff. Cover both the
+# New tasks use a durable question as the draft's diff. Cover both the
 # uncommitted seed and an earlier attempt that committed only that spec.
 for question_seed in seeded committed; do
   dq="$(fixture)"; rq="$dq/repo"; GHq="$(ghstub "$dq")"
@@ -103,7 +103,7 @@ for question_seed in seeded committed; do
     mkdir -p "$rq/state/worktrees"
     git -C "$rq" worktree add -q -b t-q-question "$rq/state/worktrees/T-Q" main
     cp "$rq/design/tasks/T-Q.json" "$rq/state/worktrees/T-Q/design/tasks/T-Q.json"
-    git -C "$rq/state/worktrees/T-Q" add design/tasks/T-Q.json
+    git -C "$rq/state/worktrees/T-Q" add -f design/tasks/T-Q.json
     git -C "$rq/state/worktrees/T-Q" commit -qm spec
   fi
   cat > "$rq/bin/adapters/mock.sh" <<'M'
@@ -121,8 +121,10 @@ M
   assert_eq 0 "$rcq" "$question_seed spec-only scope question completes with a first-round prompt"
   assert_contains "$(cat "$dq/ghcalls")" --draft "$question_seed scope question opens a draft"
   assert_contains "$(cat "$dq/ghcalls")" 'pr comment 42' "$question_seed scope question is published"
-  assert_eq design/tasks/T-Q.json "$(git -C "$rq" diff --name-only "main...$bq")" \
-    "$question_seed question draft carries only its spec"
+  assert_eq design/questions/T-Q.md "$(git -C "$rq" diff --name-only "main...$bq")" \
+    "$question_seed question draft carries only its question"
+  assert_lacks "$(git -C "$rq" diff --name-only "main...$bq")" design/tasks/T-Q.json \
+    "$question_seed question never adds its spec"
   safe_rm_rf "$dq"
 done
 

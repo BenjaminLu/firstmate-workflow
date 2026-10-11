@@ -12,3 +12,6 @@ __pycache__/
 .codex/hooks.json
 .codex/config.toml
 .cursor/hooks.json
+
+# Local approved task specs are bound by pins, never version control.
+design/tasks/

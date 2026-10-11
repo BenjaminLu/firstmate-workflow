@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Fixture-only dispatch authority; production never fabricates a greenlight.
-seed_spec_pin() { # engine fixture, task; approved sources already committed
+seed_spec_pin() { # engine fixture, task; approved local spec and committed design/contract
   local repo="$1" task="$2"
   mkdir -p "$repo/state"
   printf '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}\n' >> "$repo/state/events.jsonl"

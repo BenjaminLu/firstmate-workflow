@@ -230,7 +230,8 @@ def build_refs(spec, root, repo, pr, head, external, task):
         point = dict(acceptance=ref['acceptance'], code=code[:20], tests=tests)
         if len(code) > 20: point['more'] = len(code) - 20
         points.append(point)
-    return dict(spec_url=None if external else blob_url(repo, head, 'design/tasks/' + task + '.json'),
+    # T-256: no project commits its spec, so no head blob can link to it.
+    return dict(spec_url=None,
                 acceptance=spec['acceptance'], points=points)
 
 

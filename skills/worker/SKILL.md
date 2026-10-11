@@ -135,9 +135,8 @@ The rebuild leaves the worktree detached until the script commits, so
 commit in it yourself: a round whose HEAD moved off the rebuild base is
 refused.
 
-In a rebuilt self-project round your own task entry is frozen: your file
-`design/tasks/<id>.json` (T-090). The script carries it through exactly as
-your previous head had it; do not rewrite it while resolving. A rebuilt
+In a rebuilt self-project round your local pinned task entry is frozen: your file
+`design/tasks/<id>.json` (T-090). The launcher places the pinned bytes in the worktree and never commits them (new specs are ignored by Git; specs committed before T-256 stay tracked); do not rewrite it while resolving. A rebuilt
 round that changes it is refused like one that leaves a marker. If the
 review asks you to change it, say so in `.fm-say.md` and change it in the
 next round that is not a rebuild.

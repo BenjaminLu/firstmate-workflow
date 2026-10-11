@@ -14,7 +14,7 @@ os.environ['HERDR_ENV'] = '0'
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'bin/lib'), str(ROOT / 'tests/lib')]
-from crew_blocks import section
+from crew_blocks import function, section
 import fm_conventions as conventions
 import fm_onboard as onboard
 from fm_public_text import validate
@@ -226,7 +226,7 @@ class FormatTests(unittest.TestCase):
 
     def worker(self, spec=SPEC, fmt=FORMAT, prefix=''):
         worker = ROOT / 'bin/fm-worker.sh'
-        block = section(worker, 'commit_msg="$TASK:', 'fm_private_stage "$tree"')
+        block = function(worker, 'self_specs_unstage') + section(worker, 'commit_msg="$TASK:', 'fm_private_stage "$tree"')
         publication = section(worker, '  pr_body="Dispatched by firstmate', '  url="$(fm_github pr create')
         script = ('set -eu\nTASK=T-051; FM_EXTERNAL=1\nFM_CODE_ROOT=' + shlex.quote(str(ROOT)) + '\n'
                   'spec=' + shlex.quote(json.dumps(spec)) + '\n'

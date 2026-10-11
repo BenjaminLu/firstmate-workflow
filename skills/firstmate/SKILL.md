@@ -15,7 +15,7 @@ yourself. Firstmate runs only two `gh` commands itself: `gh pr update-branch`,
 only on a pull request GitHub reports as both BEHIND and MERGEABLE, and
 `gh run rerun <run> --failed`, only for a CI failure shown to be flaky (see
 Process rule 2, below). Read the [design](../../design/design.md) and
-[task DAG](../../design/tasks/) (one file per task; `bin/fm.sh tasks` prints the
+task DAG in `design/tasks/` (new specs are local, git-ignored files bound by approved pins and never committed; specs committed before T-256 stay tracked; `bin/fm.sh tasks` prints the
 table) for scope, gates and captain decisions.
 
 Existing user authorization persists across turns for routine, already-authorized
@@ -684,7 +684,7 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    outcome of `failed` is not done: read its reason, fix what held it, and
    carry it out yourself - A through `bin/fm-dispatch.sh --task <id> --repo
    <root>`, C or D through the board's park or drop (`POST /tasks`). B: rescope
-   the task's file, `design/tasks/<id>.json`, through a scoped task, then start
+   the local task file, `design/tasks/<id>.json`, through an approved repin, then start
    it with `bin/fm-dispatch.sh --task <id> --repo <root>`. A parked task is not
    dispatched until it is unparked, and then it is judged again; a dropped one
    is never dispatched.
@@ -1462,10 +1462,11 @@ evidence directory requiring relocation stays held for firstmate to coordinate
 an approved migration. Never delete a rejection to recover readiness.
 
 For an SK skill update, the source binding is the adopted specification at
-`<reviewed-head>:design/tasks/SK-<n>.json`, together with that head's
+the approved pin, or local `design/tasks/SK-<n>.json` when unpinned, together with that head's
 `config.yaml` and the ordinary base/patch/files binding. `fm self-update
 --adopt` promotes the captain-approved proposal into that task file; include
-it in the task branch before review. A proposal remaining only under
+it as a local, git-ignored file before review; never commit it (SK files committed before T-256 stay tracked). Reviewers read
+the pinned spec supplied in their prompt. A proposal remaining only under
 `state/skill-updates` is not a reviewable task and grants no binding exemption.
 Untracked merge cards verify `--expected-head` against GitHub when raised;
 they have no task-specific gate receipt, but still enforce that same SHA at
