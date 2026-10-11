@@ -578,7 +578,7 @@ class QueueTests(unittest.TestCase):
         tasks = engine / 'design/tasks'; tasks.mkdir(parents=True)
         for task in ('T-001', 'T-002', 'T-003', 'T-260'):
             (tasks / (task + '.json')).write_text(json.dumps(dict(id=task, title='Queue trial',
-                milestone='M2', scope=['src/**'], depends_on=(dependencies or {}).get(task, []))))
+                milestone='M2', scope=['src/**'], acceptance=['One front advances.'], depends_on=(dependencies or {}).get(task, []))))
         (engine / 'design/design.md').write_text('Queue fixture design\n')
         (engine / 'config.yaml').write_text('project:\n  check: "true"\n')
         def git(*args):
