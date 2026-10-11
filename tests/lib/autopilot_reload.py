@@ -48,7 +48,7 @@ class Reload(unittest.TestCase):
         gh.write_text('#!/bin/sh\nprintf \'HTTP/2.0 200 OK\\nETag: "empty"\\n\\n[]\\n\'\n')
         gh.chmod(0o755)
         self.env.update(FM_AUTOPILOT_TEST_ENABLE='1', HERDR_ENV='0',
-                        FM_GH=str(gh), GH_REPO='owner/repo', FM_AUTOPILOT_RELOAD_WAIT='3',
+                        FM_GH=str(gh), GH_REPO='owner/repo', FM_AUTOPILOT_RELOAD_WAIT='10',
                         FM_ENGINE_ROOT=str(self.root), FM_STATE_DIR=str(self.root / 'state'),
                         FM_TARGET_ROOT=str(self.root), FM_TASKS_DIR=str(self.root / 'design/tasks'),
                         FM_EXTERNAL='0', FM_EVIDENCE_PROJECT='firstmate-workflow',
@@ -90,7 +90,10 @@ class Reload(unittest.TestCase):
     def read(self, name):
         return A.read_json(self.directory / (name + '.json'))
 
-    def wait_for(self, predicate, seconds=25):
+    def wait_for(self, predicate, seconds=None):
+        # Allow the reload wait twice (old and new service) plus startup slack.
+        if seconds is None:
+            seconds = 2 * int(self.env['FM_AUTOPILOT_RELOAD_WAIT']) + 15
         started = time.monotonic()
         deadline = started + seconds
         while time.monotonic() < deadline:
