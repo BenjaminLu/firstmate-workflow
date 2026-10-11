@@ -246,7 +246,12 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # A vendor that reports the model it actually ran on already ran a
     # turn: whatever error text follows in the same transcript is not "the
     # CLI never started", so it is never read as a model refusal either.
-    vendor_says "{\"type\":\"result\",\"model\":\"claude-opus-5-5\"} then: $refusal_line" 1
+    # claude streams (T-287): its init event names the model, then the error
+    case "$name" in
+      claude) vendor_says "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-opus-5-5\"}
+$refusal_line" 1 ;;
+      *) vendor_says "{\"type\":\"result\",\"model\":\"claude-opus-5-5\"} then: $refusal_line" 1 ;;
+    esac
     : > "$d/model-worked.log"
     FM_MODEL="bad-model-9000" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/model-worked.log" >/dev/null 2>"$d/model-worked.err"

@@ -564,11 +564,22 @@ fm_adapter_model_refusal() {
   [ -n "$model" ] || return 1
   [ "$rc" != 0 ] || return 1
   [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
-  # claude's own output never names a "model" that ran: its stream's init
-  # event names the one asked for before any turn (T-287), and its turns
-  # are read from modelUsage below
+  # claude streams events (T-287): a parsed event naming the model the CLI
+  # ran on - the init event, an assistant message, or a result - reports a
+  # model ran; a line that is not a whole event says nothing either way
   case "$vendor" in
-    claude) ;;
+    claude) python3 -c '
+import json, sys
+for line in sys.stdin.read().split("\n"):
+    if not line.startswith("{"): continue
+    try: e = json.loads(line)
+    except ValueError: continue
+    if not isinstance(e, dict): continue
+    m = e.get("message")
+    for v in (e.get("model") if e.get("type") in ("system", "result") else None,
+              m.get("model") if e.get("type") == "assistant" and isinstance(m, dict) else None):
+        if isinstance(v, str) and v: sys.exit(0)
+sys.exit(1)' <<< "$said" && return 1 ;;
     *) grep -q '"model"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$said" && return 1 ;;
   esac
   # claude's result names no "model": the models a turn ran on are the keys
