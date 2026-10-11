@@ -126,6 +126,11 @@ The fallback chain appends to one log, so a verdict only ever reads the bytes
 its own run added - the previous vendor's auth error must not condemn the
 next one.
 
+**claude's stream (T-287)** is searched for outage signatures only in its
+non-JSON lines and its `result` events, which is all its log held before it
+streamed: the files it reads, its commands' output and its own text are event
+lines, and cannot announce a provider outage.
+
 **Managed Codex JSONL (T-167)** uses a narrower classifier. Only top-level
 `error` and `turn.failed` diagnostic fields, plus non-JSON CLI diagnostics,
 are searched for outage signatures. Model messages, instructions, tool
@@ -219,7 +224,8 @@ usage error, loudly, rather than running on the CLI's default:
 this attempt wrote - but only when the attempt's own exit code is non-zero
 (a completed round, exit 0, is never read as a refusal - see below) and that
 slice reports no `"model":"..."` field of its own (a report of the model
-that ran means a turn happened). claude's own answer is
+that ran means a turn happened; for claude, whose stream's `init` event names
+the model asked for before any turn, a non-empty `modelUsage` instead). claude's own answer is
 `[claude-code:unrecognized_model]`, matched literally; the other three have
 no such fixed token documented, so they are matched against one generic
 phrase list instead, shared the way `_FM_SIG` is, anchored to the start of a
@@ -241,12 +247,20 @@ codebase's own prose about the check itself, saying "an invalid model" or
 "no such model found" is not the CLI refusing to start.
 
 **What the round ran on, read from the run itself (T-127).** Every adapter is
-asked for JSON output (`--output-format json` for claude, cursor-agent and
-gemini; `--json` for codex, alongside its own `--output-format` for the final
-answer), unconditionally, whether or not a managed attempt reads the final
-answer from it: it is also how the model the CLI actually used comes back.
+asked for JSON output (`--output-format stream-json --verbose` for claude,
+`--output-format json` for cursor-agent and gemini; `--json` for codex,
+alongside its own `--output-format` for the final answer), unconditionally,
+whether or not a managed attempt reads the final answer from it: it is also
+how the model the CLI actually used comes back. claude's stream (T-287) is one
+JSON event per line as each step happens - `system`, `assistant` and `user`
+events, then a final `result` event that is the object `--output-format json`
+printed before - so the run log and `fm follow` show its steps while it runs.
+The final answer and the model are read from the stream's final result event;
+a stream with no result event, or with a line starting with `{` that does not
+parse, is incomplete and records no final answer. A transcript with no event
+but a result is the old single object, still read as before.
 `fm_vendor_model` in `bin/fm-config.sh` reads it in each vendor's recorded
-shape. claude's `--output-format json` result carries no `"model"` field -
+shape. claude's result event carries no `"model"` field -
 T-127 assumed it did, and recorded `unknown` for every claude round (T-146) -
 but names the models the run used as the keys of `modelUsage`: the key the
 round asked for when it is among them, otherwise the one with the most output
@@ -259,7 +273,7 @@ guess. Per vendor, where the model comes from:
 
 | vendor | where the model appears |
 |---|---|
-| claude | `--output-format json`'s result message: the keys of `modelUsage`, `{"type":"result",...,"modelUsage":{"claude-opus-5-5":{...}}}`; before any result, the stream's `init` event, `{"type":"system","subtype":"init","model":"claude-opus-5-5",...}` |
+| claude | `--output-format stream-json`'s final result event: the keys of `modelUsage`, `{"type":"result",...,"modelUsage":{"claude-opus-5-5":{...}}}`; before any result, the stream's `init` event, `{"type":"system","subtype":"init","model":"claude-opus-5-5",...}` |
 | codex | `--json`'s event stream: a `token_count` or `turn_completed` event carrying `"model":"..."` |
 | cursor-agent | `--output-format json`'s result object: `{"type":"result",...,"model":"...",...}` |
 | gemini | `--output-format json`'s result object: `{"response":"...","stats":{...},"model":"..."}` |

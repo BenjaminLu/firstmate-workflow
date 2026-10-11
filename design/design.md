@@ -4022,7 +4022,7 @@ same news.
 documents: every adapter is asked for JSON output unconditionally now (not
 only when a managed attempt reads its final answer from it), and
 `fm_vendor_model` reads it in each vendor's recorded shape. claude's
-`--output-format json` result carries no `"model"` field - T-127 assumed it
+final result event (`--output-format stream-json`, T-287) carries no `"model"` field - T-127 assumed it
 did, and recorded `unknown` for every claude round (T-146) - but names the
 models the run used as the keys of `modelUsage`: the key the round asked for
 when it is among them, otherwise the one with the most output tokens, since
@@ -4228,11 +4228,16 @@ and refreshes each second. Each command is one `$ <command>` line with its exit
 code and its output collapsed to the first and last `FM_FOLLOW_LINES` lines (5);
 each changed file is shown as its diff against `HEAD`, staged and unstaged, as
 the file is now, with built-in highlighting only; the model's messages
-(`agent_message`, `result`, `response`) are wrapped and marked; fm's status
+(`agent_message`, claude's `assistant` text, `result`, `response`) are wrapped
+and marked; claude's tool calls show as the command it runs, the file it reads,
+the pattern it searches for, and each edited file's diff once the edit
+succeeds; fm's status
 lines, the sandbox's notices and this actor's events are single marked lines.
 A vendor that has been silent past `FM_FOLLOW_QUIET` seconds (30) of watching
-shows as `waiting for <vendor>`, so a buffered claude, cursor-agent or gemini
-round does not look stuck. Colour and screen control need a terminal without
+shows as `waiting for <vendor>`, so a buffered cursor-agent or gemini round
+does not look stuck. Vendor silence, and the dashboard's `possibly stuck`
+mark, count from the latest line the vendor wrote: for a streaming vendor
+(codex, claude) that is its latest step. Colour and screen control need a terminal without
 `NO_COLOR`; every log-derived string is stripped of control sequences.
 `--raw` (or `FM_FOLLOW_RAW=1`) keeps the byte-for-byte copy for debugging the
 view. `bin/fm.sh follow --all` prints one line per live round of the selected
@@ -4295,6 +4300,17 @@ A known caller pane is required to open a tab; without one, or without a
 Firstmate *stock launch* is only `bin/fm-worker.sh` / `bin/fm-review.sh`; session
 wrappers and hand-started vendor CLIs are protocol violations.
 Adapters still tee vendor transcripts into `cli.log`; their stdout is `run.log`.
+Claude rounds stream their steps (T-287): claude runs with
+`--output-format stream-json --verbose`, one JSON event per line as it reads
+or edits a file, runs a command or writes text, so the run log and
+`fm follow` show each step as it happens instead of one object when the round
+ends. Its final answer, verdict, model, turn count, signing and handoff come
+from the stream's last `result` event exactly as from the single object
+before. A stream that ends without a result event, or that holds a line
+starting with `{` that does not parse, even before a valid result, is
+incomplete: no final answer is recorded. Lines that do not start with `{`
+(connection-retry notices, `fm-sandbox:` lines) are skipped. A stored
+transcript in the old single-object format is still read as it was.
 Vendors that buffer until completion (for example cursor-agent `-p`
 JSON) do not stream progress; the runner therefore prints a start line, periodic
 `[fm] … still running` heartbeats (interval `FM_HEARTBEAT_SECS`, default 15, `0`

@@ -564,7 +564,24 @@ fm_adapter_model_refusal() {
   [ -n "$model" ] || return 1
   [ "$rc" != 0 ] || return 1
   [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
-  grep -q '"model"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$said" && return 1
+  # claude streams events (T-287): a parsed event naming the model the CLI
+  # ran on - the init event, an assistant message, or a result - reports a
+  # model ran; a line that is not a whole event says nothing either way
+  case "$vendor" in
+    claude) python3 -c '
+import json, sys
+for line in sys.stdin.read().split("\n"):
+    if not line.startswith("{"): continue
+    try: e = json.loads(line)
+    except ValueError: continue
+    if not isinstance(e, dict): continue
+    m = e.get("message")
+    for v in (e.get("model") if e.get("type") in ("system", "result") else None,
+              m.get("model") if e.get("type") == "assistant" and isinstance(m, dict) else None):
+        if isinstance(v, str) and v: sys.exit(0)
+sys.exit(1)' <<< "$said" && return 1 ;;
+    *) grep -q '"model"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$said" && return 1 ;;
+  esac
   # claude's result names no "model": the models a turn ran on are the keys
   # of its modelUsage (T-146), and an empty one reports nothing that ran
   grep -q '"modelUsage"[[:space:]]*:[[:space:]]*{[[:space:]]*"' <<< "$said" && return 1
@@ -670,6 +687,25 @@ sys.exit(0 if answer is not None and answer.strip() else 1)
 PY
 }
 
+# fm_adapter_claude_notices < transcript -> the lines an outage is read from
+# in a claude transcript: every line that is not a JSON event, and the result
+# events. claude streams its steps (T-287): the files it reads, the commands'
+# output and its own text are event lines, and a file that discusses a rate
+# limit is not claude being refused one. A line starting with `{` that does
+# not parse is a cut-off step, not a diagnostic either. Before T-287 the log
+# held only the notices and the one result object, which is all this keeps.
+fm_adapter_claude_notices() {
+  python3 -c '
+import json, sys
+for line in sys.stdin.read().split("\n"):
+    if line.startswith("{"):
+        try: event = json.loads(line)
+        except ValueError: continue
+        if not (isinstance(event, dict) and event.get("type") == "result"): continue
+    print(line)
+'
+}
+
 # fm_adapter_verdict <rc> <log> <offset> [vendor] -> 0 done / 1 unfit / 2 unavailable
 fm_adapter_verdict() {
   local rc="$1" log="$2" off="$3" said=''
@@ -694,7 +730,9 @@ fm_adapter_verdict() {
   # matches early kills the producer, printf takes SIGPIPE, and the pipeline
   # reports failure even though the match happened. The verdict would then
   # fall through to "done" on exactly the transcript it was meant to catch.
-  grep -qiE "$_FM_SIG" <<< "$said" && return 2
+  local notices="$said"
+  [ "${4:-}" != claude ] || notices="$(fm_adapter_claude_notices <<< "$said")"
+  grep -qiE "$_FM_SIG" <<< "$notices" && return 2
   case "$rc" in 2|4|41|69|75) return 2 ;; esac
   [ "$rc" = 0 ] || return 1
   # exit 0 having said nothing at all is not a success either

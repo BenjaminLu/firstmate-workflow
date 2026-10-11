@@ -171,7 +171,11 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # every vendor is asked for JSON output now, unconditionally, since that
     # is where the round's own model comes back (T-127)
     case "$name" in
-      claude|cursor-agent|gemini) assert_contains " $model_argv " " --output-format json " \
+      # claude streams its steps as JSON events (T-287); its final result
+      # event is where the model comes back
+      claude) assert_contains " $model_argv " " --output-format stream-json --verbose " \
+        "$name asks for streaming JSON output so its steps show and its round's model can be read back" ;;
+      cursor-agent|gemini) assert_contains " $model_argv " " --output-format json " \
         "$name asks for JSON output so its round's model can be read back" ;;
       codex) assert_contains " $model_argv " " --json " "$name asks for JSON output too" ;;
     esac
@@ -242,7 +246,12 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # A vendor that reports the model it actually ran on already ran a
     # turn: whatever error text follows in the same transcript is not "the
     # CLI never started", so it is never read as a model refusal either.
-    vendor_says "{\"type\":\"result\",\"model\":\"claude-opus-5-5\"} then: $refusal_line" 1
+    # claude streams (T-287): its init event names the model, then the error
+    case "$name" in
+      claude) vendor_says "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-opus-5-5\"}
+$refusal_line" 1 ;;
+      *) vendor_says "{\"type\":\"result\",\"model\":\"claude-opus-5-5\"} then: $refusal_line" 1 ;;
+    esac
     : > "$d/model-worked.log"
     FM_MODEL="bad-model-9000" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/model-worked.log" >/dev/null 2>"$d/model-worked.err"
