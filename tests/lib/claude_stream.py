@@ -102,7 +102,7 @@ class ClaudeStream(unittest.TestCase):
     def start(self, shape='complete', gated=False):
         """A worker round through the adapter and the runner; (process, run dir)."""
         done = subprocess.run([sys.executable, str(ROOT / 'bin/fm-herdr.py'), 'allocate', str(self.root),
-                               'worker', 'T-287', 'Ada'], env=self.env, capture_output=True, text=True,
+                               'worker', 'T-287', ''], env=self.env, capture_output=True, text=True,
                               timeout=WAIT)
         self.assertEqual(0, done.returncode, done.stderr)
         run = Path(done.stdout.strip())
