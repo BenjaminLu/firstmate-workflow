@@ -47,6 +47,7 @@ cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
 # The whole loop still runs to a merged pull request in such a tree.
 printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\nproject:\n  check: bin/ci.sh\n  test: bash {file}\n' > config.yaml
 printf '#!/usr/bin/env bash\nexit 0\n' > bin/ci.sh; chmod +x bin/ci.sh
+printf 'design/tasks/\n' > .gitignore
 mkdir -p design/tasks
 cat > design/tasks/T-101.json <<'J'
 {"id":"T-101","title":"a task the loop can finish","milestone":"M0",

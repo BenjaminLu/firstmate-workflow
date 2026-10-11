@@ -378,17 +378,31 @@ class StockRequests(unittest.TestCase):
                 self.assertEqual('src/a.py', doc['details']['refs']['points'][0]['code'][0]['file'])
                 self.assertEqual('new', doc['details']['refs']['points'][0]['code'][0]['snippet'])
 
-    def test_no_pin_reads_committed_spec_and_ignores_mutable_file(self):
-        self.write('design/tasks/T-242.json',json.dumps(self.legacy))
-        result=self.request()
+    def test_no_pin_reads_local_spec_never_the_head(self):
+        # T-256: the head commits the legacy spec; the local file is enriched.
+        self.commit_spec(self.legacy)
+        self.write('design/tasks/T-242.json',json.dumps(self.enriched))
+        trace=self.root/'git-trace'
+        self.env['GIT_TRACE']=str(trace)
+        try: result=self.request()
+        finally: del self.env['GIT_TRACE']
         self.assertEqual(0,result.returncode,result.stderr)
         doc=json.loads(self.pending().read_text())
         self.assertIn('change_points', doc['details']['en'])
         self.assertIn('refs', doc['details'])
         self.assertEqual(self.enriched['explain']['en']['change_points'],doc['details']['en']['change_points'])
         self.assertEqual(2,doc['details']['refs']['points'][0]['tests'][0]['line'])
-        self.assertIn('/blob/'+self.head+'/',doc['details']['refs']['spec_url'])
+        self.assertIsNone(doc['details']['refs']['spec_url'])
         self.assertNotIn('check_answer',doc['details'])
+        self.assertNotIn(':design/tasks/T-242.json',trace.read_text())
+
+    def test_self_spec_url_is_none_like_an_external_one(self):
+        # T-256: moved from tests/decide.test.sh; a self spec is never on the
+        # head, so no blob link points at it.
+        result=self.request(); self.assertEqual(0,result.returncode,result.stderr)
+        doc=json.loads(self.pending().read_text())
+        self.assertIn('refs',doc['details'])
+        self.assertIsNone(doc['details']['refs']['spec_url'],'self spec URL is None like an external one')
 
     def test_legacy_card_needs_neither_helper_nor_repository_discovery(self):
         self.commit_spec(self.legacy)

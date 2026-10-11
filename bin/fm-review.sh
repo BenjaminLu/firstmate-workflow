@@ -300,17 +300,16 @@ case "$pin_rc" in
   3) echo 'fm-review: no pin; legacy task context is unapproved and gate 3 (scope) will refuse it' >&2 ;;
   *) exit "$pin_rc" ;;
 esac
-# Only an unpinned legacy round uses the branch lookup below. It supplies
-# context, never gate authority; a corrupt existing pin cannot take this path.
-task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.json
-  local t="$1" b="${2:-}" j=''
+# The spec comes from the pinned snapshot; only an unpinned legacy round reads
+# the local tasks-directory file instead. No branch revision is ever read. The
+# local file supplies context, never gate authority; a corrupt existing pin
+# cannot take this path.
+task_spec() {   # task_spec <task> [branch]; optional branch is ignored
+  local t="$1"
   if [ -n "$FM_SPEC_PIN_JSON" ]; then
     jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON"; return
   fi
-  if [ "$FM_EXTERNAL" = 1 ]; then fm_task "$t" "$FM_TASKS_DIR"; return; fi
-  [ -n "$b" ] && j="$(fm_task "$t" design/tasks "$b")"
-  [ -n "$j" ] || j="$(fm_task "$t")"
-  printf '%s' "$j"
+  fm_task "$t" "$FM_TASKS_DIR"
 }
 R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
 # Local refs alone never establish which change GitHub will land.

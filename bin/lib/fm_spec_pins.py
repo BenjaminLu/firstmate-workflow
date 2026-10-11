@@ -1,7 +1,10 @@
 """T-049: dispatch-authorized immutable snapshots, shared by all pin consumers.
 
 The state store is outside worker write authority. Hashes detect corruption;
-committed self sources additionally verify against git. Dispatch-time external
+committed self sources additionally verify against git. Since T-256 a new self
+spec snapshot is `local-self`, read from the local git-ignored task file and
+checked by path and hash only; committed, seeded and approved-branch spec
+snapshots remain readable for pins recorded before it. Dispatch-time external
 approval does not claim a pre-answer proposal binding.
 """
 import argparse
@@ -160,8 +163,13 @@ class Pins:
                             author='captain', time=event['ts'], event=event)
         return None
 
-    def snapshot(self, path, commit, *, local=False, optional=False, seeded=False):
+    def snapshot(self, path, commit, *, local=False, optional=False, seeded=False, local_self=False):
         rel = str(path.relative_to(self.engine)) if not self.external else str(path)
+        if local_self:
+            if self.external or not path.is_file():
+                raise ValueError('missing approved source: ' + str(path))
+            text = path.read_bytes().decode('utf-8')
+            return dict(text=text, sha256=digest(text), source='local-self', path=rel)
         text = None
         if not self.external:
             try:
@@ -192,7 +200,7 @@ class Pins:
         target_commit = git(self.target, 'rev-parse', self.base + '^{commit}').strip()
         conventions = self.state.parent / 'CONVENTIONS.md' if self.external else self.engine / 'CONVENTIONS.md'
         snapshots = dict(
-            spec=self.snapshot(self.tasks / (self.task + '.json'), engine_commit, local=repin, seeded=not repin),
+            spec=self.snapshot(self.tasks / (self.task + '.json'), engine_commit, local=repin, seeded=not repin, local_self=not self.external),
             design=self.snapshot(self.design, engine_commit, local=repin),
             conventions=self.snapshot(conventions, engine_commit, local=repin, optional=not self.external))
         path = self.state / 'config.yaml' if self.external else self.engine / 'config.yaml'
@@ -356,6 +364,9 @@ class Pins:
                         raise ValueError('branch spec commit mismatch')
                     if git(self.engine, 'show', head + ':' + snap['path']) != snap['text']:
                         raise ValueError('branch spec bytes mismatch')
+                elif source == 'local-self':
+                    if self.external or name != 'spec':
+                        raise ValueError('invalid snapshot provenance')
                 elif source not in (('local',) if self.external else ('seeded', 'uncommitted')):
                     raise ValueError('invalid snapshot provenance')
                 if not self.external and source == 'seeded':
@@ -390,7 +401,12 @@ class Pins:
 
         expected_head is already carried by choice requests and answer receipts.
         Human prose alone cannot establish approval of arbitrary branch bytes.
+        History: since T-256 this returns None for the self project, so no new
+        self pin selects a branch spec; resolve() still verifies existing
+        approved-branch snapshots.
         """
+        if not self.external:
+            return None
         snap = snapshots['spec']
         if spec_ref:
             git(self.target, 'rev-parse', '--verify', spec_ref + '^{commit}')
@@ -543,12 +559,11 @@ class Pins:
         pin = chain[-1]
         spec = json.loads(pin['snapshots']['spec']['text'])
         if not self.external:
-            try:
-                actual = git(self.target, 'show', head + ':' + pin['snapshots']['spec']['path'])
-            except ValueError:
-                actual = ''
-            if actual != pin['snapshots']['spec']['text']:
-                raise ValueError('self task entry differs from pin')
+            entries = git(self.target, 'diff', '--no-renames', '--name-status', '-z',
+                          base + '...' + head).split('\0')
+            for status, path in zip(entries[0::2], entries[1::2]):
+                if status and path.startswith('design/tasks/'):
+                    raise ValueError('task spec in diff: ' + path)
         # T-277: a self task's small-change store is read only when it exists,
         # and is validated whole before any record widens the pinned scope.
         allowed = None

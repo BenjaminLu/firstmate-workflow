@@ -272,7 +272,7 @@ fm_binding() { printf '%s\\n' "$*" > "$CALLS"; printf ''' + answer + '''; }
         self.assertEqual(p.stdout.splitlines()[0], 't-051-work')
         self.assertEqual(p.stdout.splitlines()[1], "T-051: Save the round's changes")
         self.assertNotIn('Private launch strategy', p.stdout)
-        commit = section(worker, 'commit_msg="$TASK:', 'commit_ok=')
+        commit = function(worker, 'self_specs_unstage') + section(worker, 'commit_msg="$TASK:', 'commit_ok=')
         p = self.shell('FM_EXTERNAL=1; TASK=T-051; spec=\'{"title":"Private launch strategy"}\'\n'
                        + 'tree="$2"; fm_private_stage() { :; }\n' + commit + '\nprintf "%s" "$commit_msg"')
         self.assertEqual(p.returncode, 0, p.stderr)

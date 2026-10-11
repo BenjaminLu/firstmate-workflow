@@ -6,6 +6,10 @@ Small changes use connected problem/result prose, proposed approach, observed
 scope, validation status, dispatch provenance and recorded door/rollback.
 Complex changes use the four sections below. Size is authored.
 
+New task specs are local files, ignored by Git and never committed; specs
+committed before T-256 stay tracked. Reviewers read the pinned spec supplied
+in their prompt.
+
 The launcher binds prose to stock approved snapshots; scope comes from the
 exact-head diff and gate 3 uses the approved pin, never a mutable branch spec.
 The approved narrow legacy exception explicitly labels absent publication pin

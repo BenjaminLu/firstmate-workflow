@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/worker.sh"
 d="$(fixture)"; repo="$d/repo"; GH="$(ghstub "$d")"
 printf 'vendor: mock\nproject:\n  check: true\n' > "$repo/config.yaml"
-printf 'state/\n' > "$repo/.gitignore"
+printf 'state/\ndesign/tasks/\n' > "$repo/.gitignore"
 git -C "$repo" add config.yaml .gitignore; git -C "$repo" commit -qm contract
 git -C "$repo" push -q origin main
 printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
@@ -24,7 +24,7 @@ assert_eq 0 "$?" 'authorized worker pins before running its adapter'
 assert_ok "test -f '$repo/state/pins/T-Z/1.json'" 'worker stores its first pin outside the worktree'
 assert_contains "$(cat "$d/prompt.md")" '# Approved spec pin' 'worker prompt uses the shared pin resolver'
 assert_contains "$(cat "$d/prompt.md")" '"approval_binding": "dispatch-time"' 'worker exposes the dispatch-time approval limit'
-assert_eq committed "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'worker records committed self spec provenance'
+assert_eq local-self "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'worker records local self spec provenance'
 assert_eq 1 "$(jq -s '[.[]|select(.type=="spec_pinned")]|length' "$repo/state/events.jsonl")" 'worker emits one initial pin event'
 assert_contains "$(cat "$d/prompt.md")" '# Complete round inputs in pinned/' 'stock worker prompt indexes complete approved design'
 assert_lacks "$(cat "$d/prompt.md")" '# Launcher project context' 'self worker retains its existing prompt sections'
@@ -63,7 +63,7 @@ rm -rf "$d"
 # A resumed PR's first pin must receive the actual round worktree, not main.
 d="$(fixture)"; repo="$d/repo"; GH="$(ghstub "$d")"
 printf 'vendor: mock\nproject:\n  check: true\n' > "$repo/config.yaml"
-printf 'state/\n' > "$repo/.gitignore"
+printf 'state/\ndesign/tasks/\n' > "$repo/.gitignore"
 git -C "$repo" add config.yaml .gitignore; git -C "$repo" commit -qm contract
 git -C "$repo" push -q origin main
 git -C "$repo" checkout -qb t-z-resume
@@ -92,24 +92,17 @@ mkdir -p "$3/wider"
 printf 'resumed implementation\n' > "$3/wider/feature"
 M
 chmod +x "$repo/bin/adapters/mock.sh"
-# fixture() seeded only main's narrower spec. A refused approved-branch
-# snapshot must not fall back to that otherwise valid legacy receipt.
-(cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --pr 42) > "$d/refused.out" 2>&1
-assert_eq 65 "$?" 'resumed branch requires its own exact-byte preflight'
-assert_eq 0 "$(jq -s '[.[] | select(.type=="dispatched" or .type=="commit_pushed")]|length' "$repo/state/events.jsonl")" 'resumed refusal emits no dispatch or checkpoint'
-assert_ok "test ! -e '$repo/state/worktrees/T-Z.pid'" 'resumed refusal publishes no pid'
-assert_ok "test ! -d '$repo/state/worktrees/T-Z'" 'resumed refusal creates no worktree'
-assert_eq "$head" "$(git -C "$repo" ls-remote --heads origin t-z-resume | awk '{print $1}')" 'resumed refusal leaves remote branch unchanged'
-assert_ok "test ! -e '$d/prompt.md'" 'approved-branch refusal never falls back to the main receipt'
-assert_ok "test ! -e '$repo/state/pins/T-Z/1.json'" 'approved-branch refusal publishes no pin'
+# Repin the local spec before resuming; the PR's branch bytes grant no authority.
+cp "$d/spec.json" "$repo/design/tasks/T-Z.json"
 seed_spec_preflight "$repo" T-Z "$d/spec.json"
 (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --pr 42) > "$d/out" 2>&1
-assert_eq 0 "$?" 'resumed PR worker pins after readiness retirement'
-assert_eq approved-branch "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'resumed launcher passes worktree for approved branch scope'
+assert_eq 0 "$?" 'resumed PR worker pins local scope after readiness retirement'
+assert_eq local-self "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'resumed launcher uses local spec'
 assert_eq D-ready "$(jq -r '.approval.decision' "$repo/state/pins/T-Z/1.json")" 'resumed pin retains retired dispatch authority'
-assert_eq D-scope "$(jq -r '.spec_approval.decision' "$repo/state/pins/T-Z/1.json")" 'resumed pin binds exact scope approval'
-assert_ok "cmp '$d/spec.json' '$d/adapter-spec.json'" 'resumed adapter receives the approved branch spec bytes'
-assert_contains "$(cat "$d/prompt.md")" 'first-pin-on-resume' 'resumed prompt names first-pin provenance'
+assert_eq null "$(jq -r '.spec_approval' "$repo/state/pins/T-Z/1.json")" 'branch scope approval is never selected for a new self pin'
+assert_ok "cmp '$d/spec.json' '$d/adapter-spec.json'" 'resumed adapter receives local pinned bytes'
+assert_eq '' "$(git -C "$repo" ls-tree --name-only t-z-resume -- design/tasks/T-Z.json)" 'worker removes an already tracked own spec'
+
 rm -rf "$d"
 
 # Authorized legacy sources cannot pin, but exact-byte preflight is still

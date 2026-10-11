@@ -108,15 +108,13 @@ def source_binding(task, head, base, code):
         contract = (Path(os.environ['FM_STATE_DIR']) / 'config.yaml').read_bytes()
         conventions = (Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md').read_bytes()
     else:
-        # SK proposals are adopted into design/tasks by fm self-update --adopt,
-        # then committed on the task branch just like T tasks. Never fall back
-        # to a mutable state/skill-updates proposal or omit the spec hash.
+        path = Path(os.environ['FM_TASKS_DIR']) / (task + '.json')
         try:
-            spec = command(['git', '-C', str(root), 'show', head + ':design/tasks/' + task + '.json'])
-        except ValueError as error:
-            raise ValueError('approved committed task spec required: design/tasks/' + task + '.json') from error
+            spec = path.read_bytes()
+        except OSError as error:
+            raise ValueError('approved task spec required: ' + str(path)) from error
         if json.loads(spec).get('id') != task:
-            raise ValueError('committed task spec identity mismatch')
+            raise ValueError('approved task spec identity mismatch')
         contract = command(['git', '-C', str(root), 'show', head + ':config.yaml'])
         conventions = b''
     engine = hashlib.sha256()

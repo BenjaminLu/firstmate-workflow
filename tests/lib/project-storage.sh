@@ -80,6 +80,13 @@ if [ "$mode" = request ] && [ "$kind" = merge ] && [ -n "$project" ] &&
     else printf '{"id":"%s","scope":["src/**"],"acceptance":["The check passes."]}\n' "$task" > "$FM_TASKS_DIR/$task.json"; fi
   fi
 fi
+# T-256: a self spec is the local design/tasks file, never a branch commit.
+if [ "$mode" = request ] && [ "$kind" = merge ] && [ -z "$project" ] &&
+   [[ "$task" =~ ^(T|SK)-[0123456789]{3,}$ ]] && [ ! -f "$root/design/tasks/$task.json" ]; then
+  mkdir -p "$root/design/tasks"
+  if [ -f "$root/.fixture-source.json" ]; then cp "$root/.fixture-source.json" "$root/design/tasks/$task.json"
+  else printf '{"id":"%s","scope":["src/**"],"acceptance":["The check passes."]}\n' "$task" > "$root/design/tasks/$task.json"; fi
+fi
 exec bash "$root/bin/fm-decide-real.sh" "${args[@]}"
 SH
   chmod +x "$root/bin/fm-decide.sh"

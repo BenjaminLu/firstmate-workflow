@@ -77,7 +77,8 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   jq -n --arg task "$task" '{id:$task,title:"a mock task",scope:["src/**"],acceptance:["it exists"]}' \
     > "design/tasks/$task.json"
   printf '# design\n## 6. gates\nseven of them\n## 8. board\n' > design/design.md
-  git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
+  printf 'state/\ndesign/tasks/\n' > .gitignore
+  git add -A; git add -f -- "design/tasks/$task.json"; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
   ) || return 1
   seed_spec_preflight "$d/repo" "$task" || return 1
   seed_self_pr_authoring "$d/repo" "$task" || return 1

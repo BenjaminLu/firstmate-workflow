@@ -715,7 +715,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
             try:
                 spec = self.read_head_spec(pr, task)
                 if not isinstance(spec, dict) or spec.get('id') != task:
-                    raise ValueError('committed task spec identity mismatch')
+                    raise ValueError('approved task spec identity mismatch')
                 return task
             except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
                 reason = str(error)
@@ -739,23 +739,15 @@ class Pilot(BranchUpdates, MechanicalLoop):
         return ''
 
     def read_head_spec(self, pr, task):
-        from fm_binding import sha, fetch_ref
-        head = sha(pr['head']['sha'])
-        prefix = ['git', '-C', self.ctx['target']]
-        # Local reads do not enter the side-effect command channel. Fetch only
-        # when the immutable head object is missing, without moving task refs.
-        available = subprocess.run([*prefix, 'cat-file', '-e', head + '^{commit}'],
-                                   capture_output=True, timeout=120)
-        if available.returncode:
-            fetched = fetch_ref(self.ctx['target'], 'https://github.com/' + self.ctx['repository'] + '.git',
-                                'refs/pull/' + str(pr['number']) + '/head', runner=self.command)
-            if fetched != head:
-                raise ValueError('PR head moved while resolving task')
-        result = subprocess.run([*prefix, 'show', head + ':design/tasks/' + task + '.json'],
-                                capture_output=True, text=True, timeout=120)
-        if result.returncode:
-            raise ValueError('committed task spec unavailable at PR head')
-        return json.loads(result.stdout)
+        from fm_spec_pins import Pins
+        pin = Pins(self.adoption_env(), task).resolve(if_present=True)
+        if pin is not None:
+            return json.loads(pin['snapshots']['spec']['text'])
+        path = Path(self.ctx['tasks']) / (task + '.json')
+        try:
+            return json.loads(path.read_text())
+        except OSError as error:
+            raise ValueError('task spec unavailable for ' + task) from error
 
     def recheck(self, task, pr, reviews):
         number, head = str(pr['number']), pr['head']['sha']

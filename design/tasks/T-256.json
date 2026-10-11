@@ -1,0 +1,477 @@
+{
+  "id": "T-256",
+  "title": "New task specs stay out of version control through .gitignore, specs already tracked stay tracked, and every reader takes the spec from the approved pin or the local file",
+  "public_title": null,
+  "milestone": "M2",
+  "depends_on": [
+    "T-251"
+  ],
+  "scope": [
+    ".gitignore",
+    "bin/lib/fm_spec_pins.py",
+    "bin/lib/fm_binding.py",
+    "bin/lib/fm_autopilot.py",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-config.sh",
+    "bin/fm-canary.sh",
+    "bin/fm.sh",
+    "bin/fm-ready.sh",
+    "bin/fm-emit.sh",
+    "board/server.ts",
+    ".github/pull_request_template.md",
+    ".github/ISSUE_TEMPLATE/task-proposal.yml",
+    "skills/firstmate/SKILL.md",
+    "skills/worker/SKILL.md",
+    "design/design.md",
+    "README.md",
+    "bin/fm-decide.sh",
+    "bin/lib/fm_evidence.py",
+    "bin/lib/fm_merge_details.py",
+    "bin/lib/fm_card_refs.py",
+    "tests/**",
+    "design/tasks/**"
+  ],
+  "acceptance": [
+    "Why. The captain decided on 2026-10-08, verbatim: \"task.json不應該進版本控制\", then approved this task (\"開\"). On 2026-10-10 the captain chose the simplest form, verbatim: \"你直接gitignore就好了\". So design/tasks/ goes into .gitignore and new task specs are never committed, while the specs git already tracks stay tracked and unchanged. Nothing is removed from the index and no history is rewritten, so CI checkouts and other clones of the repository lose no file. External projects already keep specs outside git (FM_HOME/projects/<name>/tasks) and bind them by the approved pin; this task gives new self specs the same model.",
+    "Change 1, location. The self project keeps its specs at design/tasks/<id>.json on disk in the engine checkout, as today, so FM_TASKS_DIR, the registry default `tasks: design/tasks` (bin/lib/fm_registry.py :497), bin/fm-diagram.sh :187, bin/fm.sh tasks/self-update and board/server.ts keep reading the same directory. .gitignore gains `design/tasks/`. Git ignores only untracked files, so the specs it already tracks (223 on main a572a1d1) stay tracked with their current bytes. This pull request changes no tracked path under design/tasks/; its only design/tasks/ change is adding its own design/tasks/T-256.json (see Landing).",
+    "Change 2, pins (bin/lib/fm_spec_pins.py). For the self project a new pin or repin takes the spec snapshot from the local file design/tasks/<id>.json with a new source value `local-self`; design and conventions keep their current sources (`committed`, `uncommitted`, `absent`), and the contract stays `committed` from the accepted engine base (:372-373). snapshot() (:163-188) and collect() (:190) record `local-self` only for the spec. resolve() (:232 onward) accepts `local-self` only when the project is the self project and the snapshot name is `spec`, at version 1 and at every repin; its check is the existing path provenance and sha256 of the stored text, with no git lookup; the seeded not-on-base rule (:361-369) and the `uncommitted source requires authorized repin` rule (:370-371) do not apply to it. `local-self` on any other snapshot, or for an external project, raises `invalid snapshot provenance`. `committed`, `seeded`, `uncommitted` and `approved-branch` spec snapshots in an existing pin chain still resolve as today, so pins recorded before this change keep working; a new pin never records them for a self spec. approved_branch_spec (:388 onward) returns None for the self project, so spec_approval and first-pin-on-resume (:305-318) never select a branch spec for a new self pin. scope() (:540-570), for the self project only, no longer compares `head:<spec path>` with the pin; instead it refuses any path under design/tasks/ that the diff adds, modifies or deletes (`git diff --no-renames --name-status`, every status) with `task spec in diff: <path>`, so a self pull request can neither commit a new spec nor change or delete a tracked one. External projects keep today's scope() behaviour, including any design/tasks/ directory in their own repository.",
+    "Change 3, branch readers. bin/lib/fm_binding.py source_binding (:96-126): without a pin, the self project reads FM_TASKS_DIR/<task>.json like the external branch (:106-109), never `git show head:design/tasks/...`; the error text becomes `approved task spec required: <path>`. bin/lib/fm_autopilot.py read_head_spec (:728-744) takes the spec from the task's pin when present, else from the project's tasks directory; it no longer reads the PR head, and a missing spec raises `task spec unavailable for <task>`. bin/fm-review.sh task_spec (:305-314) and bin/fm-worker.sh task_spec (about :403-415) stop reading a branch revision with fm_task and read the pinned snapshot, else the local file.",
+    "Change 3b, four more branch readers (captain scope card D-firstmate-workflow-T256-3, answer A). They came in with later merges and read the spec from a branch commit when no pin exists. For the self project, readers (1) to (3) keep the pin first and then reads the local file FM_TASKS_DIR/<task>.json (design/tasks/<task>.json in this repository), never `git show <head>:design/tasks/<task>.json`. (1) bin/lib/fm_merge_details.py `_spec_text` (about line 50): the local file joins the candidates in place of the branch commit; the digest check against the bound spec stays. (2) bin/lib/fm_evidence.py `pinned_scope` (about line 707, with its `git show` at :716): after the round's pinned spec, it reads the local file; with neither, it returns the empty list as today. (3) bin/fm-decide.sh (about line 573): with no pin, the self project reads the local file like the external branch; a missing file keeps exiting with an error that names the path. (4) bin/lib/fm_card_refs.py (about line 233) builds the merge card's spec link (`spec_url`) as a blob URL to design/tasks/<task>.json on the PR head; once specs leave the branch that link points at a missing file, so for the self project `spec_url` is None, as it already is for external projects. tests/decide.test.sh (about line 1188) and tests/lib/card_refs.py (about line 390) change to expect None for a self task. External projects keep their current behaviour in all four. Tests: one named assertion per reader (and one for the self spec link being None) shows it reads the local file when no pin exists and never runs `git show` on the head; each assertion fails on base.",
+    "Change 4, worker (bin/fm-worker.sh). The worker tree still receives the pinned spec bytes at design/tasks/<id>.json (seeded copy :725-760, pinned writes :1331, :1337, :1723) so the agent can read them, but for the self project the file is ignored and never staged: before every commit and push the script removes from the index the task's own design/tasks/<id>.json and every other design/tasks/ path that the base tree does not track (`git rm --cached --quiet --ignore-unmatch` on those paths); a design/tasks/ path the base still tracks is left as the base has it, so a round never deletes another task's tracked spec. The rebuild path follows the same rule: rebuild_own_file_restore (:1102-1116) writes the bytes without `git add`; the lost-index check rebuild_lost (:1081-1099, index reads at :1087 and :1095) compares the tree file with the pin and no longer reads the index or the commit; the unpinned rebuild entry (:1228) reads the local design/tasks/<id>.json instead of `fm_task ... \"$head\"`; a rebase conflict on the task's own spec file (modify/delete once the base drops it) resolves as a deletion. A round on a branch that already tracks design/tasks/<id>.json removes it from the index in its next commit. Prompt text that says the spec is committed (:1419-1423, :1425-1427, :1513-1517) says instead that the launcher places the pinned spec in the tree and never commits it. The pull request body (:2395) says `Acceptance is in the pinned task spec for <id>.` The first-round question draft (about :1991-2001, the condition at :1998) no longer relies on the seeded spec being the draft's only diff, because that spec is never staged: for a self task it always writes design/questions/<id>.md (the `spec_copied = 0` condition is dropped there), and the comment near :2303 that says an earlier attempt \"already committed the spec\" says instead that an earlier attempt already committed the question file.",
+    "Change 6, canary and helpers. bin/fm-canary.sh (:457-475, :535, :702) writes its fixture specs as untracked files and its pins with the new source; bin/fm-config.sh fm_tasks/fm_task keep the optional revision argument for other callers but no caller in bin/ passes a branch revision for a task spec. The bin/fm-ready.sh comments that say the spec is committed (:227, :251) are corrected.",
+    "Change 7, design/design.md. Section 14 (The task DAG, :5957 onward) says that a new self task spec is a local, git-ignored file pinned by the approved pin, that specs git tracked before this change stay tracked, and that the scope gate refuses any design/tasks/ path in a self diff. Section 5.2a (:657), sections 5.3.2 and 5.3.3 (:929, :1082) and section 11 (Self-update, :3561), where it says how a skill-update proposal (an SK file, design/tasks/SK-<n>.json) is adopted into a task file, are corrected to the pin-or-local-file reading. No new numbered section is added, and the CI DAG check and bin/ci.sh do not change: the tracked specs form a closed set (every depends_on of a tracked spec names a tracked spec), and new specs are checked where they live, in the local engine checkout.",
+    "Landing. The scope gate (gate 3, which checks that a pull request changes only the files its task allows) runs the base code, whose scope() requires head:design/tasks/T-256.json to equal the pin. So the branch adds design/tasks/T-256.json, byte for byte as pinned, and it stays tracked after the merge like every spec already tracked. Every other design/tasks/ path keeps the bytes main has, so the diff holds no other design/tasks/ change. No follow-up task untracks anything. Open self pull requests that commit their own spec when this merges get a normal worker round from firstmate; Change 4 removes that spec from the index in the round's commit, so the new scope gate accepts the pull request.",
+    "Docs. skills/firstmate/SKILL.md (:18, :671, :1449; :1449 tells reviewers to bind `<reviewed-head>:design/tasks/SK-<n>.json` and changes to the pinned or local SK file), skills/worker/SKILL.md (:139), README.md, .github/pull_request_template.md and .github/ISSUE_TEMPLATE/task-proposal.yml say that a new task spec is a local, git-ignored, pinned file that is never committed, that specs committed before this change stay tracked, and that a reviewer reads the pinned spec given in its prompt.",
+    "Tests. Fixtures in tests/** that commit a spec into a fixture repository and then expect a branch read, a committed or approved-branch snapshot or the old scope comparison move to the local-file model. Suites that read a spec main tracks (for example tests/retro.test.sh reading design/tasks/T-230.json, tests/selfupdate.test.sh listing T-090, and tests/e2e/lib/fixture.ts copying the repository's design/tasks) keep reading the tracked files as on main. New cases that fail on base: (a) a self pin records source local-self from an untracked spec; (c) for the self project the scope gate refuses an added, a modified and a deleted design/tasks/ path; (d) a worker round on a branch that tracks its spec removes it from the index and never stages it again, and a rebuild round restores the pinned bytes without staging them and resolves an own-spec modify/delete conflict as a deletion; (e) source_binding and read_head_spec read the pin or local file with no spec on the PR head; (g) resolve() refuses local-self on a non-spec snapshot and for an external project; (l) fm_card_refs gives `spec_url` None for a self task; (m) a self first-round question draft with a seeded spec writes design/questions/<id>.md, so the draft has a diff; (j) a self worker round removes its own spec and paths the base does not track from the index, and never removes a design/tasks/ path the base still tracks. Regression cases: (b) an existing pin chain with committed and seeded spec snapshots still resolves; (h) an external project's diff that adds a file under its own design/tasks/ is judged by its scope list as today. Workers do not run test suites; CI and the gates verify.",
+    "Out of scope. Removing any tracked spec from the index or deleting it; rewriting git history; a CI check for tracked specs; changes to bin/ci.sh, bin/lib/fm_ci_checks.py or bin/lib/fm-carry-base.sh; external projects' storage; the spec preflight parser; moving design/tasks/ to FM_HOME."
+  ],
+  "explain": {
+    "en": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "New task spec files stay on the local disk and git ignores them."
+        },
+        {
+          "kind": "fact",
+          "text": "Gates, reviews, workers and the autopilot read the approved pin or the local file."
+        },
+        {
+          "kind": "fact",
+          "text": "The scope gate refuses any task spec change in a self pull request."
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "You decided that task spec files must not be in version control."
+        },
+        {
+          "kind": "fact",
+          "text": "You chose .gitignore, so the specs git already tracks stay and no clone loses a file."
+        }
+      ],
+      "scope_in": [
+        "the .gitignore entry",
+        "spec pins, binding, autopilot, review and worker readers",
+        "the scope gate",
+        "docs, templates and tests"
+      ],
+      "scope_out": [
+        "specs git already tracks",
+        "the git history",
+        "external project storage"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "Intent 1: design/tasks is in .gitignore, and every spec main tracks keeps its bytes."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 2: new tests prove that each reader works with no spec on the branch."
+        },
+        {
+          "kind": "fact",
+          "text": "Intent 3: new tests prove that the gate refuses an added, changed or deleted spec."
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "This task adds its own spec once, because the old scope gate needs it. It then stays tracked like the others."
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "gone",
+          "label": "Each branch commits its spec"
+        },
+        {
+          "state": "gone",
+          "label": "Gates read the branch spec"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "new",
+          "label": "New spec is ignored"
+        },
+        {
+          "state": "same",
+          "label": "Pin binds the approved bytes"
+        },
+        {
+          "state": "new",
+          "label": "Gate refuses spec changes"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Task spec"
+          },
+          {
+            "label": "Readers"
+          },
+          {
+            "label": "Scope gate"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "spec",
+            "label": "Approved spec",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "branch",
+            "label": "Branch commits spec",
+            "lane": 0,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "local",
+            "label": "Ignored local file",
+            "lane": 0,
+            "kind": "store",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "pin",
+            "label": "Pin binds bytes",
+            "lane": 1,
+            "kind": "store",
+            "state": "same"
+          },
+          {
+            "id": "readers",
+            "label": "Gates and readers",
+            "lane": 1,
+            "kind": "focal",
+            "state": "same"
+          },
+          {
+            "id": "gate",
+            "label": "Refuse spec change",
+            "lane": 2,
+            "kind": "decision",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "spec",
+            "to": "branch",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e2",
+            "from": "branch",
+            "to": "readers",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "spec",
+            "to": "local",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e4",
+            "from": "local",
+            "to": "pin",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e5",
+            "from": "pin",
+            "to": "readers",
+            "state": "same"
+          },
+          {
+            "id": "e6",
+            "from": "readers",
+            "to": "gate",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e3",
+            "e4",
+            "e5",
+            "e6"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "Each new spec stays an ignored local file.",
+            "intents": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": "c2",
+            "text": "The scope gate refuses any spec change in a self diff.",
+            "intents": [
+              3
+            ]
+          }
+        ]
+      }
+    },
+    "zh-TW": {
+      "intent": [
+        {
+          "kind": "fact",
+          "text": "新的 task spec 檔只留在本機，git 會忽略它。"
+        },
+        {
+          "kind": "fact",
+          "text": "gate、審查、worker 和 autopilot 讀已核准的 pin 或本機檔。"
+        },
+        {
+          "kind": "fact",
+          "text": "scope gate 拒絕自家 PR 裡任何 task spec 的變動。"
+        }
+      ],
+      "why": [
+        {
+          "kind": "fact",
+          "text": "你決定 task spec 檔不進版控。"
+        },
+        {
+          "kind": "fact",
+          "text": "你選了 .gitignore，已追蹤的 spec 照留，任何 clone 都不會少檔。"
+        }
+      ],
+      "scope_in": [
+        ".gitignore 的一條設定",
+        "spec pin、binding、autopilot、審查和 worker 的讀取",
+        "scope gate",
+        "文件、範本和測試"
+      ],
+      "scope_out": [
+        "git 已追蹤的 spec",
+        "git 歷史",
+        "外部專案的儲存位置"
+      ],
+      "done": [
+        {
+          "kind": "fact",
+          "text": "意圖 1：design/tasks 已寫進 .gitignore，main 追蹤的 spec 內容都不變。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 2：新測試證明分支上沒有 spec 時每個讀取都正常。"
+        },
+        {
+          "kind": "fact",
+          "text": "意圖 3：新測試證明 gate 拒絕新增、修改或刪除 spec。"
+        }
+      ],
+      "notes": [
+        {
+          "kind": "caution",
+          "text": "舊的 scope gate 需要這個 task 的 spec，所以它會加入一次，之後跟其他 spec 一樣留著。"
+        }
+      ],
+      "before_nodes": [
+        {
+          "state": "gone",
+          "label": "每個分支 commit 自己的 spec"
+        },
+        {
+          "state": "gone",
+          "label": "gate 讀分支上的 spec"
+        }
+      ],
+      "after_nodes": [
+        {
+          "state": "new",
+          "label": "git 忽略新 spec"
+        },
+        {
+          "state": "same",
+          "label": "pin 綁定核准的內容"
+        },
+        {
+          "state": "new",
+          "label": "gate 拒絕 spec 變動"
+        }
+      ],
+      "scene": {
+        "lanes": [
+          {
+            "label": "Task spec"
+          },
+          {
+            "label": "讀取端"
+          },
+          {
+            "label": "Scope gate"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "spec",
+            "label": "已核准的 spec",
+            "lane": 0,
+            "kind": "input",
+            "state": "same"
+          },
+          {
+            "id": "branch",
+            "label": "分支 commit spec",
+            "lane": 0,
+            "kind": "step",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "local",
+            "label": "git 忽略的本機檔",
+            "lane": 0,
+            "kind": "store",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "pin",
+            "label": "pin 綁定內容",
+            "lane": 1,
+            "kind": "store",
+            "state": "same"
+          },
+          {
+            "id": "readers",
+            "label": "關卡與讀取端",
+            "lane": 1,
+            "kind": "focal",
+            "state": "same"
+          },
+          {
+            "id": "gate",
+            "label": "拒絕 spec 變動",
+            "lane": 2,
+            "kind": "decision",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "from": "spec",
+            "to": "branch",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e2",
+            "from": "branch",
+            "to": "readers",
+            "state": "gone",
+            "change": "c1"
+          },
+          {
+            "id": "e3",
+            "from": "spec",
+            "to": "local",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e4",
+            "from": "local",
+            "to": "pin",
+            "state": "new",
+            "change": "c1"
+          },
+          {
+            "id": "e5",
+            "from": "pin",
+            "to": "readers",
+            "state": "same"
+          },
+          {
+            "id": "e6",
+            "from": "readers",
+            "to": "gate",
+            "state": "new",
+            "change": "c2"
+          }
+        ],
+        "tokens": {
+          "before": [
+            "e1",
+            "e2"
+          ],
+          "after": [
+            "e3",
+            "e4",
+            "e5",
+            "e6"
+          ]
+        },
+        "changes": [
+          {
+            "id": "c1",
+            "text": "每份新 spec 都留在本機，git 忽略它。",
+            "intents": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": "c2",
+            "text": "scope gate 拒絕自家差異裡的 spec 變動。",
+            "intents": [
+              3
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

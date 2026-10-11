@@ -727,7 +727,9 @@ class Migration(GateEngine, unittest.TestCase):
         records = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.store.iterdir()}
         old = self.gate(script=self.old_code_copy())
         self.assertEqual(old.returncode, 65)
-        self.assertIn('out of scope: tests/a.test.sh', old.stderr)
+        # T-256 pins use the local-self spec source, which the pre-T-277 code refuses first.
+        self.assertTrue('out of scope: tests/a.test.sh' in old.stderr
+                        or 'invalid snapshot provenance' in old.stderr, old.stderr)
         self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.store.iterdir()}, records)
 
 

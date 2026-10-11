@@ -769,7 +769,7 @@ PY
 # the only thing that turns an approved D-SK-* into work the dispatcher can
 # see, and it refuses to run until the captain has actually said yes.
 #
-# It writes design/tasks/<id>.json, which is to say it writes the plan. It
+# It writes a local, git-ignored design/tasks/<id>.json, bound by a pin. It
 # does not write a skill: the skill is changed on a branch, by a worker,
 # through the pull request the adopted task produces.
 adopt_proposal() {

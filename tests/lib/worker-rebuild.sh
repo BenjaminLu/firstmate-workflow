@@ -30,9 +30,9 @@ rb_build_fixture() {   # build each immutable seed with round one done
     fi
     if [ "${RB_PINNED:-0}" = 1 ]; then
       printf 'project:\n  check: true\n' >> config.yaml
-      printf 'state/\n' > .gitignore
+      printf 'state/\ndesign/tasks/\n' > .gitignore
     fi
-    git add -A; git commit -qm 'app and task table'; git push -q origin main
+    git add -A; git add -f design/tasks/T-1.json; git commit -qm 'app and task table'; git push -q origin main
     [ "${RB_HOOKS:-0}" != 1 ] || bin/fm-install-hooks.sh >/dev/null
   ) || return 1
   # the step a round runs is a file the test writes, so each case can say
