@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Feature dependencies: bin/fm-review.sh bin/fm-herdr.py bin/lib/fm-spec-preflight.sh
-# bin/lib/fm_spec_preflight.py bin/lib/fm_sandbox_policy.py
+# bin/lib/fm_spec_preflight.py bin/lib/fm_preflight_budget.py bin/lib/fm_sandbox_policy.py
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/review.sh
@@ -45,14 +45,11 @@ for row, vendor in zip(own, vendors):
     assert row['data']['identity']['vendor'] == vendor
     assert row['data']['identity']['model_requested'] == 'fixture-' + vendor
 body = pathlib.Path(sys.argv[1]).read_text()
-for phrase in ('declared scope', 'caller, mirror, fixture', 'ids, formats, paths', 'already in flight'):
+for phrase in ('Is the spec clear?', 'right thing to build', 'simpler way', 'already in flight'):
     assert phrase in body
-assert 'REVIEWER_COMPLETE' not in body
+assert 'REVIEWER_COMPLETE' not in body and 'PREFLIGHT-COMPLETE' not in body
 verdict = os.environ.get('FM_TEST_VERDICT', 'SPEC-OK')
-status = 'ok' if verdict == 'SPEC-OK' else 'gap'
-default = ('1. ' + status + ': Checked the acceptance and migration.\n'
-           + 'PREFLIGHT-COMPLETE:' + os.environ['FM_TASK'] + '\n'
-           + verdict + ':' + os.environ['FM_TASK'])
+default = 'Checked the acceptance and migration.\n' + verdict + ':' + os.environ['FM_TASK']
 result = {'type': 'result', 'subtype': 'success', 'is_error': False,
           'result': os.environ.get('FM_TEST_FINAL', default)}
 if os.environ['FM_CHAIN_VENDOR'] == 'codex':
@@ -81,7 +78,7 @@ assert_eq 1 "$(jq -r .attempt "$review_run/identity.json")" 'first review after 
 assert_eq 1 "$(jq -r .round "$review_run/identity.json")" 'first review after recorded preflight retains round 1'
 level=legacy; [ "$vendor" != codex ] || level=authenticated
 assert_eq "$level" "$(jq -r .provenance.level "$record")" "$vendor retains its provenance level"
-(cd "$repo" && FM_ROOT="$repo" FM_TEST_VERDICT=SPEC-GAPS FM_TEST_FINAL=$'1. open: Checked the acceptance and migration.\nPREFLIGHT-COMPLETE:T-Z\nSPEC-GAPS:T-Z' bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/gaps" 2>&1
+(cd "$repo" && FM_ROOT="$repo" FM_TEST_VERDICT=SPEC-GAPS FM_TEST_FINAL=$'Checked the acceptance and migration.\nSPEC-GAPS:T-Z' bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/gaps" 2>&1
 assert_eq 65 "$?" 'gaps retain evidence and refuse approval'
 assert_eq 'spec-gaps ok' "$(jq -sr '[.[]|select(.type=="agent_finished")][-1].data|"\(.preflight_outcome) \(.result)"' "$repo/state/events.jsonl")" 'exit 65 with retained gaps is a completed preflight'
 assert_contains "$(cat "$d/gaps")" 'SPEC-GAPS:T-Z' 'firstmate receives gaps'
@@ -102,8 +99,25 @@ if [ "$vendor" = claude ]; then
   printf 'models:\n  claude: fixture-claude\n  codex: fixture-codex\nreviewer:\n  vendor: claude\nfallback:\n  - codex\n' > "$repo/config.yaml"
   # Amend bytes because an earlier SPEC-GAPS correctly forbids their reuse.
   printf '\n' >> "$repo/design/tasks/T-Z.json"
-  (cd "$repo" && FM_ROOT="$repo" FM_TEST_FALLBACK=1 FM_TEST_FINAL=$'1. done: Checked the acceptance and migration.\nPREFLIGHT-COMPLETE:T-Z\nSPEC-OK:T-Z' bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/fallback" 2>&1
+  (cd "$repo" && FM_ROOT="$repo" FM_TEST_FALLBACK=1 FM_TEST_FINAL=$'Checked the acceptance and migration.\nSPEC-OK:T-Z' bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/fallback" 2>&1
   assert_eq 0 "$?" 'fallback attempt emits its own vendor and requested model'
+  # T-288: that was the third pass. A fourth runs no reviewer and raises the card.
+  cat > "$repo/bin/fm-decide.sh" <<'S'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_ROOT/state/decide-calls"
+[ "$1" != --allocate ] || printf 'D-self-TZ-1\n'
+S
+  chmod +x "$repo/bin/fm-decide.sh"
+  runs="$(find "$repo/state/runs" -name identity.json | wc -l | tr -d ' ')"
+  printf '\n' >> "$repo/design/tasks/T-Z.json"
+  receipts="$(find "$repo/state/evidence" -name '*.json' -type f | wc -l | tr -d ' ')"
+  (cd "$repo" && FM_ROOT="$repo" bin/fm-review.sh --spec-preflight --task T-Z --spec design/tasks/T-Z.json) > "$d/fourth" 2>&1
+  assert_eq 65 "$?" 'preflight: fourth pass raises budget card'
+  assert_eq "$runs" "$(find "$repo/state/runs" -name identity.json | wc -l | tr -d ' ')" 'a fourth pass allocates and runs no reviewer'
+  assert_contains "$(cat "$d/fourth")" 'captain card D-self-TZ-1' 'the refusal names the budget card'
+  assert_eq '--allocate --task T-Z|--request D-self-TZ-1 --task T-Z --purpose decision' \
+    "$(cut -d' ' -f1-6 "$repo/state/decide-calls" | paste -sd'|' -)" 'the launcher allocates and requests one card'
+  assert_eq "$receipts" "$(find "$repo/state/evidence" -name '*.json' -type f | wc -l | tr -d ' ')" 'a refused pass writes no receipt'
 else
   # Select the registered self project while another project is the default.
   cat >> "$repo/config.yaml" <<J

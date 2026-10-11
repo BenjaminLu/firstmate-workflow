@@ -13,7 +13,7 @@ import unittest
 ROOT = Path(sys.argv.pop(1))
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 from fm_evidence import Store
-from fm_spec_preflight import require_ok, retain, prompt, decision, standing
+from fm_spec_preflight import require_ok, retain, prompt, decision, latest, refusals
 loader = importlib.util.spec_from_file_location('managed', ROOT / 'bin/fm-herdr.py')
 managed = importlib.util.module_from_spec(loader)
 loader.loader.exec_module(managed)
@@ -98,17 +98,7 @@ class Preflight(unittest.TestCase):
 
     def record(self, data=None, verdict='SPEC-OK'):
         data = self.spec if data is None else data
-        previous = standing(self.store)
-        if previous is None:
-            statuses = ['ok' if verdict == 'SPEC-OK' else 'gap'] * max(
-                1, len(json.loads(data).get('acceptance') or []))
-        else:
-            statuses = [('open' if verdict == 'SPEC-GAPS' else
-                         'done' if item['status'] in ('gap', 'open') else 'ok')
-                        for item in previous['standing']]
-        answer = ''.join(f'{n}. {status}: Checked each acceptance line.\n'
-                         for n, status in enumerate(statuses, 1))
-        answer += 'PREFLIGHT-COMPLETE:T-X\n' + verdict + ':T-X\n'
+        answer = 'Checked each acceptance line.\n' + verdict + ':T-X\n'
         return retain(self.store, data, 'a' * 40, 'reviewer-noah-tx-r1', 1,
                       answer,
                       {'level': 'legacy', 'vendor': 'claude'})
@@ -207,23 +197,27 @@ class Preflight(unittest.TestCase):
 
     def test_prompt_four_checks_and_closing_rule(self):
         body = prompt('T-X', self.spec, 'a' * 40)
-        for part in ('declared scope', 'caller, mirror, fixture', 'ids, formats, paths',
-                     'already in flight', 'migration', 'test', 'SPEC-OK:T-X', 'SPEC-GAPS:T-X',
-                     'PREFLIGHT-COMPLETE:T-X'):
+        # T-288: four questions and a free-form review; no numbered list.
+        for part in ('1. Is the spec clear?', '2. Is it the right thing to build?',
+                     '3. Is there a simpler way?', '4. Does it contradict the code or another rule?',
+                     'already in flight', 'name the acceptance line it concerns',
+                     'suggest a rewrite', 'SPEC-OK:T-X', 'SPEC-GAPS:T-X'):
             self.assertIn(part, body)
+        self.assertIn('Do not ask for implementation detail such as callers', body)
+        self.assertNotIn('PREFLIGHT-COMPLETE', body)
         context = managed.role_context(ROOT, 'reviewer', 'T-X', 'reviewer-noah', body,
                                        spec_preflight=self.sha)
         self.assertNotIn('REVIEWER_COMPLETE', context)
         self.assertNotIn('APPROVE:T-X', context)
         self.assertIn('SPEC-OK:T-X', context)
-        self.assertIn('PREFLIGHT-COMPLETE:T-X', context)
+        self.assertNotIn('PREFLIGHT-COMPLETE', context)
 
     def test_prompt_check_five_names_the_design_section(self):
         # T-189: a design.md edit names its numbered home, never the file's end.
         body = prompt('T-X', self.spec, 'a' * 40)
-        self.assertIn('5. If the scope lists design/design.md, does the acceptance name the numbered\n'
-                      '   section (§N or §N.M) it edits?', body)
-        self.assertIn('adds a section after the last numbered section, is a\n   spec gap.', body)
+        self.assertIn('- If the scope lists design/design.md, does the acceptance name the numbered\n'
+                      '  section (§N or §N.M) it edits?', body)
+        self.assertIn('adds a section after the last numbered section, is a\n  spec gap.', body)
 
     def bold_final(self, verdict='SPEC-OK'):
         # T-206: supplied excerpt of a real reviewer final, with its layout intact.
@@ -236,9 +230,7 @@ class Preflight(unittest.TestCase):
                 self.assertEqual(verdict, decision(self.bold_final(verdict), 'T-X'))
 
     def assert_bold_heading_retained(self, verdict):
-        answer = (ROOT / 'tests/fixtures/spec-preflight/bold-headings-standing.final.txt').read_text()
-        if verdict == 'SPEC-GAPS':
-            answer = answer.replace('**ok**', '**gap**', 1).replace('SPEC-OK:T-X', 'SPEC-GAPS:T-X')
+        answer = self.bold_final(verdict)
         retained = retain(self.store, self.spec, 'a' * 40, 'reviewer-noah-tx-r1', 1,
                           answer, {'level': 'legacy', 'vendor': 'claude'})
         records = self.store.records()  # Also exercises fm_evidence re-validation.
@@ -254,19 +246,6 @@ class Preflight(unittest.TestCase):
     def test_bold_heading_gaps_is_retained(self):
         self.assert_bold_heading_retained('SPEC-GAPS')
 
-    def test_numbered_item_markup_shapes(self):
-        accepted = ('1) x', '   2. x', '**1. Why**', '**1.** Why', '__3. x__',
-                    '### 4. x', '1. x', '1. **Why**', '# 1. x',
-                    '   ###### __12)__ Why', '1.\tx')
-        rejected = ('**Why**', '- 1. x', '1.x', '1.', '```\n1. x\n```', '> 1. x',
-                    '    1. x', '\t1. x', '####### 1. x', '###1. x')
-        for item in accepted:
-            with self.subTest(accepted=item):
-                self.assertEqual('SPEC-OK', decision(item + '\nSPEC-OK:T-X', 'T-X'))
-        for item in rejected:
-            with self.subTest(rejected=item):
-                self.assertIsNone(decision(item + '\nSPEC-OK:T-X', 'T-X'))
-
     def test_bold_heading_final_keeps_exact_marker_rule(self):
         body = self.bold_final().removesuffix('SPEC-OK:T-X\n')
         invalid = ('> SPEC-OK:T-X', '```\nSPEC-OK:T-X\n```', '**SPEC-OK:T-X**',
@@ -279,11 +258,6 @@ class Preflight(unittest.TestCase):
     def test_bold_heading_final_completes_preflight(self):
         self.assertEqual('completed', managed.completion(
             'reviewer', 'T-X', self.bold_final(), self.sha))
-
-    def test_prompt_requests_plain_numbers_at_line_start(self):
-        self.assertIn('Give a numbered list of findings (or checked evidence when there are no gaps); '
-                      'start each item with its plain number, `1.`, `2.` and so on, '
-                      'at the start of the line.', prompt('T-X', self.spec, 'a' * 40))
 
     def test_vendor_final_and_strict_mode_separation(self):
         final = '1. Covered.\nSPEC-OK:T-X'
@@ -299,7 +273,8 @@ class Preflight(unittest.TestCase):
         self.assertEqual('unknown', managed.completion('reviewer', 'T-X', final))
         self.assertEqual('unknown', managed.completion('reviewer', 'T-X', 'REVIEWER_COMPLETE:T-X', self.sha))
         self.assertEqual('completed', managed.completion('reviewer', 'T-X', 'REVIEWER_COMPLETE:T-X'))
-        for invalid in ('SPEC-OK:T-X', '1. x\n> SPEC-OK:T-X', '1. x\nSPEC-OK:T-Y',
+        self.assertEqual('SPEC-OK', decision('SPEC-OK:T-X', 'T-X'), 'T-288: no numbered list is needed')
+        for invalid in ('1. x\n> SPEC-OK:T-X', '1. x\nSPEC-OK:T-Y',
                         '1. x\nSPEC-OK:T-X\nafter', '1. x\n```\nSPEC-OK:T-X'):
             self.assertIsNone(decision(invalid, 'T-X'))
 
@@ -378,7 +353,7 @@ class Rewrites(unittest.TestCase):
         status = 'ok' if verdict == 'SPEC-OK' else 'gap'
         items = items or (f'1. {status}: line 1 keeps its meaning in the rewrite.\n'
                           '2. ok: readability: "Show the round number." The rewrite fixes it.\n')
-        return 'Summary.\n' + blocks + items + 'PREFLIGHT-COMPLETE:T-X\n\n' + verdict + ':T-X\n'
+        return 'Summary.\n' + blocks + items + '\n' + verdict + ':T-X\n'
 
     def retain(self, answer, data=None, provenance=None, **inputs):
         return retain(self.store, self.data if data is None else data, 'a' * 40, self.actor, 1, answer,
@@ -480,8 +455,8 @@ class Rewrites(unittest.TestCase):
 
     def test_refusal_reasons_reach_the_next_prompt(self):
         self.assert_refused(self.block('spec', self.reworded(scope=['bin/**'])), 'only prose')
-        body = prompt('T-X', self.data, 'b' * 40, standing(self.store))
-        self.assertIn('The previous preflight refused these rewrites', body)
+        body = prompt('T-X', self.data, 'b' * 40, refusals(latest(self.store)))
+        self.assertIn('An earlier preflight refused these rewrites', body)
         self.assertIn('- spec: spec.scope.0: only prose may change', body)
 
     def test_readability_item_open_then_done(self):
@@ -490,11 +465,10 @@ class Rewrites(unittest.TestCase):
         self.retain(self.answer('', 'SPEC-GAPS', first))
         amended = (json.dumps(self.reworded(acceptance=['Keep 3 retries in `src/a.py`.',
                                                         'Show the number of the running round.']), indent=1) + '\n').encode()
-        second = '1. ok: line 1 is clear.\n2. done: readability: line 2 now names the running round.\n'
+        second = 'Line 1 is clear. Line 2 now names the running round.\n'
         self.retain(self.answer('', 'SPEC-OK', second), data=amended)
         require_ok(self.store, amended)
-        body = prompt('T-X', amended, 'b' * 40, standing(self.store))
-        self.assertIn('readability', body)
+        self.assertIn('Readability:', prompt('T-X', amended, 'b' * 40))
 
     def card(self):
         loader = importlib.util.spec_from_file_location('ste_cases', ROOT / 'tests/lib/ste_cases.py')

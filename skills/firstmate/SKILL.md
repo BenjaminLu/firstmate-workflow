@@ -1606,35 +1606,41 @@ write workflow changes. The standalone Playground uses simulated data only.
 Before every dispatch and every repin, obtain a recorded `SPEC-OK:<task>` for
 exactly the spec bytes to be pinned, using
 `bin/fm-review.sh --spec-preflight --task <task> --spec <file>` (and the selected
-`--project`). This is an isolated read-only review on the current base. Inspect
-its whole exhaustive numbered checklist, with at least one item per acceptance
-line and all standing categories: why/references, each Change, affected
-callers/mirrors/fixtures, scope completeness, new-behaviour versus regression
-tests, records/pins/tasks-in-flight migration, named design sections, i18n/lint
-reachability and external-project privacy. First-pass items use `N. ok:` or
-`N. gap:`, cite file:line, and specify the expected amendment for each gap.
-The checklist closes with `PREFLIGHT-COMPLETE:<task>` immediately before the
-SPEC verdict (blank lines allowed). Read the whole list and fix every gap in
-one amendment; a `SPEC-GAPS` item cannot be waved through.
+`--project`). This is an isolated read-only review on the current base. A spec
+states what to build, why, and when it is done; how is the worker's job,
+checked by pull request review. The reviewer reads the spec with the code at
+hand and answers four questions: is it clear, is it the right thing to build,
+is there a simpler way, and does it contradict the code or another rule. It
+does not ask for callers, line numbers or other implementation detail. Its
+answer is a free-form review whose last line is `SPEC-OK:<task>` or
+`SPEC-GAPS:<task>`; each gap names its acceptance line and suggests a rewrite.
+Read the whole review and fix every gap in one amendment; a `SPEC-GAPS` verdict
+cannot be waved through.
 
-Re-preflight re-issues every earlier number, even after SPEC-OK: gap/open becomes
-done/open, and ok/done becomes ok/open. Only appended `gap NEW-GROUND:` (changed
-text) or `gap MISSED:` (previously overlooked) items may extend the list, except
-that a spec with more acceptance lines than the list may get unlabelled `N. ok:`
-items for new lines, up to the acceptance line count (T-284). Watch
-the signed receipt's `missed` count and inspect every MISSED item; repeated
-omissions defeat convergence. The receipt's `standing` field holds the parsed
-list, while its answer retains the verbatim checklist. Legacy receipts without
-`standing` still authorize their exact bytes and seed no list. If an old-prompt
-vendor final fails retention with PREFLIGHT-COMPLETE, rerun preflight. Structural
-validation cannot prove exhaustive inspection or the truth of amendment labels.
+Every pass is a first pass (T-288). The prompt holds no earlier review, only
+the reasons an earlier rewrite was refused, and the answer is judged on the new
+bytes alone. Bytes that once got `SPEC-GAPS` still cannot get `SPEC-OK`.
+Receipts written before T-288, with or without a `standing` list, stay readable
+and still authorize their exact bytes.
 Approval for different bytes cannot authorize dispatch, including after a repin.
+
+A task gets 3 preflight passes (receipts written since T-288; older receipts
+do not count). A fourth `--spec-preflight` runs no reviewer: it exits 65 and
+raises a captain card with three choices: narrow the spec, park the task, or
+allow one more pass. Any answer starts a new count of 3 passes. The card holds
+only the task id, counts and verdicts, so it is the same for an external
+project. If raising the card failed, the message says which step to finish by
+hand: either request the recorded card with the `bin/fm-decide.sh --request`
+line it prints, or raise the card yourself and run `fm_preflight_budget.py
+record-card --task <id> --id <decision id>` inside the project environment
+(`fm_storage_init`). After answer A, preflight only
+the narrowed spec; after answer B, do not preflight the task again until the
+captain asks for it.
 
 Every task changing a validation rule, lint, gate, schema or stored-record format
 must state what happens to existing records and tasks already in flight and name
-a test proving that migration. Include affected callers and mirrored fixtures,
-not just the implementation path. Structural checks do not prove that the model
-inspected each acceptance line; firstmate must inspect the recorded evidence.
+a test proving that migration. The final-line check does not prove that the
+reviewer read each acceptance line; firstmate must read the recorded review.
 
 `skills/firstmate/rule-inventory.json` lists every rule sentence of this file
 (T-279), and the gate's `rule inventory` stage refuses a rule sentence with no

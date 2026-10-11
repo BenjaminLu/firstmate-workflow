@@ -12,6 +12,10 @@
 code="${FM_CODE_ROOT:-$REPO}"
 preflight_py="$code/bin/lib/fm_spec_preflight.py"
 base_head="$(git -C "$FM_TARGET_ROOT" rev-parse "$BASE^{commit}")" || exit 65
+# T-288: after its pass budget a task runs no reviewer until the captain
+# answers the budget card this raises (or names, when one already waits).
+python3 "$code/bin/lib/fm_preflight_budget.py" gate --task "$TASK" --state "$FM_STATE_DIR" \
+  --project "$(fm_evidence_project)" --code "$code" || exit 65
 # Arm the close immediately after allocation, including setup refusals. On
 # interruption retain the checkout: the runner may not yet have terminated.
 preflight_started=0

@@ -228,40 +228,35 @@ resolved, or a worker edit, changes the patch and needs a new review. Base
 commits touching files the change reviewed no longer void it. CI and the gates
 always rerun on the head being merged; they are firstmate's, not yours.
 
-Spec preflight uses a separate exhaustive checklist (T-248). Before its verdict,
-cover every acceptance line (at least one item each) and all standing categories:
-why/references, each Change, callers/fixtures/mirrors, scope, test labels,
-records/pins/tasks-in-flight migration, named design sections, i18n/lint
-reachability and external-project privacy. First-pass items are `N. ok:` or
-`N. gap:`, with file:line evidence and the expected spec change for each gap.
-Put any summary sentence before item 1. After the last numbered item, write
-only standalone `PREFLIGHT-COMPLETE:<task>` and then SPEC-OK or SPEC-GAPS, with
-nothing but blank lines between the last item, the marker and the verdict.
-Every gap belongs in that report.
-Later preflights, including after SPEC-OK, keep every number: gap/open becomes
-done/open; ok/done becomes ok/open. Append only `gap NEW-GROUND:` for changed
-text or `gap MISSED:` for prior omissions, using the next numbers. When the spec
-now has more acceptance lines than the earlier list, also append `N. ok:` items,
-one per new line with no gap, up to the acceptance line count. SPEC-OK has
-no gap/open items; SPEC-GAPS has at least one. The signed `standing` and `missed`
-fields preserve the list and count omissions. This preflight protocol does not
-change the implementation-review standing list below.
+Spec preflight is one fresh review of a proposed spec (T-288). A spec states
+what to build, why, and when it is done; how is the worker's job, checked by
+pull request review. Read the spec with the code at hand and answer four
+questions: is it clear, is it the right thing to build, is there a simpler way,
+and does it contradict the code or another rule. Do not ask for implementation
+detail such as callers or line numbers. Two checks stay: a task that changes a
+validation rule, lint, gate, schema or stored-record format must say what
+happens to records and tasks already in flight, and a spec whose scope lists
+design/design.md must name the numbered section it edits. Write a free-form
+review; each gap names the acceptance line it concerns and suggests a rewrite.
+Every gap belongs in this one review. The last line is `SPEC-OK:<task>` or
+`SPEC-GAPS:<task>`. Every pass is a first pass: the prompt holds no earlier
+review, and nothing is compared with one. This does not change the
+implementation-review standing list below.
 
-Readability is one more standing category of every preflight (T-270). Read the
+Readability is part of every preflight (T-270). Read the
 spec, and the card and pull-request draft when the run includes them, as
 [plain-writing.md](../firstmate/plain-writing.md) describes: as a backend
 engineer with three to five years of experience who has never seen this
-repository. Each readability item quotes the exact sentence and says where that
-reader gets stuck. A wording problem your rewrite fixes is `N. ok:` and says the
-rewrite fixes it; a problem that no clear rewrite can fix without changing the
-meaning is `N. gap:` with the expected spec change. Check the card in en, zh-TW
-and the rendered zh-CN; a word left in Traditional characters in zh-CN is an
-item that names the zh-TW rewording or the exact missing `i18n/tw2cn.tsv` rows.
+repository. For a readability problem, quote the exact sentence and say where
+that reader gets stuck. A wording problem your rewrite fixes is not a gap; say
+the rewrite fixes it. A problem that no clear rewrite can fix without changing
+the meaning is a gap with a suggested rewrite. Check the card in en, zh-TW and
+the rendered zh-CN; a word left in Traditional characters in zh-CN is a problem
+to report with the zh-TW rewording or the exact missing `i18n/tw2cn.tsv` rows.
 
 You may fix the wording yourself, each kind at most once, in a block that
 opens with one of these exact lines and closes with a line of three
-backquotes, placed before item 1 and never between the last item and the
-marker:
+backquotes, placed before the final line:
 
 - ```` ```json fm-reworded-spec ````: the whole spec. Only `title` and the
   text of each acceptance line may change; the acceptance list keeps its
@@ -277,7 +272,7 @@ marker:
 Keep every code span, path, file:line, hash, task number, decision id and
 number in the same string; the launcher refuses a rewrite that drops, adds or
 moves one, and it revalidates the result. For each rewritten string, state in
-the checklist that it keeps its meaning. A rewrite that would change a
+the review that it keeps its meaning. A rewrite that would change a
 condition or obligation is a gap, not a rewrite. Never rewrite
 `public_title`, `public_summary` or `public_changes`: report a readability
 problem there as a gap, and check that public fields hold no private prose.

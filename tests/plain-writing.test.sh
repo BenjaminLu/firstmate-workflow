@@ -228,7 +228,9 @@ record="$(ls -t "$repo"/state/evidence/*/T-Z/*.json | head -1)"
 assert_eq "$(sha "$d/card-original.json")" "$(jq -r .rewrite.card.submitted_sha256 "$record")" \
   'a card changed during the review does not reach the pinned copy'
 assert_eq '["sources.spec.sha256"]' "$(jq -c '.rewrite["pr-authoring"].machine_change' "$record")" 'the only machine change is recorded'
-# An unchanged card reviewed without a rewrite.
+# An unchanged card reviewed without a rewrite. Three receipts exist, so this
+# would be T-Z's fourth pass (T-288 pass budget): start from an empty store.
+rm -rf "$repo/state/evidence"
 cp "$d/card-original.json" "$d/card.json"
 final ''
 preflight --card "$d/card.json" > "$d/out" 2>&1
