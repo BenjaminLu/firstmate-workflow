@@ -150,8 +150,8 @@ and machine markers:
 
 The checks block a card request (`fm_ste.py check-plain`, all three checks), a
 new pull-request draft when firstmate seals it (glued numbers and slash
-chains), and the public fields of an external spec during spec preflight
-(glued numbers and slash chains). A pull-request body gets its glossary section
+chains), and the public fields of an external spec at pin time, when the spec
+is pinned or repinned (glued numbers and slash chains; T-297). A pull-request body gets its glossary section
 generated from the terms it uses, so the unexplained-term check never blocks
 pull-request text. Everywhere else, including commit messages and posted
 comments, the checks only write findings to firstmate's log

@@ -3,16 +3,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/review.sh
 . "$ROOT/tests/lib/review.sh"
-for mode in normal preflight; do
-  d="$(fixture)"; r="$d/repo"; gh="$(ghstub "$d")"
-  args=(--branch work)
-  [ "$mode" != preflight ] || args=(--spec-preflight)
-  out="$(cd "$r" && FM_ROOT="$r" FM_GH="$gh" FM_SESSION_PID=abc bin/fm-review.sh --task T-Z "${args[@]}" 2>&1)"; rc=$?
-  assert_eq 75 "$rc" "$mode malformed owner exits 75"
-  assert_contains "$out" 'no session owns this review' "$mode explains ownership refusal"
-  assert_eq '' "$(find "$r/state" -name identity.json -print)" "$mode refuses before identity allocation"
-  safe_rm_rf "$d"
-done
+# The spec preflight mode once checked here is removed (T-297).
+mode=normal
+d="$(fixture)"; r="$d/repo"; gh="$(ghstub "$d")"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$gh" FM_SESSION_PID=abc bin/fm-review.sh --task T-Z --branch work 2>&1)"; rc=$?
+assert_eq 75 "$rc" "$mode malformed owner exits 75"
+assert_contains "$out" 'no session owns this review' "$mode explains ownership refusal"
+assert_eq '' "$(find "$r/state" -name identity.json -print)" "$mode refuses before identity allocation"
+safe_rm_rf "$d"
 
 d="$(fixture)"; r="$d/repo"; gh="$(ghstub "$d")"
 cat > "$r/bin/adapters/mock.sh" <<'SH'

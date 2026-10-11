@@ -198,7 +198,7 @@ lt_fixture() {   # lt_fixture -> a fixture with the pinned contract committed, s
   # T-256: a new self spec is a local, ignored file the base never tracks
   git -C "$r" rm -q --cached design/tasks/T-Z.json
   git -C "$r" add config.yaml; git -C "$r" commit -qm contract; git -C "$r" push -q origin main
-  seed_spec_preflight "$r" T-Z; seed_self_pr_authoring "$r" T-Z
+  seed_self_pr_authoring "$r" T-Z
   # the working copy differs, so the plan shows which one it came from
   lt_config "$TEMPLATE_CONFIG" > "$r/config.yaml"
   lt_adapter "$r"
@@ -290,7 +290,7 @@ no_pin_scenario() {
   lt_fixture
   printf 'vendor: mock\nfallback:\n  - mock\n' > "$r/config.yaml"
   git -C "$r" add config.yaml; git -C "$r" commit -qm 'no contract'; git -C "$r" push -q origin main
-  seed_spec_preflight "$r" T-Z; seed_self_pr_authoring "$r" T-Z
+  seed_self_pr_authoring "$r" T-Z
   lt_config "$TEMPLATE_CONFIG" '  check_env:
     LTX_CHECK: on
 ' > "$r/config.yaml"

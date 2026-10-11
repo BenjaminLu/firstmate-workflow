@@ -643,7 +643,7 @@ class StockPublication(unittest.TestCase):
         self.evidence_project = 'self'
         approval = dict(type='greenlit', task='T-259', actor='captain', ts='2026-10-03T00:00:00Z')
         (self.state/'events.jsonl').write_text(json.dumps(approval)+'\n')
-        self.seed_preflight(); self.author()
+        self.author()
         adapter = self.repo/'bin/adapters/mock.sh'
         adapter.write_text('#!/usr/bin/env bash\n[ "$1" = run ] || exit 64\n'
                            'touch "$FM_SEEN/adapter-started"\nmkdir -p "$3/src"\n'
@@ -691,14 +691,6 @@ else: print('[]')
 
     def git(self, *args): return self.run_ok('git', '-C', str(self.repo), *args)
 
-    def seed_preflight(self):
-        from fm_evidence import Store
-        data = (self.repo/'design/tasks/T-259.json').read_bytes()
-        Store(self.state, self.evidence_project, 'T-259').append(
-            'spec-preflight', 1, 'reviewer-fixture', 'a'*40,
-            '1. Fixture checked.\nSPEC-OK:T-259', spec_sha256=hashlib.sha256(data).hexdigest(),
-            verdict='SPEC-OK', provenance=dict(level='legacy', vendor='claude'))
-
     def author(self):
         env = dict(self.env, FM_ENGINE_ROOT=str(self.repo), FM_TARGET_ROOT=str(self.repo),
                    FM_STATE_DIR=str(self.state), FM_TASKS_DIR=str(self.repo/'design/tasks'),
@@ -742,7 +734,7 @@ else: print('[]')
 
     def pin_create(self):
         result = self.subprocess.run([sys.executable, str(self.repo/'bin/lib/fm_spec_pins.py'),
-                                      'create', '--task', 'T-259', '--require-preflight', 'self'],
+                                      'create', '--task', 'T-259'],
                                      cwd=self.repo, env=self.pin_env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
@@ -776,7 +768,7 @@ else: print('[]')
             '    tasks: design/tasks\n    project:\n      check: true\n')
         self.git('add', 'config.yaml'); self.git('commit', '-qm', 'registered self sources')
         self.git('push', '-q', 'origin', 'main')
-        self.evidence_project = 'firstmate-workflow'; self.seed_preflight(); self.author()
+        self.evidence_project = 'firstmate-workflow'; self.author()
         result = self.worker(); self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertIn('https://github.com/fixture/project/commit/', self.publication()['body'])
 
@@ -873,13 +865,6 @@ else: print('[]')
         (self.state/'pr-authoring/T-259.json').write_text(json.dumps(self.draft))
         self.assertIn('meaningful authored prose', self.assert_refused().stderr)
 
-    def test_stale_preflight_refuses_before_adapter(self):
-        self.spec['acceptance'].append('New approved purpose needs preflight.')
-        (self.repo/'design/tasks/T-259.json').write_text(json.dumps(self.spec)+'\n')
-        self.git('add', 'design/tasks/T-259.json'); self.git('commit', '-qm', 'new approved source')
-        self.git('push', '-q', 'origin', 'main')
-        self.assertIn('no SPEC-OK', self.assert_refused().stderr)
-
     def test_symlink_draft_refuses(self):
         path = self.state/'pr-authoring/T-259.json'
         outside = self.home/'outside.json'; outside.write_bytes(path.read_bytes())
@@ -890,10 +875,6 @@ else: print('[]')
         (self.state/'pins/T-259').mkdir(parents=True)
         (self.state/'pins/T-259/1.json').write_text('{broken')
         self.assert_refused()
-
-    def test_invalid_preflight_refuses_before_dispatch(self):
-        import shutil
-        shutil.rmtree(self.state/'evidence'); self.assert_refused()
 
     def test_sealed_pin_digest_refusal_is_distinct_from_missing_authoring(self):
         self.pin_create()
@@ -940,7 +921,7 @@ else: print('[]')
         self.evidence_project = 'firstmate-workflow'
         (self.state/'events.jsonl').write_text(json.dumps(dict(type='greenlit', task='T-259',
             actor='captain', project=self.evidence_project, ts='2026-10-03T00:00:00Z'))+'\n')
-        self.seed_preflight(); self.author()
+        self.author()
         result = self.worker(); self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         (self.state/'pr-authoring/T-259.json').unlink(); (self.home/'published.json').unlink()
         (self.repo/'bin/adapters/mock.sh').write_text('#!/usr/bin/env bash\n[ "$1" = run ] || exit 64\n'
@@ -1030,7 +1011,7 @@ else: print('[]')
         self.spec['scope'] = []
         (self.repo/'design/tasks/T-259.json').write_text(json.dumps(self.spec)+'\n')
         self.git('add', 'design/tasks/T-259.json'); self.git('commit', '-qm', 'invalid fixture scope')
-        self.git('push', '-q', 'origin', 'main'); self.seed_preflight(); self.assert_refused()
+        self.git('push', '-q', 'origin', 'main'); self.assert_refused()
 
     def test_retained_old_frozen_code_keeps_prior_output_and_bytes(self):
         old = gzip.decompress(base64.b64decode(HISTORICAL_WORKER_GZIP_BASE64,

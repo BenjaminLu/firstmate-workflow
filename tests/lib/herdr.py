@@ -370,11 +370,6 @@ class EntrypointsFixture(unittest.TestCase):
         (self.repo / 'design/tasks/T-035.json').write_text(json.dumps(dict(id='T-035',title='test',scope=['src/**'],depends_on=[],acceptance=['works'])))
         (self.repo / 'design/design.md').write_text('## 6. Gates\nEvidence\n## 8. Board\n')
         (self.repo / 'config.yaml').write_text('vendor: codex\nconcurrency: 2\nproject:\n  check: true\n')
-        # Shared receipt helper: tests/lib/spec-preflight.sh. Seed only fixture bytes.
-        subprocess.run(['bash', '-c',
-                        '. "$1/tests/lib/spec-preflight.sh"; ROOT="$1"; seed_spec_preflight "$2" T-035',
-                        'seed-preflight', str(root), str(self.repo)],
-                       env={**os.environ, 'HERDR_ENV': '0'}, check=True)
         self.fake = self.repo / 'fakebin'; self.fake.mkdir()
         # no ambient terminal host: a developer's own tmux or cmux is not the fixture's
         self.env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_', 'TMUX', 'CMUX_'))}

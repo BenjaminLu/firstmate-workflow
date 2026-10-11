@@ -17,7 +17,6 @@ mkdir -p "$3/src"
 printf 'implemented\n' > "$3/src/feature"
 M
 chmod +x "$repo/bin/adapters/mock.sh"
-seed_spec_preflight "$repo" T-Z "" firstmate-workflow
 seed_self_pr_authoring "$repo" T-Z firstmate-workflow
 (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --project firstmate-workflow) > "$d/out" 2>&1
 assert_eq 0 "$?" 'authorized worker pins before running its adapter'
@@ -94,7 +93,6 @@ M
 chmod +x "$repo/bin/adapters/mock.sh"
 # Repin the local spec before resuming; the PR's branch bytes grant no authority.
 cp "$d/spec.json" "$repo/design/tasks/T-Z.json"
-seed_spec_preflight "$repo" T-Z "$d/spec.json"
 (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z --pr 42) > "$d/out" 2>&1
 assert_eq 0 "$?" 'resumed PR worker pins local scope after readiness retirement'
 assert_eq local-self "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'resumed launcher uses local spec'
@@ -105,8 +103,8 @@ assert_eq '' "$(git -C "$repo" ls-tree --name-only t-z-resume -- design/tasks/T-
 
 rm -rf "$d"
 
-# Authorized legacy sources cannot pin, but exact-byte preflight is still
-# required before the adapter can run in either self mode.
+# Authorized legacy sources cannot pin; the older stock publication path
+# runs the adapter in either self mode with no spec preflight receipt (T-297).
 for missing in contract design; do
   for mode in default explicit; do
     d="$(fixture)"; repo="$d/repo"; GH="$(ghstub "$d")"
@@ -141,13 +139,6 @@ M
     [ "$mode" != explicit ] || evidence_project=firstmate-workflow
     project_args=(); [ "$mode" != explicit ] || project_args=(--project firstmate-workflow)
     rm -rf "$repo/state/evidence"
-    (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"}) > "$d/refused.out" 2>&1
-    assert_eq 65 "$?" "legacy missing preflight refuses ($missing, $mode)"
-    assert_eq 0 "$(jq -s '[.[] | select(.type=="dispatched" or .type=="commit_pushed")]|length' "$repo/state/events.jsonl")" 'legacy refusal emits no dispatch or checkpoint'
-    assert_ok "test ! -e '$repo/state/worktrees/T-Z.pid'" 'legacy refusal publishes no pid'
-    assert_ok "test ! -d '$repo/state/worktrees/T-Z'" 'legacy refusal creates no worktree'
-    assert_eq '' "$(git -C "$repo" ls-remote --heads origin 't-z-*')" 'legacy refusal pushes no branch'
-    seed_spec_preflight "$repo" T-Z "" "$evidence_project"
     seed_self_pr_authoring "$repo" T-Z "$evidence_project"
     (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-worker.sh --task T-Z ${project_args[@]+"${project_args[@]}"}) > "$d/out" 2>&1
     assert_eq 0 "$?" "authorized worker survives missing $missing ($mode self)"

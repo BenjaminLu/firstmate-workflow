@@ -147,11 +147,8 @@ class Budget:
             if not pin or pin.get('version', 0) <= card['pin'] or pin.get('source') != 'repin':
                 return False
             approval = pin.get('spec_approval') or pin.get('approval') or {}
-            if not moment(approval.get('time')) > moment(reply['ts']):
-                return False
-            from fm_spec_preflight import require_ok
-            require_ok(self.store, pin['snapshots']['spec']['text'].encode('utf-8'))
-            return True
+            # The approved repin alone releases the hold; no SPEC-OK (T-297).
+            return moment(approval.get('time')) > moment(reply['ts'])
         except (ValueError, OSError, KeyError, TypeError, AttributeError):
             return False
 

@@ -20,7 +20,6 @@ import fm_watch as W
 import fm_lifeline as life
 import fm_merge_authorization as M
 from fm_evidence import Store
-import fm_spec_preflight as P
 spec = importlib.util.spec_from_file_location('herdr', ROOT / 'bin/fm-herdr.py')
 H = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(H)
@@ -118,7 +117,9 @@ class PreflightLifecycle(unittest.TestCase):
         actor = who['actor']
         store = Store(self.state,'self','T-191')
         data = (self.tasks / 'T-191.json').read_bytes()
-        P.retain(store,data,'a'*40,actor,1,'1. ok: Checked.\nPREFLIGHT-COMPLETE:T-191\nSPEC-OK:T-191',dict(level='legacy'))
+        # A receipt as the removed launcher wrote it (T-297 keeps it readable).
+        store.append('spec-preflight',1,actor,'a'*40,'1. ok: Checked.\nPREFLIGHT-COMPLETE:T-191\nSPEC-OK:T-191',
+                     spec_sha256=hashlib.sha256(data).hexdigest(),verdict='SPEC-OK',provenance=dict(level='legacy'))
         self.emit(actor,'crew_status',dict(role='reviewer',mode='spec-preflight'))
         pilot = A.Pilot(self.ctx)
         self.assertEqual(M.inventory(pilot),([],[],[]), 'preflight is not an implementation review in merge reminders')
@@ -139,19 +140,6 @@ class PreflightLifecycle(unittest.TestCase):
         for kind in ('crew_status','agent_finished','agent_lost'):
             result = subprocess.run(['bash',str(self.root/'bin/fm-diagram.sh'),'--event',kind],capture_output=True)
             self.assertEqual(result.returncode,0,kind+' is a routine diagram event')
-
-    def test_outcome_matches_actor_and_exact_spec_before_exit_status(self):
-        store=Store(self.state,'self','T-191')
-        data=(self.tasks/'T-191.json').read_bytes()
-        sha=hashlib.sha256(data).hexdigest()
-        P.retain(store,data,'a'*40,'preflight-a',1,'1. gap: Checked.\nPREFLIGHT-COMPLETE:T-191\nSPEC-GAPS:T-191',dict(level='legacy'))
-        self.assertEqual(P.outcome(store,'preflight-a',sha,65,1),'spec-gaps')
-        self.assertEqual(P.outcome(store,'preflight-a',sha,143,1),'spec-gaps')
-        self.assertEqual(P.outcome(store,'other',sha,65,1),'failed')
-        self.assertEqual(P.outcome(store,'preflight-a','b'*64,65,1),'failed')
-        for rc in (129,130,143):
-            self.assertEqual(P.outcome(store,'other',sha,rc,0),'interrupted')
-        self.assertEqual(P.outcome(store,'other',sha,65,0),'refused')
 
     def test_untagged_failure_of_known_preflight_is_neutral(self):
         _, who = self.allocate(True,'imani')

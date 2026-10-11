@@ -18,7 +18,7 @@ from crew_blocks import function, section
 import fm_conventions as conventions
 import fm_onboard as onboard
 from fm_public_text import validate
-from fm_spec_preflight import prompt
+from fm_spec_pins import spec_check
 
 FORMAT = dict(pr_title='conventional', pr_sections=['Summary', 'Changes', 'Testing', 'AI 参与度'], pr_language='en')
 SPEC = dict(id='T-051', title='Private plan', scope=['widget'], acceptance=['Private reason'],
@@ -100,7 +100,7 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(validate(title, None, 'conventional'), [])
         spec = dict(SPEC, public_title=title)
         with patch.dict(os.environ, FM_EXTERNAL='1', FM_PR_TITLE='conventional'):
-            prompt('T-051', json.dumps(spec).encode(), 'base')
+            spec_check('T-051', json.dumps(spec))
             self.assertEqual(self.render(spec)['title'], title)
 
     def test_public_changes_validation(self):
@@ -159,15 +159,15 @@ class FormatTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(ROOT / 'bin/lib' / name), *args],
                               env=self.env if env is None else env, capture_output=True, text=True, timeout=10)
 
-    def test_cli_and_prompt_style_and_changes(self):
+    def test_cli_and_pin_style_and_changes(self):
         spec = dict(SPEC, public_title='Deduct the fee')
         path = self.home / 'spec.json'; path.write_text(json.dumps(spec))
         self.assertEqual(self.cli('fm_public_text.py', 'check', str(path)).returncode, 0)
         self.assertEqual(self.cli('fm_public_text.py', 'check', str(path), env=dict(self.env, FM_PR_TITLE='conventional')).returncode, 65)
         with patch.dict(os.environ, FM_EXTERNAL='1', FM_PR_TITLE='conventional'):
-            with self.assertRaisesRegex(ValueError, 'conventional'): prompt('T-051', path.read_bytes(), 'base')
+            with self.assertRaisesRegex(ValueError, 'conventional'): spec_check('T-051', path.read_text())
         with patch.dict(os.environ, FM_EXTERNAL='0', FM_PR_TITLE='conventional'):
-            prompt('T-051', path.read_bytes(), 'base')
+            spec_check('T-051', path.read_text())
         path.write_text(json.dumps(dict(spec, public_changes=[])))
         self.assertEqual(self.cli('fm_public_text.py', 'check', str(path)).returncode, 65)
         path.write_text(json.dumps(SPEC))
@@ -258,22 +258,28 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(p.stderr, 'fm-worker: cannot read the PR format; using the generic title\n')
         self.assertEqual(p.stdout, "T-051: Save the round's changes\nT-051: Save the round's changes\nTask T-051." ' Captain acceptance and evidence are retained privately.')
 
-    def test_shell_preflight_format_failure_and_self_guard(self):
-        source = (ROOT / 'bin/lib/fm-spec-preflight.sh').read_text()
-        block = source[source.index('if [ "${FM_EXTERNAL:-0}" = 1 ]; then'):source.index('python3 "$preflight_py" prompt')]
-        self.assertIn('export FM_PR_TITLE', block)
+    def test_shell_pin_format_failure_and_self_guard(self):
+        # T-297: fm_pin create and check read the PR title style the removed
+        # spec preflight read; other pin commands and self projects do not.
+        from crew_blocks import function
+        block = function(ROOT / 'bin/fm-config.sh', 'fm_pin')
+        stub = 'python3() { echo "pins $FM_PR_TITLE" >&2; }\n_fm_code_dir=/code\n'
         for external in (0, 1):
-            p = subprocess.run(['bash', '-c', 'set -eu\nFM_EXTERNAL=' + str(external) + '\nfm_conventions() { echo called >&2; return 65; }\n' + block],
-                               env=self.env, capture_output=True, text=True, timeout=10)
-            self.assertEqual(p.returncode, 65 if external else 0)
-            self.assertEqual('cannot read the PR format' in p.stderr, bool(external))
-            if not external: self.assertEqual(p.stderr, '')
+            for command, reads in (('create', True), ('check', True), ('resolve', False), ('scope', False)):
+                with self.subTest(external=external, command=command):
+                    p = subprocess.run(['bash', '-c', 'set -eu\nFM_EXTERNAL=' + str(external) + '\nFM_PR_TITLE=unset\n'
+                                        'fm_conventions() { echo called >&2; return 65; }\n' + stub + block
+                                        + 'fm_pin ' + command + ' --task T-051'],
+                                       env=self.env, capture_output=True, text=True, timeout=10)
+                    refused = bool(external) and reads
+                    self.assertEqual(p.returncode, 65 if refused else 0, p.stderr)
+                    self.assertEqual('cannot read the PR format' in p.stderr, refused)
         p = subprocess.run(['bash', '-c', '''set -eu
 FM_EXTERNAL=1
 fm_conventions() { echo '{"pr_title":"conventional"}'; }
-''' + block +
-                            '\n[ "$FM_PR_TITLE" = conventional ]'], env=self.env, capture_output=True, text=True, timeout=10)
+''' + stub + block + 'fm_pin create --task T-051'], env=self.env, capture_output=True, text=True, timeout=10)
         self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual('pins conventional\n', p.stderr)
 
 
 class TestingRefreshCases:

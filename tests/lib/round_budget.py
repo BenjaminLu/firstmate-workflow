@@ -12,7 +12,6 @@ Modes for tests/round-budget.test.sh:
   round_budget.py <root> seed <state> <project> <task> <round> <head>
                                                       append one marked REJECT, a new item open
 """
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -57,13 +56,6 @@ def append(store, round_number, items, decided='REJECT', marked=True, head=None,
 def distinct(n):
     """Round n of a history with a different item open in each round."""
     return ['done a'] * (n - 1) + ['open new ground']
-
-
-def preflight(store, text):
-    return store.append('spec-preflight', 1, 'reviewer-fixture', 'a' * 40,
-                        '1. Fixture acceptance checked.\nSPEC-OK:' + T,
-                        spec_sha256=hashlib.sha256(text.encode()).hexdigest(), verdict='SPEC-OK',
-                        provenance={'level': 'legacy', 'vendor': 'claude'})
 
 
 def pin(version, source='dispatch', time='2026-10-01T00:00:00Z', text=SPEC1, spec_time=None):
@@ -310,18 +302,18 @@ class Release(Base):
         for n in range(1, 4):
             append(self.store, n, distinct(n))
         self.pin = pin(1)
-        preflight(self.store, SPEC1)
         self.budget().record_card('D-alpha-T001-1')
         answer(self.state, 'D-alpha-T001-1', chosen)
 
-    def test_a_later_authorized_repin_with_spec_ok_releases_a_hold(self):
+    def test_a_later_authorized_repin_alone_releases_a_hold(self):
+        # T-297, fail-first: main also asked for a SPEC-OK on the new bytes.
+        # No spec preflight receipt exists in this store.
         for chosen in ('B', 'A'):
             with self.subTest(chosen=chosen):
                 self.setUp()
                 self.held(chosen)
                 self.pin = pin(2, 'repin', '2026-10-06T00:00:00Z', SPEC2)
-                self.assertIn(self.state_of()['state'], ('parked', 'narrow'), 'no SPEC-OK for the new bytes yet')
-                preflight(self.store, SPEC2)
+                self.assertEqual([], [r for r in self.store.records() if r['kind'] == 'spec-preflight'])
                 result = self.state_of()
                 self.assertEqual((result['state'], result['budget']), ('within', 6), 'card rounds 3 + rounds 3')
                 append(self.store, 4, ['done a', 'done a', 'open lock'], head=HEADS[3])
@@ -330,21 +322,19 @@ class Release(Base):
 
     def test_spec_approval_time_is_used_when_present(self):
         self.held()
-        preflight(self.store, SPEC2)
         self.pin = pin(2, 'repin', '2026-10-06T00:00:00Z', SPEC2, spec_time='2026-10-04T00:00:00Z')
         self.assertEqual(self.state_of()['state'], 'parked')
 
     def test_no_release_without_an_authorized_later_repin(self):
         cases = dict(
-            unpinned_candidate=(pin(1), SPEC2),
-            same_bytes=(pin(1), SPEC1),
-            approved_before_answer=(pin(2, 'repin', '2026-10-04T23:59:59Z', SPEC2), SPEC2),
-            not_a_repin=(pin(2, 'dispatch', '2026-10-06T00:00:00Z', SPEC2), SPEC2))
-        for name, (current, preflighted) in cases.items():
+            unpinned_candidate=pin(1, text=SPEC2),
+            same_bytes=pin(1),
+            approved_before_answer=pin(2, 'repin', '2026-10-04T23:59:59Z', SPEC2),
+            not_a_repin=pin(2, 'dispatch', '2026-10-06T00:00:00Z', SPEC2))
+        for name, current in cases.items():
             with self.subTest(name=name):
                 self.setUp()
                 self.held()
-                preflight(self.store, preflighted)
                 self.pin = current
                 self.assertEqual(self.state_of()['state'], 'parked')
                 self.assertEqual(self.cli('check').returncode, 65)
@@ -358,9 +348,7 @@ class Release(Base):
                 first = self.budget().record_card('D-alpha-T001-1')
                 self.assertIsNone(first['pin'])
                 answer(self.state, 'D-alpha-T001-1', chosen)
-                preflight(self.store, SPEC1)
-                preflight(self.store, SPEC2)
-                self.assertEqual(self.state_of()['state'], state, 'a SPEC-OK alone does not release')
+                self.assertEqual(self.state_of()['state'], state, 'no repin, no release')
                 second = self.budget().record_card('D-alpha-T001-2')
                 self.assertEqual(second['signature'], first['signature'])
                 self.assertEqual(self.state_of()['state'], 'waiting')
@@ -714,7 +702,6 @@ class Autopilot(BranchFixture, unittest.TestCase):
                   'zh-TW': f'T-001：船長選擇縮小範圍（決策卡 {CARD}）；請準備重新釘選規格'}
         self.assertEqual(self.wakes()[-1], narrow)
         self.assertEqual(len([w for w in self.wakes() if w == narrow]), 1)
-        preflight(self.store(), SPEC2)
         self.pin = pin(2, 'repin', '2026-10-04T00:00:00Z', SPEC2)  # approved before the answer
         self.advance(3)
         self.assertNotIn('T-001 REJECT:', str(self.wakes()))

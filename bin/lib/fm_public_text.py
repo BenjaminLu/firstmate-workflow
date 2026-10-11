@@ -55,7 +55,8 @@ def validate(title, summary, style='plain', changes=None):
 
 def plain_problems(title, summary, changes=None):
     """Blocking plain-writing checks (glued numbers, slash chains) on public
-    spec fields; spec preflight alone calls this, never a publishing round."""
+    spec fields; the pin-time spec check alone calls this (T-297), never a
+    publishing round."""
     import fm_plain
 
     fields = [('public_title', title), ('public_summary', summary)]

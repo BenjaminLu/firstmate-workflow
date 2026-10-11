@@ -51,31 +51,31 @@ if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ];
 fi
 fm_conventions "" >/dev/null || exit 65
 fm_refuse_herdr_bypass fm-worker || exit $?
-# Check the prospective pin before allocating an identity, arming the EXIT
-# checkpoint, publishing liveness, or touching a task branch/worktree. Read
-# an existing PR's branch directly; no worktree or local branch is needed.
-preflight_ref=''
+# Check the prospective spec before allocating an identity, arming the EXIT
+# checkpoint, publishing liveness, or touching a task branch/worktree (T-297:
+# the pin-time checks, no SPEC-OK record). Read an existing PR's branch
+# directly; no worktree or local branch is needed.
+spec_ref=''
 if [ "$FM_EXTERNAL" = 0 ]; then
-  preflight_slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
-  preflight_ref="$(git for-each-ref --format='%(refname:short)' refs/heads | grep -i "^$preflight_slug-" | head -1)"
-  if [ -z "$preflight_ref" ]; then
-    preflight_ref="$(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep -i "^origin/$preflight_slug-" | head -1)"
+  spec_slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
+  spec_ref="$(git for-each-ref --format='%(refname:short)' refs/heads | grep -i "^$spec_slug-" | head -1)"
+  if [ -z "$spec_ref" ]; then
+    spec_ref="$(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep -i "^origin/$spec_slug-" | head -1)"
   fi
 fi
 if [ -n "$PR" ] && [ "$FM_EXTERNAL" = 0 ]; then
-  preflight_pr_ref="$(fm_github pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
-  case "$preflight_pr_ref" in
+  spec_pr_ref="$(fm_github pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
+  case "$spec_pr_ref" in
     ''|null|*[!A-Za-z0-9._/-]*|/*|*/) ;;
-    *) preflight_ref="$preflight_pr_ref"
-       if ! git rev-parse --verify "$preflight_ref^{commit}" >/dev/null 2>&1; then
-         preflight_ref="origin/$preflight_ref"
+    *) spec_ref="$spec_pr_ref"
+       if ! git rev-parse --verify "$spec_ref^{commit}" >/dev/null 2>&1; then
+         spec_ref="origin/$spec_ref"
        fi ;;
   esac
 fi
-preflight_source=()
-[ -z "$preflight_ref" ] || preflight_source=(--spec-ref "$preflight_ref")
-fm_pin preflight --task "$TASK" --require-preflight "$(fm_evidence_project)" \
-  ${preflight_source[@]+"${preflight_source[@]}"} || exit 65
+spec_source=()
+[ -z "$spec_ref" ] || spec_source=(--spec-ref "$spec_ref")
+fm_pin check --task "$TASK" ${spec_source[@]+"${spec_source[@]}"} || exit 65
 # T-276: a task stopped at its review round budget, parked or waiting for a
 # narrowed repin starts no round; the captain's card decides. The engine
 # checkout's own config.yaml holds the budget.
@@ -1316,7 +1316,7 @@ pin_warning=''
 if [ -z "$FM_SPEC_PIN_JSON" ]; then
   pin_args=()
   [ -z "$PR" ] || pin_args+=(--resume --spec-worktree "$tree")
-  FM_SPEC_PIN_JSON="$(fm_pin create --task "$TASK" --require-preflight "$(fm_evidence_project)" ${pin_args[@]+"${pin_args[@]}"})"; pin_rc=$?
+  FM_SPEC_PIN_JSON="$(fm_pin create --task "$TASK" ${pin_args[@]+"${pin_args[@]}"})"; pin_rc=$?
   case "$pin_rc" in
     0) spec="$(jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON")"
        set_crew_activity "$spec"
@@ -1390,18 +1390,6 @@ if [ -n "$pinned_path" ] && [ "$rebuilt" = 0 ]; then
   fi
 fi
 
-# T-185 migration: old pins remain immutable, but every new invocation must
-# have a signed preflight for the exact snapshot. No grandfathered dispatch.
-preflight_args=(require --task "$TASK" --state "$FM_STATE_DIR" --project "$(fm_evidence_project)")
-if [ -n "$FM_SPEC_PIN_JSON" ]; then
-  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_spec_preflight.py" "${preflight_args[@]}" \
-    --pin-stdin <<<"$FM_SPEC_PIN_JSON" || exit 65
-else
-  # Legacy unpinned rounds must also be checked; this grants no gate authority.
-  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_spec_preflight.py" "${preflight_args[@]}" \
-    --spec "$FM_TASKS_DIR/$TASK.json" || exit 65
-fi
-
 # --- the prompt: the task, the design that bears on it, and the skill ----
 prompt="$tree/.fm-prompt.md"
 # This is the worker's one way to speak, and it is read back with
@@ -1456,6 +1444,10 @@ fi
 # shellcheck source=bin/lib/fm-pinned.sh
 . "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-pinned.sh"
 fm_round_pinned worker "$spec" || exit 65
+# T-297: the first round on these spec bytes - a new task, or the first round
+# after a repin - reads the spec and the code, then asks or plans. A failed
+# read says first: the instructions cost less than a missed question.
+spec_first="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_first_round.py" "$FM_RUN_DIR")" || spec_first=first
 
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
@@ -1491,6 +1483,20 @@ fm_round_pinned worker "$spec" || exit 65
     printf 'The launcher opens a draft pull request and posts your question there, even\n'
     printf 'when you change no implementation. This replaces the premature-question rule\n'
     printf 'in the worker instructions above for these first-round requests.\n'
+  fi
+  if [ "$spec_first" = first ]; then
+    printf '\n---\n\n# Read first, then ask or plan\n\n'
+    printf 'This is your first round on this spec: a new task, or the first round after\n'
+    printf 'a repin. Before you change any file, read the approved spec (%s/spec.json)\n' "$FM_PINNED_DIR"
+    printf 'and the code it touches. Then do one of two things.\n\n'
+    printf -- '- Ask, and stop, when the spec is unclear, when it does not match the code,\n'
+    printf '  when it changes a rule but does not say what happens to records and tasks\n'
+    printf '  already in flight, or when it lists `design/design.md` but does not name\n'
+    printf '  the numbered section (§N or §N.M) it edits. Write a standalone\n'
+    printf '  `ASK-SPEC:%s` marker and the question to `.fm-say.md`, and change no file.\n' "$TASK"
+    printf -- '- Otherwise, before you change a file, write a short plan into `.fm-say.md`:\n'
+    printf '  the files you will change, and how you will prove the task is done. Then\n'
+    printf '  do the work in this same round.\n'
   fi
   printf '\n---\n\n'
   if [ "$round_two" = 1 ]; then

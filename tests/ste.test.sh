@@ -55,7 +55,7 @@ python3 "$ROOT/bin/lib/fm_ste.py" check-details --kind > "$d/report" 2> "$d/erro
 assert_eq 64 "$?" 'kind requires a value and file'
 assert_contains "$(cat "$d/error")" 'check-details [--kind <kind>] <file>' 'usage shows optional kind'
 # T-244: an unhashable scene reference is a named field error, never a traceback,
-# through check-explain and spec preflight. Fixture: tests/lib/ste_cases.py card().
+# through check-explain and the pin-time spec check (T-297). Fixture: tests/lib/ste_cases.py card().
 for mutation in 'nodes.change:n["state"]="new";n["change"]=[]' 'edges.change:e["state"]="new";e["change"]=[]' \
   'edges.from:e["from"]=[]' 'edges.to:e["to"]={}'; do
   field="${mutation%%:*}"
@@ -83,11 +83,11 @@ PY_SCENE
   assert_eq 64 "$rc" "check-explain refuses malformed $field"
   assert_contains "$(cat "$d/error")" "en.scene.$field" "check-explain names $field"
   assert_lacks "$(cat "$d/error")" Traceback "check-explain has no traceback for $field"
-  python3 "$ROOT/bin/lib/fm_spec_preflight.py" prompt --task T-001 --spec "$d/scene-spec.json" --base base > "$d/report" 2> "$d/error"
+  python3 "$ROOT/bin/lib/fm_spec_preflight.py" check --task T-001 --spec "$d/scene-spec.json" > "$d/report" 2> "$d/error"
   rc=$?
-  assert_eq 65 "$rc" "preflight refuses malformed $field"
-  assert_contains "$(cat "$d/error")" "en.scene.$field" "preflight names $field"
-  assert_lacks "$(cat "$d/error")" Traceback "preflight has no traceback for $field"
+  assert_eq 65 "$rc" "the pin-time spec check refuses malformed $field"
+  assert_contains "$(cat "$d/error")" "en.scene.$field" "the pin-time spec check names $field"
+  assert_lacks "$(cat "$d/error")" Traceback "the pin-time spec check has no traceback for $field"
 done
 python3 "$ROOT/bin/lib/fm_ste.py" rules > "$d/rules"
 assert_eq 0 "$?" 'rules CLI succeeds'

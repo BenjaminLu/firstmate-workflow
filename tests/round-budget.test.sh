@@ -2,7 +2,7 @@
 # T-276: every task gets a review round budget that stops for the captain.
 # Feature dependencies: bin/lib/fm_round_budget.py bin/lib/fm_autopilot_loop.py bin/fm-worker.sh bin/fm-decide.sh
 # Shared fixtures: tests/lib/round_budget.py tests/lib/autopilot_branch_fixture.py tests/lib/worker.sh
-#   tests/lib/spec-preflight.sh tests/lib/binding-fixture.sh tests/lib/project-storage.sh
+#   tests/lib/binding-fixture.sh tests/lib/project-storage.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/worker.sh
@@ -14,6 +14,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/tests/lib/round_budget.py" "$ROOT"
 assert_eq 0 "$?" 'budget state, cards, answers, holds, autopilot, privacy and tw2cn cases pass'
+# T-297, fail-first: an approved repin releases the hold with no SPEC-OK record.
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/tests/lib/round_budget.py" "$ROOT" \
+  Release.test_a_later_authorized_repin_alone_releases_a_hold
+assert_eq 0 "$?" 'round budget: repin alone releases'
 
 # --- the worker launcher refuses a stopped task before it allocates a round ---
 d="$(fixture)"; repo="$d/repo"; GH="$(ghstub "$d")"

@@ -61,7 +61,6 @@ S
     sed '/^jq /d' "$d/round-one.sh" > "$d/pinned-round-one.sh"
     mv "$d/pinned-round-one.sh" "$d/round-one.sh"
     printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$r/state/events.jsonl"
-    seed_spec_preflight "$r" T-Z "" firstmate-workflow || return 1
     project_args=(--project firstmate-workflow)
     RB_AUTHOR_PROJECT=firstmate-workflow
   fi

@@ -1372,7 +1372,21 @@ fm_binding() {
 
 # Approved immutable task snapshots. Storage is resolved by the caller before
 # invoking this one reader; the pin store is never inside an external checkout.
-fm_pin() { python3 "$_fm_code_dir/lib/fm_spec_pins.py" "$@"; }
+# A new pin checks its spec (T-297); an external public_title follows the
+# project's PR title style, read here as the removed spec preflight read it.
+fm_pin() {
+  case "${1:-}" in
+    create|check)
+      if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+        local pr_format
+        pr_format="$(fm_conventions pr_format 2>/dev/null)" || {
+          echo 'fm-pin: cannot read the PR format' >&2; return 65; }
+        FM_PR_TITLE="$(jq -r '.pr_title' <<<"$pr_format")" || return 65
+        export FM_PR_TITLE
+      fi ;;
+  esac
+  python3 "$_fm_code_dir/lib/fm_spec_pins.py" "$@"
+}
 fm_pin_existing() { # task; absent is 3, corrupt is 65 (never a fallback)
   fm_pin resolve --task "$1" --if-present
 }

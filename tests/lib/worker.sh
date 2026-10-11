@@ -80,7 +80,6 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   printf 'state/\ndesign/tasks/\n' > .gitignore
   git add -A; git add -f -- "design/tasks/$task.json"; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
   ) || return 1
-  seed_spec_preflight "$d/repo" "$task" || return 1
   seed_self_pr_authoring "$d/repo" "$task" || return 1
   printf '%s' "$d"
 }
