@@ -15,6 +15,8 @@ case_py test_refused_rewrite_reasons_still_reach_the_next_prompt
 assert_eq 0 "$?" 'preflight: refused rewrite reasons reach the next prompt'
 case_py test_fourth_pass_raises_budget_card
 assert_eq 0 "$?" 'preflight: fourth pass raises budget card'
+case_py test_custom_budget_answer_resets_the_count
+assert_eq 0 "$?" 'preflight: custom budget answer resets the count'
 case_py test_budget_card_failure_names_the_recovery
 assert_eq 0 "$?" 'preflight: budget card failure names the recovery'
 case_py test_old_receipt_still_authorizes_pin

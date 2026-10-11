@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -145,6 +146,27 @@ class Fresh(unittest.TestCase):
         self.assertEqual(0, budget.state_of()['used'])
         self.retain('Clear now.\nSPEC-OK:T-X\n', self.spec('fixed'))
         self.assertEqual(1, budget.state_of()['used'])
+
+    def test_custom_budget_answer_resets_the_count(self):
+        # Any answer resets the count: the board's free text and "change" too.
+        for chosen, text in (('custom', 'Split it.'), ('change', None)):
+            with self.subTest(chosen=chosen):
+                shutil.rmtree(self.state, ignore_errors=True)
+                self.state.mkdir(parents=True)
+                self.store = Store(self.state, 'self', 'T-X', external=False)
+                budget = B.Budget(self.state, 'self', 'T-X', external=False)
+                for n in range(3):
+                    self.retain(f'gap {n}.\nSPEC-GAPS:T-X\n', self.spec(f'line {n}'))
+                calls = []
+                self.assertEqual(65, B.gate(budget, ROOT, self.decide(calls)))
+                ident = 'D-firstmate-workflow-TX-1'
+                decisions = self.state / 'decisions'
+                decisions.mkdir()
+                (decisions / (ident + '.json')).write_text(json.dumps(dict(
+                    id=ident, task='T-X', chosen=chosen, text=text, ts='2026-10-11T00:00:00Z')))
+                self.assertEqual(dict(state='within', used=0, answer=chosen),
+                                 {k: budget.state_of()[k] for k in ('state', 'used', 'answer')})
+                self.assertEqual(0, B.gate(budget, ROOT, self.decide(calls)), 'a custom answer allows a pass')
 
     def test_budget_card_failure_names_the_recovery(self):
         budget = B.Budget(self.state, 'self', 'T-X', external=False)

@@ -70,7 +70,7 @@ class Budget:
         except ValueError:
             return None
         if (not isinstance(record, dict) or record.get('id') != ident or record.get('task') != self.task
-                or record.get('chosen') not in ('A', 'B', 'C') or not record.get('ts')):
+                or not isinstance(record.get('chosen'), str) or not record.get('chosen') or not record.get('ts')):
             return None
         return record
 
