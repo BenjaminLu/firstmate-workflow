@@ -355,6 +355,8 @@ trap ci_cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
+# every stage's repositories skip git automatic maintenance (T-280)
+fm_git_quiet "$ci_tmp/git-quiet" || exit 70
 
 # --- containment (T-151) --------------------------------------------------
 # Every suite runs with a scope marker in its environment, which every

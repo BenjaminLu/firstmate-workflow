@@ -140,6 +140,8 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+# the suites run here, not through bin/ci.sh, so they need the same git (T-280)
+fm_git_quiet "$work/git-quiet" || exit 70
 
 # Gate 4 supplies the verified pin, independent of any target config file.
 # Standalone CI retains its head declaration.

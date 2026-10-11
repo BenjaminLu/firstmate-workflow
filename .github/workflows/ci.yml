@@ -279,6 +279,9 @@ jobs:
           grep -q 'firstmate_ci_unpriv_bwrap' "$fm_logs/child.stdout"
           grep -Eq '^CapEff:[[:space:]]+0+$' "$fm_logs/child.stdout"
           # Unchanged mandatory controls include all metadata denials and external roots.
+          # These two run before bin/ci.sh, so they need its git wrapper too (T-280).
+          . bin/fm-config.sh && fm_git_quiet "$RUNNER_TEMP/git-quiet"
+          trap - HUP  # fm-config.sh ignores HUP; an ignored signal would pass to every child
           bash tests/pinned-context.test.sh
           bash tests/review-experiment-evidence.test.sh
           fm_globals
@@ -620,6 +623,9 @@ jobs:
           grep -q 'firstmate_ci_unpriv_bwrap' "$fm_logs/child.stdout"
           grep -Eq '^CapEff:[[:space:]]+0+$' "$fm_logs/child.stdout"
           # Unchanged mandatory controls include all metadata denials and external roots.
+          # These two run before bin/fm-failfirst.sh, so they need its git wrapper too (T-280).
+          . bin/fm-config.sh && fm_git_quiet "$RUNNER_TEMP/git-quiet"
+          trap - HUP  # fm-config.sh ignores HUP; an ignored signal would pass to every child
           bash tests/pinned-context.test.sh
           bash tests/review-experiment-evidence.test.sh
           fm_globals
