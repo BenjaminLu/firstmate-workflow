@@ -32,7 +32,7 @@ fixture() {
   chmod +x "$d/bin/suite"
   printf 'vendor: mock\nproject:\n  check: bin/suite\n' > "$d/config.yaml"
   cat > "$d/design/tasks/T-X.json" <<JSON
-{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml"]}
+{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml"],"acceptance":["works"]}
 JSON
   echo base > "$d/src/thing.sh"
   echo design > "$d/design/design.md"
@@ -74,7 +74,7 @@ assert_fail "gate '$d' wide 3" "3 blocks a diff that reaches outside it"
 
 # A branch cannot expand its own approved scope (T-049).
 git -C "$d" checkout -q -b ownfile green
-printf '{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml","design/tasks/T-X.json","elsewhere/**"]}\n' \
+printf '{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml","design/tasks/T-X.json","elsewhere/**"],"acceptance":["works"]}\n' \
   > "$d/design/tasks/T-X.json"
 mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm ownfile
 git -C "$d" checkout -q main
@@ -115,7 +115,7 @@ touched() {
   # and one that names only a longer name with helper.sh inside it
   printf 'touch %q/marks/near   # fm-helper.sh, not the helper above\n' "$r" > "$r/tests/near.test.sh"
   printf 'base\n' > "$r/src/thing.sh"
-  printf '{"id":"T-X","scope":["src/**","tests/**","config.yaml"]}\n' > "$r/design/tasks/T-X.json"
+  printf '{"id":"T-X","scope":["src/**","tests/**","config.yaml"],"acceptance":["works"]}\n' > "$r/design/tasks/T-X.json"
   printf 'marks/\nstate/\n' > "$r/.gitignore"
   echo design > "$r/design/design.md"
   git -C "$r" add -A; git -C "$r" commit -qm base

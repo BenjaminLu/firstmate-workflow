@@ -29,7 +29,7 @@ class SpecPins(unittest.TestCase):
         git(self.root, 'config', 'user.name', 'fixture')
         (self.root / 'design/tasks').mkdir(parents=True)
         self.spec = self.root / 'design/tasks/T-X.json'
-        self.spec.write_text(json.dumps({'id': 'T-X', 'scope': ['src/**', 'design/tasks/T-X.json', '**']}))
+        self.spec.write_text(json.dumps({'id': 'T-X', 'scope': ['src/**', 'design/tasks/T-X.json', '**'], 'acceptance': ['works']}))
         (self.root / 'design/design.md').write_text('approved design\n')
         (self.root / 'config.yaml').write_text('project:\n  check: true\n  docs:\n    - docs/**\n')
         git(self.root, 'add', '.')
@@ -127,7 +127,7 @@ class SpecPins(unittest.TestCase):
         self.decision('D-2', ts='2026-10-03T00:02:00Z')
         with self.assertRaisesRegex(ValueError, 'unchanged'):
             self.p.create(decision='D-2')
-        self.spec.write_text('{"id":"T-X","scope":["new/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["new/**"],"acceptance":["works"]}')
         reused = self.pin_cli('--decision', 'D-1')
         self.assertEqual(reused.returncode, 65)
         self.assertIn('already used', reused.stderr)
@@ -162,7 +162,7 @@ class SpecPins(unittest.TestCase):
             previous = record
         self.assertEqual(self.p.resolve(), previous)
         self.assertEqual(self.legacy_gate().returncode, 0)
-        self.spec.write_text('{"id":"T-X","scope":["new/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["new/**"],"acceptance":["works"]}')
         for decision in ('D-2', 'D-3'):
             with self.assertRaisesRegex(ValueError, 'already used'):
                 self.p.create(decision=decision)
@@ -228,7 +228,7 @@ class SpecPins(unittest.TestCase):
         self.decision('D-2', ts='2026-10-03T00:02:00Z')
         first = self.p.create()
         self.assertEqual(first['approval']['decision'], 'D-1')
-        self.spec.write_text('{"id":"T-X","scope":["wider/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["wider/**"],"acceptance":["works"]}')
         second = self.p.create(decision='D-2')
         self.assertEqual(second['version'], 2)
         self.assertEqual(self.p.resolve(), second)
@@ -244,7 +244,7 @@ class SpecPins(unittest.TestCase):
         self.event()
         self.decision()
         self.p.create()
-        self.spec.write_text('{"id":"T-X","scope":["wider/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["wider/**"],"acceptance":["works"]}')
         env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
         result = subprocess.run(['bash', str(ROOT / 'bin/fm-project.sh'), 'repin',
             '--repo', str(self.root), '--project', 'firstmate-workflow', '--task', 'T-X',
@@ -291,7 +291,7 @@ class SpecPins(unittest.TestCase):
         self.event()
         base_text = self.spec.read_text()
         head = git(self.root, 'rev-parse', 'HEAD')
-        self.spec.write_text('{"id":"T-X","scope":["unapproved/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["unapproved/**"],"acceptance":["works"]}')
         self.decision()
         receipt = self.state / 'decisions/D-1.json'
         answer = json.loads(receipt.read_text())
@@ -307,7 +307,7 @@ class SpecPins(unittest.TestCase):
         worktree = Path(self.tmp.name) / 'round'
         git(self.root, 'worktree', 'add', '-qb', 'task-branch', str(worktree), 'main')
         branch_spec = worktree / 'design/tasks/T-X.json'
-        branch_spec.write_text('{"id":"T-X","scope":["wider/**"]}')
+        branch_spec.write_text('{"id":"T-X","scope":["wider/**"],"acceptance":["works"]}')
         git(worktree, 'add', '.')
         git(worktree, 'commit', '-qm', 'proposed task change')
         head = git(worktree, 'rev-parse', 'HEAD')
@@ -324,7 +324,7 @@ class SpecPins(unittest.TestCase):
         self.assertEqual(pin['snapshots']['spec']['text'], base_text)
         self.assertNotIn('spec_approval', pin)
         self.assertEqual(self.p.resolve(), pin)
-        self.spec.write_text('{"id":"T-X","scope":["extra/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["extra/**"],"acceptance":["works"]}')
         revised = self.p.create(decision='D-1')
         self.assertEqual(self.p.resolve(), revised)
 
@@ -363,7 +363,7 @@ class SpecPins(unittest.TestCase):
         git(self.root, 'rm', str(self.spec))
         git(self.root, 'commit', '-qm', 'base without new task')
         self.spec.parent.mkdir(parents=True, exist_ok=True)
-        self.spec.write_text('{"id":"T-X","scope":["src/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["src/**"],"acceptance":["works"]}')
         self.event()
         self.assertEqual(self.p.create()['snapshots']['spec']['source'], 'local-self')
 
@@ -373,7 +373,7 @@ class SpecPins(unittest.TestCase):
         self.decision()
         with self.assertRaisesRegex(ValueError, 'unchanged'):
             self.p.create(decision='D-1')
-        self.spec.write_text('{"id":"T-X","scope":["src/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["src/**"],"acceptance":["works"]}')
         self.decision('D-2', task='T-Y')
         with self.assertRaisesRegex(ValueError, 'authorization'):
             self.p.create(decision='D-2')
@@ -381,7 +381,7 @@ class SpecPins(unittest.TestCase):
         self.assertEqual(second['version'], 2)
         self.assertEqual(json.loads((self.state / 'pins/T-X/1.json').read_text()), first)
         self.assertEqual(self.p.resolve(), second)
-        self.spec.write_text('{"id":"T-X","scope":["other/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["other/**"],"acceptance":["works"]}')
         with self.assertRaisesRegex(ValueError, 'already used'):
             self.p.create(decision='D-1')
 
@@ -391,7 +391,7 @@ class SpecPins(unittest.TestCase):
         # an amended spec is written and an authorized repin writes pin
         # version 2. Pin version 1 stays on disk byte for byte. Both specs
         # stay in the local file, never committed (T-256).
-        self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json"]}')
+        self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json"],"acceptance":["works"]}')
         self.event()
         first = self.p.create()
         base = first['target_base_commit']
@@ -403,7 +403,7 @@ class SpecPins(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'out of scope: skills/rule-inventory.json'):
             self.p.scope('HEAD', base)
         self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json",'
-                             '"skills/rule-inventory.json"]}')
+                             '"skills/rule-inventory.json"],"acceptance":["works"]}')
         self.decision()
         second = self.p.create(decision='D-1')
         self.assertEqual(second['version'], 2)
@@ -413,7 +413,7 @@ class SpecPins(unittest.TestCase):
     def test_repin_requires_strictly_newer_approval(self):
         self.event()
         first = self.p.create()
-        self.spec.write_text('{"id":"T-X","scope":["wider/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["wider/**"],"acceptance":["works"]}')
         for ts in ('2026-10-02T23:59:59Z', '2026-10-03T00:00:00Z',
                    '2026-10-03T08:00:00+08:00'):
             with self.subTest(ts=ts):
@@ -454,7 +454,7 @@ class SpecPins(unittest.TestCase):
         state = home / 'state'
         state.mkdir(parents=True)
         (home / 'tasks').mkdir()
-        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["src/**"]}')
+        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["src/**"],"acceptance":["works"],"public_title":"Keep the private widget"}')
         (home / 'design.md').write_text('private design')
         (home / 'CONVENTIONS.md').write_text('private conventions')
         (state / 'config.yaml').write_text('project:\n  check: private-check\n  docs:\n    - guide/**\n')
@@ -472,7 +472,7 @@ class SpecPins(unittest.TestCase):
         self.decision('D-2', project='client', ts='2026-10-03T00:02:00Z')
         (home / 'design.md').write_text('revised private design')
         (home / 'CONVENTIONS.md').write_text('revised private conventions')
-        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["changed/**"]}')
+        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["changed/**"],"acceptance":["works"],"public_title":"Keep the private widget"}')
         (state / 'config.yaml').write_text('project:\n  check: new-private-check\n')
         revised = p.create(decision='D-2')
         self.assertEqual(revised['version'], 2)
@@ -481,7 +481,7 @@ class SpecPins(unittest.TestCase):
         self.assertEqual(p.resolve(), revised)
 
     def test_scope_and_committed_provenance(self):
-        self.spec.write_text('{"id":"T-X","scope":["src/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["src/**"],"acceptance":["works"]}')
         git(self.root, 'add', '.')
         git(self.root, 'commit', '-qm', 'narrow scope')
         self.event()
@@ -530,7 +530,7 @@ class SpecPins(unittest.TestCase):
     def test_repin_refuses_every_mismatched_approval(self):
         self.event()
         self.p.create()
-        self.spec.write_text('{"id":"T-X","scope":["different/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["different/**"],"acceptance":["works"]}')
         for kwargs in (dict(project='other'), dict(task='T-Y'), dict(chosen='B'), dict(kind='merge')):
             with self.subTest(**kwargs):
                 self.decision(**kwargs)
@@ -544,7 +544,7 @@ class SpecPins(unittest.TestCase):
         self.event()
         self.p.create()
         for number, args in enumerate(([], ['--project', 'firstmate-workflow']), 1):
-            self.spec.write_text(json.dumps({'id': 'T-X', 'scope': [f'src/{number}/**']}))
+            self.spec.write_text(json.dumps({'id': 'T-X', 'scope': [f'src/{number}/**'], 'acceptance': ['works']}))
             self.decision(f'D-{number}', ts=f'2026-10-03T00:0{number}:00Z')
             env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
             result = subprocess.run(['bash', str(ROOT / 'bin/fm-project.sh'), 'repin',
@@ -563,9 +563,20 @@ class SpecPins(unittest.TestCase):
         self.state = home / 'state'
         self.state.mkdir(parents=True)
         (home / 'tasks').mkdir()
-        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["src/**"]}')
+        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["src/**"],"acceptance":["works"],"public_title":"Keep the private widget"}')
         (home / 'design.md').write_text('private design')
-        (home / 'CONVENTIONS.md').write_text('private conventions')
+        # T-297: the CLI pin reads the project's PR title style from the
+        # conventions front matter, as the removed spec preflight did.
+        policy = dict(repository='owner/client', base='main', land='card', review='fm', post='local',
+                      merge_method='squash', stacking='hold', confirmed=True, policy_confirmed=True,
+                      delete_branch=True, force_with_lease=False, required_checks=['ci'], analysers=[],
+                      captain='fixture', intent='Use this policy', product='fixture',
+                      confirmed_at='2026-10-07', watch_seconds=60, debounce_seconds=60,
+                      reinspect_seconds=60, available_merge_methods=['squash'],
+                      protection={'status': 'known'}, reviewers=[], commit_examples=[],
+                      posting_languages=['en'], bootstrap_authorized=False)
+        (home / 'CONVENTIONS.md').write_text('---\n' + ''.join(
+            k + ': ' + json.dumps(v) + '\n' for k, v in policy.items()) + '---\nprivate conventions\n')
         (self.state / 'config.yaml').write_text('project:\n  check: true\n')
         target = home / 'repo'
         git(self.root, 'clone', '-q', str(self.root), str(target))

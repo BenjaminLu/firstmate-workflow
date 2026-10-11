@@ -33,11 +33,13 @@ class SpecRefused(ValueError):
     legacy source fallback."""
 
 
-def spec_check(task, text):
-    """Every check the removed spec preflight ran before its reviewer."""
+def spec_check(task, text, env=None):
+    """Every check the removed spec preflight ran before its reviewer. env
+    names the project being pinned (FM_EXTERNAL, FM_PR_TITLE); the process
+    environment is the default."""
     from fm_spec_preflight import check
     try:
-        check(task, text.encode('utf-8'))
+        check(task, text.encode('utf-8'), env)
     except (ValueError, KeyError, TypeError) as error:
         raise SpecRefused(str(error) or type(error).__name__) from error
 
@@ -131,6 +133,7 @@ class Pins:
         self.target = Path(env['FM_TARGET_ROOT'])
         self.state = Path(env['FM_STATE_DIR'])
         self.external = env.get('FM_EXTERNAL') == '1'
+        self.spec_env = {key: env[key] for key in ('FM_EXTERNAL', 'FM_PR_TITLE') if key in env}
         self.project = env.get('FM_PROJECT') or 'firstmate-workflow'
         self.tasks = Path(env['FM_TASKS_DIR'])
         self.design = Path(env['FM_DESIGN'])
@@ -473,11 +476,11 @@ class Pins:
         except (ValueError, OSError, KeyError, TypeError):
             spec = self.tasks / (self.task + '.json')
             if spec.is_file():
-                spec_check(self.task, spec.read_bytes().decode('utf-8', 'replace'))
+                spec_check(self.task, spec.read_bytes().decode('utf-8', 'replace'), self.spec_env)
             return
         if spec_ref and not self.external:
             self.approved_branch_spec(None, snapshots, approval, spec_ref)
-        spec_check(self.task, snapshots['spec']['text'])
+        spec_check(self.task, snapshots['spec']['text'], self.spec_env)
 
     def create(self, decision=None, resume=False, spec_worktree=None):
         if list(self.directory.glob('*.json')) and not decision:
@@ -501,7 +504,7 @@ class Pins:
             self.check_repin(old, decision, snapshots, approval)
         # Check the final selected bytes, including an approved resumed branch,
         # before publishing a pin or a repin (T-297).
-        spec_check(self.task, snapshots['spec']['text'])
+        spec_check(self.task, snapshots['spec']['text'], self.spec_env)
         self.directory.mkdir(parents=True, exist_ok=True)
         lock = self.directory / '.lock'
         if lock.is_symlink():

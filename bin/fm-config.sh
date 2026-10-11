@@ -1378,9 +1378,10 @@ fm_pin() {
   case "${1:-}" in
     create|check)
       if [ "${FM_EXTERNAL:-0}" = 1 ]; then
-        local pr_format
-        pr_format="$(fm_conventions pr_format 2>/dev/null)" || {
-          echo 'fm-pin: cannot read the PR format' >&2; return 65; }
+        local pr_format pr_error
+        pr_error="$(fm_conventions pr_format 2>&1 >/dev/null)" || {
+          echo "fm-pin: cannot read the PR format: $pr_error" >&2; return 65; }
+        pr_format="$(fm_conventions pr_format 2>/dev/null)" || return 65
         FM_PR_TITLE="$(jq -r '.pr_title' <<<"$pr_format")" || return 65
         export FM_PR_TITLE
       fi ;;

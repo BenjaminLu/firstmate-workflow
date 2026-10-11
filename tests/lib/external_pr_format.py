@@ -274,6 +274,8 @@ class FormatTests(unittest.TestCase):
                     refused = bool(external) and reads
                     self.assertEqual(p.returncode, 65 if refused else 0, p.stderr)
                     self.assertEqual('cannot read the PR format' in p.stderr, refused)
+                    # The conventions error is named, not swallowed.
+                    self.assertEqual('cannot read the PR format: called' in p.stderr, refused)
         p = subprocess.run(['bash', '-c', '''set -eu
 FM_EXTERNAL=1
 fm_conventions() { echo '{"pr_title":"conventional"}'; }

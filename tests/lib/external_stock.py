@@ -65,6 +65,9 @@ def refuse_public_fields(engine, home, env):
             assert not pins, ('a refused spec wrote a pin', step, field, value)
 
 
+DEFAULT_TITLE = 'Build the fixture widget'
+
+
 def scenario(stop_owner=False, public_title=None, card_only=False, pin_refusals=False):
     with tempfile.TemporaryDirectory(prefix='external-stock-') as tmp:
         scratch = Path(tmp)
@@ -124,9 +127,10 @@ with open(sys.argv[4], 'a') as log:
                 captain='captain', intent='Private acceptance sentinel', product='Private product sentinel',
                 required_checks=['ci'], contract={'check': 'true'}, post='local'))
         (home / 'tasks').mkdir(exist_ok=True)
+        # T-297: an external spec pins only with a valid public title.
         (home / 'tasks/T-051.json').write_text(json.dumps(dict(id='T-051',
             title='Private title sentinel', depends_on=[], scope=['implementation'],
-            acceptance=['Private acceptance sentinel'])))
+            acceptance=['Private acceptance sentinel'], public_title=DEFAULT_TITLE)))
         if public_title is not None:
             spec_path = home / 'tasks/T-051.json'
             spec = json.loads(spec_path.read_text())
@@ -274,10 +278,7 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
                 paths = run(['git', '-C', str(remote), 'ls-tree', '-r', '--name-only', 't-051-work'], env)
                 assert paths.splitlines() == ['base-content', 'implementation'], paths
                 message = run(['git', '-C', str(target), 'log', '-1', '--format=%s'], env)
-                if public_title is None:
-                    assert message == "T-051: Save the round's changes", message
-                else:
-                    assert message == public_title, message
+                assert message == (public_title or DEFAULT_TITLE), message
                 calls = [json.loads(line) for line in (scratch / 'gh.jsonl').read_text().splitlines()]
                 create = next(call for call in calls if call[:2] == ['pr', 'create'])
                 assert create[create.index('--repo')+1] == 'owner/app'

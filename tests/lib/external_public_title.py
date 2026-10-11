@@ -102,6 +102,29 @@ class PublicText(unittest.TestCase):
         with patch.dict(os.environ, FM_EXTERNAL='0'):
             spec_check('T-051', json.dumps(self.spec))
 
+    def test_pin_checks_the_pinned_project_not_the_process(self):
+        # T-297: the pin-time check follows the environment the pin store was
+        # opened with, so an in-process external pin is checked like the CLI.
+        from fm_spec_pins import Pins
+        (self.home / 'state').mkdir()
+        (self.home / 'tasks').mkdir()
+        (self.home / 'design.md').write_text('Private design\n')
+        (self.home / 'state/events.jsonl').write_text(json.dumps(dict(
+            type='greenlit', actor='captain', project='client', ts='2026-10-02T00:00:00Z', data={})) + '\n')
+        root = str(self.home)
+        env = dict(FM_ENGINE_ROOT=root, FM_TARGET_ROOT=root, FM_STATE_DIR=root + '/state',
+                   FM_TASKS_DIR=root + '/tasks', FM_DESIGN=root + '/design.md',
+                   FM_EXTERNAL='1', FM_PROJECT='client')
+        spec = self.home / 'tasks/T-051.json'
+        with patch.dict(os.environ, FM_EXTERNAL='0', FM_PR_TITLE='plain'):
+            spec.write_text(json.dumps(self.spec))
+            with self.assertRaisesRegex(SpecRefused, 'external spec needs a valid public_title:'):
+                Pins(env, 'T-051').check()
+            spec.write_text(json.dumps(dict(self.spec, public_title=TITLE)))
+            Pins(env, 'T-051').check()
+            with self.assertRaisesRegex(SpecRefused, 'conventional subject'):
+                Pins(dict(env, FM_PR_TITLE='conventional'), 'T-051').check()
+
     def shell(self, fields=None, external=1, prefix='', tail=''):
         spec = dict(self.spec, **(fields or {}))
         commit = section(WORKER, 'commit_msg="$TASK:', 'fm_private_stage "$tree"')

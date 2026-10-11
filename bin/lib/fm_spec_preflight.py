@@ -92,19 +92,20 @@ def validate_change_refs(spec):
             raise ValueError(lang + '.check: correct answer absent from visible evidence')
 
 
-def validate_spec(task, spec):
+def validate_spec(task, spec, env=None):
     """Every check a submitted spec meets before it pins."""
+    env = os.environ if env is None else env
     if not isinstance(spec, dict) or spec.get('id') != task or not spec.get('scope') or not spec.get('acceptance'):
         raise ValueError('a spec needs the task identity, scope and acceptance lines')
     if 'adopt' in spec:
-        if os.environ.get('FM_EXTERNAL') != '1':
+        if env.get('FM_EXTERNAL') != '1':
             raise ValueError('adopt is only supported for external projects')
         from fm_adopt import validate
         validate(spec['adopt'])
-    if os.environ.get('FM_EXTERNAL') == '1':
+    if env.get('FM_EXTERNAL') == '1':
         from fm_public_text import validate
         problems = validate(spec.get('public_title'), spec.get('public_summary'),
-                            os.environ.get('FM_PR_TITLE', 'plain'), spec.get('public_changes'))
+                            env.get('FM_PR_TITLE', 'plain'), spec.get('public_changes'))
         if problems:
             raise ValueError('external spec needs a valid public_title: ' + '; '.join(problems))
         from fm_public_text import plain_problems
@@ -123,14 +124,14 @@ def validate_spec(task, spec):
     validate_change_refs(spec)
 
 
-def check(task, data):
+def check(task, data, env=None):
     """The pin-time spec check (T-297): every check the removed preflight ran
     before its reviewer. Raises ValueError on the first failure."""
     try:
         spec = json.loads(data)
     except ValueError as error:
         raise ValueError('spec is not JSON: ' + str(error)) from error
-    validate_spec(task, spec)
+    validate_spec(task, spec, env)
 
 
 def main():

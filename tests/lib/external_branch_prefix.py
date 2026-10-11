@@ -150,17 +150,30 @@ else: sys.exit(1)
         self.configure(branch_prefix='feature/')
         self.published('feature/t-051-add-a-fee-check', 'no CI branch patterns recorded for this project; cannot prove CI runs on feature/t-051-add-a-fee-check')
 
+    def early_refused(self, message):
+        # T-297: the pin-time spec check runs before the run has an identity,
+        # so it refuses with no crash event, no worktree and no publication.
+        result = self.launch()
+        self.assertEqual(result.returncode, 65, result.stdout + result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertFalse(any('push' in x or 'worktree' in x and 'add' in x
+                             for x in self.commands(Path(self.env['FM_TEST_GIT_LOG']))))
+        self.assertFalse(any(x[:2]==['pr','create'] for x in self.commands(self.gh_log)))
+
     def test_invalid_public_text_uses_work(self):
+        # T-297: invalid public text no longer reaches a branch name; the
+        # pin-time check refuses it before any branch exists.
         self.spec['public_title'] = 'Read private/file'
         self.write_spec()
         self.configure(branch_prefix='feature/', ci_branch_patterns=['feature/*'])
-        self.published('feature/t-051-work')
+        self.early_refused('fm-pin: external spec needs a valid public_title: '
+                           'public_title: path-like text is not public prose')
 
     def test_malformed_owner_refuses(self):
         self.owner('branch_prefix: feature/\n')
         error = 'fm-conventions: quote conventions string as JSON: branch_prefix'
-        self.refused('fm-worker: cannot read branch format: ' + error,
-                     'fm-worker：無法讀取 branch 格式：' + error)
+        # T-297: the pin-time check reads the PR title style first.
+        self.early_refused('fm-pin: cannot read the PR format: ' + error)
 
     def test_branch_policy_shapes_and_cli(self):
         policy = conventions.read_policy(self.home/'CONVENTIONS.md')

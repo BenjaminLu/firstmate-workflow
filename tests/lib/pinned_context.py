@@ -251,7 +251,8 @@ class PinnedContext(unittest.TestCase):
         state = private / 'state'
         state.mkdir(parents=True)
         (private / 'tasks').mkdir()
-        (private / 'tasks/T-173.json').write_text('{"id":"T-173","scope":["src/**"],"acceptance":["§15.10"]}')
+        (private / 'tasks/T-173.json').write_text('{"id":"T-173","scope":["src/**"],"acceptance":["§15.10"],'
+                                                   '"public_title":"Keep the private widget"}')
         for key, path in [('design', private / 'design.md'), ('conventions', private / 'CONVENTIONS.md'),
                           ('contract', state / 'config.yaml')]:
             path.write_bytes(self.pin['snapshots'][key]['text'].encode())

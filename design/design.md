@@ -1655,6 +1655,11 @@ fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 `setup` once in the checkout and reports the contract; `status` only reports it.
 
+### Spec preflight and migration (T-185)
+
+T-297 removed the spec preflight; the next subsection replaces this one. This
+heading stays only so that older task prompts that anchor it still resolve.
+
 ### The worker's first-round plan (T-297)
 
 The spec preflight of T-185, T-270 and T-288 is removed. A review of each spec
