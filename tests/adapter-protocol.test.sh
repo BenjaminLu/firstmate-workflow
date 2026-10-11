@@ -171,7 +171,11 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # every vendor is asked for JSON output now, unconditionally, since that
     # is where the round's own model comes back (T-127)
     case "$name" in
-      claude|cursor-agent|gemini) assert_contains " $model_argv " " --output-format json " \
+      # claude streams its steps as JSON events (T-287); its final result
+      # event is where the model comes back
+      claude) assert_contains " $model_argv " " --output-format stream-json --verbose " \
+        "$name asks for streaming JSON output so its steps show and its round's model can be read back" ;;
+      cursor-agent|gemini) assert_contains " $model_argv " " --output-format json " \
         "$name asks for JSON output so its round's model can be read back" ;;
       codex) assert_contains " $model_argv " " --json " "$name asks for JSON output too" ;;
     esac

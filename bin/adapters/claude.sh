@@ -195,13 +195,19 @@ else
   allow=(Bash "${allow[@]}")
 fi
 settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":$sandbox}"
-# --output-format json always, not only when a managed attempt reads the
-# final answer from it (T-127): it is also how the round's own model comes
-# back, for the run's record - as the keys of the result message's
-# "modelUsage", which names no "model" field (T-146; fm_vendor_model).
+# --output-format stream-json always, not only when a managed attempt reads
+# the final answer from it (T-127): one JSON event per line as each step
+# happens (T-287), so the run log and `fm follow` show the files it reads
+# and edits, the commands it runs and its own text while the round runs,
+# instead of one object when it ends. claude -p streams only with --verbose.
+# The stream's final result event is the same object --output-format json
+# printed: the final answer, and the round's own model for the run's record -
+# as the keys of its "modelUsage", which names no "model" field (T-146;
+# fm_vendor_model). A stream with no result event, or with a malformed event
+# line, is incomplete (cli_final in bin/fm-herdr.py).
 mode=(--restricted --strict-mcp-config --disable-slash-commands
       --tools "Bash,Read,Edit,Write,Grep,Glob" --add-dir "$tmp"
-      --permission-mode dontAsk --settings "$settings" --output-format json
+      --permission-mode dontAsk --settings "$settings" --output-format stream-json --verbose
       --allowedTools "${allow[@]}" --disallowedTools "${deny[@]}")
 # config.yaml's model, applied with claude's own flag (T-127); FM_ADAPTER_ARGS
 # may not name one (refused above), so this is the one place it comes from
@@ -239,5 +245,5 @@ msg="$(fm_adapter_model_refusal claude "${FM_MODEL:-}" "$log" "$off" "$rc")" && 
   [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'claude\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
   exit 64
 }
-fm_adapter_verdict "$rc" "$log" "$off"
+fm_adapter_verdict "$rc" "$log" "$off" claude
 exit $?

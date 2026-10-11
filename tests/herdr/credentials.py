@@ -95,7 +95,8 @@ import json,os,pathlib,sys
 prompt=sys.stdin.read(); assert os.environ['FM_ACTOR'] in prompt
 pathlib.Path(os.environ['FM_TEST_ROOT'],'prompted-'+pathlib.Path(sys.argv[0]).name).touch()
 assert 'explicitly dispatched reviewer' in prompt
-assert '--output-format' in sys.argv and 'json' in sys.argv
+fmt=sys.argv[sys.argv.index('--output-format')+1]
+assert fmt==('stream-json' if pathlib.Path(sys.argv[0]).name=='claude' else 'json'),fmt
 final='REJECT:T-035\nREVIEWER_COMPLETE:T-035'
 print(json.dumps({'type':'result','result':final,'response':final}))
 ''')

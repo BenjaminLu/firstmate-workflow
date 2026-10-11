@@ -1880,6 +1880,9 @@ def cli_final(vendor, log):
             elif kind == 'turn.completed':
                 complete, active = active and answer is not None, False
         return answer if complete and kind == 'turn.completed' else None
+    if vendor == 'claude':
+        streamed, answer = claude_stream_final(text)
+        if streamed: return answer
     for candidate in (text, *reversed(text.splitlines())):
         try: response = json.loads(candidate)
         except ValueError: continue
@@ -1890,6 +1893,38 @@ def cli_final(vendor, log):
             return value
         return None
     return None
+
+
+def claude_stream_final(text):
+    """(streamed, answer) for a claude transcript (T-287).
+
+    A round launched with --output-format stream-json writes one event per
+    line, and any event that is not a result (`system`, `assistant`, `user`)
+    marks the transcript as a stream. A transcript with none is the single
+    object --output-format json printed before T-287, and is read by the
+    rules above as it always was. In a stream, lines that do not start with
+    `{` - connection-retry notices, `fm-sandbox:` lines - are skipped, and the
+    last result event is the one that counts. A stream that ends without a
+    result event, or that holds a line starting with `{` that does not parse
+    anywhere in it, is incomplete: a step was cut off, so even a valid result
+    after it authorizes nothing.
+    """
+    streamed = malformed = False
+    result = None
+    for line in text.split('\n'):
+        if not line.startswith('{'): continue
+        try: event = json.loads(line)
+        except ValueError:
+            malformed = True; continue
+        if not isinstance(event, dict):
+            malformed = True; continue
+        kind = event.get('type')
+        if kind == 'result': result = event
+        elif isinstance(kind, str): streamed = True
+    if not streamed: return False, None
+    if malformed or result is None or result.get('is_error') or result.get('error'): return True, None
+    answer = result.get('result')
+    return True, answer if isinstance(answer, str) else None
 
 
 def execute_child(attempt, lifetime_fd):
@@ -1906,8 +1941,9 @@ def execute_child(attempt, lifetime_fd):
         raise ValueError('FM_HEARTBEAT_SECS must be non-negative finite seconds')
     with (attempt / 'cli.log').open('ab') as log:
         # stdout remains on the real terminal; adapters tee their CLI transcript.
-        # Vendors using -p/--output-format json often buffer until the end, so
-        # captains watching the Herdr pane also get periodic heartbeats here.
+        # Vendors using -p/--output-format json often buffer until the end
+        # (claude streams its steps since T-287), so captains watching the
+        # Herdr pane also get periodic heartbeats here.
         try:
             child = subprocess.Popen([invocation['adapter'], 'run', invocation['prompt'],
                                       invocation['tree'], str(attempt / 'cli.log')], env=env,

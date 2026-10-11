@@ -38,6 +38,8 @@ LABELS = {
     'hidden': '... {count} lines hidden ...',
     'message': '> ',
     'search': 'search: {query}',
+    'read': 'read {path}',
+    'tool': 'tool: {name}',
     'diff': 'diff of {path} against HEAD, as the file is now',
     'binary': 'binary file changed: {path}',
     'unchanged': 'no change against HEAD: {path}',
@@ -56,6 +58,7 @@ LABELS = {
     'waiting': 'waiting for {vendor}: it sends its output when it finishes ({time})',
     'doing_command': 'running a command: {command}',
     'doing_edit': 'editing a file: {path}',
+    'doing_read': 'reading a file: {path}',
     'doing_message': 'writing a message',
     'doing_wait': 'waiting for {vendor}',
     'doing_start': 'starting',
@@ -105,6 +108,8 @@ GIT_OPTIONS = ('--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.
 DIFF = ('diff', '--no-ext-diff', '--no-textconv', '--no-color')
 
 GREEN, RED, CYAN, YELLOW, MAGENTA, GREY, BLUE = '32', '31', '36', '33', '35', '90', '34'
+# claude's tools that change a file, shown as its diff once the tool succeeds
+CLAUDE_EDITS = ('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
 
 
 def duration(seconds):
@@ -432,6 +437,7 @@ class Round:
         self.waited = False
         self.doing = ('wait', '')
         self.shown = set()
+        self.tools, self.said = {}, None  # claude's stream: its tool calls by id, its last text
         self.block = None
         self.keep, self.bad_keep = lines_limit()
         self.quiet = setting('FM_FOLLOW_QUIET', 30.0)
@@ -501,6 +507,7 @@ class Round:
         kind, what = self.doing
         if kind == 'command': return say('doing_command', command=what[:80])
         if kind == 'edit': return say('doing_edit', path=what)
+        if kind == 'read': return say('doing_read', path=what)
         if kind == 'message': return say('doing_message')
         vendor = clean(self.vendor) if self.vendor else say('unknown')
         quiet = self.silence()
@@ -579,15 +586,77 @@ class Round:
             item = event.get('item')
             if isinstance(item, dict): self.item(kind, item)
             return True
+        if kind in ('system', 'rate_limit_event'):  # claude's stream: init, retries, compaction
+            self.doing = ('wait', ''); return True
+        if kind in ('assistant', 'user') and isinstance(event.get('message'), dict):
+            self.claude(kind, event['message']); return True
         if kind == 'result':  # claude and cursor-agent: one final object
-            if isinstance(event.get('result'), str):
-                self.message(event['result'], RED if event.get('is_error') else '')
+            text = event.get('result')
+            if isinstance(text, str):
+                # claude's stream already showed its last text as it was said
+                if text == self.said and not event.get('is_error'): self.doing = ('message', '')
+                else: self.message(text, RED if event.get('is_error') else '')
             return True
         if isinstance(event.get('response'), str):  # gemini
             self.message(event['response']); return True
         if isinstance(event.get('error'), dict) and isinstance(event['error'].get('message'), str):
             self.message(say('error', text=clean(event['error']['message'])), RED); return True
         return False
+
+    # claude's stream (T-287): an assistant event carries its text and the
+    # tools it calls, a user event the tools' results
+
+    def claude(self, kind, message):
+        content = message.get('content')
+        if not isinstance(content, list): return
+        for block in content:
+            if not isinstance(block, dict): continue
+            part = block.get('type')
+            if kind == 'assistant' and part == 'text' and isinstance(block.get('text'), str):
+                self.message(block['text']); self.said = block['text']
+            elif kind == 'assistant' and part == 'tool_use': self.tool_use(block)
+            elif kind == 'user' and part == 'tool_result': self.tool_result(block)
+
+    def tool_use(self, block):
+        name, given = block.get('name'), block.get('input')
+        given = given if isinstance(given, dict) else {}
+        if isinstance(block.get('id'), str): self.tools[block['id']] = (name, given)
+        path = given.get('file_path') or given.get('notebook_path') or given.get('path')
+        path = clean(path) if isinstance(path, str) and path else say('unknown')
+        if name == 'Bash':
+            command = clean(given.get('command') or '').replace('\n', ' ')
+            self.put(self.style('1;' + YELLOW, say('command', command=command)))
+            self.doing = ('command', command)
+        elif name in CLAUDE_EDITS:
+            self.doing = ('edit', path)
+        elif name == 'Read':
+            self.put(self.style(BLUE, say('read', path=path)))
+            self.doing = ('read', path)
+        elif name in ('Grep', 'Glob'):
+            self.put(self.style(BLUE, say('search', query=clean(given.get('pattern') or say('unknown')))))
+            self.doing = ('wait', '')
+        else:
+            self.put(self.style(GREY, say('tool', name=clean(name or say('unknown')))))
+            self.doing = ('wait', '')
+
+    def tool_result(self, block):
+        name, given = self.tools.pop(block.get('tool_use_id'), (None, {}))
+        failed = bool(block.get('is_error'))
+        if name in CLAUDE_EDITS and not failed:
+            path = given.get('file_path') or given.get('notebook_path')
+            if isinstance(path, str) and path:
+                self.doing = ('edit', clean(path))
+                if self.screen: self.diff(path)
+            return
+        if name == 'Bash' or failed:
+            output = block.get('content')
+            if isinstance(output, list):
+                output = '\n'.join(part.get('text') for part in output
+                                   if isinstance(part, dict) and isinstance(part.get('text'), str))
+            output = clean(output if isinstance(output, str) else '').rstrip('\n')
+            for text, hidden in collapse(output.split('\n') if output else [], self.keep):
+                self.put('  ' + (self.style(GREY, text) if hidden else self.style(RED, text) if failed else text))
+        self.doing = ('wait', '')
 
     def item(self, phase, item):
         kind, ident = item.get('type'), item.get('id')
