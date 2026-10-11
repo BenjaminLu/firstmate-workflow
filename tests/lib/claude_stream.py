@@ -224,6 +224,24 @@ class ClaudeStream(unittest.TestCase):
         good.write_text('\n'.join([*stream, json.dumps(failed)]) + '\n')
         self.assertIsNone(herdr.cli_final('claude', good))
 
+    def test_outage_read_from_notices_only(self):
+        """claude stream: outage read from notices only"""
+        log = self.tmp / 'outage.log'
+
+        def verdict(rc, *lines):
+            log.write_text('\n'.join(lines) + '\n')
+            return subprocess.run(['bash', '-c', '. "$1/bin/adapters/_lib.sh"; fm_adapter_verdict "$3" "$2" 0 claude',
+                                   'verdict', str(ROOT), str(log), str(rc)], env=self.env,
+                                  capture_output=True, timeout=WAIT).returncode
+        stream = self.stub('stream-json').splitlines()
+        read = json.dumps({'type': 'user', 'message': {'role': 'user', 'content': [
+            {'tool_use_id': 't', 'type': 'tool_result', 'content': 'rate limit exceeded: 401 unauthorized'}]}})
+        self.assertEqual(0, verdict(0, stream[0], read, *stream[1:]), 'a file it reads is not an outage')
+        failed = json.dumps(dict(json.loads(stream[-1]), is_error=True,
+                                 result='API Error: 429 Too Many Requests, rate limit exceeded'))
+        self.assertEqual(2, verdict(1, stream[0], failed), 'a result event still reports an outage')
+        self.assertEqual(2, verdict(1, stream[0], 'Error: not logged in'), 'and so does a non-JSON notice')
+
     @staticmethod
     def parses(text):
         try: json.loads(text)

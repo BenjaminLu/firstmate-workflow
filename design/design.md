@@ -4022,7 +4022,7 @@ same news.
 documents: every adapter is asked for JSON output unconditionally now (not
 only when a managed attempt reads its final answer from it), and
 `fm_vendor_model` reads it in each vendor's recorded shape. claude's
-`--output-format json` result carries no `"model"` field - T-127 assumed it
+final result event (`--output-format stream-json`, T-287) carries no `"model"` field - T-127 assumed it
 did, and recorded `unknown` for every claude round (T-146) - but names the
 models the run used as the keys of `modelUsage`: the key the round asked for
 when it is among them, otherwise the one with the most output tokens, since
