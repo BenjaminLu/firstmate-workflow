@@ -1065,7 +1065,7 @@ done
 raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!skills/*/rule-inventory.json' ':!bin/fm-decide.sh' \
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 # Autopilot holds ready tasks for firstmate's judgement; merge cards consume authored details.
-assert_eq "bin/fm-retro.sh bin/fm.sh bin/lib/fm_autopilot_loop.py " "$raisers" "only fm.sh, fm-retro.sh's one retro card and the autopilot merge loop raise cards; readiness still needs judgment"
+assert_eq "bin/fm-retro.sh bin/fm.sh bin/lib/fm_autopilot_loop.py bin/lib/fm_preflight_budget.py " "$raisers" "only fm.sh, fm-retro.sh's one retro card, the autopilot merge loop and the spec preflight pass-budget card raise cards; readiness still needs judgment"
 # A line that is one quoted message and nothing else only prints the name; any other line naming them
 # is a call. bash prints a parsed >&2 as 1>&2 and ends a command with ;
 said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(1?>&2)?[[:space:]]*;?[[:space:]]*$'

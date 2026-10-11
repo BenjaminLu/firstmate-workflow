@@ -1661,42 +1661,51 @@ Before every dispatch and repin, firstmate runs
 `bin/fm-review.sh --spec-preflight --task <task> --spec <file>` with the selected
 project. The reviewer gets an independent read-only checkout of the current base
 and the exact proposed bytes, not a worker report or implementation verdict.
-It checks each acceptance line for scope feasibility; every affected caller,
-mirror, fixture and test; existing ids, formats, paths and interfaces; and an
-explicit, tested migration for validation, lint, gate, schema or record changes.
-Check 5 (T-189): when the scope lists design/design.md, the acceptance names the
-numbered section (§N or §N.M) it edits and adds nothing after the last one.
-The first final is one exhaustive numbered checklist (T-248), with at least one
-item per acceptance line and coverage of why and its references, each Change,
-callers/fixtures/mirrors, scope completeness, new-behaviour versus regression
-test labels, migration of records/pins/tasks in flight, the named design section,
-i18n and lint reachability, and external-project privacy. Each item starts
-`N. ok:` or `N. gap:`, cites file:line, and states the expected spec change for
-a gap. Bold or heading markup around the number (T-206) and bold status words
-are allowed. A standalone `PREFLIGHT-COMPLETE:<task>` closes the checklist
-immediately before `SPEC-OK:<task>` or `SPEC-GAPS:<task>`, unquoted, unfenced and
-last; blank lines between the two markers are allowed.
+A spec states what to build, why, and when it is done; how is the worker's
+job, checked by pull request review (T-288). The reviewer reads the spec with the
+code at hand and answers four questions: is it clear, is it the right thing to
+build, is there a simpler way, and does it contradict the code or another rule.
+It does not ask for implementation detail such as callers or line numbers. A
+task that changes a validation, lint, gate, schema or record rule must still say
+what happens to records and tasks already in flight, and the reviewer checks
+that it says it. Check 5 (T-189): when the scope lists design/design.md, the
+acceptance names the numbered section (§N or §N.M) it edits and adds nothing
+after the last one.
 
-Every later preflight re-issues the latest stored standing list, even after
-SPEC-OK or changed spec bytes. It keeps all earlier numbers: gap/open becomes
-done/open; ok/done becomes ok/open. It appends only the next numbers, marked
-`gap NEW-GROUND:` for amended text or `gap MISSED:` for something the earlier
-pass should have caught, except that when the spec has more acceptance lines
-than the earlier list, a new line with no gap gets an unlabelled `N. ok:` item,
-numbered at most the acceptance line count (T-284). Every gap belongs in the first report. Retention checks
-the final contiguous numbered block, acceptance count, numbering, transitions
-and verdict consistency: SPEC-GAPS requires a gap/open item, SPEC-OK forbids one.
-The signed receipt adds `standing` (number, status, label and verbatim first line)
-and `missed` (the count of MISSED items); the original answer preserves complete
-continuation text for the next prompt. Readers take no write lock or directory
-creation step. These structural checks do not prove exhaustive model inspection
-or that a NEW-GROUND/MISSED label is substantively correct.
+The answer is a free-form review. Each gap names the acceptance line it concerns
+and suggests a rewrite; a reviewer rewrite of the spec text goes through the
+accepted-rewrite path (T-270). The last line is `SPEC-OK:<task>` or
+`SPEC-GAPS:<task>`, once, unquoted and unfenced; retention refuses any other
+final line with a message that names the expected line. No numbered list and no
+`PREFLIGHT-COMPLETE:<task>` line is required.
 
-Existing preflight records stay immutable and their exact-byte SPEC-OK remains
-valid: the legacy decision parser is unchanged. Records without `standing` do
-not seed a list; their next preflight starts a first pass. A vendor run begun
-with the old prompt that reaches the new retention check fails with exit 65
-naming PREFLIGHT-COMPLETE; firstmate reruns it. Running workers are unaffected.
+Every pass is a first pass (T-288). The prompt holds no earlier review, and the
+answer is checked with no comparison to an earlier one; the carried standing
+list of T-248 and T-284 (kept numbers, done/open moves, NEW-GROUND and MISSED
+labels, one item per acceptance line) is gone. Two rules carry over: bytes that
+once got SPEC-GAPS cannot get SPEC-OK, and the reasons an earlier rewrite was
+refused go into the next prompt. Readers take no write lock or directory
+creation step. The final-line check does not prove that the reviewer read each
+acceptance line.
+
+A pass is a preflight that wrote a receipt with a verdict. Receipts written
+since T-288 carry `pass_budget: 1`; a task gets at most 3 of them after its last
+answered budget card (`bin/lib/fm_preflight_budget.py`, cards in
+`<project state>/preflight-budget/<task>.json`, answers in the decision record
+of the same id). A fourth `--spec-preflight` allocates no identity and runs no
+reviewer: it exits 65 and raises a captain card with three choices, narrow the
+spec, park the task, or allow one more pass. While the card waits, every pass
+is refused and names it; any answer starts a new count. The card holds only the
+task id, the counts and each pass's verdict, never spec or review text, so an
+external project gets the same card.
+
+Existing preflight records stay immutable and keep binding their exact bytes.
+Receipts written before T-288, with or without `standing` and `missed`, stay
+readable: they all carry a numbered list, so the verdict the relaxed decision
+parser reads from them is unchanged, and a pin or repin that relied on one is
+unaffected. They never count toward the pass budget, so a task with 3 or more
+of them still gets its passes. A vendor run begun with the old prompt still ends
+with its verdict line and is retained. Running workers are unaffected.
 
 The launcher retains signed `spec-preflight` evidence in the same project-local
 store as briefs and verdicts, bound to the spec SHA-256 and observed base. Managed
@@ -1725,18 +1734,17 @@ is edited. Tests cover missing and mismatched receipts, exact-byte admission,
 changed pins, existing pins without receipts, and mode-bound final selection.
 Missing or untested migration in a rule-changing diff is a REJECT finding.
 
-Readability (T-270) is one more standing category. `prompt()` loads
+Readability (T-270) is part of every preflight. `prompt()` loads
 `skills/firstmate/plain-writing.md` and `i18n/glossary.json` from the frozen
 code root only, and refuses with exit 65, before any model runs, when either is
-missing or unreadable. Each readability item quotes the exact sentence; a wording problem
-fixed by the reviewer's rewrite is `ok`, one no rewrite can fix without changing
-meaning is a `gap`. The rule of at least one item per acceptance line is
-unchanged. `--card <details.json>` and `--pr-authoring <file>` add a dispatch or
+missing or unreadable. A readability finding quotes the exact sentence; a wording
+problem fixed by the reviewer's rewrite is not a gap, one no rewrite can fix
+without changing meaning is a gap. `--card <details.json>` and `--pr-authoring <file>` add a dispatch or
 repin card (reviewed in en, zh-TW and the zh-CN text that `i18n/tw2cn.tsv`
 renders) and the pull-request draft to the same run, as read-only pinned copies
 whose SHA-256 the run binds.
 
-The reviewer may return three rewrite blocks before item 1, each opening with an
+The reviewer may return three rewrite blocks before its final line, each opening with an
 exact line ```` ```json fm-reworded-spec ````, ```` ```json fm-reworded-card ````
 or ```` ```json fm-reworded-pr-authoring ```` and closing with a line of three
 backquotes. A second block of one kind is refused as `duplicate`, content that
@@ -1758,7 +1766,7 @@ verdict, and adds `rewrite`: per kind the rewritten SHA-256, a status
 (`accepted`, `refused`, `unused` under SPEC-GAPS, or `unchanged`), any refusal
 reason and the submitted card or draft SHA-256. Any refused rewrite makes the
 effective outcome `rewrite-refused`, which exits 65 like SPEC-GAPS, authorizes
-nothing, and puts its reasons into the next prompt after the standing list. A
+nothing, and puts its reasons into the next prompt. A
 SPEC-OK receipt with an accepted spec rewrite authorizes only the rewritten
 bytes; one without a spec rewrite authorizes the submitted bytes, as every older
 receipt does. Bytes any receipt marked SPEC-GAPS are never authorized. The
