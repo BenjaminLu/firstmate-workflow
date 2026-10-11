@@ -388,11 +388,10 @@ class SpecPins(unittest.TestCase):
     def test_scope_widening_needs_authorized_repin(self):
         # T-279 rollout: a change that adds a file its pin does not scope -
         # an inventory entry beside a reworded skill rule - is refused until
-        # an amended spec is committed and an authorized repin writes pin
-        # version 2. Pin version 1 stays on disk byte for byte.
+        # an amended spec is written and an authorized repin writes pin
+        # version 2. Pin version 1 stays on disk byte for byte. Both specs
+        # stay in the local file, never committed (T-256).
         self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json"]}')
-        git(self.root, 'add', '.')
-        git(self.root, 'commit', '-qm', 'narrow scope')
         self.event()
         first = self.p.create()
         base = first['target_base_commit']
@@ -405,8 +404,6 @@ class SpecPins(unittest.TestCase):
             self.p.scope('HEAD', base)
         self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json",'
                              '"skills/rule-inventory.json"]}')
-        git(self.root, 'add', str(self.spec))
-        git(self.root, 'commit', '-qm', 'amended spec widens scope')
         self.decision()
         second = self.p.create(decision='D-1')
         self.assertEqual(second['version'], 2)
