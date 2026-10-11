@@ -1183,7 +1183,6 @@ pr_is "$walk" 1 t-242-change 'T-242: the check passes'
 FM_GH="$walk/gh" FM_ROOT="$walk" bash "$walk/bin/fm-decide.sh" --request D-9242 --task T-242 --kind merge --pr 1 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --details "$walk/details.json" > "$walk/result" 2> "$walk/error"
 assert_eq 0 "$?" 'matching spec intent enriches the stock merge request'
 assert_eq true "$(jq '.details.en.change_points[0].intent==1 and .details.en.door.kind=="one-way" and .details.en.check.about.intent==1 and .check_answer==0 and (.details|has("check_answer")|not) and .details.refs.points[0].code[0].file=="src/a.py"' "$walk/state/pending/D-9242.json")" 'stock card carries authoritative walk, refs and private answer'
-assert_eq 'https://github.com/owner/engine/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/design/tasks/T-242.json' "$(jq -r .details.refs.spec_url "$walk/state/pending/D-9242.json")" 'self spec URL uses canonical repository and head'
 jq '.en.intent[0].text="Different intent."' "$walk/details.json" > "$walk/bad.json"
 FM_GH="$walk/gh" FM_ROOT="$walk" bash "$walk/bin/fm-decide.sh" --request D-9243 --task T-242 --kind merge --pr 1 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --details "$walk/bad.json" > "$walk/result" 2> "$walk/error"
 assert_eq 65 "$?" 'mismatched authored intent refuses'

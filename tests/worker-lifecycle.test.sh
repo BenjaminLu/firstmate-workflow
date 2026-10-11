@@ -56,15 +56,15 @@ jq -n '{id:"T-N",title:"a new task",scope:["src/**","design/tasks/T-N.json"],acc
   > "$rn/design/tasks/T-N.json"
 seed_spec_preflight "$rn" T-N
 seed_self_pr_authoring "$rn" T-N self
-assert_eq "?? design/tasks/T-N.json" "$(git -C "$rn" status --porcelain -- design/tasks)" \
+assert_eq "!! design/tasks/T-N.json" "$(git -C "$rn" status --porcelain --ignored --untracked-files=all -- design/tasks/T-N.json)" \
   "the new task's spec is untracked in the dispatching repository"
 outn="$(cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" bin/fm-worker.sh --task T-N --name worker-n 2>&1)"
 assert_eq "0" "$?" "a new task whose spec is untracked runs"
 bn="$(printf '%s' "$outn" | tail -1)"
-assert_eq "$(cat "$rn/design/tasks/T-N.json")" "$(git -C "$rn" show "$bn:design/tasks/T-N.json" 2>/dev/null)" \
-  "its spec file is copied into the worktree and committed with the round's work"
-assert_contains "$(git -C "$rn" show --stat --format= "$bn")" "mock.txt" "beside what the round wrote"
-assert_contains "$outn" "design/tasks/T-N.json is not on the base; copied into the worktree" "and the worker says so"
+assert_eq "$(cat "$rn/design/tasks/T-N.json")" "$(cat "$rn/state/worktrees/T-N/design/tasks/T-N.json")" \
+  "its pinned spec is placed locally in the worktree"
+assert_eq '' "$(git -C "$rn" ls-tree --name-only "$bn" -- design/tasks/T-N.json)" "the round never commits its spec"
+assert_contains "$(git -C "$rn" show --stat --format= "$bn")" "mock.txt" "the round commits its implementation"
 # the copy is the script's, not the round's: a round that leaves it as it
 # was and changes nothing else changed nothing
 dn2="$(fixture)"; rn2="$dn2/repo"; GHn2="$(ghstub "$dn2")"
@@ -94,7 +94,7 @@ assert_lacks "$outfresh" 'unexpected fresh-branch history probe' "fresh branch n
 safe_rm_rf "$dfresh"
 
 # T-160: an abandoned branch is not evidence that a worker authored anything.
-for leftover in empty commit dirty spec spec_pr; do
+for leftover in empty commit dirty spec spec_pr spec_index; do
   dl="$(fixture)"; rl="$dl/repo"; GHl="$(ghstub "$dl")"
   bl=t-n-leftover; tl="$rl/state/worktrees/T-N"
   mkdir -p "$rl/state/worktrees"
@@ -107,7 +107,7 @@ for leftover in empty commit dirty spec spec_pr; do
       echo authored > "$tl/earlier.txt"
       mkdir -p "$tl/design/tasks"
       jq '.acceptance=["AUTHORED_SPEC"]' "$rl/design/tasks/T-N.json" > "$tl/design/tasks/T-N.json"
-      git -C "$tl" add earlier.txt design/tasks/T-N.json; git -C "$tl" commit -qm earlier
+      git -C "$tl" add earlier.txt; git -C "$tl" add -f design/tasks/T-N.json; git -C "$tl" commit -qm earlier
       # Establish immutable approved branch intent before the mutable root widens.
       cp "$rl/design/tasks/T-N.json" "$dl/widened-spec.json"
       cp "$tl/design/tasks/T-N.json" "$rl/design/tasks/T-N.json"
@@ -121,10 +121,11 @@ for leftover in empty commit dirty spec spec_pr; do
       cp "$dl/widened-spec.json" "$rl/design/tasks/T-N.json"
       seed_self_pr_authoring "$rl" T-N self ;;
     dirty) echo authored > "$tl/earlier.txt" ;;
-    spec|spec_pr)
+    spec|spec_pr|spec_index)
       mkdir -p "$tl/design/tasks"
       jq '.acceptance=["OLD_SPEC"]' "$rl/design/tasks/T-N.json" > "$tl/design/tasks/T-N.json"
-      git -C "$tl" add design/tasks/T-N.json; git -C "$tl" commit -qm spec ;;
+      git -C "$tl" add -f design/tasks/T-N.json; git -C "$tl" commit -qm spec
+      if [ "$leftover" = spec_index ]; then git -C "$tl" rm --cached -q design/tasks/T-N.json; fi ;;
   esac
   echo current > "$rl/current-base.txt"
   git -C "$rl" add current-base.txt; git -C "$rl" commit -qm advance
@@ -152,7 +153,7 @@ M
     commit|dirty)
       assert_eq authored "$(cat "$tl/earlier.txt" 2>/dev/null)" "$leftover leftover preserves authored work in the active tree"
       assert_contains "$promptl" "Your branch already carries your earlier work" "$leftover leftover prompt acknowledges earlier work" ;;
-    spec|spec_pr)
+    spec|spec_pr|spec_index)
       assert_lacks "$promptl" "Your branch already carries your earlier work" "$leftover spec-only branch gets a first-round prompt"
       assert_contains "$promptl" WIDENED_SPEC "spec-only branch receives firstmate's revised acceptance"
       assert_lacks "$promptl" OLD_SPEC "spec-only branch no longer prompts with obsolete acceptance"

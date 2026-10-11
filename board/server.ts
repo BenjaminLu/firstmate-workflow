@@ -4,7 +4,7 @@
 //   FM_PORT=4173 FM_ROOT=.             the log it tails is the one the crew writes
 //
 // No build step and no framework: the page is a file, the stream is SSE, and
-// the state endpoint is derived from events.jsonl and design/tasks/ so the
+// the state endpoint reads events.jsonl and local, git-ignored design/tasks/ so the
 // board has no opinion the log does not already hold.
 import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";

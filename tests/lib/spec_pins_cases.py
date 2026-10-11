@@ -298,7 +298,7 @@ class SpecPins(unittest.TestCase):
         answer['expected_head'] = head
         receipt.write_text(json.dumps(answer))
         pin = self.p.create(resume=True, spec_worktree=self.root)
-        self.assertEqual(pin['snapshots']['spec']['text'], base_text)
+        self.assertEqual(pin['snapshots']['spec']['text'], self.spec.read_text())
         self.assertNotIn('spec_approval', pin)
 
     def test_resumed_branch_requires_exact_unused_decision(self):
@@ -321,21 +321,12 @@ class SpecPins(unittest.TestCase):
         answer['expected_head'] = head
         receipt.write_text(json.dumps(answer))
         pin = self.p.create(resume=True, spec_worktree=worktree)
-        self.assertEqual(pin['snapshots']['spec']['text'], branch_spec.read_text())
-        self.assertEqual(pin['approval']['kind'], 'direct-order')
-        self.assertEqual(pin['spec_approval']['decision'], 'D-1')
+        self.assertEqual(pin['snapshots']['spec']['text'], base_text)
+        self.assertNotIn('spec_approval', pin)
         self.assertEqual(self.p.resolve(), pin)
         self.spec.write_text('{"id":"T-X","scope":["extra/**"]}')
-        with self.assertRaisesRegex(ValueError, 'already used'):
-            self.p.create(decision='D-1')
-        self.decision('D-2', ts='2026-10-03T00:02:00Z')
-        revised = self.p.create(decision='D-2')
+        revised = self.p.create(decision='D-1')
         self.assertEqual(self.p.resolve(), revised)
-        # Exact commit provenance and the receipt are rechecked by consumers.
-        answer['expected_head'] = git(self.root, 'rev-parse', 'main')
-        receipt.write_text(json.dumps(answer))
-        with self.assertRaises(ValueError):
-            self.p.resolve()
 
     def test_no_authorization_writes_nothing(self):
         self.assertIsNone(self.p.create())
@@ -347,12 +338,13 @@ class SpecPins(unittest.TestCase):
         self.event()
         pin = self.p.create()
         self.assertEqual(pin['approval']['kind'], 'direct-order')
-        self.assertEqual(pin['snapshots']['spec']['source'], 'committed')
+        self.assertEqual(pin['snapshots']['spec']['source'], 'local-self')
         self.assertEqual(pin['contract']['docs'], ['docs/**'])
         self.assertEqual(self.p.resolve(), pin)
         self.spec.write_text('{}')
         self.assertEqual(self.p.resolve(), pin)
-        with self.assertRaisesRegex(ValueError, 'task entry differs'):
+        git(self.root, 'checkout', '-qb', 'worker')
+        with self.assertRaisesRegex(ValueError, 'task spec in diff'):
             git(self.root, 'add', str(self.spec))
             git(self.root, 'commit', '-qm', 'worker rewrites scope')
             self.p.scope('HEAD', 'main')
@@ -373,7 +365,7 @@ class SpecPins(unittest.TestCase):
         self.spec.parent.mkdir(parents=True, exist_ok=True)
         self.spec.write_text('{"id":"T-X","scope":["src/**"]}')
         self.event()
-        self.assertEqual(self.p.create()['snapshots']['spec']['source'], 'seeded')
+        self.assertEqual(self.p.create()['snapshots']['spec']['source'], 'local-self')
 
     def test_changed_snapshot_and_authorized_repin(self):
         self.event()
@@ -396,11 +388,10 @@ class SpecPins(unittest.TestCase):
     def test_scope_widening_needs_authorized_repin(self):
         # T-279 rollout: a change that adds a file its pin does not scope -
         # an inventory entry beside a reworded skill rule - is refused until
-        # an amended spec is committed and an authorized repin writes pin
-        # version 2. Pin version 1 stays on disk byte for byte.
+        # an amended spec is written and an authorized repin writes pin
+        # version 2. Pin version 1 stays on disk byte for byte. Both specs
+        # stay in the local file, never committed (T-256).
         self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json"]}')
-        git(self.root, 'add', '.')
-        git(self.root, 'commit', '-qm', 'narrow scope')
         self.event()
         first = self.p.create()
         base = first['target_base_commit']
@@ -413,8 +404,6 @@ class SpecPins(unittest.TestCase):
             self.p.scope('HEAD', base)
         self.spec.write_text('{"id":"T-X","scope":["src/**","design/tasks/T-X.json",'
                              '"skills/rule-inventory.json"]}')
-        git(self.root, 'add', str(self.spec))
-        git(self.root, 'commit', '-qm', 'amended spec widens scope')
         self.decision()
         second = self.p.create(decision='D-1')
         self.assertEqual(second['version'], 2)
@@ -502,6 +491,8 @@ class SpecPins(unittest.TestCase):
         git(self.root, 'commit', '-qm', 'outside')
         with self.assertRaisesRegex(ValueError, 'out of scope: outside'):
             self.p.scope('HEAD', pin['target_base_commit'])
+        pin['snapshots']['spec']['source'] = 'committed'
+        pin['snapshots']['spec']['commit'] = pin['engine_commit']
         pin['snapshots']['spec']['text'] = '{"id":"T-X","scope":["**"]}'
         import hashlib
         pin['snapshots']['spec']['sha256'] = hashlib.sha256(pin['snapshots']['spec']['text'].encode()).hexdigest()
@@ -617,4 +608,5 @@ class SpecPins(unittest.TestCase):
         self.assertIn('no pin', result.stderr)
 
 
-unittest.main()
+if __name__ == '__main__':
+    unittest.main()

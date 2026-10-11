@@ -79,7 +79,7 @@ printf '{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml","design/
 mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm ownfile
 git -C "$d" checkout -q main
 assert_fail "gate '$d' ownfile 3" "3 rejects a branch that widens its own task scope"
-assert_contains "$(said "$d" ownfile 3)" "task entry differs" "3 names the task snapshot mismatch"
+assert_contains "$(said "$d" ownfile 3)" "task spec in diff" "3 names the forbidden spec change"
 
 # --- gate 4: the one that matters ---------------------------------------
 d="$(fixture)"

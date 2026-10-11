@@ -476,8 +476,8 @@ card must carry `intent`, `why`, `scope_in`, `scope_out`, `done`, `questions`,
 optional. The title starts with `MERGE CARD — ` in en and `【合併卡】` in zh-TW.
 The walk fields are optional additions, never new required fields for legacy
 merge cards. Only tracked merge cards may carry them. The producer takes them
-from the authoritative pin, else the committed self spec at expected head or
-the external private spec. Authored intents must match that source exactly;
+from the authoritative pin, else the local self task file or the external
+private spec. Authored intents must match that source exactly;
 authored walk fields must match too. Refusal exits 65 before pending publication.
 After STE validation, the producer attaches locale-free `details.refs` from
 head/diff/head GitHub reads at the expected SHA, with spec acceptance, PR hunks
@@ -672,18 +672,13 @@ handed.
 It also refuses while the pull request is still open. An unmerged branch is
 someone's unfinished work.
 
-**A new task's spec comes with its worktree (T-147).** Firstmate writes a new
-task's `design/tasks/<id>.json` in its own working tree, and the task's new
-branch, made from the base, does not carry it: T-157's codex round was told
-the file "is committed on this branch", found it was not, and stopped. So
-when `fm-worker.sh` makes a new branch's worktree and the file is not in it,
-it copies the spec it read from the dispatching repository in, uncommitted,
-and the prompt says it is there and goes out with the round's commit. The
-copy is not the round's work: a round that leaves it as it was and changes
-nothing else changed nothing. A later round's branch carries the file
-already; a pinned round's file follows the latest approved pin (15.5),
-while an unpinned rebuilt round's entry stays frozen to the previous head
-(5.3.3), so only a new unpinned branch gets the dispatch copy.
+**A task's spec stays local (T-256).** Firstmate writes the approved spec at
+`design/tasks/<id>.json`. The launcher places its pinned bytes in the worker
+worktree for the agent to read, never commits them, and removes an own spec
+already tracked on an older branch from the index. Other specs still tracked
+on the base retain their base entries; paths absent from the base are removed
+from the index. Rebuilds restore the pinned bytes on disk without staging them.
+
 `tests/worker.test.sh` covers a new task whose spec is untracked in the repository.
 
 ### 5.3 The adapter contract, `bin/adapters/<vendor>.sh`
@@ -1064,7 +1059,7 @@ changes ends successfully), `74` GitHub could not
 say which pull request the branch has, `75` a rebuilt round was refused
 before its commit — a conflict marker left, a conflict with no markers left
 exactly as the merge left it, a HEAD no longer on the rebuild base, or the
-task's own entry not as the pin has it (the previous head for an unpinned
+task's own entry not as the pin has it (the saved local file for an unpinned
 round) — and nothing was published, and `130`, `143` — a signal, 128
 plus its number, from the INT/TERM traps that make a killed run stop
 rather than carry on. `SIGHUP` is ignored (same as `fm-config.sh`) so a
@@ -1151,7 +1146,7 @@ GitHub, until the captain pushed it by hand (T-089, T-086).
 
 Unresolved is a conflict, with or without markers, and also the task's
 own `design/tasks/<id>.json` file when the rebuild could not
-keep it as the pin has it (or the previous head in an unpinned round) —
+keep it as the pin has it (or the saved local file in an unpinned round) —
 the prompt lists that file for the worker to put back, and the check before
 the commit refuses the rebuild
 as it stands, as it refuses a marker. An unresolved rebuild is never
@@ -1163,7 +1158,7 @@ run, recreates the worktree from the unmoved branch and rebuilds again.
 
 The task's own file, `design/tasks/<id>.json` (section 14), comes through
 as the latest approved pin has it, byte for byte; an unpinned round keeps
-it as the previous head had it. Restoration is best effort; the pre-commit
+it as the local file had it. Restoration is best effort; the pre-commit
 check holds the round if it fails or the worker changes the frozen file.
 Other files are merged normally, with unresolved conflicts handed to the
 worker. Legacy array and task-table migration is retired (T-157).
@@ -1174,10 +1169,10 @@ would sit under the round, outside every check — nor while any file it
 carries, read against that base, has a line starting `<<<<<<<` or
 `>>>>>>>`, nor while a conflict with no markers is byte for byte what the
 merge left, nor while the task's own file differs
-from the pin's bytes (or the previous head's in an unpinned round) —
+from the pin's bytes (or the saved local bytes in an unpinned round) —
 however it got that way, including a worker that rewrote it while resolving.
 In a rebuilt round the task's own entry is therefore frozen: a pinned
-entry changes only through a captain-approved repin, and an unpinned
+local entry changes only through a captain-approved repin, and an unpinned
 entry's edit waits for a round that is not a rebuild. The run names the
 files, publishes nothing and exits `75`. Otherwise the rebuild and the round's work are one commit on the
 base, so gate 2 holds by construction. The commit is made with `git
@@ -1418,16 +1413,21 @@ a retry. Commits beyond the base are preserved; unpublished dirty work stays
 in its attached worktree with a recovery copy. Existing PR and detached
 rebuild recovery keep their rescue-and-recreate behavior.
 
-While a new task's commits touch only its own spec, the dispatching
-repository's revised spec is copied into the branch and prompt, including
-when the spec already has a draft PR. An uncommitted change is never replaced
-this way, and implementation commits keep the branch spec authoritative.
+Historically, a spec-only branch received the dispatching repository's revised
+spec, while implementation commits kept the branch copy authoritative. Under
+T-256, the authorized pin supplies the spec to the worktree and prompt even
+when a draft PR exists; an unpinned round reads the local task file. The spec
+is never staged or committed, and changed approval requires a repin.
 
 A no-PR round that only asks with a standalone `SCOPE-BLOCKED:<task>` or
 `ASK-<reason>:<task>` marker in `.fm-say.md` opens a draft PR and posts that
-note after creation. The spec supplies the diff when available; a task already
-on the base gets `design/questions/<task>.md` carrying the question so GitHub
-has a real diff to open. Firstmate must resolve that draft's scope (including
+note after creation. This draft path applies only when a project uses
+`projection: comments`; under `projection: local` a question-only round
+opens no draft PR. Because the spec is never
+staged, it is never part of the draft's diff: a question-only round with no
+implementation diff always commits `design/questions/<task>.md` carrying the
+question, whether or not the task exists on the base, so GitHub has a real
+diff to open. Firstmate must resolve that draft's scope (including
 removing or authorizing the question record) before the gates and merge.
 The transient `.fm-say.md` is never committed. Publication failures retain
 the note through the existing `state/unsent/` recovery path. Ordinary notes
@@ -1497,7 +1497,7 @@ concurrency limit still hold, and it says which one held the task.
 |---|---|---|
 | 1 | **branch** — branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
 | 2 | **rebase** — rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
-| 3 | **scope** — the diff stays in approved scope | shared verified pin resolver; changed files within pinned `scope`, unchanged self task entry, no `.fm-*` paths |
+| 3 | **scope** — the diff stays in approved scope | shared verified pin resolver; changed files within pinned `scope`; for the self project no added, modified or deleted path under `design/tasks/`; no `.fm-*` paths |
 | 4 | **fail-first** — **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 5 | **ci** — the required GitHub check is green | `gh pr checks <pr> --required` |
 | 6 | **approval** — the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id, merge-base to head, with no later `REJECT` (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
@@ -1713,8 +1713,9 @@ Every new worker invocation requires SPEC-OK for its exact pinned bytes. Missing
 different or changed bytes exit 65 with the preflight command. A read-only
 prospective-pin check runs before freezing the launcher, allocating a crew
 identity, publishing a PID or dispatch event, creating a branch/worktree, or
-arming the EXIT checkpoint. Resumed self tasks read the captain-approved branch
-spec directly from git; legacy unpinned inputs still require their exact bytes.
+arming the EXIT checkpoint. Resumed self tasks take their spec from the approved
+pin, or from the local task file before the first pin, never from a branch
+commit; legacy unpinned inputs still require their exact bytes.
 SPEC-GAPS requires
 an amended spec, not an override on the same bytes. A repin therefore needs fresh
 preflight when its spec changes. Existing records and pins are not rewritten or
@@ -3600,6 +3601,10 @@ reference file or a code check with a test, builds the checks the
 ---
 
 ## 11. Self-update
+
+SK adoption writes a local, git-ignored `design/tasks/SK-<n>.json` and binds
+review to the approved pin, or that local file when no pin exists. Adoption
+never commits the spec; reviewers read the pinned spec given in their prompt.
 
 #### Mid-run progress (truthful; T-036)
 
@@ -6082,29 +6087,43 @@ holds that task's entry and nothing else, with `id`, `title`, `milestone`,
 `depends_on`, `scope`, `bootstrap` and `acceptance`. `scope` is the glob
 allowlist gate 3 enforces. There is no table here: `bin/fm.sh tasks` prints
 it on demand, grouped by milestone, with id, title and dependencies. Nothing
-generated is committed.
+generated is committed. Since T-256, `design/tasks/` is in `.gitignore`: a
+new self task spec is a local, git-ignored file bound by the approved pin and
+never committed. Specs git tracked before this change stay tracked with their
+bytes; nothing is removed from the index. Gate 3 refuses any path under
+`design/tasks/` that a self diff adds, modifies or deletes, so a self pull
+request neither commits a new spec nor changes a tracked one.
 
 Tasks marked `bootstrap` are built by hand: they are the dispatcher and its
 gates, and the dispatcher cannot dispatch itself.
 
-**Why one file per task (T-090).** The list used to be one array in
+**Why one file per task (T-090, history).** This paragraph records the model
+before T-256, when task files were committed. The list used to be one array in
 `design/tasks.json` plus a hand-kept copy of it as a table in this section.
-Every pull request that added or revised a task appended to the tail of the
-same array and the same table, so with `main` requiring up-to-date branches
+Every pull request that added or revised a task then appended to the tail of
+the same array and the same table, so with `main` requiring up-to-date branches
 every merge turned every other open pull request into a conflict, resolved by
-hand and force-pushed — once dropping a design section on the way. Parallel
-work must never write the same text: adding a task adds a file, revising one
-edits only its file, and two branches that each add a task merge cleanly.
+hand and force-pushed — once dropping a design section on the way. T-090's
+answer was that parallel work must never write the same text: adding a task
+added a file, revising one edited only its file, and two branches that each
+added a task merged cleanly. Since T-256, new self task specs are local,
+git-ignored files pinned by the approved pin, and pull requests no longer add
+or change them. The specs committed before T-256, including T-256's own, stay
+tracked.
 
 **Readers.** Every reader goes through `bin/fm-config.sh`: `fm_tasks [dir]
 [rev]` lists every task (one JSON object per line, in id order), `fm_task <id>
 [dir] [rev]` reads one, and `fm_tasks_write` writes entries out as files. With
-a `rev`, they read a branch rather than the working copy — gate 3, the worker
-and the reviewer read the branch under test. The board reads the list through
+a `rev`, the optional legacy helper can read a branch, but callers in `bin/`
+read the approved pin or the local file. Reviewers read the pinned spec supplied
+in their prompt. The board reads the list through
 the same `fm_tasks`. `bin/ci.sh`'s DAG stage runs `fm_tasks_check` on every
 registered task directory: every file parses, its `id` is its file name, every
 dependency has a file, no task waits on itself through any chain, and no
-`design/tasks.json` is left beside the directory.
+`design/tasks.json` is left beside the directory. In a CI checkout that
+directory holds only the tracked specs, which form a closed set (every
+`depends_on` of a tracked spec names a tracked spec); new local specs are
+checked where they live, in the local engine checkout.
 
 **Order.** `fm_tasks` lists tasks by id, compared as versions (`sort -V`):
 `T-2` before `T-9` before `T-10`, `SK-001` before `T-001`. The old array's
@@ -6124,8 +6143,15 @@ scratch) is not a task file and is not read or checked.
 that no open pull request and no registered project still carries the
 one-array task list. Readers now require `design/tasks/<id>.json`; the
 legacy reader, scope alias, migration command and rebuild conversion are
-removed. A rebuild preserves the branch's own task file and leaves other
+removed. A rebuild preserves the local pinned task file and leaves other
 conflicts for the worker, under the usual no-lost-work checks.
+
+**Readers after T-256.** The merge-card details (`fm_merge_details.py`), the
+review's fix checks (`fm_evidence.py` `pinned_scope`) and the decision helper
+(`fm-decide.sh`) read the pin first and then the local task file, never a
+branch commit. For the self project the merge card's spec link is empty, as it
+already is for external projects. Historical committed and seeded pin
+snapshots still verify through `git show <engine_commit>:<path>`.
 
 ---
 
@@ -6383,8 +6409,10 @@ while other tasks continue.
 T-049 pins append-only snapshots of approved spec, design, conventions and full
 gate contract with SHA-256, project/task, approval author/time/decision, source
 version, engine code commit and base commit. External local approvals need no
-public engine commit. Self committed sources are re-derived; uncommitted self
-sources have explicit provenance and hash. One resolver verifies all hashes and
+public engine commit. New self specs use `local-self` provenance and stored-text
+hash verification without a git lookup. Self committed design, conventions and
+contract sources are re-derived; local changes have explicit provenance and hash.
+Historical spec sources retain their original verification. One resolver verifies all hashes and
 supplies the latest authorized pin; a mutable branch cannot widen its own scope.
 Gate 3 refuses missing pins, mismatches, out-of-scope files and `.fm-*` artifacts.
 The one exception (T-277, §6): for a self task, gate 3 also accepts the exact
@@ -6394,10 +6422,11 @@ an external project.
 Repin requires an exact project/task captain decision for changed snapshots,
 appends a version and emits `spec_repinned`; never rewrite old pins.
 
-A self task's branch file is the committed copy of the latest pin, written
-by `fm-worker.sh` at round start and committed with the round (T-207).
-A non-rebuilt round restores an edited file to the pin before publishing,
-and a rebuilt round that changes it is held (exit `75`); gate 3 is unchanged.
+A self task's worktree file receives the latest pinned bytes from
+`fm-worker.sh` at round start. It stays local and is never staged or committed
+(T-256). A non-rebuilt round restores an edited file to the pin before
+publishing, and a rebuilt round that changes it is held (exit `75`). Gate 3
+refuses any addition, modification or deletion under `design/tasks/`.
 
 Before each worker or reviewer round, the launcher materializes the verified
 snapshots byte for byte under that run's private `pinned/` directory as
@@ -6418,16 +6447,20 @@ stay in the project's private run, never the target checkout or engine tree.
 
 The worker launcher writes pin 1 outside the sandbox before calling an adapter.
 A resumed task with an existing PR and no pin gets `source: first-pin-on-resume`
-from the current accepted base. Self sources record `<commit>:<path>` and
-SHA-256; a new spec absent from that base is explicitly `seeded`. Gate contracts
+from the local self task file for the spec (`local-self`) and the current
+accepted base for the other self snapshots. New self pins and repins never
+record `seeded` or `approved-branch` spec sources; those sources remain valid
+only when resolving historical self pins. Committed design and conventions
+sources record `<commit>:<path>` and SHA-256. Gate contracts
 always come from accepted engine base, with readers accepting both the historical
 top-level `project:` and the current self registry entry (T-170). External
 spec, design, conventions and contract bytes are private local snapshots; resolving them never requires those
 files to exist on public engine main. Every reader uses `fm_spec_pins.py`, which
 verifies the complete append-only chain, each snapshot hash, identity and
 approval provenance, and re-derives committed self sources. Workers and
-reviewers receive the pinned spec and context; gate 3 also rejects a self
-task entry that differs from the pin and any path component beginning `.fm-`.
+reviewers receive the pinned spec and context; gate 3 rejects any self task-spec
+addition, modification or deletion and any path component beginning `.fm-`. Historical
+pins retain their original snapshot provenance verification.
 
 Initial authority comes from dispatch records only (T-171): the captain's
 `decision_made` A for the readiness card named by `state/ready/<task>.json`
@@ -6463,7 +6496,11 @@ in force; in particular, a scope card never supplies initial dispatch authority,
 and ordinary repins still require changed snapshot hashes.
 
 On resume, the launcher passes its actual worktree to the pin collector.
-A changed self task file can replace the base snapshot only when an unused
+Under T-256, a new self spec snapshot always reads the local task file as
+`local-self`; branch-spec approval selection is disabled for self projects.
+The following branch approval rules describe historical self pins only; they
+remain accepted by the resolver and do not create new self pins.
+A changed self task file could replace the base snapshot only when an unused
 captain choice A for the same project/task names a commit through the existing
 `fm-decide.sh --expected-head <sha>` field whose task-file bytes exactly match
 the worktree. That choice must postdate dispatch authority. A prose-only card,
@@ -6490,8 +6527,9 @@ are unchanged. A repin likewise uses an existing exact project/task captain
 choice A, reads all source bytes afresh, requires changed snapshot hashes,
 refuses reuse or an approval no later than the superseded pin approval, and appends a new version without replacing one:
 `bin/fm-project.sh repin --project <p> --task <t> --decision <id>`.
-Self repins identify uncommitted local spec/design/conventions explicitly;
-their gate contract still comes from accepted base. Omitted project and explicit
+Self repins record the local spec as `local-self`; design and conventions
+retain committed, uncommitted or absent provenance as applicable. Their gate
+contract still comes from accepted base. Omitted project and explicit
 `firstmate-workflow` retain the same self storage and behavior. The pin contains
 all contract fields, including `docs`; gate 4 passes the verified contract
 to the shared fail-first engine without consulting the target config.
@@ -7202,12 +7240,11 @@ an interrupted write is reconciled, never replayed by a restart or idle timer.
 #### New task discovery and question freshness (T-180)
 
 The autopilot derives a task candidate using the canonical branch/title grammar,
-then validates the matching task spec committed at the observed PR head. A missing
-head object is fetched through a private ref without moving the task branch.
-If that spec cannot resolve the task, the latest authorized pin supplies the
-fallback. The main checkout's task directory is never a prerequisite. Unresolved
-PRs retain their head and reason in supervisor state without repeated wakes;
-later polls may resolve newly available objects or pins. Gates still verify the
+then reads the matching task spec from its authorized pin when present, else
+from the project's local tasks directory. No task spec is read from the PR
+head. A corrupt pin refuses resolution rather than falling back to local data.
+Unresolved PRs retain their head and reason in supervisor state without repeated
+wakes; later polls may resolve newly available local files or pins. Gates still verify the
 current authoritative head and approved scope independently.
 
 Local ASK and SCOPE-BLOCKED records must match the PR head and be newer than the

@@ -223,6 +223,9 @@ class MergePath(unittest.TestCase):
         spec = dict(id='T-001',explain=explain,acceptance=['The check passes.'],check_answer=0,
                     change_refs=[dict(files=['src/a.py'],tests=[dict(file='tests/a.py',name='missing')],acceptance=[0])])
         (engine / '.fixture-source.json').write_text(json.dumps(spec))
+        # T-256: a self spec is a local file, which fm-decide.sh reads without a pin.
+        (engine / 'design/tasks').mkdir(parents=True, exist_ok=True)
+        (engine / 'design/tasks/T-001.json').write_text(json.dumps(spec))
         (engine / '.fixture-diff').write_text('diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x\n+y\n')
         (engine / 'prs.jsonl').write_text(json.dumps(dict(number=12,state='OPEN',headRefOid=HEAD,headRefName=PR['head']['ref'],title=PR['title']))+'\n')
         self.dispatch()

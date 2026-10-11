@@ -45,5 +45,5 @@ scratch_new() { mktemp "$work/scratch.XXXXXX"; }
 scratch_add() { :; }
 worker_changed_files() { return 1; }
 '''
-    return subprocess.run(['bash', '-c', setup + prefix + '\n' + body, '_', str(root), str(home)],
+    return subprocess.run(['bash', '-c', setup + function(Path(root) / 'bin/fm-worker.sh', 'self_specs_unstage') + prefix + '\n' + body, '_', str(root), str(home)],
                           env=env, capture_output=True, text=True, timeout=15)

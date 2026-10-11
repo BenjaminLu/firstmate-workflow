@@ -71,7 +71,7 @@ class Rebuild(unittest.TestCase):
 
     def definitions(self):
         return ''.join(function(worker, name) for name in (
-            'rebuild_state_of', 'rebuild_side_left', 'rebuild_fingerprint',
+            'self_specs_unstage', 'rebuild_state_of', 'rebuild_side_left', 'rebuild_fingerprint',
             'rebuild_unmerged', 'rebuild_lost', 'rebuild_own_file_restore',
             'rebuild_rebases', 'rebuild_probe_drop', 'bring_up_to_date',
             'rebuild_settle', 'worker_changed_files', 'rebuild_unresolved',
@@ -247,6 +247,7 @@ command git --git-dir="$work/origin.git" update-ref refs/heads/task "$rebuild_ba
         self.base_moves('conflict')
         p = self.run_body('bring_up_to_date\n' +
             function(root / 'bin/fm-config.sh', 'fm_publication_policy') +
+            function(worker, 'self_specs_unstage') +
             function(worker, 'publish_wip_if_dirty') +
             '\n_fm_wip_done=0; publish_wip_if_dirty interrupted',
             'fm_conventions() { :; }; fm_target_validate() { :; }\n')

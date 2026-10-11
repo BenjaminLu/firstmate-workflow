@@ -622,16 +622,16 @@ assert_fail "git --git-dir='$dW2/remote.git' cat-file -e 'main:design/tasks.json
     && sed 's/^line 10$/line 10 for a while/' src/app.txt > n && mv n src/app.txt && rb_commit -am 'touch line 10' \
     && sed 's/^line 10 for a while$/line 10/' src/app.txt > n && mv n src/app.txt && rb_commit -am 'put line 10 back' \
     && git push -q origin HEAD )
-oldW2="$(rb_head "$dW2" "$bW2")"
 printf '%s\n' "sed 's/^line 10\$/line 10 by main/' src/app.txt > n && mv n src/app.txt" \
   "jq '.title=\"retitled on main\"' design/tasks/T-Z.json > n && mv n design/tasks/T-Z.json" > "$dW2/main.sh"
 rb_move_main "$dW2" "$dW2/main.sh" || exit 1
 rb_round_two "$dW2" "$rb_add"
 rb_rebuilt "$dW2" "W2"
 assert_eq "0" "$rb_rc" "W2: the rebuild completes"
-assert_eq "$(git --git-dir="$dW2/remote.git" rev-parse "$oldW2:design/tasks/T-Z.json")" \
-  "$(git --git-dir="$dW2/remote.git" rev-parse "$bW2:design/tasks/T-Z.json" 2>/dev/null)" \
-  "W2: the task's own file comes through byte for byte as the branch had it"
+assert_eq '' "$(git --git-dir="$dW2/remote.git" ls-tree --name-only "$bW2" -- design/tasks/T-Z.json)" \
+  "W2: the task's own file stays outside the rebuilt commit"
+assert_ok "cmp -s '$dW2/repo/design/tasks/T-Z.json' '$dW2/repo/state/worktrees/T-Z/design/tasks/T-Z.json'" \
+  "W2: the rebuild restores the saved local task bytes"
 assert_contains "$(git --git-dir="$dW2/remote.git" show "$bW2:src/app.txt")" "line 10 by main" "W2: and main's other change is kept"
 assert_contains "$(cat "$dW2/prompt.md")" 'design/tasks/T-Z.json' "W2: the worker is told its own file is frozen"
 

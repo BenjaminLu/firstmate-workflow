@@ -33,9 +33,9 @@ M
       # the old self diff prompt and the fixture's original missing design.
       # tests/lib/review_pinned_golden.py is the literal helper dependency.
       python3 "$ROOT/tests/lib/review_pinned_golden.py" "$(cat "$dd/pinned-path")" \
-        "$(git show work:design/tasks/T-Z.json | jq .)" "$rd/config.yaml"
+        "$(jq . "$rd/design/tasks/T-Z.json")" "$rd/config.yaml"
       printf '\n---\n\n# The task\n\n```json\n%s\n```\n' \
-        "$(git show work:design/tasks/T-Z.json | jq .)"
+        "$(jq . "$rd/design/tasks/T-Z.json")"
       printf '\n# Round %s\n' 1
       # T-272 added one line, every round: a fix proposal per open item
       printf '\nEach open item of a REJECT'"'"'s standing list carries exactly one fix proposal - a fenced `diff fix-<N>` unified diff against the reviewed head, or a fenced `text fix-<N>` block with non-empty file:, change:, fixes: and fail-first: lines - or, for a decision only the captain can make, one indented line DECISION:%s <question> inside that item. Do not edit, commit or push files: propose the fix in your answer.\n' T-Z

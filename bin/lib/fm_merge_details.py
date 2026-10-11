@@ -46,11 +46,11 @@ def _spec_text(task, head, want, root, env):
             candidates.append(pin['snapshots']['spec']['text'].encode('utf-8'))
     except (ValueError, OSError, ImportError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError):
         pass
-    if head:
-        shown = subprocess.run(['git', '-C', str(root), 'show', head + ':design/tasks/' + task + '.json'],
-                               stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
-        if shown.returncode == 0:
-            candidates.append(shown.stdout)
+    # T-256: the local spec file, never the branch commit, follows the pin.
+    try:
+        candidates.append((Path(root) / 'design/tasks' / (task + '.json')).read_bytes())
+    except OSError:
+        pass
     for data in candidates:
         if hashlib.sha256(data).hexdigest() == want:
             return data.decode('utf-8')

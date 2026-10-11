@@ -5,8 +5,8 @@ body:
     attributes:
       value: |
         Every change starts from a task (see CONTRIBUTING.md). The captain decides whether a proposal
-        becomes one; if it does, its file design/tasks/<id>.json lands in the same pull request
-        that implements it. Write in English.
+        becomes one; if it does, its new file design/tasks/<id>.json stays local, is ignored by Git and is never
+        committed, bound by the approved pin; specs committed before T-256 stay tracked. Reviewers read the pinned spec supplied in their prompt. Write in English.
   - type: textarea
     id: problem
     attributes:

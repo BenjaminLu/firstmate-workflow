@@ -10,7 +10,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sync_fixture() {
   d="$(fixture)" || exit 1; repo="$d/repo"; GH="$(ghstub "$d")"
   printf 'project:\n  check: true\n' >> "$repo/config.yaml"
-  printf 'state/\n' > "$repo/.gitignore"
+  printf 'state/\ndesign/tasks/\n' > "$repo/.gitignore"
+  git -C "$repo" rm --cached -q -- design/tasks/T-Z.json
   git -C "$repo" add config.yaml .gitignore
   git -C "$repo" commit -qm contract; git -C "$repo" push -q origin main
   printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
@@ -58,17 +59,17 @@ sync_repin() {
 sync_bytes() {
   local version="$1" label="$2"
   jq -j .snapshots.spec.text < "$repo/state/pins/T-Z/$version.json" > "$d/expected"
-  git --git-dir="$d/remote.git" show "$branch:design/tasks/T-Z.json" > "$d/published"
-  assert_eq 0 "$?" "$label: published head contains task file"
-  assert_ok "cmp -s '$d/expected' '$d/published'" "$label: published task equals exact pinned bytes"
+  cp "$repo/state/worktrees/T-Z/design/tasks/T-Z.json" "$d/published"
+  assert_eq '' "$(git --git-dir="$d/remote.git" ls-tree --name-only "$branch" -- design/tasks/T-Z.json)" "$label: published head has no spec"
+  assert_ok "cmp -s '$d/expected' '$d/published'" "$label: local task equals exact pinned bytes"
 }
 
-# a: repin alone is published by the normal round, without a worker edit.
+# a: a normal round publishes implementation while repinned bytes stay local.
 sync_seed
 sync_repin
-printf ':\n' > "$d/step.sh"
+printf 'printf "two\\n" > src/feature\n' > "$d/step.sh"
 sync_round 42
-assert_eq 0 "$sync_rc" 'a: repin alone completes'
+assert_eq 0 "$sync_rc" 'a: repin with implementation completes'
 sync_bytes 2 a
 assert_ok "cmp -s '$d/expected' '$d/seen-spec.json'" 'a: adapter sees v2 before it runs'
 assert_eq 'T-Z: a mock task' "$(git --git-dir="$d/remote.git" log -1 --format=%s "$branch")" 'a: normal round commit, not a checkpoint'
@@ -100,7 +101,7 @@ git -C "$repo" commit -qm fallback; git -C "$repo" push -q origin main
 sync_repin
 printf 'exit 2\n' > "$d/step.sh"
 sync_round 42
-assert_eq 0 "$sync_rc" 'a2: fallback completes'
+assert_eq 1 "$sync_rc" 'a2: fallback completes without implementation work'
 assert_ok "test -e '$d/mock2-called'" 'a2: second vendor is invoked'
 sync_bytes 2 a2
 rm -rf "$d"
@@ -149,8 +150,8 @@ printf ':\n' > "$d/step.sh"
 sync_round
 assert_eq 1 "$sync_rc" 'e: new task without worker changes is still no-work'
 sync_bytes 1 e
-assert_eq 1 "$(git --git-dir="$d/remote.git" rev-list --count "main..$branch")" 'e: exactly one checkpoint'
-assert_eq 'T-Z: Save unfinished work after the round stopped (exit-1)' "$(git --git-dir="$d/remote.git" log -1 --format=%s "$branch")" 'e: existing checkpoint behavior, in plain words (T-270)'
+assert_eq 0 "$(git -C "$repo" rev-list --count "main..$branch")" 'e: local spec creates no checkpoint'
+assert_eq '' "$(git -C "$repo" ls-tree --name-only "$branch" -- design/tasks/T-Z.json)" 'e: local spec stays untracked'
 head="$(rb_head "$d" "$branch")"
 sync_round
 assert_eq 1 "$sync_rc" 'e: spec-only next round remains no-work'
@@ -162,7 +163,7 @@ rm -rf "$d"
 sync_seed
 sync_repin
 head="$(rb_head "$d" "$branch")"
-git --git-dir="$d/remote.git" show "$head:design/tasks/T-Z.json" > "$d/old-spec"
+jq -j .snapshots.spec.text < "$repo/state/pins/T-Z/2.json" > "$d/old-spec"
 for early in unavailable transport model; do
   case "$early" in
     unavailable) printf 'exit 2\n' > "$d/step.sh"; expected_rc=2 ;;
@@ -180,7 +181,7 @@ S
     assert_contains "$(cat "$d/out")" 'every vendor was unavailable' 'f: unavailable reason retained'
   fi
   assert_eq "$head" "$(rb_head "$d" "$branch")" "f/$early: no sync checkpoint pushed"
-  assert_ok "cmp -s '$d/old-spec' '$repo/state/worktrees/T-Z/design/tasks/T-Z.json'" "f/$early: early exit puts HEAD bytes back"
+  assert_ok "cmp -s '$d/old-spec' '$repo/state/worktrees/T-Z/design/tasks/T-Z.json'" "f/$early: early exit retains pinned local bytes"
 done
 rm -rf "$d"
 

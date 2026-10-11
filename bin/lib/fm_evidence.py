@@ -705,19 +705,20 @@ def retain_verdict(store, args):
 
 
 def pinned_scope(run, task, head):
-    """The round's pinned scope, else the head's committed task entry, else none."""
-    import subprocess
+    """The round's pinned scope, else the self project's local task file, else none.
+
+    T-256: the spec never comes from a branch commit, so head is unused."""
     try:
         pinned = Path(run) / 'pinned/spec.json'
         if pinned.is_file():
             return list(json.loads(pinned.read_text()).get('scope', []))
         root = os.environ.get('FM_TARGET_ROOT', '')
         if root and os.environ.get('FM_EXTERNAL') != '1':
-            shown = subprocess.run(['git', '-C', root, 'show', f'{head}:design/tasks/{task}.json'],
-                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
-            if shown.returncode == 0:
-                return list(json.loads(shown.stdout).get('scope', []))
-    except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            tasks = os.environ.get('FM_TASKS_DIR') or str(Path(root) / 'design/tasks')
+            local = Path(tasks) / f'{task}.json'
+            if local.is_file():
+                return list(json.loads(local.read_text()).get('scope', []))
+    except (OSError, ValueError, AttributeError):
         pass
     return []
 

@@ -165,15 +165,15 @@ except ValueError:
 else:
     raise AssertionError('green stale local head cannot satisfy remote readiness')
 
-# SK proposals become ordinary committed specs only after captain adoption.
+# SK proposals become local approved specs only after captain adoption.
 try:
     source_binding('SK-001', changed, new_base, code)
 except ValueError as error:
-    assert 'approved committed task spec required' in str(error), str(error)
+    assert 'approved task spec required' in str(error), str(error)
 else:
-    raise AssertionError('unadopted SK proposal cannot substitute for a committed spec')
+    raise AssertionError('unadopted SK proposal cannot substitute for an approved local spec')
 (root/'design/tasks/SK-001.json').write_text(json.dumps(dict(id='SK-001',scope=['skills/**'],acceptance=['adopted change'])))
-git('add','design/tasks/SK-001.json'); git('commit','-qm','adopt skill proposal')
+# Adopted specs stay local; the reviewed head carries no task spec.
 sk_head = git('rev-parse','HEAD')
 sk_bound = source_binding('SK-001', sk_head, new_base, code)
 import hashlib

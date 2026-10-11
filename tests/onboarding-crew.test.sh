@@ -171,7 +171,7 @@ else: sys.exit(2)
         self.assertEqual(p.returncode,1,p.stderr)
     def test_exit_checkpoint_is_also_policy_gated(self):
         (self.home/'tree').mkdir()
-        body=function(worker,'publish_wip_if_dirty')+'publish_wip_if_dirty'
+        body=function(worker,'self_specs_unstage')+function(worker,'publish_wip_if_dirty')+'publish_wip_if_dirty'
         p=shell(root,self.home,body,
             '_fm_wip_done=0; fm_publication_policy() { return 65; }; git() { echo git >> "$work/gitcalls"; }; fm_git_transfer() { echo transfer >> "$work/gitcalls"; }')
         self.assertEqual(p.returncode,1,p.stderr)

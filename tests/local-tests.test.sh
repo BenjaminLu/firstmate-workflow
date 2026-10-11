@@ -195,6 +195,8 @@ lt_fixture() {   # lt_fixture -> a fixture with the pinned contract committed, s
   d="$(fixture)"; r="$d/repo"; GH="$(lt_gh "$d")"
   mkdir -p "$d/out"
   lt_config "$TEMPLATE_PIN" > "$r/config.yaml"
+  # T-256: a new self spec is a local, ignored file the base never tracks
+  git -C "$r" rm -q --cached design/tasks/T-Z.json
   git -C "$r" add config.yaml; git -C "$r" commit -qm contract; git -C "$r" push -q origin main
   seed_spec_preflight "$r" T-Z; seed_self_pr_authoring "$r" T-Z
   # the working copy differs, so the plan shows which one it came from

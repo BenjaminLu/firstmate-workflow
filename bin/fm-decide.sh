@@ -568,11 +568,11 @@ try:
     env.setdefault('FM_DESIGN', str(Path(env['FM_STATE_DIR']).parent/'design.md'))
     pin = Pins(env, task).resolve(if_present=True)
     if pin is not None: raw = pin['snapshots']['spec']['text']
-    elif external: raw = (Path(env['FM_TASKS_DIR'])/(task+'.json')).read_text()
     else:
-        result = subprocess.run(['git','-C',root,'show',head+':design/tasks/'+task+'.json'],capture_output=True,text=True)
-        if result.returncode: raise ValueError('approved committed task spec required at expected head')
-        raw = result.stdout
+        # T-256: a self spec is a local file like an external one, never a branch commit.
+        local = Path(env['FM_TASKS_DIR'])/(task+'.json')
+        if not local.is_file(): raise ValueError('approved task spec required: '+str(local))
+        raw = local.read_text()
     spec = json.loads(raw)
     if spec.get('id') != task: raise ValueError('task spec identity mismatch')
     explain = spec.get('explain', {})

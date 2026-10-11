@@ -474,6 +474,7 @@ destroy_fixture_build() {   # destroy_fixture_build <dir>
         '{id:$id,title:("a hostile round: " + $mode),scope:[("src/" + $mode + "/**")],acceptance:["it exists"]}' \
         > "design/tasks/$id.json" || exit 1
     done
+    printf "design/tasks/\n" > .gitignore || exit 1
     git add -A || exit 1
     git commit -qm base || exit 1
     git remote add origin "$bare" || exit 1

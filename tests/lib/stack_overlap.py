@@ -165,10 +165,15 @@ class Reader(unittest.TestCase):
 
     def test_prospective_approved_snapshot_before_the_first_pin(self):
         reader = feature('approved_scope')
-        engine = Engine(self.tmp, {'T-1': (['src/**'], [])})
-        engine.task('T-1', ['mutable/**'])  # uncommitted checkout edit is never read
+        engine = Engine(self.tmp, {'T-1': (['docs/**'], [])})
+        # T-256: before the first pin a self spec is the local file the pin will freeze.
+        engine.task('T-1', ['src/**'])
         self.assertEqual(['src/**'], reader(engine.pin_env(), 'T-1'))
         self.assertFalse((engine.root / 'state/pins').exists(), 'reading writes no pin')
+        from fm_spec_pins import Pins
+        self.assertIsNotNone(Pins(engine.pin_env(), 'T-1').create())
+        engine.task('T-1', ['mutable/**'])  # after the pin, a local edit is never read
+        self.assertEqual(['src/**'], reader(engine.pin_env(), 'T-1'))
 
     def test_no_approval_or_corrupt_pin_is_unreadable(self):
         reader = feature('approved_scope')

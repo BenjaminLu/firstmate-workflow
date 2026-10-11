@@ -52,6 +52,7 @@ emit() { printf '%s\n' "$*" >> "$EXIT_EVENTS"; }
 emit_once() { :; }
 wake_round_end() { :; }
 EOF
+  sed -n '/^self_specs_unstage() {/,/^}/p' "$ROOT/bin/fm-worker.sh"
   sed -n '/^publish_wip_if_dirty() {/,/^}/p' "$ROOT/bin/fm-worker.sh"
   sed -n '/^finished() {/,/^}/p' "$ROOT/bin/fm-worker.sh"
   sed -n '/^trap finished EXIT$/p' "$ROOT/bin/fm-worker.sh"

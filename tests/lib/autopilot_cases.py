@@ -126,8 +126,6 @@ class PilotTests(ReviewerWakeCases, TestingRefreshCases, BranchFixture, unittest
         spec = (Path(self.context['tasks']) / 'T-001.json').read_text()
         pin = patch('fm_spec_pins.Pins.resolve', return_value=dict(snapshots=dict(spec=dict(text=spec))))
         pin.start(); self.addCleanup(pin.stop)
-        head_spec = patch.object(self.pilot, 'read_head_spec', side_effect=ValueError('committed task spec unavailable at PR head'))
-        head_spec.start(); self.addCleanup(head_spec.stop)
         rows = [dict(type='commit_pushed', task='T-001', data={})]
         self.pilot.rows = lambda: rows
         github = patch('fm_adopt.binding.github', side_effect=self.adopt_github)
