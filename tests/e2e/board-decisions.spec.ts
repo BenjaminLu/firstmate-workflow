@@ -128,7 +128,8 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
         await expect(frame.locator('h1,button,.gates,.lanes')).toHaveCount(0);
       }
       if (lang === 'zh-CN') await expect(page.locator('#card-D-2 h2')).toHaveText('限制审查重试');
-      await expect(page.locator('#card-D-1').locator('iframe:visible, .change-fallback:visible')).toHaveCount(1);
+      // only the open card is shown, and the loop leaves D-2 open
+      await expect(page.locator('#card-D-2').locator('iframe:visible, .change-fallback:visible')).toHaveCount(1);
     }
     await expect(page.locator('.dcard img,.dcard script')).toHaveCount(0);
     await page.locator('#card-D-2 [data-c="B"]').click();
