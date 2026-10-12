@@ -275,7 +275,7 @@ gate6() {
   else
     code=1; echo '  lane code: missing'
   fi
-  python3 "$GATE_BIN/lib/fm_design.py" gate --config "$FM_CONFIG" --project "${FM_PROJECT:-}" \
+  python3 "$GATE_BIN/lib/fm_design.py" gate --config "${FM_CONFIG:-}" --project "${FM_PROJECT:-}" \
     --repo "$FM_TARGET_ROOT" --base "$mb" --head "$head" --state "$FM_STATE_DIR" \
     --evidence-project "$(fm_evidence_project)" --task "$TASK" --code "${FM_ENGINE_ROOT:-$REPO}" || design=1
   [ "$code" = 0 ] && [ "$design" = 0 ]

@@ -1744,8 +1744,8 @@ const later = (a: unknown, b: unknown) => {
   return !Number.isFinite(x) || !Number.isFinite(y) || x + 1000 > y;
 };
 
-// T-298: the pages bin/lib/fm_design.py captured for a UI change's design
-// review, kept under state/design/<task>/<head>/. A merge card carries each
+// T-298: the pages the engine's design capture took for a UI change's design
+// review (the board only reads the files; it runs no capture), kept under state/design/<task>/<head>/. A merge card carries each
 // page's prototype and head screenshots, which /design-shot serves.
 const DESIGN_TASK = /^(T|SK)-[0-9]{3,}$/, DESIGN_HEAD = /^[0-9a-f]{40,64}$/;
 const DESIGN_FILE = /^(head|prototype)\/[A-Za-z0-9._-]+\.png$/;

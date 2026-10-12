@@ -189,7 +189,10 @@ mkdir -p "$work/runner/bin/lib"
 cp "$ROOT/bin/fm-gate.sh" "$work/runner/bin/"
 cp "$ROOT/bin/lib/fm_gates.json" "$work/runner/bin/lib/"
 : > "$work/runner/bin/lib/fm-stack.sh"
+# T-298: gate 6 also asks bin/lib/fm_design.py; this fixture is no UI change.
+printf 'raise SystemExit(0)\n' > "$work/runner/bin/lib/fm_design.py"
 cat > "$work/runner/bin/fm-config.sh" <<'SH'
+fm_evidence_project() { echo self; }
 fm_storage_init() { FM_TARGET_ROOT="$1"; FM_EXTERNAL=0; FM_STATE_DIR="$1/state"; }
 fm_target_validate() { :; }
 fm_binding() {

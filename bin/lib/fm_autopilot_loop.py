@@ -823,7 +823,8 @@ class MechanicalLoop:
                        f'設計審查啟動失敗：{error}；請手動啟動或排除原因')
             self.save()
 
-    def missing_reviews(self, output):
+    @staticmethod
+    def missing_reviews(output):
         """The review lanes gate 6 reported missing; code alone for an older gate."""
         lanes = [lane for lane in ('code', 'design') if f'lane {lane}: missing' in output]
         if not lanes and 'lane design:' not in output:
@@ -899,7 +900,7 @@ class MechanicalLoop:
                     self.attention('head', task, pr, f'{task}: authoritative head changed; regate', f'{task}：遠端版本已變更，需要重新檢查關卡')
                     return
                 # T-298: whichever of code and design review is missing, both at once
-                for lane in self.missing_reviews(output):
+                for lane in MechanicalLoop.missing_reviews(output):
                     if lane == 'design':
                         self.launch_design_review(task, pr, result['round'])
                     else:
