@@ -177,6 +177,8 @@ for (const door of ['one-way', 'two-way'] as const) test(`a ${door} card with a 
     const [toc, code, explain] = await Promise.all(['.dtoc', '.dcode', '.dexplain'].map(async area => (await card.locator(`.dwalk ${area}`).boundingBox())!));
     expect(toc.x + toc.width).toBeLessThanOrEqual(code.x + 1);
     expect(code.x + code.width).toBeLessThanOrEqual(explain.x + 1);
+    // the old and new line numbers fit their column, never spilling into the code
+    expect(await card.locator('.dcode .walk-row .cn').evaluateAll(els => els.filter(el => el.scrollWidth > el.clientWidth + 1).length)).toBe(0);
     // How it works: the prototype's phase control and its numbered changes
     await expect(card.locator('.hero .seg2 button')).toHaveText([EN.walkBefore, EN.walkChange, EN.walkAfter]);
     await expect(card.locator('.hero .hchanges .cn2')).toHaveText(['1']);
@@ -202,6 +204,11 @@ for (const theme of ['light','dark']) test(`the phone decision bar shows flag le
     await expect(bar.locator('[data-c="A"]')).toHaveAccessibleName(/^A · \S/);
     for (const control of ['.mflag[data-c="A"]', '[data-decision-details]', '.confirm'])
       expect((await bar.locator(control).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    // every tile, the custom answer included, is wide enough to hit
+    for (const width of [320, 760, 761, 390]) {
+      await page.setViewportSize({width, height:844});
+      for (const tile of await bar.locator('.mflag').all()) expect((await tile.boundingBox())!.width, `w${width}`).toBeGreaterThanOrEqual(44);
+    }
     await expect.poll(() => card.evaluate(el => parseFloat(getComputedStyle(el).paddingBottom) >= el.querySelector('.drow')!.getBoundingClientRect().height)).toBe(true);
     await bar.locator('[data-decision-details]').click();
     await expect(card.getByRole('dialog')).toBeVisible();

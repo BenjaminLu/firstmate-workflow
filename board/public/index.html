@@ -76,7 +76,7 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .s-captain{--edge:#8a6a2f} .s-merged{--edge:#2c5f49} .s-closed{--edge:#3a3a3a}
 .log{background:var(--bg2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .log ul{margin:0;padding:6px 0;list-style:none;max-height:64vh;overflow:auto}
-.log li{display:grid;grid-template-columns:62px 90px 1fr;gap:10px;padding:5px 13px;font-size:12px;
+.log li{display:grid;grid-template-columns:max-content minmax(max-content,90px) minmax(0,1fr);gap:10px;padding:5px 13px;font-size:12px;
   border-bottom:1px solid rgba(33,48,65,.5)}
 .log li:last-child{border-bottom:0}
 .log time{font:11px var(--mono);color:var(--fg3)}
@@ -103,7 +103,7 @@ body{font-size:16px}
 .lane,.card,section,.dcard{min-width:0;overflow-wrap:anywhere}
 .card .t,.log li,.explanation,.tradeoffs,.empty{font-size:16px}
 .langs button{min-height:44px;white-space:normal;max-width:100%}
-.log li{grid-template-columns:minmax(0,62px) minmax(0,90px) minmax(0,1fr)}
+.log li{grid-template-columns:max-content minmax(max-content,90px) minmax(0,1fr)}
 .log .who{overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 #history{margin-top:16px}#history summary{cursor:pointer;min-height:44px;padding:10px;background:var(--bg2);font-size:16px}
 .history-cards{padding-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:9px}

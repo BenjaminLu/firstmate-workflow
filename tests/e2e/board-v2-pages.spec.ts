@@ -184,3 +184,26 @@ test('a page change closes the Fleet detail and keeps the open decision sheet an
     await expect(page.locator('#decisionsPanel #deckwrap')).toBeAttached();
   } finally { await stopBoard(board); }
 });
+
+// Short tokens never break inside themselves: a column narrower than "unknown",
+// "Awaiting update" or "09:05:00" wraps them mid-word (the T-289 design review).
+const lines = (el: Element) => {
+  const range = document.createRange(); range.selectNodeContents(el);
+  return new Set(Array.from(range.getClientRects()).filter(r => r.width > 0).map(r => Math.round(r.top))).size;
+};
+test('the Crew round and state and the Log time read on one line at 1440', async ({page}) => {
+  const board = await startBoard(makeRoot(['working','review']));
+  try {
+    await page.setViewportSize({width:1440, height:900});
+    await page.goto(board.url+'/?lang=en');
+    await showCrew(page);
+    const fm = page.locator('#roster [data-roster="firstmate"]');
+    await expect(fm.locator('.rd')).toHaveText(EN.crewUnknown);
+    await expect(fm.locator('.st')).toHaveText(EN.laneUnknown);
+    for (const cell of ['.rl', '.rd', '.st']) expect(await fm.locator(cell).evaluate(lines), cell).toBe(1);
+    await showLog(page);
+    const times = page.locator('#log li time');
+    await expect(times.first()).toHaveText(/^\d\d:\d\d:\d\d$/);
+    for (const time of await times.all()) expect(await time.evaluate(lines)).toBe(1);
+  } finally { await stopBoard(board); }
+});

@@ -158,7 +158,7 @@ section>h2,#shipregion>h2{font:600 var(--t21) var(--display)!important;letter-sp
 /* A project chip stays one line (ship.css); its column is sized to hold it whole. */
 #crewPanel .roster .pj.pchip{justify-self:start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
 @media(min-width:761px){
-  #crewPanel .roster :is(.rhead,li.rrow){grid-template-columns:10px minmax(150px,1.1fr) 90px minmax(min-content,1fr) 80px 120px 110px 60px 110px 70px minmax(280px,3fr)}
+  #crewPanel .roster :is(.rhead,li.rrow){grid-template-columns:10px minmax(150px,1.1fr) minmax(max-content,110px) minmax(min-content,1fr) 80px 120px 110px minmax(max-content,80px) minmax(max-content,140px) 70px minmax(280px,3fr)}
 }
 @media(max-width:760px){
   #crewPanel .roster .rhead{display:flex;flex-wrap:wrap;gap:var(--s2)}
@@ -341,7 +341,7 @@ a.pill:hover{border-color:var(--harbour)}
 .dcode header code{font:600 var(--t13) var(--code)} .dcode a{color:var(--accent)}
 .crows{max-height:600px;overflow:auto;font:12px/1.6 var(--code)}
 .crow{display:grid;grid-template-columns:72px 14px minmax(0,1fr);padding:0 var(--s2);border-left:3px solid transparent}
-.crow .cn{color:var(--fog);text-align:right;padding-right:6px;user-select:none;white-space:pre} .crow .cm{color:var(--fog)}
+.crow .cn{color:var(--fog);text-align:right;padding-right:6px;user-select:none;white-space:pre;tab-size:5} .crow .cm{color:var(--fog)}
 .crow code{font:inherit;white-space:pre;overflow-x:auto}
 .crow.add{background:var(--kelp-t)} .crow.add .cm{color:var(--ok)}
 .crow.del{background:var(--red-t)} .crow.del .cm{color:var(--bad)} .crow.del code{text-decoration:line-through;text-decoration-color:var(--red)}
@@ -517,7 +517,7 @@ a.pill:hover{border-color:var(--harbour)}
   .dexplain{border-top:0;border-bottom:1px solid var(--line)}
   .crows{max-height:360px}
   .change-fallback{flex-direction:column}
-  .drow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:var(--s1);padding:var(--s2) var(--s3)}
+  .drow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s1);padding:var(--s2) var(--s3)}
   .drow .doorchip,.drow .lockmsg,.drow .validation,.drow .refused{grid-column:1/-1;justify-self:start}
   .dcustom{grid-column:1/-1}
   .mini{display:contents}
