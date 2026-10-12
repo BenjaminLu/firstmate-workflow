@@ -26,7 +26,7 @@ test('capture: served page has content', async ({}, info) => {
   expect(server).not.toBeNull();
   expect(record.pages[0].text).toContain('Cache the task index');
   expect(record.pages[0].text).toContain('SK-007');
-  expect(record.pages[0].readyText).toContain('SK-007');
+  expect(record.pages[0].readyText).toContain('FIRSTMATE');
 });
 
 test('capture: remote request blocked', async ({}, info) => {
