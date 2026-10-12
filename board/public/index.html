@@ -53,7 +53,6 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .vend i{width:6px;height:6px;border-radius:50%;background:var(--fg3)}
 .vend.x{border-color:#4a3a1a;color:#e0b45c} .vend.x i{background:var(--brass)}
 .vend b{font-weight:700;color:var(--brass)}
-  border-radius:9px;margin-bottom:8px;min-width:0}
 .kbadge{display:inline-block;flex-shrink:0;white-space:nowrap;font:700 12px/1.5 var(--sans);
   padding:2px 8px;border-radius:4px;margin-right:8px;vertical-align:baseline}
 .k-merge{background:var(--k-merge);color:#080f17}
@@ -90,12 +89,6 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .langs button{padding:4px 11px;font:12px var(--sans);color:var(--fg2);background:none;border:none;cursor:pointer}
 .langs button+button{border-left:1px solid var(--line)}
 .langs button[aria-pressed=true]{background:#1d4b7a;color:#fff}
-.acts{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;align-items:center}
-.acts button{font:750 12.5px var(--sans);border:none;border-radius:9px;padding:8px 18px;cursor:pointer}
-.acts .go{background:linear-gradient(180deg,#e0b055,#b8862c);color:#2a1c05;box-shadow:0 2px 0 #6d4d13}
-.acts .go:active{transform:translateY(2px);box-shadow:none}
-.acts .alt{background:var(--bg3);color:var(--fg2);border:1px solid var(--line)}
-.acts .said{font:11px var(--mono);color:var(--brass)}
 /* the diagram is a page of its own, so it comes in as a page: the board's
    styles cannot leak into it and its styles cannot leak back out */
 iframe.dg{display:block;width:100%;height:240px;margin:12px 0 0;border:1px solid var(--line);
@@ -104,13 +97,12 @@ iframe.dg[hidden]{display:none}
 body{font-size:16px}
 .top{flex-wrap:wrap;position:relative;gap:8px}
 .top>*{min-width:0}.langs{margin-left:0;flex-shrink:0}
-.langs button,.acts .said{font-size:13px}#gl{font-size:13px!important}
+.langs button{font-size:13px}#gl{font-size:13px!important}
 .top small,section>h2,.lane h3,.card .id,.card .pr,.log time,.log .who{font-size:13px}
 #deckwrap>h2{font-size:13px!important}
-.lane,.card,section,.dcard,.acts>*{min-width:0;overflow-wrap:anywhere}
-.card .t,.log li,.explanation,.tradeoffs,.empty,.acts button,.acts label,.acts textarea{font-size:16px}
-.acts button,.langs button{min-height:44px;white-space:normal;max-width:100%}
-.acts textarea{font:inherit}
+.lane,.card,section,.dcard{min-width:0;overflow-wrap:anywhere}
+.card .t,.log li,.explanation,.tradeoffs,.empty{font-size:16px}
+.langs button{min-height:44px;white-space:normal;max-width:100%}
 .log li{grid-template-columns:minmax(0,62px) minmax(0,90px) minmax(0,1fr)}
 .log .who{overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 #history{margin-top:16px}#history summary{cursor:pointer;min-height:44px;padding:10px;background:var(--bg2);font-size:16px}
@@ -140,9 +132,12 @@ body{font-size:16px}
 #dropConfirm .note{margin:6px 0 0;font-size:14px;color:var(--fg2)}
 #dropConfirm label{display:block;margin-top:8px;font-size:14px}
 #dropConfirm textarea{display:block;width:100%;margin-top:4px;font:inherit;background:var(--bg3);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
+#dropConfirm .acts{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;align-items:center}
+#dropConfirm .acts button{font:750 16px var(--sans);border:1px solid var(--line);border-radius:9px;padding:8px 18px;cursor:pointer;
+  min-height:44px;white-space:normal;max-width:100%;min-width:0;background:var(--bg3);color:var(--fg2)}
+#dropConfirm .acts .go{background:linear-gradient(180deg,#e0b055,#b8862c);color:#2a1c05;border:none;box-shadow:0 2px 0 #6d4d13}
 .card .badge.b-lost{background:#7c5a1b}
 .card .badge.b-parked{background:#4a4f5c}
-.acts .eff{font:600 12px var(--mono);font-style:normal;color:var(--brass)}
 #effects{list-style:none;margin:0 0 8px;padding:0;color:var(--bad);font-size:14px}#effects:empty{display:none}
 .log .k-agent_lost,.log .k-reopened,.log .k-worker_note_unsent{color:var(--warn)}
 /* T-069: a pull request number is a link to it and keeps the look it had */
@@ -208,7 +203,6 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 .dcard.intent-card{padding:0;font-size:16px;line-height:1.5;overflow-wrap:anywhere}
 .intent-card > section,.intent-card .intent-alignment > section,.intent-card > footer{padding:16px;display:grid;gap:8px;min-width:0;border-top:1px solid var(--line)}
 .intent-card > .intent-header{border-top:0}
-.intent-card > .acts{margin-top:0}
 .intent-card .intent-header .gates{padding:0;gap:8px}
 .intent-card .intent-alignment{border:0;margin:0;padding:0}
 .intent-card h4{font-size:18px;color:var(--brass);margin:0;line-height:1.5}
@@ -218,12 +212,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 .intent-card .intent-why{color:var(--fg2);max-width:72ch}
 .intent-card .intent-scope{gap:8px;min-width:0}
 .intent-card .intent-scope > div{min-width:0}
-.intent-card .acts button,.intent-card .acts label,.intent-card .acts textarea,.intent-card .tradeoffs{font-size:16px;line-height:1.5}
-.intent-card .acts .opt{white-space:normal;text-align:left;min-height:44px;max-width:72ch;width:100%;margin:0;color:var(--fg);background:var(--bg3)}
-.intent-card .acts .option-box{display:grid;gap:8px;padding:16px;border:1px solid var(--line);background:var(--bg2)}
-.intent-card .acts button:disabled{opacity:.55;cursor:default}
-.intent-card .acts .option-box[aria-pressed="true"]{border-color:var(--brass);outline:2px solid var(--brass)}
-.intent-card .acts .tradeoffs{display:block;font-weight:400;margin:0;color:var(--fg2)}
+.intent-card .tradeoffs{font-size:16px;line-height:1.5}
 .intent-card .confirm-question{display:flex;align-items:flex-start;gap:8px;margin:0;min-width:0}
 .intent-card .confirm-question > p{flex:1;min-width:0}
 .intent-card .question-controls{flex:1;min-width:0;max-width:72ch}
@@ -1429,16 +1418,19 @@ function decisionBar(d, content, locked) {
   const keys = d.purpose === 'retro' ? ['A','C'] : ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])];
   const label = k => { const o = content?.options?.[k]; return o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'); };
   // T-118: what the option does when chosen, as the server will carry it out
-  const effect = k => { const e = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null); return e ? ` <i class="eff">→ ${esc(effectLabel(e))}</i>` : ''; };
+  const effectOf = k => d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
+  const effect = k => { const e = effectOf(k); return e ? ` <i class="eff">→ ${esc(effectLabel(e))}</i>` : ''; };
+  // a tile's name: its text is hidden on a phone, so the name carries it
+  const tileName = k => [k, label(k)].filter(Boolean).join(' · ') + (effectOf(k) ? ` → ${effectLabel(effectOf(k))}` : '');
   // a one-way merge stays locked until every intent is checked and the check is answered
   const doorLocked = k => !locked && mergeDoorNeeded(d, k) && !doorReady(d);
   const state = (k, extra = '') => `${locked ? ' disabled' : doorLocked(k) ? ' aria-disabled="true"' : ''}${tipAttr()}${extra}`;
-  const tiles = keys.map(k => `<button type="button" class="mflag opt f-${k}" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}"${state(k, ` title="${esc(label(k))}"`)}>` +
+  const tiles = keys.map(k => `<button type="button" class="mflag opt f-${k}" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" aria-label="${esc(tileName(k))}"${state(k, ` title="${esc(label(k))}"`)}>` +
     `<b>${doorLocked(k) ? ICON.lock : k}</b><span>${esc(label(k))}${effect(k)}</span></button>`).join('') +
-    (d.purpose === 'retro' ? '' : `<button type="button" class="mflag opt f-custom" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}"${state('custom')}><b aria-hidden="true">&#9998;</b><span>${esc(t('customChoice'))}</span></button>`);
+    (d.purpose === 'retro' ? '' : `<button type="button" class="mflag opt f-custom" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" aria-label="${esc(t('customChoice'))}"${state('custom')}><b aria-hidden="true">&#9998;</b><span>${esc(t('customChoice'))}</span></button>`);
   const flags = keys.map(k => { const o = content?.options?.[k];
     return `<button type="button" class="flagbtn f-${k}" data-id="${esc(d.id)}" data-pick="${k}" aria-pressed="${pick === k}"${state(k)}><span class="fl">${doorLocked(k) ? ICON.lock : k}</span>` +
-      `<span class="fb"><b>${esc(label(k))}${effect(k)}</b>${o ? `<span class="pro">${ICON.plus}<span>${said(words(o.pros), d)}</span></span><span class="con">${ICON.minus}<span>${said(words(o.cons), d)}</span></span>` : ''}</span></button>`; }).join('');
+      `<span class="fb"><b>${esc(label(k))}${effect(k)}</b>${o ? `<span class="pro">${ICON.plus}<span><span class="vh">${esc(t('pros'))} </span>${said(words(o.pros), d)}</span></span><span class="con">${ICON.minus}<span><span class="vh">${esc(t('cons'))} </span>${said(words(o.cons), d)}</span></span>` : ''}</span></button>`; }).join('');
   const input = doorInput(d.id), need = (content?.intent || []).length;
   const check = door?.kind === 'one-way' && content.check ? `<div class="understand door-check"><h4>${esc(t('beforeUnlock'))}</h4>` +
     `<p class="prog"><span class="bar"><i style="width:${need ? Math.round(100 * input.reviewed.length / need) : 0}%"></i></span>${esc(t('intentsChecked').replace('{have}', input.reviewed.length).replace('{need}', need))}</p>` +

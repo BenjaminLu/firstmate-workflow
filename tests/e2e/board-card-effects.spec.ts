@@ -37,6 +37,11 @@ test('T-118: an answered card leaves the captain lane, and a park chosen on a ca
     await expect(inLane('captain','T-031')).toHaveCount(1);
     // the card says what each option does before the captain picks it
     await expect(page.locator('#card-D-1020 .opt[data-c="B"] .eff')).toHaveText(`→ ${EN.effectPark}`);
+    // a reader hears the same: the tile's name carries its option and effect,
+    // and each trade-off says whether it is an advantage or a cost
+    await expect(page.locator('#card-D-1020 .mflag[data-c="B"]')).toHaveAccessibleName(`B · Keep individual reads → ${EN.effectPark}`);
+    await expect(page.locator('#card-D-1020 .flagbtn[data-pick="A"] .pro')).toHaveText(`${EN.pros} Fewer reads`);
+    await expect(page.locator('#card-D-1020 .flagbtn[data-pick="A"] .con')).toHaveText(`${EN.cons} Uses memory`);
     await page.locator('#card-D-1020 .opt[data-c="B"]').click();
     await page.locator('#card-D-1020 .confirm').click();
     // the park is carried out: the parked event, and the card leaves the lane

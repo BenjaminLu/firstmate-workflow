@@ -46,7 +46,12 @@ checks = [
     ('optional notes require items', "const notes = hasItems('notes') ?" in intent),
     ('optional questions require items', "const questions = (content?.questions || []).length ?" in bar),
     ('optional outcome requires nonempty text', "content?.outcome?.trim() ?" in drawer),
+    ('the inline stylesheet balances its braces', (lambda css: css.count('{') == css.count('}'))(re.sub(r'/\*.*?\*/', '', ''.join(re.findall(r'<style[^>]*>(.*?)</style>', html, re.S)), flags=re.S))),
 ]
+# the same check for the board's own stylesheets: a deleted rule leaves no half behind
+for sheet in ['board.css', 'ship.css']:
+    css = re.sub(r'/\*.*?\*/', '', (root / 'board/public' / sheet).read_text(), flags=re.S)
+    checks.append((f'{sheet} balances its braces', css.count('{') == css.count('}')))
 for locale in ['en', 'zh-TW']:
     dictionary = json.loads((root / f'i18n/ui.{locale}.json').read_text())
     for key in ['howHeading', 'scopeHeading', 'alignmentHeading', 'optionsHeading', 'notesHeading', 'showMore']:

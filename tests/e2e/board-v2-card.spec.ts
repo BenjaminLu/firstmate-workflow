@@ -197,6 +197,9 @@ for (const theme of ['light','dark']) test(`the phone decision bar shows flag le
     const card = page.locator('#card-D-211'), bar = card.locator('.dbar');
     await expect(bar.locator('.mflag span').first()).toBeHidden();
     await expect(bar.locator('.mflag b').first()).toBeVisible();
+    // the tiles keep their names when their text is hidden at phone width
+    await expect(bar.locator('[data-c="custom"]')).toHaveAccessibleName(EN.customChoice);
+    await expect(bar.locator('[data-c="A"]')).toHaveAccessibleName(/^A · \S/);
     for (const control of ['.mflag[data-c="A"]', '[data-decision-details]', '.confirm'])
       expect((await bar.locator(control).boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await expect.poll(() => card.evaluate(el => parseFloat(getComputedStyle(el).paddingBottom) >= el.querySelector('.drow')!.getBoundingClientRect().height)).toBe(true);
