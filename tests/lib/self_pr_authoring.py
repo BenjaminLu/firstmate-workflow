@@ -711,6 +711,10 @@ else: print('[]')
             pr.save(pr.state_path(pins.state, 'pr-authoring/T-259.json'), self.draft)
 
     def worker(self, *args):
+        # T-302: these rounds build, so firstmate has accepted the plan of
+        # T-259 on the sources the test left in place
+        self.subprocess.run(['bash', str(ROOT/'tests/lib/fixture_plan.sh'), str(ROOT), str(self.repo), 'T-259'],
+                            cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=30)
         return self.subprocess.run(['bash', str(self.repo/'bin/fm-worker.sh'), '--task', 'T-259', *args],
                                    cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=60)
 

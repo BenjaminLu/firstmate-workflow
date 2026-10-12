@@ -626,6 +626,9 @@ else:
                         'python3 "$1/tests/lib/self_pr_authoring.py" "$1" --seed T-035 self',
                         'seed-self-authoring', str(root), str(self.repo)],
                        env=self.env, check=True, capture_output=True, text=True)
+        # T-302: these rounds build, so firstmate has accepted the plan of T-035
+        subprocess.run(['bash', str(root/'tests/lib/fixture_plan.sh'), str(root), str(self.repo), 'T-035', '1', 'a'*40],
+                       env=self.env, check=True, capture_output=True, text=True)
 
     def executable(self, name, content):
         p=self.fake/name; p.write_text('#!'+sys.executable+'\n'+STATUS_PRELUDE.get(name,'')+content); p.chmod(0o755)
