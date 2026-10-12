@@ -36,6 +36,12 @@ case "\$1 \$2" in
       *) printf '[{"number":1,"headRefName":"$3","headRefOid":"$2","isCrossRepository":false,"baseRefName":"main"}]\\n' ;;
     esac ;;
   'pr create') echo https://github.com/fixture/project/pull/2 ;;
+  # T-296: PR #1's changed files, read when a declared scope overlaps it.
+  'pr view')
+    case " \$* " in
+      *' --json files,changedFiles '*) printf '{"files":[{"path":"src/parent"}],"changedFiles":1}\\n' ;;
+      *) echo "unexpected GitHub call: \$*" >&2; exit 1 ;;
+    esac ;;
   *) echo "unexpected GitHub call: \$*" >&2; exit 1 ;;
 esac
 STUB

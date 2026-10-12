@@ -7105,21 +7105,49 @@ these mechanical operations later; it does not supply their authorization.
 T-278 replaces judgement-based holding of overlapping self tasks with a
 stock rule; external projects are unchanged. A self task is in flight from
 its `dispatched` or `pr_opened` event until a later `merged` or `closed`
-event. Two approved scope lists overlap when two literal entries are equal,
+event, or until its worker's launch is refused by the overlap check: that
+worker's `fm_stack select` records a `worker_crashed` event with
+`data.overlap_refused` true, and a later `dispatched` or `pr_opened` puts the
+task back in flight (T-296), so two refused tasks never hold each other. Two
+approved scope lists overlap when two literal entries are equal,
 a glob matches a literal with fnmatch, or two globs have static prefixes
 (leading segments without `*`, `?` or `[`) where one equals or is a
-whole-segment prefix of the other; an empty prefix overlaps every glob. The
+whole-segment prefix of the other; an empty prefix overlaps every glob.
+Entries and changed files under `tests/` never count, on either side: a
+shared test file is reconciled when the later branch catches up with its
+base. The
 shared reader in `bin/lib/fm_stack.py` takes a task's scope from its latest
 valid pin, or before the first pin from the snapshot `Pins.collect()` makes
 once an approval exists. It never reads the mutable task file, and any error
 or missing approval makes the scope unreadable. It runs only when a self
 task is in flight.
 
-Dispatch checks each candidate against every in-flight self task without a
-GitHub call: once while preparing, and again under `state/dispatch.lock`
-against the events read there plus each candidate already selected in the same
-run, so one batch never selects two overlapping tasks. An unreadable scope
-holds the candidate as `overlap check unavailable: <task>`. Without overlap
+An in-flight task with an open PR is compared by the files that PR changes
+against its base, not by its declared scope (T-296): it overlaps the
+candidate only when a changed file outside `tests/` matches an entry of the
+candidate's scope. A task with no PR yet, and a candidate reserved earlier in
+the same run, is compared by its declared scope. A PR's changed files are
+read (`gh pr view --json files,changedFiles`) only when the candidate's
+declared scope overlaps that task's, since the scope gate keeps a PR inside
+its declared scope. When they cannot be read, the list is shorter than the
+PR's changed-file count, or the GitHub repository cannot be resolved, the
+candidate holds as `overlap check unavailable: <task>` under every policy;
+an unreadable PR never counts as no overlap and is never a parent. Nothing
+re-checks a pair when an in-flight PR later changes a file in the scope of a
+task started beside it; that conflict surfaces when the later branch catches
+up with its base. Candidates held under the earlier declared-scope rule are
+re-checked on their next dispatch attempt, tasks already stacked on an
+overlapped PR keep their base, and no event, pin or hold record is rewritten.
+
+Dispatch checks each candidate against every in-flight self task twice. The
+first check, while preparing, reads each open PR's changed files from GitHub
+at most once, and only as above. The second, under `state/dispatch.lock`
+against the events read there plus each candidate already selected in the
+same run, makes no GitHub call: it reuses the changed files read at the first
+check for the same PR number and compares any other in-flight task by its
+declared scope, so one batch never selects two overlapping tasks. An
+unreadable scope holds the candidate as `overlap check unavailable: <task>`.
+Without overlap
 the dependency rule above is unchanged. With overlap, C is the overlapped
 tasks plus unmerged dependencies, in task order (numeric IDs by number,
 then any other pin-valid ID in string order), each `<task> (PR #<n>)` or
@@ -7134,8 +7162,10 @@ C, excluding the candidate's own dispatch record. A self worker without a PR
 runs it under every policy, so a task reserved under one policy never starts
 overlapping work from main under another; workers with a PR keep its base.
 `select` accepts every task ID pin validation accepts and resolves the GitHub
-repository only when choosing a parent needs a GitHub read, so an empty C or
-a locally decided hold works in a checkout whose origin is a local path.
+repository only when it must read GitHub: to read an open PR's changed files
+when declared scopes overlap, or to choose a parent. So an empty C, or a hold
+decided by declared scopes against tasks with no PR, works in a checkout whose
+origin is a local path; there, changed files that must be read are unreadable.
 
 `state/autopilot/self-stack-policy.json` is runtime state, not pinned
 context. Its schema-1 record has exactly `version` (integer 1),
