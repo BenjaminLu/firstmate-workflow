@@ -7,6 +7,7 @@ import { basename, join, resolve } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { test as base, type Page } from "@playwright/test";
+import { SEED_TASKS } from "./seed-tasks";
 
 // No import.meta here: it is ESM-only and the runner transpiles to
 // CommonJS. cwd is the repository root because bin/ci.sh is the only thing
@@ -91,7 +92,8 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   writeFileSync(join(d,"board/public/voyage2d/index.html"),bundle);
   writeFileSync(join(d,"board/public/voyage2d/captain.webp"),captainSprite);
   cpSync(join(ROOT, "i18n"), join(d, "i18n"), { recursive: true });
-  cpSync(join(ROOT, "design/tasks"), join(d, "design/tasks"), { recursive: true });
+  // the fixture's own task specs, never the repository's design/tasks (T-294)
+  writeTasks(d, SEED_TASKS);
   mkdirSync(join(d, 'bin'));
   // fm-config.sh is how the board reads the task list (T-090) and, with the
   // parser it loads, the project registry (T-069); without a config.yaml they
@@ -103,10 +105,10 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   mkdirSync(join(d, 'bin/lib'));
   for (const f of ['fm-task-grammar.sh', 'fm_gates.json', 'fm_binding.py', 'fm_git_transfer.py', 'fm_evidence.py', 'fm_spec_preflight.py', 'fm_ste.py', 'fm_lifeline.py', 'fm-lifeline.sh', 'fm_project_paths.py', 'fm_registry.py', 'fm_config_values.py', 'fm_config_tasks.py', 'fm_config_runtime.py']) cpSync(join(ROOT, 'bin/lib', f), join(d, 'bin/lib', f));
 
-  const tasks = readTasks(ROOT);
+  const tasks = readTasks(d);
   if (tasks.length < stages.length) {
     throw new Error(
-      `the fixture wants ${stages.length} tasks and design/tasks/ has ${tasks.length}`);
+      `the fixture wants ${stages.length} tasks and its seed has ${tasks.length}`);
   }
   const ev: string[] = [JSON.stringify({
     ts: "2026-09-21T09:00:00Z", actor: "captain", type: "greenlit",

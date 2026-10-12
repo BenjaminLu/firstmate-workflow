@@ -3448,6 +3448,14 @@ Only the board is tri-lingual. The repository is English (section 1).
 
 The local gate and GitHub Actions run **the same** `bin/ci.sh`.
 
+CI does not need committed task specs (T-294). No CI check reads this
+repository's own `design/tasks/` from the checkout as an input: the
+end-to-end fixture writes its own task specs (`tests/e2e/lib/seed-tasks.ts`),
+the retro suite reads a copy of the spec it needs from `tests/fixtures/`, and
+the DAG stage skips a self task directory the checkout does not have
+(section 14). A checkout with `design/tasks/` deleted runs every stage and
+passes.
+
 The elapsed-time limit defaults to 180 seconds. Set `FM_CI_MAX_SECONDS` to a
 plain decimal integer from 1 to 3600, without leading zeros, to select an
 explicit budget; invalid or empty values exit 64 with guidance. The gate
@@ -6281,10 +6289,15 @@ in their prompt. The board reads the list through
 the same `fm_tasks`. `bin/ci.sh`'s DAG stage runs `fm_tasks_check` on every
 registered task directory: every file parses, its `id` is its file name, every
 dependency has a file, no task waits on itself through any chain, and no
-`design/tasks.json` is left beside the directory. In a CI checkout that
-directory holds only the tracked specs, which form a closed set (every
-`depends_on` of a tracked spec names a tracked spec); new local specs are
-checked where they live, in the local engine checkout.
+`design/tasks.json` is left beside the directory. When the self project's
+task directory is missing from the checkout, the stage prints a skip line in
+the same `(skipped)` format it uses for an external project's missing list,
+`project <name>: <tasks> not in this checkout (skipped)`, and passes (T-294);
+a present directory is checked as before. CI therefore does not depend on
+committed specs: once they leave git, CI no longer checks this repository's
+tasks, and a wrong self `tasks:` path in `config.yaml` is skipped rather than
+failing. The self task specs are checked where they live, by a run in the
+local engine checkout.
 
 **Order.** `fm_tasks` lists tasks by id, compared as versions (`sort -V`):
 `T-2` before `T-9` before `T-10`, `SK-001` before `T-001`. The old array's
