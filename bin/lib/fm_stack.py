@@ -56,6 +56,44 @@ def scopes_overlap(left, right):
     return any(entries_overlap(a, b) for a in left for b in right)
 
 
+def code_entries(entries):
+    """Entries and files under tests/ never count as overlap (T-296)."""
+    return [entry for entry in entries if entry != 'tests' and not entry.startswith('tests/')]
+
+
+def pr_files(repository, number):
+    """The paths an open PR changes against its base; any doubt is unreadable."""
+    view = github(repository, 'pr', 'view', str(number), '--repo', repository, '--json', 'files,changedFiles')
+    files = view.get('files') if isinstance(view, dict) else None
+    paths = [item.get('path') for item in files if isinstance(item, dict)] if isinstance(files, list) else []
+    # gh lists at most 100 files; a short list is not the whole change.
+    if (not isinstance(files, list) or type(view.get('changedFiles')) is not int
+            or len(paths) != view['changedFiles'] or len(paths) != len(files)
+            or not all(isinstance(path, str) and path for path in paths)):
+        raise ValueError('changed files unavailable for PR #' + str(number))
+    return paths
+
+
+def changes_reader(repository):
+    """Read each open PR's changed files once; a failure holds as unreadable.
+
+    `repository` is resolved on the first read, only when one is needed.
+    """
+    seen, resolved = {}, []
+
+    def read(task, number):
+        if number not in seen:
+            try:
+                if not resolved:
+                    resolved.append(repository() if callable(repository) else repository)
+                seen[number] = pr_files(resolved[0], number)
+            except Exception as error:  # Unreadable changes never count as no overlap.
+                raise ScopeUnavailable(task) from error
+        return seen[number]
+    read.seen = seen
+    return read
+
+
 def approved_scope(env, task):
     """The scope of the task's approved spec bytes, never the mutable task file.
 
@@ -86,8 +124,26 @@ def task_order(task):
     return (0, int(match[1]), task) if match else (1, 0, task)
 
 
+def launch_refused(event):
+    """The event a worker launch refused by the overlap check leaves (T-296)."""
+    data = event.get('data')
+    return event.get('type') == 'worker_crashed' and isinstance(data, dict) and data.get('overlap_refused') is True
+
+
+def refused_tasks(events):
+    """Tasks whose latest dispatch was refused by the overlap check: not in flight."""
+    refused = set()
+    for event in events:
+        if event.get('type') in ('dispatched', 'pr_opened'):
+            refused.discard(event.get('task'))
+        elif launch_refused(event):
+            refused.add(event.get('task'))
+    return refused
+
+
 def in_flight(events, exclude=None):
-    """Tasks with a dispatched or pr_opened event and no later merged or closed, with any PR number."""
+    """Tasks with a dispatched or pr_opened event and no later merged, closed or
+    refused launch, with any PR number."""
     flight = {}
     for event in events:
         task, kind = event.get('task'), event.get('type')
@@ -99,7 +155,7 @@ def in_flight(events, exclude=None):
                 flight[task] = number
             else:
                 flight.setdefault(task, None)
-        elif kind in ('merged', 'closed'):
+        elif kind in ('merged', 'closed') or launch_refused(event):
             flight.pop(task, None)
     return flight
 
@@ -108,11 +164,15 @@ def merged_tasks(events):
     return {e.get('task') for e in events if e.get('type') == 'merged'}
 
 
-def overlap_members(env, task, dependencies, events, reserved=()):
+def overlap_members(env, task, dependencies, events, reserved=(), changes=None):
     """None when the candidate overlaps nothing in flight; otherwise the sorted set C.
 
     C is the overlapped in-flight tasks plus the unmerged dependencies, each
-    with its PR number from the event log (None: no PR yet). No GitHub call.
+    with its PR number from the event log (None: no PR yet). Entries under
+    tests/ never count. An in-flight task whose declared scope overlaps is
+    then compared by its open PR's changed files: `changes(task, number)`
+    returns them, raises ScopeUnavailable, or returns None to keep the
+    declared scope. Without `changes` there is no GitHub call.
     """
     flight = in_flight(events, exclude=task)
     for other in reserved:
@@ -120,8 +180,14 @@ def overlap_members(env, task, dependencies, events, reserved=()):
             flight.setdefault(other, None)
     if not flight:
         return None
-    mine = approved_scope(env, task)
-    overlapped = [other for other in flight if scopes_overlap(mine, approved_scope(env, other))]
+    mine = code_entries(approved_scope(env, task))
+    overlapped = []
+    for other, number in flight.items():
+        if not scopes_overlap(mine, code_entries(approved_scope(env, other))):
+            continue
+        files = changes(other, number) if changes is not None and number is not None else None
+        if files is None or scopes_overlap(mine, code_entries(files)):
+            overlapped.append(other)
     if not overlapped:
         return None
     merged = merged_tasks(events)
@@ -524,6 +590,29 @@ def read_events(state):
     return [row for row in rows if isinstance(row, dict)]
 
 
+def record_refusal(task, reason, project):
+    """A worker of this task refused by the overlap check is not in flight (T-296).
+
+    Only the task's own worker records it; the dispatcher's preflight has no
+    dispatched record to undo. Best effort: the refusal itself still exits 65.
+    """
+    actor = os.environ.get('FM_ACTOR')
+    if os.environ.get('FM_ROLE') != 'worker' or os.environ.get('FM_TASK') != task or not actor:
+        return
+    argv = [str(Path(__file__).resolve().parents[1] / 'fm-emit.sh'), '--actor', actor,
+            '--type', 'worker_crashed', '--task', task, '--data', json.dumps({'overlap_refused': True}),
+            '--en', 'overlap check refused the launch: ' + reason, '--tw', '重疊檢查拒絕開工：' + reason]
+    if project:
+        argv += ['--project', project]
+    try:
+        out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as error:
+        print('fm-stack: could not record the refused launch: ' + str(error), file=sys.stderr)
+        return
+    if out.returncode:
+        print('fm-stack: could not record the refused launch: ' + out.stderr.strip(), file=sys.stderr)
+
+
 def select(args, base, policy, external):
     # The worker's own task grammar: every self worker without a PR asks (T-278).
     if not args.task or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', args.task):
@@ -539,13 +628,19 @@ def select(args, base, policy, external):
     dependencies = task.get('depends_on', [])
     allowed = policy['stacking'] == 'allowed'
     if not external:
-        # T-278: an approved-scope overlap with work in flight is held or stacked.
-        members = overlap_members(os.environ, args.task, dependencies, events)
-        if members is not None:
-            reason = overlap_hold(members, allowed)
-            if reason:
-                raise ValueError(reason)
-            return overlap_parent(lazy_repository(), base, members[0])
+        # T-278: an approved-scope overlap with work in flight is held or stacked;
+        # T-296: an open PR is compared by the files it changes.
+        try:
+            members = overlap_members(os.environ, args.task, dependencies, events,
+                                      changes=changes_reader(lazy_repository))
+            if members is not None:
+                reason = overlap_hold(members, allowed)
+                if reason:
+                    raise ValueError(reason)
+                return overlap_parent(lazy_repository(), base, members[0])
+        except ValueError as error:
+            record_refusal(args.task, str(error), project)
+            raise
     return select_base(lazy_repository, base, dependencies, merged, allowed,
                        adopted={task: pr for pr, task in fm_adopt.scan(os.environ)[0].items()})
 

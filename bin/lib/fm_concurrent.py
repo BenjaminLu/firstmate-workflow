@@ -120,6 +120,13 @@ def stack_library():
     return fm_stack
 
 
+def refused_launches(events):
+    """Tasks whose latest launch the overlap check refused: not in flight (T-296)."""
+    if not any(e.get('type') == 'worker_crashed' for e in events):
+        return set()
+    return stack_library().refused_tasks(events)
+
+
 def scope_env(route):
     """The pin reader's view of one self route; nothing here reads GitHub."""
     return dict(os.environ, FM_ENGINE_ROOT=route['engine'], FM_TARGET_ROOT=route['target'],
@@ -127,13 +134,13 @@ def scope_env(route):
                 FM_PROJECT=route['name'], FM_EXTERNAL='0', FM_BASE=route.get('base') or 'main')
 
 
-def overlap_check(route, task, dependencies, events, allowed, reserved=()):
+def overlap_check(route, task, dependencies, events, allowed, reserved=(), changes=None):
     """(members, reason) for one self candidate; members None means no overlap."""
     stack = stack_library()
     if not stack.in_flight(events, exclude=task) and not [r for r in reserved if r != task]:
         return None, ''
     try:
-        members = stack.overlap_members(scope_env(route), task, dependencies, events, reserved)
+        members = stack.overlap_members(scope_env(route), task, dependencies, events, reserved, changes)
     except stack.ScopeUnavailable as error:
         return None, str(error)
     if members is None:
@@ -151,6 +158,17 @@ def prepare(root, route, default, ordered, notes=None):
 . "$1/lib/fm-stack.sh"
 fm_stack_policy stacking''', name).strip() == 'allowed'
         return notes['allowed']
+    # T-296: the first check reads an open PR's changed files once; the check
+    # under the lock reuses notes['changes'] and reads nothing.
+    notes['changes'] = {}
+    reader = []
+    def changes(other, number):
+        if not reader:
+            reader.append(stack_library().changes_reader(lambda: shell(root, '''fm_storage_init "$2" || exit 65
+. "$1/lib/fm-stack.sh"
+fm_stack_repository''', name).strip()))
+            notes['changes'] = reader[0].seen
+        return reader[0](other, number)
     # Verification, task reads and greenlight are deliberately outside the lock.
     tasks = shell(root, '''fm_storage_init "$2" || exit 65
 fm_external_prepare >&2 || exit 65
@@ -173,7 +191,9 @@ fm_tasks "$FM_TASKS_DIR"''', name)
     done = {e.get('task') for e in events if e.get('type') == 'merged'}
     closed = {e.get('task') for e in events if e.get('type') == 'closed'}
     # Historical work prevents automatic redispatch, but consumes no capacity.
-    touched = {e.get('task') for e in events if e.get('type') in ('dispatched', 'pr_opened')}
+    # A launch the overlap check refused is not in flight (T-296).
+    touched = ({e.get('task') for e in events if e.get('type') in ('dispatched', 'pr_opened')}
+               - refused_launches(events))
     parks = {}
     for event in events:
         if event.get('type') in ('parked', 'unparked'):
@@ -197,9 +217,11 @@ fm_tasks "$FM_TASKS_DIR"''', name)
             unmet = [d for d in task.get('depends_on', []) if d not in done]
             members = None
             notes['deps'][task_id] = list(task.get('depends_on', []))
-            # T-278: approved-scope overlap with self work in flight, no GitHub read.
+            # T-278: approved-scope overlap with self work in flight; an open PR
+            # whose declared scope overlaps is compared by its changed files.
             if route.get('external') != '1' and (ordered or task_id in cleared):
-                members, why = overlap_check(route, task_id, notes['deps'][task_id], events, allowed)
+                members, why = overlap_check(route, task_id, notes['deps'][task_id], events, allowed,
+                                             changes=changes)
                 if members is not None and not why:
                     try:
                         shell(root, '''fm_storage_init "$2" || exit 65
@@ -264,8 +286,9 @@ def dispatch(root, selected, ordered, dry, limit):
         # Another dispatch may have reserved/started these while we prepared.
         for name in queues:
             locked_events[name] = read_events(by_name[name], default)
-            touched = {e.get('task') for e in locked_events[name]
-                       if e.get('type') in ('dispatched', 'pr_opened', 'merged', 'closed')}
+            touched = (({e.get('task') for e in locked_events[name]
+                         if e.get('type') in ('dispatched', 'pr_opened')} - refused_launches(locked_events[name]))
+                       | {e.get('task') for e in locked_events[name] if e.get('type') in ('merged', 'closed')})
             queues[name] = [task for task in queues[name] if task not in touched]
         reserved = {}
         def admit(name, task):
@@ -274,8 +297,10 @@ def dispatch(root, selected, ordered, dry, limit):
             if route.get('external') == '1':
                 return True
             earlier = reserved.setdefault(name, [])
+            seen = note.get('changes', {})
             members, why = overlap_check(route, task, note.get('deps', {}).get(task, []),
-                                         locked_events[name], lambda: bool(note.get('allowed')), earlier)
+                                         locked_events[name], lambda: bool(note.get('allowed')), earlier,
+                                         lambda other, number: seen.get(number))
             if members is not None and not why and note.get('stacked', {}).get(task) != members:
                 why = 'overlaps ' + stack_library().describe(members)
             if why:

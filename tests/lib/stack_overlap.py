@@ -83,10 +83,23 @@ class Engine:
     def pulls(self, rows):
         stub = self.root / 'gh'
         (self.root / 'pulls.json').write_text(json.dumps(rows))
+        # T-296: `pr view <n>` answers the changed files set by changes(); unset fails.
         stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "' + str(self.gh_calls) + '"\n'
                         'case "$1 $2" in\n  "pr list") cat "' + str(self.root / 'pulls.json') + '" ;;\n'
+                        '  "pr view") cat "' + str(self.root) + '/files-$3.json" ;;\n'
                         '  *) echo "unexpected GitHub call: $*" >&2; exit 1 ;;\nesac\n')
         stub.chmod(0o755)
+
+    def changes(self, number, files, count=None):
+        """The files open PR #number changes against its base, as gh pr view reports them."""
+        (self.root / ('files-%d.json' % number)).write_text(json.dumps(dict(
+            files=[dict(path=path, additions=1, deletions=0) for path in files],
+            changedFiles=len(files) if count is None else count)))
+
+    def reads(self, number):
+        """How many times the changed files of PR #number were read from GitHub."""
+        calls = self.gh_calls.read_text().splitlines() if self.gh_calls.exists() else []
+        return sum(call.startswith('pr view %d ' % number) and 'files' in call for call in calls)
 
     def policy(self, stacking='allowed', force=True):
         path = self.root / 'state/autopilot/self-stack-policy.json'
@@ -112,9 +125,12 @@ class Engine:
                     FM_STATE_DIR=str(self.root / 'state'), FM_TASKS_DIR=str(self.root / 'design/tasks'),
                     FM_DESIGN=str(self.root / 'design/design.md'))
 
-    def select(self, task, local_origin=False):
+    def select(self, task, local_origin=False, worker=False):
         """fm_stack select through bin/lib/fm-stack.sh, exactly as fm-worker.sh asks it."""
         env = self.env()
+        if worker:
+            # What fm_identity exports for the task's own worker round.
+            env.update(FM_ROLE='worker', FM_TASK=task, FM_ACTOR='worker-imani-' + task.lower() + '-r1')
         if local_origin:
             # A local bare origin has no GitHub mapping; any repository lookup fails.
             del env['GH_REPO']
@@ -200,15 +216,19 @@ class Dispatch(unittest.TestCase):
     def test_one_overlap_without_policy_holds_with_reason(self):
         engine = self.engine({'T-1': (['src/**'], []), 'T-2': (['src/a.py'], [])})
         engine.flight('T-1', 7)
+        engine.changes(7, ['src/a.py'])
         code, started, err = engine.dispatch('--task', 'T-2')
         self.assertEqual(0, code, err)
         self.assertEqual([], started)
         self.assertIn('T-2 overlaps T-1 (PR #7)', err)
-        self.assertFalse(engine.gh_calls.exists(), 'an overlap hold reads no GitHub')
+        # T-296: one changed-files read for the overlapping PR, and nothing else.
+        self.assertEqual(['pr view 7 --repo fixture/project --json files,changedFiles'],
+                         engine.gh_calls.read_text().splitlines())
 
     def test_two_overlaps_hold_listing_both_in_task_order(self):
         engine = self.engine({'T-9': (['src/**'], []), 'T-10': (['src/x/*.py'], []), 'T-2': (['src/x/a.py'], [])})
         engine.flight('T-10', 12)
+        engine.changes(12, ['src/x/a.py'])
         engine.flight('T-9')
         code, started, err = engine.dispatch('--task', 'T-2')
         self.assertEqual([], started)
@@ -227,6 +247,7 @@ class Dispatch(unittest.TestCase):
                               'T-2': (['src/b.py'], ['T-3'])})
         engine.policy()
         engine.flight('T-1', 7)
+        engine.changes(7, ['src/b.py'])
         engine.pulls([dict(number=7, headRefName='t-1-x', headRefOid=A, isCrossRepository=False, baseRefName='main')])
         code, started, err = engine.dispatch('--task', 'T-2')
         self.assertEqual([], started)
@@ -236,6 +257,7 @@ class Dispatch(unittest.TestCase):
         engine = self.engine({'T-1': (['src/**'], []), 'T-2': (['src/b.py'], ['T-1'])})
         engine.policy()
         engine.flight('T-1', 7)
+        engine.changes(7, ['src/b.py'])
         engine.pulls([dict(number=7, headRefName='t-1-x', headRefOid=A, isCrossRepository=False, baseRefName='main')])
         code, started, err = engine.dispatch('--task', 'T-2')
         self.assertEqual(0, code, err)
@@ -247,6 +269,7 @@ class Dispatch(unittest.TestCase):
         engine = self.engine({'T-1': (['src/**'], []), 'T-2': (['src/b.py'], [])})
         engine.policy()
         engine.flight('T-1', 7)
+        engine.changes(7, ['src/b.py'])
         engine.pulls([dict(number=7, headRefName='t-1-x', headRefOid=A, isCrossRepository=False,
                            baseRefName='t-0-base')])
         code, started, err = engine.dispatch('--task', 'T-2')
@@ -258,6 +281,7 @@ class Dispatch(unittest.TestCase):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as tmp:
                 engine = Engine(tmp, {'T-1': (['src/**'], []), 'T-2': (['src/b.py'], [])})
                 engine.flight('T-1', 7)
+                engine.changes(7, ['src/b.py'])
                 self.assertEqual([], engine.dispatch('--task', 'T-2')[1])
                 engine.event(type=outcome, actor='github', task='T-1', pr=7)
                 code, started, err = engine.dispatch('--task', 'T-2')
@@ -375,6 +399,150 @@ class Selector(unittest.TestCase):
         self.assertEqual({'name': 't-1-parent', 'head': A, 'pr': 7}, json.loads(out or 'null'))
         calls = engine.gh_calls.read_text().splitlines() if engine.gh_calls.exists() else []
         self.assertTrue(any(call.startswith('pr list --repo fixture/project') for call in calls), calls)
+
+
+class ChangedFiles(unittest.TestCase):
+    """T-296: an open PR is compared by the files it changes; tests/ never counts."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.tmp = tmp.name
+
+    def test_overlap_pr_files_decide(self):
+        # overlap: pr files decide. FAIL-FIRST: the base holds on the declared globs.
+        engine = Engine(self.tmp, {'T-1': (['bin/lib/**', 'tests/**', 'design/design.md'], []),
+                                   'T-2': (['tests/**', 'bin/lib/fm_retro.py'], [])})
+        engine.flight('T-1', 7)
+        engine.changes(7, ['bin/lib/fm_claude.py', 'bin/lib/fm_adapter.py', 'tests/claude.test.sh'])
+        code, out, err = engine.select('T-2')
+        self.assertEqual(0, code, err)
+        self.assertEqual({'name': 'main'}, json.loads(out or 'null'))
+        code, started, err = engine.dispatch('--task', 'T-2')
+        self.assertEqual(0, code, err)
+        self.assertEqual(['T-2'], started, err)
+        self.assertNotIn('overlaps', err)
+
+    def test_overlap_tests_never_count(self):
+        # overlap: tests never count. FAIL-FIRST: the base holds on tests/** vs tests/lib/*.py.
+        engine = Engine(self.tmp, {'T-1': (['tests/**', 'bin/fm-a.sh'], []),
+                                   'T-2': (['tests/lib/*.py', 'tests/b.test.sh', 'bin/fm-b.sh'], [])})
+        engine.flight('T-1')
+        code, started, err = engine.dispatch('--task', 'T-2')
+        self.assertEqual(0, code, err)
+        self.assertEqual(['T-2'], started, err)
+        self.assertFalse(engine.gh_calls.exists(), 'tasks with no PR read no GitHub')
+
+    def test_overlap_shared_changed_file_holds(self):
+        # overlap: shared changed file holds.
+        engine = Engine(self.tmp, {'T-1': (['bin/lib/**', 'tests/**'], []),
+                                   'T-2': (['tests/**', 'bin/lib/fm_retro.py'], [])})
+        engine.flight('T-1', 7)
+        engine.changes(7, ['bin/lib/fm_retro.py', 'tests/retro.test.sh'])
+        code, started, err = engine.dispatch('--task', 'T-2')
+        self.assertEqual(0, code, err)
+        self.assertEqual([], started)
+        self.assertIn('T-2 overlaps T-1 (PR #7)', err)
+        self.assertEqual(1, engine.reads(7))
+
+    def test_overlap_test_file_alone_never_holds(self):
+        # A PR that changes one shared test file and other code: the test file does not count.
+        engine = Engine(self.tmp, {'T-1': (['bin/lib/**', 'tests/**'], []),
+                                   'T-2': (['tests/retro.test.sh', 'bin/lib/fm_retro.py'], [])})
+        engine.flight('T-1', 7)
+        engine.changes(7, ['bin/lib/fm_claude.py', 'tests/retro.test.sh'])
+        code, started, err = engine.dispatch('--task', 'T-2')
+        self.assertEqual(['T-2'], started, err)
+
+    def test_overlap_no_pr_uses_scope(self):
+        # overlap: no pr uses scope.
+        engine = Engine(self.tmp, {'T-1': (['bin/lib/**', 'tests/**'], []),
+                                   'T-2': (['tests/**', 'bin/lib/fm_retro.py'], [])})
+        engine.flight('T-1')
+        code, started, err = engine.dispatch('--task', 'T-2')
+        self.assertEqual([], started)
+        self.assertIn('T-2 overlaps T-1 (no PR yet)', err)
+        self.assertFalse(engine.gh_calls.exists(), 'a task with no PR reads no GitHub')
+
+    def test_overlap_no_shared_declared_scope_reads_nothing(self):
+        # Changed files are read only when the declared scopes overlap.
+        engine = Engine(self.tmp, {'T-1': (['bin/lib/**', 'tests/**'], []),
+                                   'T-2': (['tests/**', 'docs/x.md'], [])})
+        engine.flight('T-1', 7)
+        code, started, err = engine.dispatch('--task', 'T-2')
+        self.assertEqual(['T-2'], started, err)
+        self.assertFalse(engine.gh_calls.exists(), 'no declared overlap, no changed-files read')
+
+    def test_overlap_unreadable_pr_holds(self):
+        # overlap: unreadable pr holds, under every policy and never stacked.
+        for case in ('hold', 'allowed', 'truncated', 'local origin'):
+            with self.subTest(case), tempfile.TemporaryDirectory() as tmp:
+                engine = Engine(tmp, {'T-1': (['bin/lib/**'], []), 'T-2': (['bin/lib/fm_retro.py'], [])})
+                engine.flight('T-1', 7)
+                engine.pulls([dict(number=7, headRefName='t-1-x', headRefOid=A, isCrossRepository=False,
+                                   baseRefName='main')])
+                if case != 'hold':
+                    engine.policy()
+                if case == 'truncated':
+                    # gh lists 100 files; a PR that changes more is not fully known.
+                    engine.changes(7, ['bin/lib/x%d.py' % n for n in range(100)], count=150)
+                if case == 'local origin':
+                    engine.changes(7, ['bin/lib/fm_retro.py'])
+                    code, out, err = engine.select('T-2', local_origin=True)
+                    self.assertEqual(65, code, err)
+                    self.assertIn('overlap check unavailable: T-1', err)
+                    self.assertEqual('', out)
+                    continue
+                code, started, err = engine.dispatch('--task', 'T-2')
+                self.assertEqual([], started)
+                self.assertIn('T-2 overlap check unavailable: T-1', err)
+                code, out, err = engine.select('T-2')
+                self.assertEqual(65, code, err)
+                self.assertIn('overlap check unavailable: T-1', err)
+                calls = engine.gh_calls.read_text().splitlines()
+                self.assertFalse([call for call in calls if call.startswith('pr list')], 'never stacks on it')
+
+    def test_overlap_lock_check_reuses_changed_files(self):
+        # The check under the dispatch lock makes no GitHub call.
+        engine = Engine(self.tmp, {'T-1': (['bin/lib/**'], []), 'T-2': (['bin/lib/fm_retro.py'], [])})
+        engine.flight('T-1', 7)
+        engine.changes(7, ['bin/lib/fm_claude.py'])
+        code, started, err = engine.dispatch('--task', 'T-2')
+        self.assertEqual(['T-2'], started, err)
+        self.assertEqual(1, engine.reads(7), 'one read at the first check, none under the lock')
+
+    def test_overlap_refused_dispatch_is_not_in_flight(self):
+        # overlap: refused dispatch is not in flight. FAIL-FIRST: on the base the
+        # refused T-1 still holds T-2 and stays "already in flight" for dispatch.
+        engine = Engine(self.tmp, {'T-1': (['src/**'], []), 'T-2': (['src/a.py'], [])})
+        engine.flight('T-1')
+        engine.flight('T-2')
+        code, out, err = engine.select('T-1', worker=True)
+        self.assertEqual(65, code, err)
+        self.assertIn('overlaps T-2 (no PR yet)', err)
+        rows = [json.loads(line) for line in (engine.root / 'state/events.jsonl').read_text().splitlines()]
+        refused = [row for row in rows if row.get('type') == 'worker_crashed']
+        self.assertEqual(1, len(refused), rows)
+        self.assertEqual(('T-1', 'worker-imani-t-1-r1'), (refused[0]['task'], refused[0]['actor']))
+        self.assertIs(True, refused[0]['data']['overlap_refused'])
+        code, out, err = engine.select('T-2', worker=True)
+        self.assertEqual(0, code, err)
+        self.assertEqual({'name': 'main'}, json.loads(out or 'null'))
+        # The refused task is re-checked on its next dispatch attempt.
+        code, started, err = engine.dispatch('--task', 'T-1')
+        self.assertNotIn('already in flight', err)
+        self.assertIn('T-1 overlaps T-2 (no PR yet)', err)
+        engine.event(type='closed', actor='github', task='T-2')
+        code, started, err = engine.dispatch('--task', 'T-1')
+        self.assertEqual(['T-1'], started, err)
+
+    def test_overlap_refusal_outside_the_tasks_worker_records_nothing(self):
+        # The dispatcher's preflight and other callers leave no refusal record.
+        engine = Engine(self.tmp, {'T-1': (['src/**'], []), 'T-2': (['src/a.py'], [])})
+        engine.flight('T-2')
+        code, out, err = engine.select('T-1')
+        self.assertEqual(65, code, err)
+        rows = (engine.root / 'state/events.jsonl').read_text()
+        self.assertNotIn('worker_crashed', rows)
 
 
 class NamedTestResult(unittest.TextTestResult):
