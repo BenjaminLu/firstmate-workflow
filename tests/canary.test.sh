@@ -14,7 +14,7 @@ for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
 done
 export HERDR_ENV=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Feature dependencies: bin/fm-canary.sh bin/lib/fm_spec_pins.py bin/lib/fm_evidence.py
+# Feature dependencies: bin/fm-canary.sh bin/lib/fm-fixture-plan.sh bin/lib/fm_spec_pins.py bin/lib/fm_evidence.py
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
