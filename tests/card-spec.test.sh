@@ -37,7 +37,7 @@ out="$(request --request "$id" --task T-301 --purpose dispatch --details "$d/bar
 assert_eq 0 "$?" "card: dispatch takes spec fields: the card is raised ($out)"
 pending="$d/state/pending/$id.json"
 for lang in en zh-TW; do
-  for field in intent done before_nodes after_nodes why scope_in scope_out notes; do
+  for field in intent 'done' before_nodes after_nodes why scope_in scope_out notes; do
     assert_eq "$(jq -c --arg l "$lang" --arg k "$field" '.explain[$l][$k]' "$d/design/tasks/T-301.json")" \
       "$(jq -c --arg l "$lang" --arg k "$field" '.details[$l][$k]' "$pending" 2>/dev/null)" \
       "card: dispatch takes spec fields: $lang.$field comes from the spec"
