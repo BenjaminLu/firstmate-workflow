@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import autopilot_loop as fixture
+from fm_autopilot_loop import RESUME_LIMIT
 # A module import: its test classes must not run again in this suite.
 import autopilot_stale_jobs as stale
 
@@ -88,6 +89,13 @@ class InterruptedJobs(unittest.TestCase):
         self.assertEqual(self.started(), [])
         self.pull()
         self.assertEqual(self.spawns(), [('spawn', path, packet)])
+        # A second signal on the rerun is a failure, never an endless relaunch.
+        self.receipt(path, packet, -9)
+        self.pilot.consume_jobs(); self.pull()
+        self.assertEqual(job['state'], 'done')
+        self.assertEqual(len(self.spawns()), 1)
+        self.assertEqual(len(self.wakes_with('gate run failed (exit -9)')), 1)
+        self.pilot.data['wakes'].clear()  # one gate wake per head; exit 70 needs its own
         failed, path, packet = self.job('failed')
         self.receipt(path, packet, 70, 'Mechanical child ended without a receipt')
         self.pilot.consume_jobs()
@@ -210,9 +218,20 @@ class InterruptedJobs(unittest.TestCase):
         self.pilot.recover_jobs()
         self.assertEqual((lost['state'], lost.get('superseded_by')), ('superseded', 'unresumable'))
         self.assertEqual(bound['state'], 'uncertain')
-        self.assertEqual(self.pilot.data['wakes'], {})
-        self.pull()
+        self.assertEqual(len(self.wakes_with('cannot run again; its next step did not happen')), 1)
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.pilot.recover_jobs(); self.pull()
         self.assertEqual(self.spawns(), [])
+        self.assertEqual(len(self.pilot.data['wakes']), 1, 'firstmate is told once')
+
+    def test_interrupted_job_reruns_a_bounded_number_of_times(self):
+        """A job cut off by every restart runs again at most RESUME_LIMIT times, then firstmate is told once."""
+        job, path, packet = self.job('gate')
+        for _ in range(RESUME_LIMIT + 2):
+            self.pilot.recover_jobs(); self.pull()
+        self.assertEqual(len(self.spawns()), RESUME_LIMIT)
+        self.assertEqual(job['state'], 'uncertain', 'it keeps blocking its task for firstmate to finish')
+        self.assertEqual(len(self.wakes_with('was run again 3 times and was interrupted each time')), 1)
 
     def test_upgraded_uncertain_job_resumes(self):
         """autopilot: upgraded uncertain job resumes

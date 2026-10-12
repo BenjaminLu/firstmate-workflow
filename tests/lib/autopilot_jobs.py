@@ -67,10 +67,10 @@ class Jobs(unittest.TestCase):
             restored.spawn = lambda *a: spawned.append(a)
             restored.emit = lambda *a, **kw: emitted.append(a)
             restored.recover_jobs(); restored.recover_jobs()
-            # T-293: with no packet it cannot run again, so it closes without a notice.
+            # T-293: with no packet it cannot run again; it closes and firstmate is told once.
             self.assertEqual(restored.data['jobs']['old']['state'], 'superseded')
             self.assertEqual(restored.data['jobs']['old']['superseded_by'], 'unresumable')
-            self.assertEqual(restored.data['wakes'], {})
+            self.assertEqual(len(restored.data['wakes']), 1)
             self.assertEqual(spawned, [])
             self.assertEqual([e[0] for e in emitted], ['crew_status'])
 

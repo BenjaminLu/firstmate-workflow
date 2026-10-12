@@ -28,6 +28,8 @@ HOLD_TW = {'outstanding card': '已有待處理決策卡',
     'unverified failed history': '失敗歷史無法驗證'}
 # Job kinds the autopilot starts on a PR head and can run again (T-293).
 RESUMABLE = ('gate', 'protocol', 'review', 'design-review')
+# T-293: an interrupted job runs again at most this many times; then firstmate finishes it.
+RESUME_LIMIT = 3
 
 
 class MechanicalLoop:
@@ -770,11 +772,13 @@ class MechanicalLoop:
                     and not getattr(self, '_queue_snapshot_ready', False)):
                 continue
             code = read_json(receipt).get('code')
-            if type(code) is int and code < 0 and 'queue_binding' not in job:
+            if (type(code) is int and code < 0 and 'queue_binding' not in job
+                    and not job.get('signal_rerun')):
                 # T-293: a child killed by a signal was interrupted, not failed.
-                # Its receipt is kept beside the packet; the step runs again.
+                # Its receipt is kept beside the packet; the step runs again
+                # once. A second signal is a failure that firstmate is told of.
                 receipt.replace(Path(job['path']).with_suffix('.interrupted.json'))
-                job.update(state='interrupted', phase='child')
+                job.update(state='interrupted', phase='child', signal_rerun=True)
                 self.save()
                 continue
             self.consume(ident, job, receipt)
@@ -847,6 +851,12 @@ class MechanicalLoop:
         for ident, job in list(jobs.items()):
             if job['state'] == 'interrupted' and not self.resumable(job):
                 self.close_job(ident, job, 'unresumable')
+                # Its step did not happen and nothing will run it again.
+                task = job.get('task', '')
+                self.queue('unresumable-' + ident, task,
+                           f'{task}: an interrupted autopilot job cannot run again; its next step did not happen: '
+                           + str(job.get('path') or ident),
+                           f'{task}：中斷的自動駕駛工作無法重跑，下一步沒有發生')
         self.save()
         self.consume_jobs()
 
@@ -886,6 +896,16 @@ class MechanicalLoop:
         if self.busy(task) or any(r.get('task') == task for r in live_rounds(
                 [dict(state=str(self.state), name=self.ctx['project'])])):
             return  # the next poll tries again once the task is idle
+        if job.get('resumes', 0) >= RESUME_LIMIT:
+            # Interrupted again and again: stop rerunning and let firstmate finish it.
+            job['state'] = 'uncertain'; job.pop('phase', None)
+            self.save()
+            self.queue('resume-limit-' + ident, task,
+                       f'{task}: an interrupted {kind} job at {head[:12]} was run again {RESUME_LIMIT} times '
+                       f'and was interrupted each time; its next step did not happen: {path}',
+                       f'{task}：{head[:12]} 中斷的 {kind} 工作已重跑 {RESUME_LIMIT} 次仍每次中斷，下一步沒有發生')
+            return
+        job['resumes'] = job.get('resumes', 0) + 1
         self.job_status(ident, job, f'Resumed an interrupted {kind} job of {task} at {head[:12]}',
                         f'已在 {head[:12]} 續跑 {task} 中斷的 {kind} 工作',
                         f'{task}: resumed an interrupted {kind} job but could not record the event',
