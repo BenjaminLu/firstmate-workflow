@@ -32,6 +32,15 @@ make_sandbox() {
   : > "$d/calls"
 }
 
+# fake_claude_settings <file>: a line for a fake claude script that keeps a
+# copy of the settings file it was handed with --settings at <file> (T-300).
+# The adapter writes that file into the round's temp directory, which is
+# gone once the round ends.
+fake_claude_settings() {
+  # shellcheck disable=SC2016  # the fake expands these, not this shell
+  printf 'p=; for a in "$@"; do [ "$p" = --settings ] && cp "$a" "%s"; p="$a"; done\n' "$1"
+}
+
 # Every round runs under the policy fm owns (T-105): each adapter starts its
 # CLI behind bin/fm-sandbox.sh and refuses a round it cannot confine. No
 # real sandbox runs in this suite - a runner cannot be relied on to have

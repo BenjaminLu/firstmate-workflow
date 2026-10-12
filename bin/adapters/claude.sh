@@ -160,6 +160,9 @@ deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -
       "Bash(gh variable:*)" "Bash(gh label:*)" "Bash(gh gist:*)" "Bash(gh auth:*)"
       "Bash(herdr:*)" "Bash(open:*)" "Bash(xdg-open:*)" "Bash(osascript:*)"
       "Bash(curl:*)" "Bash(wget:*)")
+# the command rules alone go on the command line as well (T-300): a fixed
+# list, unlike the read rules below, which name every folder they carve
+deny_cmds=("${deny[@]}")
 # the never-readable paths, as rules too: the OS sandbox is what makes
 # every other path unreadable. A never_read path that CONTAINS one of the
 # round's own folders - state, on the self project, whose own
@@ -174,8 +177,7 @@ deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -
 # denies every other entry at each level instead - state/events.jsonl,
 # every other worktree, every other round's run folder and the round's own
 # run files beside pinned/ - and never the branch that leads to a kept one.
-keep=("$work" "$tmp" ${ro[@]+"${ro[@]}"}); _fm_carved='
-'
+keep=("$work" "$tmp" ${ro[@]+"${ro[@]}"}); carved_out=()
 fm_adapter_kept() { # entry: is it a kept folder, an ancestor of one, or inside one?
   local k
   for k in "${keep[@]}"; do
@@ -194,13 +196,7 @@ fm_adapter_carve_deny() {
       [ "${entry##*/}" = "$seg" ] && continue
       case "$entry" in *[[:space:]\"\\*\(\),]*) continue ;; esac
       fm_adapter_kept "$entry" && continue
-      # each kept folder's walk passes the same siblings near the top
-      case "$_fm_carved" in *"
-$entry
-"*) continue ;; esac
-      _fm_carved="$_fm_carved$entry
-"
-      deny+=("Read(/$entry/**)" "Read(/$entry)")
+      carved_out+=("$entry")
     done < <(find "$cur" -mindepth 1 -maxdepth 1 2>/dev/null)
     cur="$cur/$seg"
   done
@@ -215,7 +211,15 @@ while IFS= read -r p; do
   [ -n "$carved" ] && continue
   deny+=("Read(/$p/**)" "Read(/$p)")
 done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["never_read"]))' "$FM_POLICY")
-rules() { local r s=''; for r in "$@"; do s="$s${s:+,}\"$r\""; done; printf '%s' "$s"; }
+# each kept folder's walk passes the same siblings near the top, so the
+# carved entries are made unique once here, not by rescanning every entry
+# already carved for each new one: that was quadratic in the number of run
+# folders under state/runs, about a minute for 2,700 of them (T-300)
+while IFS= read -r entry; do
+  [ -n "$entry" ] && deny+=("Read(/$entry/**)" "Read(/$entry)")
+done < <(printf '%s\n' ${carved_out[@]+"${carved_out[@]}"} | awk '!seen[$0]++')
+# one printf, not one string append per rule: thousands of rules (T-300)
+rules() { [ $# -gt 0 ] || return 0; local s; s="$(printf '"%s",' "$@")"; printf '%s' "${s%,}"; }
 if [ -n "${FM_UNSANDBOXED:-}" ]; then
   # The operator's hatch (T-117): no OS sandbox around claude, so its own
   # comes back on with T-066's settings - every shell command inside it,
@@ -230,7 +234,20 @@ else
   sandbox='{"enabled":false}'
   allow=(Bash "${allow[@]}")
 fi
-settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":$sandbox}"
+# The settings go in a file, never on the command line (T-300). The read
+# rules carve around the round's own folders, so on the self project they
+# name every other run folder under state/runs, thousands of them; on the
+# command line they passed macOS's 1 MB limit and no claude round started.
+# The file is in the round's own temp directory, the one place claude inside
+# the OS sandbox can read that the round does not share: the control
+# directory is out of its reach. It is read-only, and no file tool may
+# rewrite it.
+settings="$tmp/claude-settings.json"
+deny+=("Edit(/$settings)" "Write(/$settings)")
+if ! printf '%s\n' "{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":$sandbox}" \
+     > "$settings" || ! chmod 0444 "$settings"; then
+  echo "claude: cannot write the round's settings at $settings; refusing the round" >&2; exit 70
+fi
 # --output-format stream-json always, not only when a managed attempt reads
 # the final answer from it (T-127): one JSON event per line as each step
 # happens (T-287), so the run log and `fm follow` show the files it reads
@@ -244,7 +261,7 @@ settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${al
 mode=(--restricted --strict-mcp-config --disable-slash-commands
       --tools "Bash,Read,Edit,Write,Grep,Glob" --add-dir "$tmp"
       --permission-mode dontAsk --settings "$settings" --output-format stream-json --verbose
-      --allowedTools "${allow[@]}" --disallowedTools "${deny[@]}")
+      --allowedTools "${allow[@]}" --disallowedTools "${deny_cmds[@]}")
 # config.yaml's model, applied with claude's own flag (T-127); FM_ADAPTER_ARGS
 # may not name one (refused above), so this is the one place it comes from
 model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
