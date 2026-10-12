@@ -194,6 +194,27 @@ def plan(page_list, kind, targets, out):
     return dict(out=str(Path(out).resolve()), shots=shots)
 
 
+def apply_server(planned, server):
+    """Expand only served head pages; prototype and file plans stay intact."""
+    shots = []
+    for shot in planned['shots']:
+        served = server['pages'].get(shot['page']) if shot['target'] == 'head' else None
+        if not served:
+            shots.append(shot)
+            continue
+        for index, view in enumerate(served.get('views', [{}])):
+            item = dict(shot, url=view.get('url', served['url']))
+            for key in ('ready', 'click'):
+                if view.get(key, served.get(key)):
+                    item[key] = view.get(key, served.get(key))
+            if 'name' in view:
+                item['view'] = view['name']
+                path = Path(shot['file'])
+                item['file'] = str(path.with_name(f'{path.stem}-view-{index + 1}.png'))
+            shots.append(item)
+    planned['shots'] = shots
+
+
 def capture_tool():
     configured = os.environ.get('FM_DESIGN_CAPTURE', '')
     if configured:
@@ -234,9 +255,11 @@ def manifest(planned, task, head, kind, prototype):
     by_page = {}
     for shot in planned['shots']:
         row = by_page.setdefault(shot['page'], {})
-        cell = row.setdefault((shot['viewport'], shot['scheme']),
+        cell = row.setdefault((shot.get('view'), shot['viewport'], shot['scheme']),
                               dict(viewport=shot['viewport'], width=shot['width'], height=shot['height'],
                                    scheme=shot['scheme'], head=None, prototype=None))
+        if 'view' in shot:
+            cell['view'] = shot['view']
         cell[shot['target']] = shot['file']
     return dict(version=1, task=task, head=head, kind=kind, prototype=prototype,
                 pages=[dict(page=page, shots=list(cells.values())) for page, cells in by_page.items()])
@@ -280,12 +303,7 @@ def capture(args):
         from fm_capture_server import capture_server
         with capture_server(tree) as server:
             if server:
-                for shot in planned['shots']:
-                    served = server['pages'].get(shot['page']) if shot['target'] == 'head' else None
-                    if served:
-                        shot['url'] = served['url']
-                        if served.get('ready'):
-                            shot['ready'] = served['ready']
+                apply_server(planned, server)
             run_capture(planned, out)
     record = manifest(planned, args.task, args.head, kind, str(folder) if folder else None)
     requests = out / 'requests.json'

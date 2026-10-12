@@ -13,10 +13,13 @@ function capture(mode: string, info: TestInfo) {
     encoding: 'utf8', env: {...process.env, PYTHONDONTWRITEBYTECODE: '1'},
   });
   expect(result.status, `${result.error || ''}\n${result.stdout}\n${result.stderr}`).toBe(0);
-  expect(readFileSync(join(out, 'head/page.png')).subarray(0, 8))
-    .toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const record = JSON.parse(readFileSync(join(out, 'requests.json'), 'utf8'));
+  for (const shot of record.pages) {
+    expect(readFileSync(join(out, shot.file)).subarray(0, 8))
+      .toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  }
   return {
-    record: JSON.parse(readFileSync(join(out, 'requests.json'), 'utf8')),
+    record,
     server: JSON.parse(readFileSync(join(out, 'server.json'), 'utf8')),
   };
 }
@@ -24,9 +27,19 @@ function capture(mode: string, info: TestInfo) {
 test('capture: served page has content', async ({}, info) => {
   const {record, server} = capture('served', info);
   expect(server).not.toBeNull();
-  expect(record.pages[0].text).toContain('Cache the task index');
-  expect(record.pages[0].text).toContain('SK-007');
-  expect(record.pages[0].readyText).toContain('FIRSTMATE');
+  expect(record.pages.map((shot: {view: string}) => shot.view))
+    .toEqual(['Decisions', 'Fleet', 'Crew', 'Log']);
+  for (const [view, selector, content] of [
+    ['Decisions', '#decisionsPanel #card-D-1', 'SK-007'],
+    ['Fleet', '#fleetPanel .card[data-task="SK-007"]', 'SK-007'],
+    ['Crew', '#crewSheet[open] #roster .rrow', 'FIRSTMATE'],
+    ['Log', '#logSheet[open] #log li', 'worker-5'],
+  ]) {
+    const shot = record.pages.find((shot: {view: string}) => shot.view === view);
+    expect(shot.ready).toBe(selector);
+    expect(shot.readyVisible, `${view} fixture panel must be visible`).toBe(true);
+    expect(shot.readyText).toContain(content);
+  }
 });
 
 test('capture: remote request blocked', async ({}, info) => {

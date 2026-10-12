@@ -54,6 +54,33 @@ class CapturePlan(unittest.TestCase):
             self.assertEqual({s['scheme'] for s in served}, {'light', 'dark'})
             self.assertEqual({s['width'] for s in served}, {320, 390, 768, 1440, 1920})
 
+    def test_named_views_preserve_dimensions_and_prototype(self):
+        """capture: named views retain every width and scheme"""
+        original = fm_design.plan([dict(path='index.html', slug='index')], 'web',
+                                  [('head', ROOT, lambda *_: __file__),
+                                   ('prototype', ROOT, lambda *_: __file__)], '/tmp/shots')
+        views = [dict(name='Decisions', ready='#card'),
+                 dict(name='Fleet', click='#tabFleet', ready='#fleet .card')]
+        server = {'pages': {'index.html': {'url': 'http://127.0.0.1:1234/', 'views': views}}}
+        import copy
+        planned = copy.deepcopy(original)
+        fm_design.apply_server(planned, server)
+        prototypes = [s for s in original['shots'] if s['target'] == 'prototype']
+        self.assertEqual([s for s in planned['shots'] if s['target'] == 'prototype'], prototypes)
+        head = [s for s in planned['shots'] if s['target'] == 'head']
+        self.assertEqual(len(head), 20)
+        self.assertEqual(len({s['file'] for s in planned['shots']}), 30)
+        for view in views:
+            shots = [s for s in head if s['view'] == view['name']]
+            self.assertEqual({(s['width'], s['scheme']) for s in shots},
+                             {(w, c) for w in (320, 390, 768, 1440, 1920) for c in ('light', 'dark')})
+            self.assertTrue(all(s['ready'] == view['ready'] for s in shots))
+            self.assertTrue(all(s.get('click') == view.get('click') for s in shots))
+        record = fm_design.manifest(planned, 'T-299', 'a'*40, 'web', 'prototype')
+        cells = record['pages'][0]['shots']
+        self.assertEqual(len(cells), 30)
+        self.assertEqual({s.get('view') for s in cells}, {None, 'Decisions', 'Fleet'})
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -52,13 +52,15 @@ try {
       const page = await context.newPage();
       const response = await page.goto(shot.url, { waitUntil: "load", timeout: 30000 });
       if (response && !response.ok() && !shot.url.startsWith("file:")) throw new Error(`HTTP ${response.status()}`);
-      if (shot.ready) await page.locator(shot.ready).first().waitFor({state: 'attached', timeout: 30000});
+      if (shot.click) await page.locator(shot.click).click({timeout: 30000});
+      if (shot.ready) await page.locator(shot.ready).first().waitFor({state: 'visible', timeout: 30000});
       const out = join(plan.out, shot.file);
       mkdirSync(dirname(out), { recursive: true });
       await page.screenshot({ path: out, fullPage: true, animations: "disabled" });
-      record.pages.push({file: shot.file, url: shot.url,
+      record.pages.push({file: shot.file, url: shot.url, view: shot.view, ready: shot.ready,
+        readyVisible: shot.ready ? await page.locator(shot.ready).first().isVisible() : null,
         text: (await page.locator('body').innerText()).slice(0, 16000),
-        readyText: shot.ready ? await page.locator(shot.ready).first().textContent() : null});
+        readyText: shot.ready ? await page.locator(shot.ready).first().innerText() : null});
     } catch (error) {
       failed++;
       console.error(`capture failed: ${shot.file}: ${error.message}`);

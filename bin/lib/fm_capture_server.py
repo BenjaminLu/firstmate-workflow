@@ -2,7 +2,8 @@
 
 The fixed tests/e2e/capture-server.sh hook prints one JSON line after it is
 ready: {"pages": {"repository/page.html": {"url": "http://127.0.0.1:port/",
-"ready": "CSS selector"}}}. Unlisted pages retain their file URLs. EOF on
+"ready": "CSS selector", "views": [{"name": "Fleet", "click": "#tabFleet",
+"ready": "#fleetPanel .card"}]}}}. Unlisted pages retain their file URLs. EOF on
 stdin asks the hook to stop; the lifeline also ends it when its owner dies.
 """
 from contextlib import contextmanager
@@ -66,6 +67,21 @@ def capture_server(root):
                     raise ValueError('capture server page URL must be local: ' + page)
                 if entry.get('ready') is not None and not isinstance(entry['ready'], str):
                     raise ValueError('capture server ready must be a CSS selector')
+                views = entry.get('views', [])
+                if 'views' in entry and (not isinstance(views, list) or not views):
+                    raise ValueError('capture server views must be a nonempty list')
+                names = set()
+                for view in views:
+                    if (not isinstance(view, dict) or not isinstance(view.get('name'), str)
+                            or not view['name'].strip() or view['name'] in names):
+                        raise ValueError('capture server views need unique names')
+                    names.add(view['name'])
+                    if not isinstance(view.get('ready'), str) or not view['ready'].strip():
+                        raise ValueError('capture server view needs a visible ready selector')
+                    if 'click' in view and (not isinstance(view['click'], str) or not view['click'].strip()):
+                        raise ValueError('capture server click must be a CSS selector')
+                    if 'url' in view and not local_url(view['url']):
+                        raise ValueError('capture server view URL must be local: ' + page)
             yield record
         finally:
             proc.stdin.close()

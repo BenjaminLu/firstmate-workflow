@@ -209,8 +209,15 @@ capture, and no round starts. The kept copy is under
 T-299 adds the optional repository hook `tests/e2e/capture-server.sh`.
 The capture starts it in the exported head, waits for one JSON line with
 `pages` mapping repository paths to local `url` and optional `ready` CSS
-selectors, and closes stdin to stop it when capture ends. Its process is
-owned through the lifeline. Here it starts the board on the existing e2e
+selectors, and closes stdin to stop it when capture ends. A page entry may
+include a nonempty `views` list. Each view has a unique `name`, a `ready`
+selector that must be visible, and optionally a `click` selector or a local
+`url` override. The capture opens each view independently at every width and
+scheme, clicks its control, waits for visible fixture content, and retains
+its name in the plan, request record and manifest. The board hook names
+Decisions with its open merge card, Fleet, Crew and Log through the board's
+existing controls. Prototype shots are not expanded into these views. The hook
+process is owned through the lifeline. Here it starts the board on the existing e2e
 fixture data, so the decision card, Fleet, Crew and Log have content.
 Unlisted pages and repositories without the hook still open as files;
 prototype capture is unchanged. Existing tasks need no migration: the hook

@@ -14,7 +14,12 @@ let board: Awaited<ReturnType<typeof startBoard>> | undefined;
 try {
   board = await startBoard(root);
   process.stdout.write(JSON.stringify({pages: {
-    'board/public/index.html': {url: `${board.url}/?lang=en`, ready: '#roster .rrow'},
+    'board/public/index.html': {url: `${board.url}/?lang=en`, views: [
+      {name: 'Decisions', click: '#tabDecisions', ready: '#decisionsPanel #card-D-1'},
+      {name: 'Fleet', click: '#tabFleet', ready: '#fleetPanel .card[data-task="SK-007"]'},
+      {name: 'Crew', click: '#rosterBtn', ready: '#crewSheet[open] #roster .rrow'},
+      {name: 'Log', click: '#logBtn', ready: '#logSheet[open] #log li'},
+    ]},
   }}) + '\n');
   await new Promise<void>(resolve => {
     process.stdin.resume();
