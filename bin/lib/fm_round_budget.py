@@ -55,42 +55,56 @@ def config(path):
     return output
 
 
+def label(lane, n):
+    """How an item reads in a row: a code item by its number, a design item as `design <n>` (T-298)."""
+    return n if lane == 'code' else f'{lane} {n}'
+
+
 def rounds(store):
-    """One row per review round, represented by its last retained record."""
-    by_round = {}
-    for record in store.verdicts():
-        by_round[int(record['round'])] = record
-    # T-298: a design REJECT counts toward the budget like a code REJECT. It
-    # joins the code round it reviewed, or stands as that round on its own.
-    design = {}
-    for record in store.verdicts('design'):
-        design[int(record['round'])] = record
+    """One row per review round, represented by its last retained record.
+
+    T-298: a design REJECT counts toward the budget like a code REJECT. Its
+    round joins the code round it reviewed, or stands as that round on its
+    own. The two lanes keep separate standing lists, so a row carries each
+    lane's open items, and `stall` keys them by lane: design item 1 and code
+    item 1 are different findings."""
+    lanes = {'code': {}, 'design': {}}
+    for lane, by_round in lanes.items():
+        for record in store.verdicts(lane):
+            by_round[int(record['round'])] = record
     rows = []
-    listed_before = False
-    for number in sorted(set(by_round) | set(design)):
-        record = by_round.get(number)
-        if record is None or (design.get(number, {}).get('verdict') == 'REJECT' and record.get('verdict') != 'REJECT'):
-            record = design[number]
-        items = criteria(record.get('text', ''), store.task)
-        must, follow = [], []
-        for n, body in items:
-            if item_is_open(body, store.task, listed_before):
-                (must if severity(body) == 'must-fix' else follow).append(n)
+    listed_before = dict.fromkeys(lanes, False)
+    for number in sorted(set(lanes['code']) | set(lanes['design'])):
+        present = [(lane, by_round[number]) for lane, by_round in lanes.items() if number in by_round]
+        rejected = [record for _, record in present if record.get('verdict') == 'REJECT']
+        record = rejected[0] if rejected else present[0][1]
+        must, follow, stall, listed = [], [], [], False
+        for lane, lane_record in present:
+            items = criteria(lane_record.get('text', ''), store.task)
+            for n, body in items:
+                if item_is_open(body, store.task, listed_before[lane]):
+                    if severity(body) == 'must-fix':
+                        must.append(label(lane, n)); stall.append([lane, n])
+                    else:
+                        follow.append(label(lane, n))
+            listed = listed or bool(items)
+            listed_before[lane] = listed_before[lane] or bool(items)
         rows.append(dict(round=number, head=record.get('head', ''), verdict=record.get('verdict'),
                          signature=record.get('signature', ''), marked=record.get('severity_protocol') == 1,
-                         listed=bool(items), must=must, follow=follow))
-        listed_before = listed_before or bool(items)
+                         listed=listed, must=must, follow=follow, stall=stall))
     return rows
 
 
 def stalled(rows, after, stall):
-    """Items open and must-fix in the last `stall` rounds after round `after`."""
+    """Items open and must-fix in the last `stall` rounds after round `after`, in the same lane."""
     window = [row for row in rows if row['round'] > after]
     if len(window) < stall:
         return []
-    tail = window[-stall:]
-    return sorted(n for n in tail[-1]['must']
-                  if all(row['verdict'] != 'APPROVE' and row['listed'] and n in row['must'] for row in tail))
+    tail = [(row, [tuple(key) for key in row.get('stall', [['code', n] for n in row['must']])])
+            for row in window[-stall:]]
+    keys = [key for key in tail[-1][1]
+            if all(row['verdict'] != 'APPROVE' and row['listed'] and key in held for row, held in tail)]
+    return [label(lane, n) for lane, n in sorted(keys, key=lambda key: (key[0] != 'code', key[0], key[1]))]
 
 
 def moment(text):
@@ -240,7 +254,8 @@ class Budget:
 def numbers(values, english):
     if not values:
         return 'none' if english else '無'
-    shown = ', '.join(map(str, values[:NUMBERS]))
+    shown = ', '.join(str(value) if english or not isinstance(value, str)
+                      else value.replace('design ', '設計 ') for value in values[:NUMBERS])
     more = len(values) - NUMBERS
     if more > 0:
         shown += f' and {more} more' if english else f' 另 {more} 項'

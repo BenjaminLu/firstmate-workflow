@@ -213,7 +213,9 @@ out of its `state/` deny as well, so a prompt that points to
 `pinned/spec.json` can be followed. A designer round also reads, read-only,
 the one prototype folder its task names in `design.prototype`
 (`FM_PROTOTYPE_DIR`, exactly `state/prototypes/<name>`), so a REJECT can cite
-the prototype's HTML and CSS. No round reads another round's folders, another
+the prototype's HTML and CSS. Its copy of the captured pages, in a temp
+folder outside `state/` (`FM_DESIGN_SHOTS_DIR`), is read-only to it under
+both the OS sandbox and the Claude adapter's rules. No round reads another round's folders, another
 prototype or any other part of `state/`.
 
 The designer compares the pages one by one and ends with APPROVE or REJECT.
@@ -1716,7 +1718,10 @@ do. The autopilot reads the two lines and starts whichever review is missing,
 code and design at the same time on the same head, without waking firstmate.
 A design REJECT reaches the worker like any review finding: the next worker
 prompt carries it in its context pack and local review history, and the
-round budget counts its round as a REJECT round (T-276). The merge card of a
+round budget counts its round as a REJECT round (T-276). The code and design
+lanes keep separate standing lists, so the budget's stall check keys each
+must-fix item by its lane: design item 1 and code item 1 are different
+findings, and a round that rejects on both lanes carries both lists. The merge card of a
 UI change shows each page's prototype and result screenshots side by side
 behind a toggle.
 

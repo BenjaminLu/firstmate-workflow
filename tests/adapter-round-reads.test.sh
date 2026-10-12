@@ -87,11 +87,18 @@ assert_ne "" "$(denied_over "$s" "$own_run/prompt.md")" "and the round's own run
 assert_ne "" "$(denied_over "$s" "$st/events.jsonl")" "and the rest of state/ stays denied"
 assert_ne "" "$(denied_over "$s" "$st/worktrees/T-Y/x")" "and another task's worktree"
 assert_ne "" "$(denied_over "$s" "$st/prototypes/proto-a/index.html")" "a worker reads no prototype"
+assert_eq "false" "$(allowed "$(FM_DESIGN_SHOTS_DIR="$nr/shots" run_round worker)" "Read(/$nr/shots/**)")" \
+  "and a worker gets no rule for a design round's screenshots"
 
 # --- design: prototype readable --------------------------------------------
-s="$(run_round designer "$st/prototypes/proto-a")"
+mkdir -p "$nr/shots"
+s="$(FM_DESIGN_SHOTS_DIR="$nr/shots" run_round designer "$st/prototypes/proto-a")"
 assert_eq "true" "$(jq -r '.permissions.defaultMode == "dontAsk"' <<<"$s" 2>/dev/null)" \
   "the designer round started under claude's own rules"
+assert_eq "true" "$(allowed "$s" "Read(/$nr/shots/**)")" "design: the designer reads its screenshots"
+assert_eq "false" "$(printf '%s' "$s" | jq -r --arg p "$nr/shots" \
+  'any(.permissions.allow[]; startswith("Edit(/" + $p) or startswith("Write(/" + $p))')" \
+  "but nothing allows editing or writing them"
 assert_eq "started:" "$(readable "$s" "$st/prototypes/proto-a/index.html")" 'design: prototype readable'
 assert_eq "true" "$(allowed "$s" "Read(/$st/prototypes/proto-a/**)")" "and a rule allows reading it"
 assert_ne "" "$(denied_over "$s" "$st/prototypes/proto-b/index.html")" "but no other prototype"

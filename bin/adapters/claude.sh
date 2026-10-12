@@ -146,6 +146,11 @@ done
 if [ -n "${FM_PROTOTYPE_DIR:-}" ] && [ "${FM_MODEL_ROLE:-}" = designer ]; then
   _fm_ro="$(fm_adapter_rule_path "$FM_PROTOTYPE_DIR")" || exit 64; ro+=("$_fm_ro")
 fi
+# and the pages fm-review.sh captured for it, which it copies to a folder
+# beside the round's own temp folder and grants read-only in the policy
+if [ -n "${FM_DESIGN_SHOTS_DIR:-}" ] && [ "${FM_MODEL_ROLE:-}" = designer ]; then
+  _fm_ro="$(fm_adapter_rule_path "$FM_DESIGN_SHOTS_DIR")" || exit 64; ro+=("$_fm_ro")
+fi
 for _fm_ro in ${ro[@]+"${ro[@]}"}; do allow+=("Read(/$_fm_ro/**)"); done
 deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -C:*)"
       "Bash(gh:*)" "Bash(gh pr comment:*)" "Bash(gh pr review:*)" "Bash(gh pr edit:*)" "Bash(gh pr merge:*)"

@@ -188,6 +188,10 @@ print(" ".join("%s:%s" % (r["round"], r["verdict"]) for r in rounds(Store(sys.ar
 ' "$ROOT" "$repo/state")"
 unit RoundBudget.test_design_reject_counts_a_round
 assert_eq '0 1:REJECT' "$? $budget" 'design: reject counts a round'
+unit RoundBudget.test_design_and_code_lists_stay_apart
+assert_eq 0 "$?" 'design: lanes keep their own lists'
+unit RoundBudget.test_a_design_item_open_two_rounds_stalls
+assert_eq 0 "$?" 'design: a design item open two rounds stalls'
 printf '1. fix the overlap at w390\n' > "$d/brief.md"
 (cd "$repo" && bash bin/lib/fm-evidence.sh brief --task T-Z --round 2 --head "$head" --file "$d/brief.md")
 export FM_CAPTURE="$d/worker-prompt.md"

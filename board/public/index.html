@@ -922,7 +922,7 @@ function render(s) {
       (d.kind === "merge" && GATES().some(({name}) => gates?.[name] === "not_runnable")
         ? `<p class="ci-only-evidence" role="note">${esc(t('ciOnlyEvidence'))}</p>` : '') +
       (content?.intent ? `</section>${intentBody(d, content, locked)}` :
-      retroItemsHtml(d, content, locked) +
+      retroItemsHtml(d, content, locked) + designCompare(d) +
       `<div class="decision-bar">${decisionDetailsButton(d)}<div class="acts">${options}
          ${d.purpose === 'retro' ? '' : `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
          <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>`}

@@ -141,7 +141,7 @@ export FM_AVOID_REVIEWER
 # T-298: a designer round is a reviewer round in its own lane. Its engine is
 # config.yaml's `designer:`, else the reviewer's; everything else is shared.
 VROLE=reviewer
-unset FM_REVIEW_LANE FM_DESIGN_TARGET FM_PROTOTYPE_DIR
+unset FM_REVIEW_LANE FM_DESIGN_TARGET FM_PROTOTYPE_DIR FM_DESIGN_SHOTS_DIR
 if [ "$LANE" = design ]; then
   VROLE=designer; export FM_REVIEW_LANE=design
   [ -z "$PROTOTYPE" ] || export FM_DESIGN_TARGET=prototype
@@ -468,6 +468,7 @@ if [ "$LANE" = design ]; then
     jq --arg d "$DESIGN_SHOTS" '.read += [$d]' "$policy_file" > "$policy_file.design" &&
     mv "$policy_file.design" "$policy_file" || {
       echo "fm-review: could not hand the captured pages to the design round" >&2; exit 70; }
+  export FM_DESIGN_SHOTS_DIR="$DESIGN_SHOTS"
   # The one prototype folder the task names, read-only to the round, so a
   # REJECT can point to its HTML and CSS (T-298). The sandbox grants it only
   # as <state>/prototypes/<name> of this round's own state; a folder

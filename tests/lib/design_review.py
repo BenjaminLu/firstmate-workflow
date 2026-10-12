@@ -160,12 +160,54 @@ class RoundBudget(unittest.TestCase):
         store.append('verdict', 1, 'reviewer-bo-ds-t001-r1', HEAD, text, verdict='REJECT', lane='design', **legacy)
         rows = rounds(store)
         self.assertEqual([(r['round'], r['verdict']) for r in rows], [(1, 'REJECT')])
-        self.assertEqual(rows[0]['must'], [1])
+        self.assertEqual(rows[0]['must'], ['design 1'])
         # the code lane stays the code reviewer's alone
         self.assertEqual([r['verdict'] for r in store.verdicts()], ['APPROVE'])
         self.assertEqual([r['verdict'] for r in store.verdicts('design')], ['REJECT'])
         self.assertIn('Local design review round 1', store.history())
         self.assertNotIn('header overlaps', store.history(True, 'code'))
+
+
+    def store(self):
+        from fm_evidence import Store
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        return Store(folder.name, 'self', 'T-001', external=False)
+
+    def append(self, store, number, lane, decided, items):
+        text = ''.join(f'{n}. {line}\n' for n, line in enumerate(items, 1))
+        text += f'CRITERIA-COMPLETE:T-001\n{decided}:T-001' if items else f'{decided}:T-001'
+        extra = dict(lane='design') if lane == 'design' else {}
+        actor = f'reviewer-bo-ds-t001-r{number}' if lane == 'design' else f'reviewer-ada-t001-r{number}'
+        store.append('verdict', number, actor, HEAD, text, verdict=decided, provenance={'level': 'legacy'},
+                     severity_protocol=1, **extra)
+
+    def test_design_and_code_lists_stay_apart(self):
+        from fm_round_budget import rounds, stalled
+        store = self.store()
+        # round 1: both lanes reject; the design must-fix stays beside the code one
+        self.append(store, 1, 'code', 'REJECT', ['open [must-fix] lock'])
+        self.append(store, 1, 'design', 'REJECT', ['open [must-fix] page w390: header overlaps'])
+        self.assertEqual(rounds(store)[0]['must'], [1, 'design 1'])
+        # another task: code item 1 in round 1, then design item 1 in round 2
+        store = self.store()
+        self.append(store, 1, 'code', 'REJECT', ['open [must-fix] lock'])
+        self.append(store, 1, 'design', 'APPROVE', [])
+        self.append(store, 2, 'code', 'APPROVE', [])
+        self.append(store, 2, 'design', 'REJECT', ['open [must-fix] page w390: header overlaps'])
+        self.assertEqual(stalled(rounds(store), 0, 2), [], 'code item 1 and design item 1 are different findings')
+
+    def test_a_design_item_open_two_rounds_stalls(self):
+        from fm_round_budget import details, rounds, stalled
+        store = self.store()
+        for number in (1, 2):
+            self.append(store, number, 'code', 'REJECT', ['open [follow-up] note'])
+            self.append(store, number, 'design', 'REJECT', ['open [must-fix] page w390: header overlaps'])
+        rows = rounds(store)
+        self.assertEqual(stalled(rows, 0, 2), ['design 1'])
+        card = details('T-001', rows, dict(rounds=2, budget=3), 2, 2)
+        self.assertIn('Items open for 2 rounds in a row: design 1.', [f['text'] for f in card['en']['why']])
+        self.assertIn('連續 2 輪未修的項目：設計 1。', [f['text'] for f in card['zh-TW']['why']])
 
 
 if __name__ == '__main__':

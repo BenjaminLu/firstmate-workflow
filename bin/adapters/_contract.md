@@ -368,7 +368,8 @@ it cannot build the folder; a reviewer round has none.
 An adapter whose CLI keeps permission rules of its own must not hide what
 the OS sandbox grants. The Claude adapter reads `FM_PINNED_DIR`,
 `FM_LOCAL_TESTS_DIR` and, in a designer round (`FM_MODEL_ROLE=designer`),
-`FM_PROTOTYPE_DIR`: each gets a `Read(...)` allow rule and no Edit or Write
+`FM_PROTOTYPE_DIR` and `FM_DESIGN_SHOTS_DIR` (the folder of captured pages
+`bin/fm-review.sh` adds to the policy's read list): each gets a `Read(...)` allow rule and no Edit or Write
 rule, and its `state/` deny is carved around each one the way it is carved
 around the round's own tree. Every other entry under `state/` stays denied,
 other rounds' run folders included. `bin/fm-review.sh` exports
