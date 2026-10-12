@@ -114,7 +114,7 @@ projects:               # every repository firstmate drives; design section 15.2
         - tests/**
         - "*.test.*"
         - "*.spec.*"
-      test: case {file} in *.test.sh) bash {file} ;; *.spec.ts) bunx playwright test {file} ;; esac
+      test: case {file} in *.test.sh) bash {file} ;; *.spec.ts) bunx playwright test {file} --reporter=./tests/e2e/lib/failfirst-reporter.ts ;; esac
       docs:                 # changes that need no test; skills are behaviour
         - design/**
         - README.md

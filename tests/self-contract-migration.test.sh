@@ -42,7 +42,7 @@ expected = {
     'setup': 'bun install --frozen-lockfile && bunx playwright install chromium',
     'check': 'bin/ci.sh', 'check_env': {'FM_CI_MAX_SECONDS': '600'},
     'tests': ['tests/**', '*.test.*', '*.spec.*'],
-    'test': 'case {file} in *.test.sh) bash {file} ;; *.spec.ts) bunx playwright test {file} ;; esac',
+    'test': 'case {file} in *.test.sh) bash {file} ;; *.spec.ts) bunx playwright test {file} --reporter=./tests/e2e/lib/failfirst-reporter.ts ;; esac',
     'docs': ['design/**', 'README.md', 'LICENSE', 'CODE_OF_CONDUCT.md',
              'CONTRIBUTING.md', 'SECURITY.md', '.github/ISSUE_TEMPLATE/**',
              '.github/pull_request_template.md'],

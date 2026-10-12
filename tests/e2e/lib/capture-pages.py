@@ -1,35 +1,50 @@
-"""Exercise the production Python capture entrypoints for the Playwright suite."""
+"""Exercise capture on head and base using only their shared Python interface."""
 import json
+import os
 from pathlib import Path
+import shlex
+import shutil
 import sys
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 import fm_design
-from fm_capture_server import capture_server
 
 mode, directory = sys.argv[1:]
-out = Path(directory)
+out = Path(directory).resolve()
 out.mkdir(parents=True, exist_ok=True)
-source = out / 'index.html'
-if mode == 'remote':
-    source.write_text('''<p>offline fixture</p><script>
+page = 'board/public/index.html' if mode == 'served' else 'index.html'
+spec = out / 'spec.json'
+spec.write_text(json.dumps({'design': {'pages': [{'path': page}]}}))
+
+
+def export_fixture(repo, head, tree):
+    tree = Path(tree)
+    if mode == 'served':
+        # Supply the retained fixture hook exactly where production discovers
+        # it. The old capture implementation simply ignores this hook.
+        for name in ('board', 'bin', 'tests', 'i18n', 'design', 'games'):
+            (tree / name).symlink_to(ROOT / name, target_is_directory=True)
+    else:
+        text = '<p>file fixture</p>'
+        if mode == 'remote':
+            text = '''<p>offline fixture</p><script>
 fetch('https://example.invalid/api').catch(()=>{});
 new WebSocket('wss://example.invalid/socket');
-</script><img src="https://example.invalid/image.png">''')
-else:
-    source.write_text('<p>file fixture</p>')
+</script><img src="https://example.invalid/image.png">'''
+        (tree / page).write_text(text)
 
-with capture_server(ROOT if mode == 'served' else out) as server:
-    shot = dict(page='board/public/index.html', target='head', viewport='w390', width=390,
-                height=900, scheme='light', url=source.as_uri(), file='head/page.png')
-    planned = dict(out=str(out), shots=[shot])
-    if server:
-        if hasattr(fm_design, 'apply_server'):
-            fm_design.apply_server(planned, server)
-        else:
-            # Retain the old single-page setup for base comparisons, so the
-            # named-view assertion fails instead of a missing-helper error.
-            shot.update(server['pages']['board/public/index.html'])
-    fm_design.run_capture(planned, out)
-(out / 'server.json').write_text(json.dumps(server))
+
+args = SimpleNamespace(spec=spec, config='', project='', prototype=None,
+                       prototype_only=False, state='', repo='', base='', head='fixture',
+                       out=str(out), task='T-299')
+# Observe screenshots without changing navigation, routing or server setup.
+os.environ['FM_DESIGN_CAPTURE'] = shlex.join([
+    shutil.which('node') or shutil.which('bun'), str(ROOT / 'tests/e2e/lib/capture-observer.mjs')])
+with patch.object(fm_design, 'export_tree', export_fixture), \
+     patch.object(fm_design, 'changed', return_value=[]), \
+     patch.object(fm_design, 'viewports', return_value=[('w390', 390, 900)]), \
+     patch.object(fm_design, 'SCHEMES', ('light',)):
+    fm_design.capture(args)
