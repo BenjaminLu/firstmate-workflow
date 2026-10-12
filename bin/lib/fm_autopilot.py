@@ -7,8 +7,8 @@ already observed reviewer batches and report overdue judgment; no idle timer
 starts a model. Branch updates re-decide GitHub state with REST compare-and-swap;
 local task refs fast-forward before advance when no round/job or dirty worktree
 holds them. No write-ahead action ledger remains: each step is re-decided from
-per-PR records and observed state, and only owned jobs interrupted mid-run are
-left for firstmate to reconcile.
+per-PR records and observed state. An owned job interrupted mid-run resumes
+from its breakpoint at an unchanged head (T-293).
 """
 import datetime
 import fcntl
@@ -95,6 +95,8 @@ class Pilot(BranchUpdates, MechanicalLoop):
                         state='uncertain', path='')
             self.data.pop('actions', None)
             self.data['migrated_t205'] = True
+        if not self.data.get('migrated_t293'):
+            self.migrate_t293()
         # Existing installations establish the remote boundary on upgrade.
         self.data.setdefault('tracking_started', self.clock())
         if 'legacy_ask_records' not in self.data:
@@ -191,7 +193,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
                     # afterwards are its own and never pull the queue back into drain.
                     or (not self.data.get('self_queue_settled_off') and self.queue_legacy_updates_pending())
                     or any(m['state'] == 'uncertain' for m in q['members'].values())
-                    or any(j.get('state') in ('running', 'consuming', 'uncertain')
+                    or any(j.get('state') in ('running', 'consuming', 'uncertain', 'interrupted')
                            for j in self.data.get('jobs', {}).values())):
             q['enabled'] = False
             self.queue_mode = 'drain'
@@ -315,7 +317,8 @@ class Pilot(BranchUpdates, MechanicalLoop):
         q = self.data['self_queue']; now = self.clock()
         # Legacy jobs are never adopted by an activation. They finish under
         # their original owner, but their results cannot launch a continuation.
-        outstanding = any(j.get('state') in ('running', 'consuming', 'uncertain') and not j.get('queue_binding')
+        outstanding = any(j.get('state') in ('running', 'consuming', 'uncertain', 'interrupted')
+                          and not j.get('queue_binding')
                           for j in self.data.get('jobs', {}).values())
         outstanding = outstanding or self.queue_reconcile_legacy_updates(snapshots)
         if outstanding:
@@ -923,6 +926,7 @@ class Pilot(BranchUpdates, MechanicalLoop):
             self.recheck(task, pr, reviews)
         self.data['pulls'][number] = dict(task=task, head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
         self.settle_stale_jobs(number=pr['number'], head=head)
+        self.resume_jobs(task, pr)
         try:
             queue_mode = getattr(self, 'queue_mode', 'off')
             behind_front = (queue_mode in ('enabled', 'drain') and pr.get('mergeable') is True

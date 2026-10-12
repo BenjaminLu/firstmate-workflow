@@ -26,6 +26,10 @@ HOLD_TW = {'outstanding card': '已有待處理決策卡',
     'not an open card candidate': '不是可提出決策卡的開啟 PR',
     'unverified old readiness': '舊關卡證據無法驗證',
     'unverified failed history': '失敗歷史無法驗證'}
+# Job kinds the autopilot starts on a PR head and can run again (T-293).
+RESUMABLE = ('gate', 'protocol', 'review', 'design-review')
+# T-293: an interrupted job runs again at most this many times; then firstmate finishes it.
+RESUME_LIMIT = 3
 
 
 class MechanicalLoop:
@@ -188,15 +192,16 @@ class MechanicalLoop:
             f'{task} #{pr["number"]} 新決策卡暫緩：{HOLD_TW[reason]}')
 
     def settle_stale_jobs(self, number=None, head=None, open_numbers=None):
-        """T-281: supersede an uncertain job whose result can no longer matter.
+        """T-281: supersede an uncertain or interrupted job whose result can no longer matter.
 
         pull() passes its PR and current head; poll() passes the open PR
         numbers. A job at an open PR's current head stays uncertain and keeps
-        blocking. Self-queue jobs and unlabelled older records are left alone.
-        The command never runs again and its packet and log stay on disk.
+        blocking, or is resumed when interrupted (T-293). Self-queue jobs and
+        unlabelled older records are left alone. The command never runs again
+        and its packet and log stay on disk.
         """
         for ident, job in list(self.data.get('jobs', {}).items()):
-            if (job.get('state') != 'uncertain' or job.get('kind') not in ('gate', 'protocol', 'review')
+            if (job.get('state') not in ('uncertain', 'interrupted') or job.get('kind') not in RESUMABLE
                     or 'queue_binding' in job):
                 continue
             try:
@@ -210,22 +215,35 @@ class MechanicalLoop:
                 continue
             else:
                 by = head
-            job.update(state='superseded', superseded_at=self.clock(), superseded_by=by)
-            self.save()
-            task, kind, old = job.get('task', ''), job['kind'], str(job.get('head') or '')[:12]
-            if by == 'closed':
-                en_tail, tw_tail = '; the pull request is closed', '；PR 已關閉'
-            else:
-                en_tail, tw_tail = f'; the pull request is now at {by[:12]}', f'；PR 現在位於 {by[:12]}'
-            try:
-                # The throttle would drop a second settle event from this actor.
-                self.emit('crew_status', task, f'Settled a stale {kind} job of {task} at {old}' + en_tail,
-                          f'已結清 {task} 在 {old} 的過期 {kind} 工作' + tw_tail,
-                          pr=job_number, env={'FM_CREW_STATUS_SECS': '0'})
-            except ERRORS as error:
-                self.queue('settle-emit-' + ident, task,
-                           f'{task}: settled a stale {kind} job but could not record the event: {error}',
-                           f'{task}：已結清過期的 {kind} 工作，但事件無法記錄：{error}')
+            self.close_job(ident, job, by)
+
+    def close_job(self, ident, job, by):
+        """Mark a job superseded and say so once; `by` is a head, closed, verdict or unresumable."""
+        job.update(state='superseded', superseded_at=self.clock(), superseded_by=by)
+        job.pop('phase', None)
+        self.save()
+        task, kind, old = job.get('task', ''), job.get('kind', 'unlabelled'), str(job.get('head') or '')[:12]
+        en_tail, tw_tail = {
+            'closed': ('; the pull request is closed', '；PR 已關閉'),
+            'verdict': ('; its verdict is recorded', '；審查結論已記錄'),
+            'unresumable': ('; it cannot run again', '；無法重跑')}.get(
+                by, (f'; the pull request is now at {by[:12]}', f'；PR 現在位於 {by[:12]}'))
+        self.job_status(ident, job, f'Settled a stale {kind} job of {task} at {old}' + en_tail,
+                        f'已結清 {task} 在 {old} 的過期 {kind} 工作' + tw_tail,
+                        f'{task}: settled a stale {kind} job but could not record the event',
+                        f'{task}：已結清過期的 {kind} 工作，但事件無法記錄', 'settle-emit-')
+
+    def job_status(self, ident, job, en, tw, failed_en, failed_tw, prefix):
+        task = job.get('task', '')
+        try:
+            pr = int(job['number'])
+        except (KeyError, TypeError, ValueError):
+            pr = None
+        try:
+            # The throttle would drop a second status event from this actor.
+            self.emit('crew_status', task, en, tw, pr=pr, env={'FM_CREW_STATUS_SECS': '0'})
+        except ERRORS as error:
+            self.queue(prefix + ident, task, f'{failed_en}: {error}', f'{failed_tw}：{error}')
 
     def stuck_check(self, task, pr, runs, statuses):
         """T-281: wake once when an approved, green, clean PR waits 30 minutes for a card."""
@@ -300,8 +318,10 @@ class MechanicalLoop:
 
     def stuck_reason(self, task, pr):
         for job in self.data.get('jobs', {}).values():
-            if job.get('task') == task and job.get('state') == 'uncertain':
+            if job.get('task') == task and job.get('state') in ('uncertain', 'interrupted'):
                 kind, at = job.get('kind', 'unlabelled'), str(job.get('head') or '')[:12]
+                if job['state'] == 'interrupted':
+                    return f'an interrupted {kind} job at {at}', f'{at} 有一個中斷的 {kind} 工作'
                 return f'an uncertain {kind} job at {at}', f'{at} 有一個未確定的 {kind} 工作'
         try:
             hold = self.failed_card_evidence(task, pr)[1]
@@ -562,7 +582,7 @@ class MechanicalLoop:
             self.failed_card_hold(task, pr, hold)
             return
         if replacement and any(job.get('task') == task
-                and job.get('state') in ('running', 'consuming', 'uncertain')
+                and job.get('state') in ('running', 'consuming', 'uncertain', 'interrupted')
                 for job in self.data.get('jobs', {}).values()): return
         # T-276: a parked or narrowed task waits for the captain before any
         # gate, review or REJECT wake.
@@ -661,7 +681,7 @@ class MechanicalLoop:
             self.failed_card_hold(task, pr, hold)
             return
         if replacement:
-            if any(job.get('task') == task and job.get('state') in ('running', 'consuming', 'uncertain')
+            if any(job.get('task') == task and job.get('state') in ('running', 'consuming', 'uncertain', 'interrupted')
                    for job in self.data.get('jobs', {}).values()): return
             # Preserve the exact seven-element ordinary input on upgrade.
             inputs.append(replacement)
@@ -717,10 +737,17 @@ class MechanicalLoop:
         save_json(path, packet)
         jobs[identity] = dict(kind=kind, task=task, number=pr['number'], head=pr['head']['sha'],
                               state='running', path=str(path))
+        if getattr(self, '_consuming', None):
+            # T-293: the result that started this job, so a resumed result never starts it twice.
+            jobs[identity]['parent'] = self._consuming
         if 'queue_binding' in extra:
             jobs[identity]['queue_binding'] = extra['queue_binding']
             m['jobs'].append(identity)
         self.save()
+        return self.spawn(path, packet)
+
+    def spawn(self, path, packet):
+        """Run a job's packet as an owned child that writes its receipt."""
         with path.with_suffix('.log').open('ab') as log:
             child = life.start([sys.executable, str(BIN / 'lib/fm_autopilot_loop.py'), str(path)],
                 owner=os.getpid(), stdin=subprocess.DEVNULL, stdout=log, stderr=log)
@@ -734,7 +761,7 @@ class MechanicalLoop:
         return child
 
     def consume_jobs(self):
-        for job in list(self.data.setdefault('jobs', {}).values()):
+        for ident, job in list(self.data.setdefault('jobs', {}).items()):
             if job['state'] != 'running': continue
             receipt = Path(job['path']).with_suffix('.result.json')
             if not receipt.exists(): continue
@@ -744,26 +771,151 @@ class MechanicalLoop:
                     and job.get('queue_binding')
                     and not getattr(self, '_queue_snapshot_ready', False)):
                 continue
-            # Mark before acting; a crash here is reconciliation, never replay.
-            job['state'] = 'consuming'; self.save()
-            try:
-                self.job_completed(read_json(receipt))
-                job['state'] = 'done'
-            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
-                job['state'] = 'uncertain'
-                self.queue('job-' + receipt.stem, job['task'], str(error), '機械步驟需要 firstmate 核對')
-            self.save()
+            code = read_json(receipt).get('code')
+            if (type(code) is int and code < 0 and 'queue_binding' not in job
+                    and not job.get('signal_rerun')):
+                # T-293: a child killed by a signal was interrupted, not failed.
+                # Its receipt is kept beside the packet; the step runs again
+                # once. A second signal is a failure that firstmate is told of.
+                receipt.replace(Path(job['path']).with_suffix('.interrupted.json'))
+                job.update(state='interrupted', phase='child', signal_rerun=True)
+                self.save()
+                continue
+            self.consume(ident, job, receipt)
+
+    def consume(self, ident, job, receipt):
+        # Mark before acting. A stop here leaves the job interrupted: it acts on
+        # the same receipt again, and each step it takes is idempotent by its id.
+        job['state'] = 'consuming'; job.pop('phase', None); self.save()
+        self._consuming = ident
+        try:
+            self.job_completed(read_json(receipt))
+            job['state'] = 'done'
+        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+            job['state'] = 'uncertain'
+            self.queue('job-' + receipt.stem, job['task'], str(error), '機械步驟需要 firstmate 核對')
+        finally:
+            self._consuming = None
+        self.save()
+
+    def interrupt(self, job):
+        """T-293: a job cut off by a stop is unfinished; pull() resumes it from its breakpoint."""
+        result = job['state'] == 'consuming' or (bool(job.get('path')) and
+                                                  Path(job['path']).with_suffix('.result.json').exists())
+        job.update(state='interrupted', phase='result' if result else 'child')
+
+    def resumable(self, job):
+        """An interrupted job names its PR and head and still has the packet or receipt it needs."""
+        try:
+            if not job.get('path'): return False
+            packet = read_json(Path(job['path']))
+            if 'kind' not in job and packet:
+                # Older records matched through their packet; keep that here.
+                job.update(kind=packet['kind'], number=packet['pr']['number'],
+                           head=packet['pr']['head']['sha'])
+            int(job['number'])
+            if job.get('kind') not in RESUMABLE or not job.get('head'): return False
+            if job['phase'] == 'result':
+                record = read_json(Path(job['path']).with_suffix('.result.json'))
+                return all(field in record for field in ('kind', 'task', 'pr', 'code'))
+            return isinstance(packet.get('argv'), list) and bool(packet['argv'])
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def migrate_t293(self):
+        """First start after T-293: the reconcile notice is no longer queued.
+
+        One firstmate has not received yet is closed and its job resumes; a
+        delivered one keeps its job uncertain for firstmate to finish.
+        """
+        from fm_autopilot import key
+        for ident, job in self.data.get('jobs', {}).items():
+            notice = 'autopilot-' + key([self.ctx['project'], 'job-' + ident])
+            if job.get('state') != 'uncertain' or self.data['wakes'].get(notice, {}).get('pushed', True):
+                continue
+            del self.data['wakes'][notice]
+            if 'queue_binding' not in job:
+                self.interrupt(job)
+        self.data['migrated_t293'] = True
 
     def recover_jobs(self):
         self.refresh_queue()
-        for ident, job in list(self.data.setdefault('jobs', {}).items()):
+        jobs = self.data.setdefault('jobs', {})
+        for ident, job in list(jobs.items()):
             if job['state'] == 'consuming' or (job['state'] == 'running' and
                     not Path(job['path']).with_suffix('.result.json').exists()):
-                job['state'] = 'uncertain'
-                self.queue('job-' + ident, job['task'], 'Autopilot stopped during a child; reconcile its log: ' + job['path'],
-                           '自動駕駛於子程序執行中停止；請核對紀錄')
+                if 'queue_binding' in job:
+                    job['state'] = 'uncertain'  # the queue is off; its jobs are not resumed
+                else:
+                    self.interrupt(job)
+        for ident, job in list(jobs.items()):
+            if job['state'] == 'interrupted' and not self.resumable(job):
+                self.close_job(ident, job, 'unresumable')
+                # Its step did not happen and nothing will run it again.
+                task = job.get('task', '')
+                self.queue('unresumable-' + ident, task,
+                           f'{task}: an interrupted autopilot job cannot run again; its next step did not happen: '
+                           + str(job.get('path') or ident),
+                           f'{task}：中斷的自動駕駛工作無法重跑，下一步沒有發生')
         self.save()
         self.consume_jobs()
+
+    def resume_jobs(self, task, pr):
+        """T-293: run an interrupted job of this PR again on its unchanged head.
+
+        settle_stale_jobs() has already closed jobs at a moved head. A job cut
+        off while acting on its result acts on the same receipt again; a
+        review is started again only with no new verdict and no live reviewer.
+        """
+        number, head = int(pr['number']), pr['head']['sha']
+        for ident, job in list(self.data.get('jobs', {}).items()):
+            if job.get('state') != 'interrupted' or 'queue_binding' in job: continue
+            try:
+                if int(job['number']) != number or job.get('head') != head: continue
+            except (KeyError, TypeError, ValueError):
+                continue
+            try:
+                self.resume(ident, job, task, head)
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+                # The job stays interrupted and the next poll tries again.
+                job.update(state='interrupted', phase=job.get('phase') or 'child')
+                kind = job['kind']
+                self.queue('resume-' + ident, task, f'{task}: could not resume the interrupted {kind} job: {error}',
+                           f'{task}：無法續跑中斷的 {kind} 工作：{error}')
+                self.save()
+
+    def resume(self, ident, job, task, head):
+        from fm_autopilot import key
+        from fm_concurrent import live_rounds
+        path, kind = Path(job['path']), job['kind']
+        if job.get('phase') != 'result' and kind in ('review', 'design-review'):
+            verdict = self.verdict(task) if kind == 'review' else self.design_verdict(task)
+            if verdict.get('head') == head and key(verdict) != read_json(path).get('verdict_before'):
+                self.close_job(ident, job, 'verdict')
+                return
+        if self.busy(task) or any(r.get('task') == task for r in live_rounds(
+                [dict(state=str(self.state), name=self.ctx['project'])])):
+            return  # the next poll tries again once the task is idle
+        if job.get('resumes', 0) >= RESUME_LIMIT:
+            # Interrupted again and again: stop rerunning and let firstmate finish it.
+            job['state'] = 'uncertain'; job.pop('phase', None)
+            self.save()
+            self.queue('resume-limit-' + ident, task,
+                       f'{task}: an interrupted {kind} job at {head[:12]} was run again {RESUME_LIMIT} times '
+                       f'and was interrupted each time; its next step did not happen: {path}',
+                       f'{task}：{head[:12]} 中斷的 {kind} 工作已重跑 {RESUME_LIMIT} 次仍每次中斷，下一步沒有發生')
+            return
+        job['resumes'] = job.get('resumes', 0) + 1
+        self.job_status(ident, job, f'Resumed an interrupted {kind} job of {task} at {head[:12]}',
+                        f'已在 {head[:12]} 續跑 {task} 中斷的 {kind} 工作',
+                        f'{task}: resumed an interrupted {kind} job but could not record the event',
+                        f'{task}：已續跑中斷的 {kind} 工作，但事件無法記錄', 'resume-emit-')
+        if job.get('phase') == 'result':
+            self.consume(ident, job, path.with_suffix('.result.json'))
+            return
+        job['state'] = 'running'; job.pop('phase', None)
+        self.save()
+        self.spawn(path, read_json(path))
 
     def job_for(self, kind, number, head):
         for job in self.data.get('jobs', {}).values():
@@ -889,7 +1041,7 @@ class MechanicalLoop:
             if code:
                 self.attention('protocol', task, pr, f'{task}: protocol violation in round {result["round"]}' + suffix,
                                f'{task}：審查協定違規，需要 firstmate 處理')
-            else:
+            elif not self.started_by_this_result():
                 self.start_job('gate', task, pr, self.gate_command(task, pr), base=result['base'], round=result['round'])
         elif kind == 'gate':
             if code == 6:
@@ -946,6 +1098,12 @@ class MechanicalLoop:
             elif verdict.get('verdict') == 'REJECT':
                 self.design_reject_wake(task, pr, verdict)
             self.data['next_poll'] = 0
+
+    def started_by_this_result(self):
+        """T-293: whether the result being consumed already started its follow-on job."""
+        parent = getattr(self, '_consuming', None)
+        return bool(parent) and any(job.get('parent') == parent
+                                    for job in self.data.get('jobs', {}).values())
 
     def reject_wake(self, task, pr, verdict):
         """T-272: judge the triggering REJECT first, then name its fix draft.
@@ -1140,6 +1298,12 @@ class MechanicalLoop:
                 self.attention('head', task, pr, f'{task}: authoritative head changed; regate', f'{task}：遠端版本已變更，需要重新檢查關卡')
                 return
             if merge_blocker(self.state, self.ctx['project']): return
+            # T-293: a gate result acted on again never raises a second card.
+            job = self.data.get('jobs', {}).get(getattr(self, '_consuming', None) or '')
+            raised = (job or {}).get('card')
+            if raised and any((self.state / folder / (raised + '.json')).exists()
+                              for folder in ('pending', 'decisions', 'runtime/archived-pending')):
+                return
             prefix = 'D-' + owner + '-' + task.replace('-', '') + '-'
             replacement, hold = self.failed_card_evidence(task, pr)
             if hold:
@@ -1217,6 +1381,9 @@ class MechanicalLoop:
                     q = self.data['self_queue']; m = q['members'][str(pr['number'])]
                     m['card_id'] = ident
                     Q.transition(q, str(pr['number']), 'waiting-captain', 'card-request-planned', self.clock())
+                    self.save()
+                if job is not None:
+                    job['card'] = ident
                     self.save()
                 self.command(self.script('fm-decide.sh', '--request', ident, '--task', task, '--project', owner,
                     '--kind', 'merge', '--pr', pr['number'], '--expected-head', head, '--details', details))
