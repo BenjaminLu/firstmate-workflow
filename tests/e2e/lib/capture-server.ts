@@ -6,6 +6,8 @@ import { rmSync } from 'node:fs';
 for (const key of Object.keys(process.env)) {
   if (key.startsWith('FM_') && !key.startsWith('FM_LIFELINE_')) delete process.env[key];
 }
+// Only remove the directory explicitly handed over by the capture hook.
+const captureConfig = process.argv[2];
 const root = makeRoot(['working', 'gate', 'review', 'working', 'gate']);
 writeRegistry(root, 'fixture/capture');
 let board: Awaited<ReturnType<typeof startBoard>> | undefined;
@@ -19,6 +21,10 @@ try {
     process.stdin.once('end', resolve);
   });
 } finally {
-  if (board) await stopBoard(board);
-  else rmSync(root, {recursive: true, force: true});
+  try {
+    if (board) await stopBoard(board);
+    else rmSync(root, {recursive: true, force: true});
+  } finally {
+    if (captureConfig) rmSync(captureConfig, {recursive: true, force: true});
+  }
 }
