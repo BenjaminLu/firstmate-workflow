@@ -14,7 +14,7 @@ test('voyage is one live stage, persists its size, and Esc Esc unloads it', asyn
     await expect.poll(()=>page.frames().find(f=>f.url().includes('/voyage2d/'))?.evaluate(()=> (window as any).__G?.ready)).toBe(true);
     await page.keyboard.press('f');
     await expect(page.locator('body')).toHaveClass(/voyage-full/);
-    await expect(page.locator('#voyage-drawer #counts')).toHaveCount(1);
+    await expect(page.locator('#voyage-drawer #readOnly')).toHaveCount(1);
     await expect(page.locator('#voyage-drawer #deckwrap')).toHaveCount(1);
     await page.reload();
     await expect(page.locator('body')).toHaveClass(/voyage-full/);

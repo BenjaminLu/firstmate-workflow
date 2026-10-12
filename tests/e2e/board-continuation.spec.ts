@@ -1,4 +1,4 @@
-import { showFleet, openCrewSheet } from './lib/board';
+import { showFleet, showCrew } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -45,30 +45,27 @@ test('continuation history, readable mobile content and persistent controls', as
     // a pending card under a merged task is shown, not hidden, and says the task is final (T-118)
     await expect(page.locator('#card-D-999 .final-note')).toContainText(
       EN.finalNote.replace('{task}','T-999').replace('{stage}',EN.laneMerged));
-    await openCrewSheet(page);
-    for(const selector of ['.roster .jb','#secbar button','.roster .nm','.roster .st']) {
+    await showCrew(page);
+    for(const selector of ['.roster .jb','#pagetabs button','.roster .nm','.roster .st']) {
       if(selector.startsWith('.roster')) await expect(page.locator(selector).first()).toBeVisible();
       expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(13);
     }
-    await page.locator('#crewSheet [data-sheet-close]').click();
+    await page.locator('#tabDecisions').click();
     // the closed default is read on the Fleet page, where the history is shown
     await showFleet(page);
     await expect(page.locator('#history > summary')).toBeVisible();
     await expect(page.locator('#history .card').first()).not.toBeVisible();
     await page.locator('#tabDecisions').click();
     expect((await page.locator('.dcard').first().boundingBox())!.y).toBeLessThan(844);
-    // merged is a lane now, but a short one: the latest few, newest first,
-    // and a pointer at the history for the rest
+    // T-289: the Fleet page shows the open lanes only, as the prototype does;
+    // every merged task is in the history, and each one can be reopened there
     await showFleet(page);
-    const mergedLane=page.locator('[data-lane="merged"]');
-    await expect(mergedLane.locator('h3 i')).toHaveText('31');
-    await expect(mergedLane.locator('.card')).toHaveCount(5);
-    await expect(mergedLane.locator('.card').first()).toContainText('T-999');
-    await expect(mergedLane.locator('.more')).toHaveText(EN.mergedMore.replace('{n}','26'));
+    await expect(page.locator('[data-lane="merged"]')).toHaveCount(0);
+    await expect(page.locator('#history summary')).toContainText('31');
+    await expect(page.locator('#history .card[data-history="T-999"] .cmenu')).toHaveCount(1);
     await page.evaluate(async()=>{const s=await(await fetch('/api/state')).json();s.tasks=s.tasks.filter((t:any)=>t.stage!=='merged'||t.id==='H-0');(window as any).render(s);});
     await expect(page.locator('#history summary')).toContainText('1');
-    await expect(mergedLane.locator('.card')).toHaveCount(1);
-    await expect(mergedLane.locator('.more')).toHaveCount(0);
+    await expect(page.locator('#history .card')).toHaveCount(1);
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
     await expect(page.locator('#history summary')).toContainText('31');
     let posts=0;page.on('request',r=>{if(r.method()==='POST')posts++;});
@@ -112,9 +109,11 @@ test('continuation history, readable mobile content and persistent controls', as
         await page.setViewportSize({width,height:844});
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1)).toBe(true);
         expect(await page.evaluate(()=>document.documentElement.clientWidth)).toBe(width);
-        for (const selector of ['.explanation','.tradeoffs','.opt'])
-          expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
-        expect((await page.locator('.confirm').first().boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        // the prototype's type scale: reading text at 15px or more, the
+        // headline larger; a touch-width send button keeps its 44px target
+        for (const selector of ['.explanation','.cap h2'])
+          expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(15);
+        expect((await page.locator('.confirm').first().boundingBox())!.height).toBeGreaterThanOrEqual(width <= 760 ? 44 : 40);
         // one round trip per width: a locator call per element ran this test
         // past its budget on the runner once the history held 30-odd cards
         const outside=(selectors:string[])=>page.evaluate(({selectors,width})=>{
@@ -138,24 +137,23 @@ test('continuation history, readable mobile content and persistent controls', as
         expect(fleet.out).toEqual([]);
         expect(fleet.measured['.card']).toBeGreaterThan(0);
         expect(fleet.measured['#history']).toBe(1);
-        await openCrewSheet(page);
+        await showCrew(page);
         await expect(page.locator('#roster .rrow').first()).toBeVisible();
-        expect(await page.locator('#crewSheet').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
-        await page.locator('#crewSheet [data-sheet-close]').click();
+        expect(await page.locator('#crewPanel').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
         await page.locator('#tabDecisions').click();
       }
     }
     await page.setViewportSize({width:1280,height:900});await page.evaluate(()=>scrollTo(0,0));
     await page.screenshot({path:testInfo.outputPath('desktop-decisions.png')});
-    await openCrewSheet(page);
+    await showCrew(page);
     await page.locator('#roster').screenshot({path:testInfo.outputPath('desktop-roster.png')});
-    await page.locator('#crewSheet [data-sheet-close]').click();
+    await page.locator('#tabDecisions').click();
     await page.setViewportSize({width:320,height:844});
     await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:testInfo.outputPath('mobile-decisions.png')});
-    await openCrewSheet(page);
+    await showCrew(page);
     await page.locator('#roster').screenshot({path:testInfo.outputPath('mobile-roster.png')});
-    await page.locator('#crewSheet [data-sheet-close]').click();
-    await page.addStyleTag({content:'body{font-size:32px} .dcard h3{font-size:44px} .explanation,.tradeoffs,.acts button,.acts label,.acts textarea{font-size:32px}'});
+    await page.locator('#tabDecisions').click();
+    await page.addStyleTag({content:'body{font-size:32px} .dcard h2{font-size:44px} .explanation,.flagbtn b,.mflag,.dcustom,.dcustom textarea{font-size:32px}'});
     await expect(page.locator('#card-D-1 textarea')).toHaveCSS('display','block');
     const textareaSize = await page.locator('#card-D-1 textarea').evaluate(el => ({
       width: el.getBoundingClientRect().width,

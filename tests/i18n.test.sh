@@ -24,10 +24,10 @@ for k in logLoadOlder logLoadFailed staleCursor badCursor; do
   assert_ok "jq -e --arg k '$k' 'has(\$k)' '$en' >/dev/null && jq -e --arg k '$k' 'has(\$k)' '$tw' >/dev/null" "log paging key $k exists in both dictionaries"
 done
 
-# T-246: every tab, sheet and client pager label exists in both dictionaries.
-for key in tabDecisions tabFleet secLog sheetCrew sheetLog sheetClose sheetBack pagerFirst pagerPrev pagerNext pagerPosition; do
+# T-246, T-289: every page tab and client pager label exists in both dictionaries.
+for key in tabDecisions tabFleet tabCrew tabLog tabFleetOpen tabWaiting pagerFirst pagerPrev pagerNext pagerPosition; do
   for dictionary in "$en" "$tw"; do
-    assert_ok "jq -e '.${key} | type == \"string\" and length > 0' '$dictionary' >/dev/null" "T-246 $key in $dictionary"
+    assert_ok "jq -e '.${key} | type == \"string\" and length > 0' '$dictionary' >/dev/null" "page tab $key in $dictionary"
   done
 done
 
@@ -76,6 +76,34 @@ for k in $codes; do
   jq -e --arg k "$k" 'has($k)' "$tw" >/dev/null 2>&1 || missing="$missing zh-TW:$k"
 done
 assert_eq "" "$missing" "every code the server refuses with is translated in both dictionaries"
+
+# T-289: and the other way round - every key in the dictionary is asked for.
+# A key counts as asked for when a page file quotes it, builds it from a
+# quoted prefix ('kind' + ..., "lane" + ...), reads it off DICT, the diagram
+# script looks it up, or the server refuses with it. A key the port left
+# behind (the old sheets, strips and summary buttons) has none of these.
+unused_keys() {  # unused_keys <dictionary> <codes> <files...> -> keys nobody asks for
+  python3 - "$@" <<'PY'
+import json, re, sys
+keys = json.load(open(sys.argv[1]))
+codes = set(sys.argv[2].split())
+text = ''.join(open(f, encoding='utf-8').read() for f in sys.argv[3:])
+quoted = set(re.findall(r"""['"`]([A-Za-z0-9_.-]+)['"`]""", text))
+prefixes = set(re.findall(r"""['"]([A-Za-z_]{3,})['"]\s*\+""", text))
+fields = set(re.findall(r'DICT(?:\.[\w-]+|\[[^\]]+\])\.(\w+)', text))
+looked = set(re.findall(r'\bd(?:sc|get) ([A-Za-z0-9_]+)', text))
+for k in sorted(keys):
+    if k in quoted | fields | looked | codes or any(k.startswith(p) for p in prefixes): continue
+    print(k)
+PY
+}
+unused="$(unused_keys "$en" "$codes" $pages "$ROOT/bin/fm-diagram.sh" | tr '\n' ' ')"
+assert_eq "" "$unused" "every dictionary key is asked for by a page file"
+scratch="$(mktemp)"
+jq '. + {"neverAsked":"x"}' "$en" > "$scratch"
+assert_contains "$(unused_keys "$scratch" "$codes" $pages "$ROOT/bin/fm-diagram.sh")" "neverAsked" \
+  "and a key no page asks for is found (the control)"
+rm -f "$scratch"
 assert_ok "jq -e 'has(\"readOnly\")' '$en' >/dev/null && jq -e 'has(\"readOnly\")' '$tw' >/dev/null" \
   "the read-only line is in both dictionaries"
 for name in branch rebase scope fail-first ci approval; do

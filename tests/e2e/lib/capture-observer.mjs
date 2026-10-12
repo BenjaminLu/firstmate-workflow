@@ -19,7 +19,7 @@ chromium.launch = async (...args) => {
       page.screenshot = async (options) => {
         const elements = [];
         for (const selector of ['#decisionsPanel #card-D-1',
-          '#fleetPanel .card[data-task="SK-007"]', '#crewSheet[open] #roster .rrow', '#logSheet[open] #log li']) {
+          '#fleetPanel .card[data-task="SK-007"]', '#crewPanel #roster .rrow', '#logPanel #log li']) {
           const element = page.locator(selector).first();
           const visible = await element.isVisible();
           elements.push({selector, visible, text: visible ? await element.innerText() : ''});

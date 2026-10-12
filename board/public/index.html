@@ -24,10 +24,6 @@ body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans);padding-bot
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(62,207,142,.15)}
 .dot.off{background:var(--bad);box-shadow:0 0 0 3px rgba(242,100,90,.15)}
 .spacer{flex:1}
-.counts{display:flex;gap:22px;padding:14px 20px;border-bottom:1px solid var(--line)}
-.counts b{display:block;font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}
-.counts span{font:13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
-.counts .w b{color:var(--wait)} .counts .x b{color:var(--bad)}
 .lanes-wrap,.logwrap{padding:16px 20px 0}
 section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
   text-transform:uppercase;letter-spacing:.1em}
@@ -57,19 +53,6 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .vend i{width:6px;height:6px;border-radius:50%;background:var(--fg3)}
 .vend.x{border-color:#4a3a1a;color:#e0b45c} .vend.x i{background:var(--brass)}
 .vend b{font-weight:700;color:var(--brass)}
-/* the sea strip under the header, as the prototype has it */
-.counts{background:linear-gradient(180deg,#081824 0%,#0a2a44 55%,#0d3b5e 100%)}
-.counts span{color:#7fa8c6}
-/* the captain's portrait beside the first card; the rest are strips */
-.deckrow{display:flex;gap:18px;align-items:flex-start}
-#deck{flex:1;min-width:0}
-@media(max-width:820px){.deckrow{flex-direction:column;align-items:stretch}}
-#deck .also{margin:12px 0 8px;font:600 13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
-.dstrip{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--wait);
-  border-radius:9px;margin-bottom:8px;min-width:0}
-.dstrip>summary{cursor:pointer;min-height:44px;padding:10px 12px;font-size:16px;overflow-wrap:anywhere}
-.dstrip>summary .meta{font:13px var(--mono);color:var(--fg3)}
-.dstrip>summary .picked{font:700 13px var(--mono);font-style:normal;color:var(--brass)}
 .kbadge{display:inline-block;flex-shrink:0;white-space:nowrap;font:700 12px/1.5 var(--sans);
   padding:2px 8px;border-radius:4px;margin-right:8px;vertical-align:baseline}
 .k-merge{background:var(--k-merge);color:#080f17}
@@ -79,11 +62,6 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .k-skill{background:var(--k-skill);color:#080f17}
 .k-decision{background:var(--k-decision);color:#080f17}
 .k-retro{background:var(--k-decision);color:#080f17}
-.dstrip[open]>summary{border-bottom:1px solid var(--line)}
-.dstrip>.dcard{margin:0;border:0}
-.links{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
-.links a{font-size:13px;padding:3px 9px;border:1px solid var(--line);border-radius:6px;color:var(--fg2);text-decoration:none}
-.links a:hover{color:var(--fg);border-color:var(--accent)}
 .log ul{max-height:260px}
 .lane{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:9px;min-height:70px}
 .lane h3{margin:0 0 8px;font:600 10px var(--mono);color:var(--fg3);text-transform:uppercase;
@@ -98,7 +76,7 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .s-captain{--edge:#8a6a2f} .s-merged{--edge:#2c5f49} .s-closed{--edge:#3a3a3a}
 .log{background:var(--bg2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .log ul{margin:0;padding:6px 0;list-style:none;max-height:64vh;overflow:auto}
-.log li{display:grid;grid-template-columns:62px 90px 1fr;gap:10px;padding:5px 13px;font-size:12px;
+.log li{display:grid;grid-template-columns:max-content minmax(max-content,90px) minmax(0,1fr);gap:10px;padding:5px 13px;font-size:12px;
   border-bottom:1px solid rgba(33,48,65,.5)}
 .log li:last-child{border-bottom:0}
 .log time{font:11px var(--mono);color:var(--fg3)}
@@ -111,23 +89,6 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .langs button{padding:4px 11px;font:12px var(--sans);color:var(--fg2);background:none;border:none;cursor:pointer}
 .langs button+button{border-left:1px solid var(--line)}
 .langs button[aria-pressed=true]{background:#1d4b7a;color:#fff}
-#pcount{background:var(--wait);color:#1a0d28;border-radius:99px;font:800 10px var(--mono);padding:1px 7px}
-.dcard{background:var(--bg2);border:1px solid #3a2a52;border-radius:12px;padding:16px 18px;margin-bottom:10px}
-.dcard h3{margin:0 0 4px;font-size:17px;line-height:1.35}
-.dcard .meta{font:11px var(--mono);color:var(--fg3)}
-.gates{margin:12px 0 0;padding:0;list-style:none;display:grid;
-  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:3px 14px}
-.gates li{font-size:12px;color:var(--fg2);display:flex;gap:8px}
-.gates li i{font-style:normal;width:12px;text-align:center;color:var(--ok)}
-.gates li.w i,.gates li.w,.ci-only-evidence{color:var(--warn)}
-.gates li.n i{color:var(--warn)} .gates li.n{color:var(--fg3)}
-.acts{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;align-items:center}
-.acts button{font:750 12.5px var(--sans);border:none;border-radius:9px;padding:8px 18px;cursor:pointer}
-.acts .go{background:linear-gradient(180deg,#e0b055,#b8862c);color:#2a1c05;box-shadow:0 2px 0 #6d4d13}
-.acts .go:active{transform:translateY(2px);box-shadow:none}
-.acts .alt{background:var(--bg3);color:var(--fg2);border:1px solid var(--line)}
-.acts .said{font:11px var(--mono);color:var(--brass)}
-.dcard a{color:var(--accent);font:11px var(--mono)}
 /* the diagram is a page of its own, so it comes in as a page: the board's
    styles cannot leak into it and its styles cannot leak back out */
 iframe.dg{display:block;width:100%;height:240px;margin:12px 0 0;border:1px solid var(--line);
@@ -136,15 +97,13 @@ iframe.dg[hidden]{display:none}
 body{font-size:16px}
 .top{flex-wrap:wrap;position:relative;gap:8px}
 .top>*{min-width:0}.langs{margin-left:0;flex-shrink:0}
-.langs button,.acts .said{font-size:13px}#gl{font-size:13px!important}
-.top small,.counts span,section>h2,.lane h3,.card .id,.card .pr,.dcard .meta,.dcard a,.log time,.log .who,#pcount{font-size:13px}
+.langs button{font-size:13px}#gl{font-size:13px!important}
+.top small,section>h2,.lane h3,.card .id,.card .pr,.log time,.log .who{font-size:13px}
 #deckwrap>h2{font-size:13px!important}
-.counts{flex-wrap:wrap;gap:16px}.counts>div{min-width:0}
-.lane,.card,section,.dcard,.acts>*{min-width:0;overflow-wrap:anywhere}
-.card .t,.log li,.explanation,.tradeoffs,.gates li,.empty,.acts button,.acts label,.acts textarea{font-size:16px}
-.dcard h3{font-size:22px}.acts button,.langs button{min-height:44px;white-space:normal;max-width:100%}
-.acts textarea{font:inherit}.gates{grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr))}
-.log li{grid-template-columns:minmax(0,62px) minmax(0,90px) minmax(0,1fr)}
+.lane,.card,section,.dcard{min-width:0;overflow-wrap:anywhere}
+.card .t,.log li,.explanation,.tradeoffs,.empty{font-size:16px}
+.langs button{min-height:44px;white-space:normal;max-width:100%}
+.log li{grid-template-columns:max-content minmax(max-content,90px) minmax(0,1fr)}
 .log .who{overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 #history{margin-top:16px}#history summary{cursor:pointer;min-height:44px;padding:10px;background:var(--bg2);font-size:16px}
 .history-cards{padding-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:9px}
@@ -173,18 +132,20 @@ body{font-size:16px}
 #dropConfirm .note{margin:6px 0 0;font-size:14px;color:var(--fg2)}
 #dropConfirm label{display:block;margin-top:8px;font-size:14px}
 #dropConfirm textarea{display:block;width:100%;margin-top:4px;font:inherit;background:var(--bg3);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
+#dropConfirm .acts{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;align-items:center}
+#dropConfirm .acts button{font:750 16px var(--sans);border:1px solid var(--line);border-radius:9px;padding:8px 18px;cursor:pointer;
+  min-height:44px;white-space:normal;max-width:100%;min-width:0;background:var(--bg3);color:var(--fg2)}
+#dropConfirm .acts .go{background:linear-gradient(180deg,#e0b055,#b8862c);color:#2a1c05;border:none;box-shadow:0 2px 0 #6d4d13}
 .card .badge.b-lost{background:#7c5a1b}
 .card .badge.b-parked{background:#4a4f5c}
-.dcard .final-note{margin:8px 0 0;padding:6px 10px;border:1px solid #7c322b;border-radius:7px;color:var(--warn);font-size:14px}
-.acts .eff{font:600 12px var(--mono);font-style:normal;color:var(--brass)}
 #effects{list-style:none;margin:0 0 8px;padding:0;color:var(--bad);font-size:14px}#effects:empty{display:none}
 .log .k-agent_lost,.log .k-reopened,.log .k-worker_note_unsent{color:var(--warn)}
 /* T-069: a pull request number is a link to it and keeps the look it had */
 a[data-pr]{text-decoration:none}a[data-pr]:not(.pr):not(.prlink){color:inherit;font:inherit}
 a[data-pr]:not(.prlink):hover,a[data-pr]:not(.prlink):focus-visible{text-decoration:underline}
 a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
-@media(max-width:420px){.top,.counts,.lanes-wrap,.logwrap{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
-.top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
+@media(max-width:420px){.top,.lanes-wrap,.logwrap{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
+.top small,#gl{font-size:13px!important}
 #readOnly{margin:0 20px 10px;padding:8px 12px;border:1px solid var(--warn);border-radius:8px;color:var(--warn);font-size:14px}
 #readOnly[hidden],#readOnly [hidden]{display:none}
 #readOnly a{color:var(--accent)}
@@ -219,7 +180,6 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 .voyage-full #voyage-drawer [role="menu"],
 .voyage-full #voyage-drawer [role="dialog"],
 .voyage-full #voyage-drawer [role="alertdialog"]{position:relative;z-index:2}
-.voyage-full #voyage-drawer .counts{flex-wrap:wrap}
 .voyage-hidden #capstage{display:none!important}
 /* Reorder visually: moving an iframe's parent in the DOM reloads its stage. */
 @media(max-width:650px){
@@ -243,7 +203,6 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 .dcard.intent-card{padding:0;font-size:16px;line-height:1.5;overflow-wrap:anywhere}
 .intent-card > section,.intent-card .intent-alignment > section,.intent-card > footer{padding:16px;display:grid;gap:8px;min-width:0;border-top:1px solid var(--line)}
 .intent-card > .intent-header{border-top:0}
-.intent-card > .acts{margin-top:0}
 .intent-card .intent-header .gates{padding:0;gap:8px}
 .intent-card .intent-alignment{border:0;margin:0;padding:0}
 .intent-card h4{font-size:18px;color:var(--brass);margin:0;line-height:1.5}
@@ -253,12 +212,7 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 .intent-card .intent-why{color:var(--fg2);max-width:72ch}
 .intent-card .intent-scope{gap:8px;min-width:0}
 .intent-card .intent-scope > div{min-width:0}
-.intent-card .acts button,.intent-card .acts label,.intent-card .acts textarea,.intent-card .tradeoffs{font-size:16px;line-height:1.5}
-.intent-card .acts .opt{white-space:normal;text-align:left;min-height:44px;max-width:72ch;width:100%;margin:0;color:var(--fg);background:var(--bg3)}
-.intent-card .acts .option-box{display:grid;gap:8px;padding:16px;border:1px solid var(--line);background:var(--bg2)}
-.intent-card .acts button:disabled{opacity:.55;cursor:default}
-.intent-card .acts .option-box[aria-pressed="true"]{border-color:var(--brass);outline:2px solid var(--brass)}
-.intent-card .acts .tradeoffs{display:block;font-weight:400;margin:0;color:var(--fg2)}
+.intent-card .tradeoffs{font-size:16px;line-height:1.5}
 .intent-card .confirm-question{display:flex;align-items:flex-start;gap:8px;margin:0;min-width:0}
 .intent-card .confirm-question > p{flex:1;min-width:0}
 .intent-card .question-controls{flex:1;min-width:0;max-width:72ch}
@@ -287,12 +241,12 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <span class="dot" id="live"></span>
   <b id="h-brand"></b>
   <span class="spacer"></span>
-  <span class="vend" id="engine" hidden></span>
-  <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
-  <button id="themeToggle" type="button"><span aria-hidden="true">◐</span></button>
+  <button id="themeToggle" type="button"><svg class="tl-dark" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A7 7 0 017.5 4.5a7 7 0 108 8z" fill="currentColor"/></svg><svg class="tl-light" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="4" fill="currentColor"/><path d="M10 1v3M10 16v3M1 10h3M16 10h3M3.6 3.6l2.1 2.1M14.3 14.3l2.1 2.1M3.6 16.4l2.1-2.1M14.3 5.7l2.1-2.1" stroke="currentColor" stroke-width="1.6"/></svg><span class="tl-dark"></span><span class="tl-light"></span></button>
   <!-- T-273: the captain asks for a retrospective; firstmate runs it -->
   <button id="retroRun" type="button"></button>
   <span id="retroSaid" aria-live="polite"></span>
+  <span class="vend" id="engine" hidden></span>
+  <span id="gl"></span>
   <span class="langs" id="langs"></span>
 </div>
 <!-- T-122: a tab without the captain's credential says so, once, and writes nothing.
@@ -301,22 +255,20 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <a id="readOnlyHere" hidden></a>
   <button id="relogin" type="button"></button>
   <span id="reloginSaid" aria-live="polite"></span></div>
-<div class="counts" id="counts"></div>
 <p id="watch" role="status" data-watch=""></p>
-<nav id="boardnav">
-<div id="tabs" role="tablist">
-  <button id="tabDecisions" role="tab" aria-controls="decisionsPanel" aria-selected="true"><span></span><span class="badge" hidden></span></button>
-  <button id="tabFleet" role="tab" aria-controls="fleetPanel" aria-selected="false"></button>
+<!-- One row of page tabs under the voyage; every page is a tab panel. -->
+<div id="pagetabs" role="tablist">
+  <button id="tabDecisions" role="tab" aria-controls="decisionsPanel" aria-selected="true"><span class="lb"></span><span class="badge2" hidden></span></button>
+  <button id="tabFleet" role="tab" aria-controls="fleetPanel" aria-selected="false"><span class="lb"></span><span class="sub"></span></button>
+  <button id="tabCrew" role="tab" aria-controls="crewPanel" aria-selected="false"><span class="lb"></span><span class="sub"></span></button>
+  <button id="tabLog" role="tab" aria-controls="logPanel" aria-selected="false"><span class="lb"></span></button>
 </div>
-<div id="secbar"><button id="rosterBtn" aria-haspopup="dialog" aria-controls="crewSheet"></button><span class="aboard"></span><button id="logBtn" aria-haspopup="dialog" aria-controls="logSheet"></button><span id="latestEvent"></span></div>
-</nav>
-<section id="decisionsPanel" role="tabpanel" aria-labelledby="tabDecisions">
-<section id="deckwrap" style="padding:0 20px" hidden>
-  <h2 style="margin:16px 0 10px;font:600 13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
-    <span id="awaiting"></span> <span id="pcount"></span></h2>
+<main id="decisionsPanel" role="tabpanel" aria-labelledby="tabDecisions">
+<section id="deckwrap" hidden>
   <div class="deckrow"><div class="capstage" id="capstage" hidden></div><div id="deck"></div></div>
 </section>
-</section>
+<p class="calm" id="calm" hidden></p>
+</main>
 <section id="fleetPanel" role="tabpanel" aria-labelledby="tabFleet" hidden>
 <section class="lanes-wrap">
   <h2 id="h-fleet"></h2>
@@ -333,27 +285,26 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <details id="history"><summary></summary><div class="history-cards"></div></details>
 </section>
 </section>
-<dialog id="crewSheet" class="board-sheet" role="dialog" aria-modal="true" aria-labelledby="crewSheetTitle">
-  <header><h2 id="crewSheetTitle"></h2><button data-sheet-close></button></header>
-  <section id="shipregion"><div class="roster" id="roster"></div></section>
-</dialog>
-<dialog id="logSheet" class="board-sheet" role="dialog" aria-modal="true" aria-labelledby="logSheetTitle">
-  <header><h2 id="logSheetTitle"></h2><button data-sheet-close></button></header>
+<section id="crewPanel" role="tabpanel" aria-labelledby="tabCrew" hidden>
+<section id="shipregion">
+  <h2 id="h-crew"></h2>
+  <div class="roster" id="roster"></div>
+</section>
+</section>
+<section id="logPanel" role="tabpanel" aria-labelledby="tabLog" hidden>
 <section class="logwrap">
   <h2 id="h-log"></h2>
   <div class="log"><ul id="log"></ul><ul id="logOlder"></ul></div>
   <button id="logLoadOlder" type="button"></button>
   <span id="logLoadStatus" role="status"></span>
 </section>
-</dialog>
+</section>
 <script src="ship.js"></script>
 <script src="diagram.js"></script>
 <script src="watch.js"></script>
 <script src="game.js"></script>
 <script>
-// the lanes come from the server, in lifecycle order; this is only how many
-// merged cards the merged lane shows before pointing at the history
-const MERGED_SHOWN = 5;
+// the lanes come from the server, in lifecycle order
 const laneKey = k => "lane" + k[0].toUpperCase() + k.slice(1);
 // every string the reader sees comes from the dictionary; zh-CN is derived
 // from zh-TW by the table, so there is no third file to keep in step
@@ -495,8 +446,11 @@ const picks = new Map(), drafts = new Map(), answers = new Map(), sent = new Set
 // It is an alert only on the render that first shows it; every later render
 // keeps the text without the role, so one refusal is announced once.
 const refused = new Map();
-// strips the captain has opened in place; the first card is always open
-const expanded = new Set();
+// T-289: one card is open at a time; the queue above it picks which. Null
+// means the first pending card. Intent check steps start open; the captain
+// may close one, and it stays closed across renders.
+let currentCard = null;
+const closedSteps = new Set();
 const revealedSections = new Set();
 const openDecisionSheets = new Set(), openWhys = new Set(), openDesigns = new Set();
 let latest, feedback = null, orderUntil = 0, orderTimer;
@@ -630,10 +584,13 @@ function pose() {
 
 function chrome() {
   const themeToggle = document.getElementById("themeToggle"); themeToggle.title = t("themeToggle"); themeToggle.setAttribute("aria-label", t("themeToggle"));
+  // the button names the theme it switches to; CSS shows the one that applies
+  themeToggle.querySelector("span.tl-dark").textContent = t("themeDark");
+  themeToggle.querySelector("span.tl-light").textContent = t("themeLight");
   showRetro();
   document.getElementById("h-brand").innerHTML =
     esc(t("brand")) + "<small>" + esc(t("sub")) + "</small>";
-  document.getElementById("awaiting").textContent = t("awaiting");
+  document.getElementById("calm").textContent = t("noCardWaits");
   document.getElementById("h-fleet").textContent = t("fleet");
   document.getElementById("h-log").textContent = t("log");
   SHIP.patch(document.getElementById("langs"), LANGS.map(l =>
@@ -650,15 +607,16 @@ function chrome() {
 
 function render(s) {
   // Native details toggles are delivered later. Read live disclosure before
-  // any patch can overwrite a just-opened (or just-closed) strip with stale
+  // any patch can overwrite a just-opened (or just-closed) step with stale
   // state, regardless of whether this render came from a sheet or a refresh.
-  document.querySelectorAll('#deck details.dstrip').forEach(el => {
-    if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
+  document.querySelectorAll('#deck details[data-step]').forEach(el => {
+    if (el.open) closedSteps.delete(el.dataset.step); else closedSteps.add(el.dataset.step);
   });
   const focus = document.activeElement;
   const focusSheet = focus?.closest?.('.decision-sheet')?.dataset.id;
   const focusKey = focus?.dataset?.id;
-  const focusChoice = focus?.dataset?.c;
+  // the attributes that tell one control of a card from another
+  const focusMarks = ['c','pick','question','ok','doorAnswer','reviewIntent','decisionDetails','decisionClose'].map(k => focus?.dataset?.[k]);
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
   latest = s;
   refreshTaskDetail();
@@ -689,12 +647,6 @@ function render(s) {
     : eng ? `<i aria-hidden="true"></i>${esc(eng.vendor)}` +
         (eng.cross ? ` <b>⇄ ${esc(eng.reviewer)}</b>` : "") : "";
   engine.title = live ? t("engineLive") : eng ? `${t("engine")}${eng.cross ? " · " + t("crossVendor") : ""}${eng.rule ? ` · ${eng.rule} (${eng.host ?? "?"} → ${eng.vendor})` : ""}` : "";
-  document.getElementById("counts").innerHTML = [
-    ["merged", t("merged"), s.counts.merged, ""], ["inflight", t("inflight"), s.counts.inflight, ""],
-    ["waiting", t("waitingOnYou"), s.counts.waiting ?? 0, "w"],
-    ["blocked", t("blocked"), s.counts.blocked, "x"],
-    ["ready", t("ready"), s.counts.ready, ""], ["backlog", t("backlog"), s.counts.backlog, ""],
-  ].map(([k, l, n, c]) => `<div class="${c}" data-count="${k}"><b>${esc(n)}</b><span>${esc(l)}</span></div>`).join("");
 
   // whether firstmate is watched: the beacon, the last wake and its reason,
   // what waits, and any gap - work in flight with no live watcher (T-137)
@@ -758,21 +710,15 @@ function render(s) {
     lastReview(task) +
     ((task.blocked_on || []).length ? `<div class="dep">${esc(t("blockedOn"))} ${esc((task.blocked_by || task.blocked_on.map(id => ({id}))).map(blocker).join(', '))}</div>` : '') +
     (task.badges || []).map(b => `<span class="badge b-${esc(b.kind)}">${esc(badge(b))}</span>`).join('') + `</div>`;
-  SHIP.patch(document.getElementById("lanes"), (s.lanes || []).map(k => {
-    let items = s.tasks.filter(task => task.stage === k), more = '';
-    if (k === 'merged') {
-      // newest first; the rest are one click away in the history
-      items = [...items].sort((a, b) => (b.merged_seq ?? -1) - (a.merged_seq ?? -1));
-      if (items.length > MERGED_SHOWN)
-        more = `<p class="more">${esc(t("mergedMore").replace('{n}', items.length - MERGED_SHOWN))}</p>`;
-    }
-    const total = items.length;
-    if (k === 'merged') items = items.slice(0, MERGED_SHOWN);
+  // T-289: the Fleet page shows the open lanes only, as the prototype does;
+  // every merged task is in the history below
+  SHIP.patch(document.getElementById("lanes"), (s.lanes || []).filter(k => k !== 'merged').map(k => {
+    const items = s.tasks.filter(task => task.stage === k);
     // ready and backlog take a parked card back; where it lands is up to its
     // dependencies, not to which of the two it was dropped on
     const zone = k === 'ready' || k === 'backlog' ? ' data-zone="unpark"' : '';
-    return `<div class="lane l-${k}" data-lane="${k}"${zone}><h3>${esc(t(laneKey(k)))}<i>${total}</i></h3>` +
-      items.map(task => card(task, k)).join("") + more + `</div>`;
+    return `<div class="lane l-${k}" data-lane="${k}"${zone}><h3>${esc(t(laneKey(k)))}<i>${items.length}</i></h3>` +
+      items.map(task => card(task, k)).join("") + `</div>`;
   }).join(""));
 
   // the parked group below the lanes, collapsed until opened
@@ -815,8 +761,8 @@ function render(s) {
   const completed = s.tasks.filter(item => ['merged','closed'].includes(item.stage));
   const history = document.getElementById('history');
   history.querySelector('summary').textContent = `${t('history')} · ${t('laneMerged')} ${completed.filter(x=>x.stage==='merged').length} · ${t('laneClosed')} ${completed.filter(x=>x.stage==='closed').length}`;
-  // T-118: a finished task the lanes do not show - every closed one, and the
-  // merged ones past the lane's first few - is reopened from here
+  // T-118: a finished task the lanes do not show - every closed and every
+  // merged one - is reopened from here
   const inLane = new Set([...document.querySelectorAll('#lanes [data-key]')].map(el => el.dataset.key));
   SHIP.patch(history.querySelector('.history-cards'), completed.map(item =>
     `<div tabindex="0" role="button" aria-haspopup="dialog" class="card s-${item.stage}" data-task="${esc(item.id)}" data-key="${esc(keyOf(item))}" data-project="${esc(item.project || '')}" data-history="${esc(item.id)}"><div class="hd"><span class="id">${esc(item.id)}</span>${multi() ? ' ' + chip(item.project) : ''} <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
@@ -835,7 +781,7 @@ function render(s) {
   for (const id of [...drafts.keys()]) if (!pendingIds.has(id)) drafts.delete(id);
   for (const id of [...answers.keys()]) if (!pendingIds.has(id)) answers.delete(id);
   for (const id of [...sent]) if (!pendingIds.has(id)) sent.delete(id);
-  for (const id of [...expanded]) if (!pendingIds.has(id)) expanded.delete(id);
+  for (const key of [...closedSteps]) if (!pendingIds.has(JSON.parse(key)[0])) closedSteps.delete(key);
   for (const id of [...refused.keys()]) if (!pendingIds.has(id)) refused.delete(id);
   // merges answered and still running: said by name, and "outcome unknown"
   // when GitHub could not tell the board how one ended
@@ -866,20 +812,21 @@ function render(s) {
     status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     wrap.append(status);
   }
-  document.getElementById("pcount").textContent = pend.length || "";
   // Links go only where the data is: a local file the record names, the pull
-  // request it names, and design.md when the repository has one.
+  // request it names, and design.md when the repository has one. T-289: they
+  // sit with the status pills, in the prototype's pill style.
   const links = d => {
     const out = [];
     const project = d.project || s.project || s.default_project || '';
     const query = project ? `&project=${encodeURIComponent(project)}` : '';
+    if (d.pr) out.push(prRef(d.pr, d.pr_url, 'pill prlink', `${ICON.git}<span class="vh">${esc(t("viewPr"))} </span><code>#${esc(d.pr)}</code>`));
+    out.push(...statusPills(d));
     if (typeof d.path === 'string' && d.path)
-      out.push(`<a href="/file?path=${encodeURIComponent(d.path)}${query}" data-project="${esc(project)}" data-open="${esc(d.path)}" target="_blank" rel="noreferrer">&#8599; ${esc(t("openLocal"))}</a>`);
-    if (d.pr) out.push(prRef(d.pr, d.pr_url, 'prlink', `${esc(t("viewPr"))} #${esc(d.pr)}`));
+      out.push(`<a class="pill" href="/file?path=${encodeURIComponent(d.path)}${query}" data-project="${esc(project)}" data-open="${esc(d.path)}" target="_blank" rel="noreferrer">&#8599; ${esc(t("openLocal"))}</a>`);
     const designPath = s.design_docs?.[project];
     if (designPath)
-      out.push(`<a href="/file?path=${encodeURIComponent(designPath)}${query}" data-project="${esc(project)}" data-open="${esc(designPath)}" target="_blank" rel="noreferrer">&#9776; ${esc(t("viewDesign"))}</a>`);
-    return out.length ? `<div class="links">${out.join('')}</div>` : '';
+      out.push(`<a class="pill" href="/file?path=${encodeURIComponent(designPath)}${query}" data-project="${esc(project)}" data-open="${esc(designPath)}" target="_blank" rel="noreferrer">&#9776; ${esc(t("viewDesign"))}</a>`);
+    return `<div class="pills links">${out.join('')}</div>`;
   };
   // whose card it is: an id that names its owner (T-047) shows the project and
   // task read out of it; a project's name is data and is not translated. With
@@ -892,61 +839,59 @@ function render(s) {
       : own ? `<span class="project">${esc(own.project)}</span>` : '';
     return `${esc(d.id)}${p ? ` · ${p}` : ''} · ${esc(d.task || own?.task || '')}`;
   };
-  const full = d => {
-    const gates = d.gates || [], content = localized(d), pick = picks.get(d.id);
+  // T-289: the open card reads as the prototype's: the header (kind, door,
+  // headline, pills, "Why you see this"), the intent rows, How it works, the
+  // walk and intent check, and the fixed decision bar.
+  const full = (d, index, total) => {
+    const gates = d.gates || [], content = localized(d);
     // an answered card, or a tab that cannot write (T-122), takes no choice
     const locked = sent.has(d.id) || answered.has(d.id) || readOnly();
-    // D only where the card offers it: a readiness card's drop (T-059);
-    // a retrospective card offers A and C only (T-273)
-    const options = ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])]
-      .filter(k => d.purpose !== 'retro' || k === 'A' || k === 'C').map(k => {
-      const o = content?.options?.[k];
-      // T-118: what the option does when chosen, as the server will carry it out
-      const eff = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
-      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked?'disabled':''}${tipAttr()}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}` +
-        `${eff ? ` <i class="eff">→ ${esc(effectLabel(eff))}</i>` : ''}</button>` +
-        (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros), d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons), d)}</p>` : '');
-    }).join('');
-    return `<div class="dcard${content?.intent ? ' intent-card' : ''}" id="card-${esc(d.id)}">${content?.intent ? '<section class="intent-header">' : ''}<div class="meta">${kindBadge(d)} ${whose(d)}` +
-      `${stePill(d)}</div><h3>${said(content ? words(content.title) : d.title || t("waiting"), d)}</h3>` +
+    const title = content ? words(content.title) : d.title || t("waiting");
+    const cut = title.search(/[:\uff1a]/);
+    const pre = cut > 0 ? title.slice(0, cut + 1) : '', head = cut > 0 ? title.slice(cut + 1).trim() : title;
+    const notes = (content?.notes || []).length;
+    const header = `<header class="caphead intent-header"><div class="capmeta meta">${kindBadge(d)} <span class="task">${whose(d)}</span>` +
+      (content?.door ? doorChip(content.door) : '') + stePill(d) + (total > 1 ? `<span class="pos">${index + 1} / ${total}</span>` : '') + `</div>` +
+      `<h2>${pre ? `<span class="pre">${said(pre, d)}</span>` : ''}${said(head, d)}</h2>` +
       // T-118: a card whose task is already merged or closed is shown, and
       // says so: it may have been raised under the wrong task
       (d.task_final ? `<p class="final-note" role="note">${esc(t('finalNote').replace('{task}', d.task || '').replace('{stage}', laneLabel(d.task_final)))}</p>` : '') +
-      links(d) +
-      (content?.intent ? '' : `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'), d)}</p>`) +
-      (content?.intent ? '' : DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>` : '') + plainBlock(content)) +
-
+      `<div class="row">${links(d)}<button type="button" class="why" data-why="${esc(d.id)}" aria-controls="why-${esc(d.id)}" aria-expanded="${openWhys.has(d.id)}"><span>${esc(t("whyYouSeeThis"))}</span>` +
+      (notes ? ` <span class="nb">${esc(t('noteCount').replace('{n}', notes))}</span>` : '') + `</button></div>` +
+      `<div class="drawer" id="why-${esc(d.id)}"${openWhys.has(d.id) ? '' : ' hidden'}>${whyDrawer(d, content)}</div>` +
       (d.kind === "merge" && d.gates
-        ? `<ul class="gates">${GATES().map(({n,name})=>{const g=t("gate_"+name), warning=gates[name]==="not_runnable", ok=gatePassed(gates,name);return `<li class="${warning?"w":ok?"y":"n"}"><i>${warning?"&#9888;":ok?"&#10003;":"&#8211;"}</i>${n}. ${esc(g)}${warning?` · ${esc(t('gateNotRunnable').replace('{reason}', () => d.not_runnable?.[name] || ''))}`:''}</li>`;}).join("")}</ul>`
+        ? `<ol class="gates rail">${GATES().map(({n,name})=>{const g=t("gate_"+name), warning=gates[name]==="not_runnable", ok=gatePassed(gates,name);return `<li class="${warning?"w":ok?"y":"n"}"><i>${warning?"&#9888;":ok?ICON.tick:n}</i><b>${n}. ${esc(g)}${warning?` · ${esc(t('gateNotRunnable').replace('{reason}', () => d.not_runnable?.[name] || ''))}`:''}</b></li>`;}).join("")}</ol>`
         : "") +
       (d.kind === "merge" && GATES().some(({name}) => gates?.[name] === "not_runnable")
-        ? `<p class="ci-only-evidence" role="note">${esc(t('ciOnlyEvidence'))}</p>` : '') +
-      (content?.intent ? `</section>${intentBody(d, content, locked)}` :
-      retroItemsHtml(d, content, locked) + designCompare(d) +
-      `<div class="decision-bar">${decisionDetailsButton(d)}<div class="acts">${options}
-         ${d.purpose === 'retro' ? '' : `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
-         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>`}
-         <span class="validation" id="validation-${esc(d.id)}"></span>
-         ${refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : ''}
-         <button class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(t(sent.has(d.id) ? 'sending' : 'confirmOrder'))}</button>
-       </div></div>${decisionSheet(d, content, locked)}`) + '</div>';
+        ? `<p class="ci-only-evidence" role="note">${esc(t('ciOnlyEvidence'))}</p>` : '') + `</header>`;
+    const body = content?.intent ? cardBody(d, content, locked)
+      : `<section class="hero"><h3>${esc(t('howHeading'))}</h3>${DIAGRAM.embed(d.id)}` +
+        (content ? fallback(d, content) : '') + `</section>` +
+        retroItemsHtml(d, content, locked);
+    return `<article class="cap dcard kind-${cardKind(d)}" id="card-${esc(d.id)}" data-id="${esc(d.id)}"${index === shown ? '' : ' hidden'}>` +
+      header + body + designCompare(d) + decisionBar(d, content, locked) + `</article>`;
   };
-  // The first pending decision is open in full beside the captain's portrait;
-  // every other one is a one-line strip that opens in place, with the same
-  // select-then-confirm card inside it.
-  SHIP.patch(deck, pend.map((d, i) => {
-    if (i === 0) return full(d) +
-      (pend.length > 1 ? `<p class="also" id="alsoWaiting">${esc(t("alsoWaiting"))}</p>` : '');
-    const content = localized(d), pick = picks.get(d.id);
-    return `<details class="dstrip" id="strip-${esc(d.id)}" data-id="${esc(d.id)}"${expanded.has(d.id) ? ' open' : ''}>` +
-      `<summary>${kindBadge(d)} <span class="meta">${whose(d)}</span> ` +
-      `<span class="st">${said(content ? words(content.title) : d.title || t("waiting"), d)}</span>` +
-      (pick ? ` <i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') +
-      `</summary>${full(d)}</details>`;
-  }).join(""));
+  // in the server's order; the queue names every open card and opens one
+  if (currentCard && !pendingIds.has(currentCard)) currentCard = null;
+  const shown = Math.max(0, pend.findIndex(d => d.id === currentCard));
+  const queue = pend.length > 1 ? `<nav class="queue" aria-label="${esc(t('queueLabel'))}">` + pend.map((d, i) => {
+    const content = localized(d), title = content ? words(content.title) : d.title || t("waiting"), door = content?.door?.kind;
+    const pick = picks.get(d.id);
+    return `<button type="button" class="qitem" id="queue-${esc(d.id)}" data-go="${esc(d.id)}" aria-current="${i === shown}" aria-controls="card-${esc(d.id)}">${kindBadge(d)}` +
+      `<span class="qt">${esc(d.task || d.id)}${multi() ? ' ' + chip(projOf(d)) : ''}</span>${door ? `<span class="qd ${door === 'one-way' ? 'one-way' : 'two-way'}" aria-hidden="true">${door === 'one-way' ? 1 : 2}</span>` : '<span></span>'}` +
+      `<span class="qh">${said(title.slice(title.search(/[:\uff1a]/) + 1).trim(), d)}</span>` +
+      (pick ? `<i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') + `</button>`;
+  }).join('') + `</nav>` : '';
+  SHIP.patch(deck, queue + pend.map((d, i) => full(d, i, pend.length)).join(""));
+  document.getElementById('calm').hidden = pend.length > 0;
+  deck.querySelectorAll('[data-go]').forEach(button => button.onclick = () => {
+    currentCard = button.dataset.go; render(latest);
+    document.getElementById(`queue-${button.dataset.go}`)?.focus({preventScroll:true});
+    DIAGRAM.mount(document.getElementById(`card-${button.dataset.go}`), lang).catch(() => {});
+  });
   deck.querySelectorAll('[data-decision-details]').forEach(button => button.onclick = () => {
-    openDecisionSheets.add(button.dataset.id); render(latest);
-    document.getElementById(`sheet-${button.dataset.id}`)?.querySelector('[data-decision-close]')?.focus();
+    if (openDecisionSheets.has(button.dataset.id)) { closeDecisionSheet(button.dataset.id); return; }
+    openDecisionSheet(button.dataset.id);
   });
   deck.querySelectorAll('[data-decision-close]').forEach(button => button.onclick = () => closeDecisionSheet(button.dataset.id));
   deck.querySelectorAll('[data-design]').forEach(el => {
@@ -956,18 +901,14 @@ function render(s) {
       render(latest);   // the screenshots load only once the toggle is open
     };
   });
-  deck.querySelectorAll('[data-why]').forEach(el => {
-    el.querySelector('summary').onclick = event => {
-      event.preventDefault();
-      if (openWhys.has(el.dataset.why)) openWhys.delete(el.dataset.why); else openWhys.add(el.dataset.why);
-      el.open = openWhys.has(el.dataset.why);
-    };
+  deck.querySelectorAll('[data-why]').forEach(button => button.onclick = () => {
+    if (openWhys.has(button.dataset.why)) openWhys.delete(button.dataset.why); else openWhys.add(button.dataset.why);
+    const drawer = document.getElementById(`why-${button.dataset.why}`);
+    drawer.hidden = !openWhys.has(button.dataset.why);
+    button.setAttribute('aria-expanded', String(!drawer.hidden));
   });
   syncDecisionBars();
   for (const r of refused.values()) r.announced = true;
-  deck.querySelectorAll('details.dstrip').forEach(el => el.ontoggle = () => {
-    if (el.open) DIAGRAM.mount(el, lang).catch(() => {});
-  });
   deck.querySelectorAll('[data-open]').forEach(a => a.onclick = e => {
     // hand it to the editor; the read-only view stays the fallback, and is
     // all a tab without the credential gets
@@ -998,9 +939,11 @@ function render(s) {
     itemPicks.set(b.dataset.id, {...(itemPicks.get(b.dataset.id) || {}), [Number(b.dataset.itemIndex)]: b.dataset.itemChoice});
     render(latest);
   });
-  deck.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
+  deck.querySelectorAll('[data-c],[data-pick]').forEach(b => b.onclick = () => {
     if (sent.has(b.dataset.id) || answered.has(b.dataset.id) || readOnly()) return;
-    picks.set(b.dataset.id, b.dataset.c); render(latest);
+    // a locked one-way merge opens the sheet that says what unlocks it
+    if (b.getAttribute('aria-disabled') === 'true') { openDecisionSheet(b.dataset.id); return; }
+    picks.set(b.dataset.id, b.dataset.c || b.dataset.pick); render(latest);
   });
   deck.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => {
     if (sent.has(b.dataset.id) || answered.has(b.dataset.id) || readOnly()) return;
@@ -1028,17 +971,17 @@ function render(s) {
   mountWalk(deck);
 
   const crew = SHIP.crewOf(s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
+  // the roster is the Crew page itself, never hidden by an older toggle
   SHIP.rosterOn = true;
   SHIP.roster(document.getElementById("roster"), crew, t);
-  document.querySelector('#secbar .aboard').textContent = `${t('aboard')} ${crew.length}/${s.deckLimit}`;
-  document.getElementById('rosterBtn').textContent = t('rosterBtn');
-  syncBoardNavigation(s);
+  document.getElementById('h-crew').textContent = t('crewAboard').replace('{n}', crew.length).replace('{max}', s.deckLimit);
+  syncBoardNavigation(s, crew);
   pageRegion('history', history, '.history-cards .card', 12);
   pageRegion('parked', parkedGroup, '.parked-cards .card', 6);
   pose(); feedbackText();
   if (focusKey) {
     const focusRoot = focusSheet ? document.getElementById(`sheet-${focusSheet}`) : deck;
-    const replacement = [...(focusRoot?.querySelectorAll('[data-id]') || [])].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && (focusChoice ? el.dataset.c === focusChoice : !el.dataset.c) && el.dataset.question === focus.dataset.question && el.dataset.ok === focus.dataset.ok);
+    const replacement = [...(focusRoot?.querySelectorAll('[data-id]') || [])].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && ['c','pick','question','ok','doorAnswer','reviewIntent','decisionDetails','decisionClose'].every((k, i) => el.dataset[k] === focusMarks[i]));
     (replacement || (focusSheet && document.getElementById(`sheet-${focusSheet}`)?.querySelector('[data-decision-close]')))?.focus({preventScroll:true});
     if (replacement && selection) replacement.setSelectionRange(...selection);
   }
@@ -1051,59 +994,51 @@ function render(s) {
 }
 
 // Client-only navigation and paging preserve the existing region nodes and game homes.
+// T-289: four page tabs at one level (Decisions, Fleet, Crew, Log), as the
+// prototype has them; a page never opens over another.
+const PAGES = ['decisions','fleet','crew','log'];
+const tabOf = page => document.getElementById('tab' + page[0].toUpperCase() + page.slice(1));
 let activeTab = 'decisions', tabInitialized = false, fleetScroll = 0;
 const pages = new Map();
 function selectTab(tab, remember = true) {
   const hadDetail = !!openTaskKey;
   if (hadDetail) closeTaskDetail();
-  activeTab = tab === 'fleet' ? 'fleet' : 'decisions';
-  for (const [name, id] of [['decisions','Decisions'], ['fleet','Fleet']]) {
-    const selected = name === activeTab;
-    document.getElementById(name + 'Panel').hidden = !selected;
-    const button = document.getElementById('tab' + id);
-    button.setAttribute('aria-selected', String(selected));
-    button.tabIndex = selected ? 0 : -1;
+  activeTab = PAGES.includes(tab) ? tab : 'decisions';
+  for (const page of PAGES) {
+    const selected = page === activeTab;
+    document.getElementById(page + 'Panel').hidden = !selected;
+    tabOf(page).setAttribute('aria-selected', String(selected));
+    tabOf(page).tabIndex = selected ? 0 : -1;
   }
-  if (hadDetail && remember) document.querySelector('#tabs [aria-selected="true"]').focus({preventScroll:true});
+  document.documentElement.dataset.page = activeTab;
+  if (hadDetail && remember) tabOf(activeTab).focus({preventScroll:true});
   if (remember) try { localStorage.setItem('board.tab', activeTab); } catch {}
+  // the open card's bar takes its room only while Decisions shows
+  if (activeTab === 'decisions') syncDecisionBars();
 }
-for (const [name, id] of [['decisions','Decisions'], ['fleet','Fleet']]) {
-  document.getElementById('tab' + id).onclick = () => selectTab(name);
-}
-document.getElementById('tabs').onkeydown = event => {
+for (const page of PAGES) tabOf(page).onclick = () => selectTab(page);
+document.getElementById('pagetabs').onkeydown = event => {
   if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
   event.preventDefault();
-  selectTab(event.key === 'Home' ? 'decisions' : event.key === 'End' ? 'fleet' : activeTab === 'fleet' ? 'decisions' : 'fleet');
-  document.querySelector('#tabs [aria-selected="true"]').focus();
+  const at = PAGES.indexOf(activeTab);
+  selectTab(event.key === 'Home' ? PAGES[0] : event.key === 'End' ? PAGES.at(-1)
+    : PAGES[(at + (event.key === 'ArrowRight' ? 1 : PAGES.length - 1)) % PAGES.length]);
+  tabOf(activeTab).focus();
 };
-function syncBoardNavigation(s) {
+function syncBoardNavigation(s, crew) {
   if (!tabInitialized) {
     let saved;
     try { saved = localStorage.getItem('board.tab'); } catch {}
     selectTab(s.counts.waiting > 0 ? 'decisions' : saved, false);
     tabInitialized = true;
   }
-  document.querySelector('#tabDecisions > span').textContent = t('tabDecisions');
-  const badge = document.querySelector('#tabDecisions .badge');
-  badge.hidden = !(s.counts.waiting > 0); badge.textContent = String(s.counts.waiting || 0);
-  document.getElementById('tabFleet').textContent = t('tabFleet');
-  document.getElementById('logBtn').textContent = t('secLog');
-  const event = s.recent?.[0];
-  document.getElementById('latestEvent').innerHTML = event ? said(words(event.summary?.[lang === 'en' ? 'en' : 'zh-TW'] || event.summary?.en || event.type), event) : esc(t('nothingYet'));
-  for (const [id, key] of [['crewSheetTitle','sheetCrew'], ['logSheetTitle','sheetLog']]) document.getElementById(id).textContent = t(key);
-  document.querySelectorAll('[data-sheet-close]').forEach(button => button.textContent = t('sheetClose'));
-}
-for (const [id, openerId] of [['crewSheet','rosterBtn'], ['logSheet','logBtn']]) {
-  const sheet = document.getElementById(id), opener = document.getElementById(openerId);
-  opener.onclick = () => {
-    if (openTaskKey) closeTaskDetail();
-    document.querySelectorAll('.board-sheet[open]').forEach(other => other.close());
-    if (id === 'crewSheet') { SHIP.rosterOn = true; document.getElementById('roster').hidden = false; }
-    sheet.showModal(); sheet.querySelector('[data-sheet-close]').focus();
-  };
-  sheet.querySelector('[data-sheet-close]').onclick = () => sheet.close();
-  sheet.addEventListener('close', () => opener.focus({preventScroll:true}));
-  sheet.addEventListener('cancel', event => { event.preventDefault(); sheet.close(); });
+  for (const page of PAGES) tabOf(page).querySelector('.lb').textContent = t('tab' + page[0].toUpperCase() + page.slice(1));
+  const waiting = (s.pending || []).length, badge = document.querySelector('#tabDecisions .badge2');
+  badge.hidden = !(waiting > 0); badge.textContent = String(waiting);
+  badge.setAttribute('aria-label', t('tabWaiting').replace('{n}', waiting));
+  const open = (s.tasks || []).filter(task => !['merged','closed'].includes(task.stage)).length;
+  document.querySelector('#tabFleet .sub').textContent = t('tabFleetOpen').replace('{n}', open);
+  document.querySelector('#tabCrew .sub').textContent = String(crew.length);
 }
 function pageRegion(name, host, selector, size) {
   const items = [...host.querySelectorAll(selector)], total = Math.max(1, Math.ceil(items.length / size));
@@ -1135,12 +1070,21 @@ let detailTrigger = null;
 let openTaskKey = null, detailState = null, detailData = null, detailRequest = 0;
 const expandedAcceptance = new Set();
 const detailPanel = document.getElementById('taskDetail');
-// From 760px up the pane keeps its close control; below, the same control is the visible Back.
-const phoneDetail = matchMedia('(max-width:759px)');
-const detailCloseName = () => t(phoneDetail.matches ? 'sheetBack' : 'detailClose');
-const detailToolbar = () => `<div class="detail-toolbar"><button data-close-task aria-label="${esc(detailCloseName())}"><span class="detail-back">${esc(t('sheetBack'))}</span><span aria-hidden="true">×</span></button></div>`;
-phoneDetail.addEventListener('change', () => detailPanel.querySelector('[data-close-task]')?.setAttribute('aria-label', detailCloseName()));
-const positionTaskDetail = () => detailPanel.style.setProperty('--task-detail-top', Math.max(0, Math.ceil(document.querySelector('.top').getBoundingClientRect().bottom)) + 'px');
+// T-289: the prototype's breadcrumb, "‹ Fleet › T-xxx", heads the detail; its
+// first step closes the detail and returns to the list (at every width).
+const phoneDetail = matchMedia('(max-width:760px)');
+const detailToolbar = id => `<nav class="detail-toolbar detail-crumb" aria-label="${esc(t('tabFleet'))}"><button type="button" data-close-task><span aria-hidden="true">‹ </span>${esc(t('tabFleet'))}</button>` +
+  (id ? `<span aria-hidden="true">›</span><b>${esc(id)}</b>` : '') + `</nav>`;
+// The sticky tab row sits under the sticky top bar; the detail sits under both.
+const positionTaskDetail = () => {
+  const tabRow = document.getElementById('pagetabs');
+  const top = document.querySelector('.top').getBoundingClientRect(), tabs = tabRow.getBoundingClientRect();
+  document.documentElement.style.setProperty('--top-h', Math.ceil(top.height) + 'px');
+  // what stays stuck to the top of the window: the top bar, and the tab row
+  // where it is sticky (not on a phone); a scrolled-to control lands below it
+  document.documentElement.style.setProperty('--stick-h', Math.ceil(top.height + (getComputedStyle(tabRow).position === 'sticky' ? tabs.height : 0)) + 'px');
+  detailPanel.style.setProperty('--task-detail-top', Math.max(0, Math.ceil(Math.max(top.bottom, tabs.bottom))) + 8 + 'px');
+};
 new ResizeObserver(positionTaskDetail).observe(document.querySelector('.top'));
 window.addEventListener('scroll', positionTaskDetail, { passive: true });
 window.addEventListener('resize', positionTaskDetail);
@@ -1167,7 +1111,7 @@ function openTaskDetail(key, trigger) {
   positionTaskDetail();
   detailPanel.hidden = false;
   document.querySelector('.lanes-wrap').classList.add('has-detail');
-  detailPanel.innerHTML = `${detailToolbar()}<p role="status">${esc(t('detailLoading'))}</p>`;
+  detailPanel.innerHTML = `${detailToolbar(taskByKey(key)?.id)}<p role="status">${esc(t('detailLoading'))}</p>`;
   detailPanel.querySelector('[data-close-task]').focus();
   refreshTaskDetail();
 }
@@ -1188,7 +1132,7 @@ async function refreshTaskDetail() {
     detailData = data; drawTaskDetail();
   } catch {
     if (request !== detailRequest || key !== openTaskKey) return;
-    detailPanel.innerHTML = `${detailToolbar()}<p role="status">${esc(t('detailUnavailable'))}</p>`;
+    detailPanel.innerHTML = `${detailToolbar(taskByKey(key)?.id)}<p role="status">${esc(t('detailUnavailable'))}</p>`;
   }
 }
 function drawTaskDetail() {
@@ -1220,11 +1164,11 @@ function drawTaskDetail() {
   const headline = translatedTitle ? (colon < 0 ? translatedTitle : translatedTitle.slice(0,colon)) : task.headline;
   const detail = translatedTitle ? (colon < 0 ? '' : translatedTitle.slice(colon+1)) : task.detail;
   const wasClose = document.activeElement?.hasAttribute('data-close-task');
-  SHIP.patch(detailPanel, `${detailToolbar()}` +
+  SHIP.patch(detailPanel, `${detailToolbar(task.id)}` +
     `<header class="intent-header" style="padding:16px"><div class="detail-meta"><span class="badge s-${esc(task.stage)}">${esc(laneLabel(task.stage))}</span><b>${esc(task.id)}</b>${task.project ? chip(task.project) : ''}${task.pr ? prRef(task.pr,task.pr_url) : ''}` +
     (typeof steOk === 'boolean' ? `<span class="ste-pill">${esc(t(steOk ? 'detailStePass' : 'detailSteFail'))}</span>` : '') +
     `</div><h3 id="taskDetailTitle">${esc(headline)}</h3>${detail ? `<p>${esc(detail)}</p>` : ''}<p>${esc(t('detailCi'))}: ${esc(checks || t('detailNoReadiness'))}</p></header>` +
-    (content?.intent ? intentBody(authored, content, true, true) : `<p style="padding:16px">${esc(t('detailNoExplain'))}</p>`) +
+    (content?.intent ? intentBody(authored, content) : `<p style="padding:16px">${esc(t('detailNoExplain'))}</p>`) +
     section('detailSpec', `<p>${esc(t('detailMilestone'))}: ${esc(task.milestone || '—')}</p><p>${esc(t('detailDependencies'))}: ${esc(task.depends_on.join(', ') || '—')}</p><h5>${esc(t('scopeHeading'))}</h5>${list(task.scope)}<h5>${esc(t('detailAcceptance'))}</h5><ol>` + task.acceptance.map((text,index) => {
       const key = JSON.stringify([openTaskKey,index]), expanded = expandedAcceptance.has(key);
       return `<li><div class="acceptance-text${expanded ? ' expanded' : ''}">${esc(text)}</div><button data-acceptance="${esc(key)}" aria-expanded="${expanded}">${esc(t(expanded ? 'detailCollapse' : 'detailExpand'))}</button></li>`;
@@ -1251,7 +1195,7 @@ detailPanel.addEventListener('click', event => {
   if (reveal) { revealedSections.add(reveal.dataset.reveal); drawTaskDetail(); }
 });
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && !document.querySelector('.board-sheet[open]') && openTaskKey && !menuOpen && !confirming) { event.preventDefault(); closeTaskDetail(); }
+  if (event.key === 'Escape' && openTaskKey && !menuOpen && !confirming) { event.preventDefault(); closeTaskDetail(); }
 });
 
 const validAnswerText = text => typeof text === 'string' && !!text.trim() && [...text].length <= 1000
@@ -1321,26 +1265,30 @@ async function verifyDoor(id) {
   else doorMessages.set(id,result.why || t("doorUnconfirmed"));
   render(latest);
 }
-function changeWalk(d, content, locked, detailOnly) {
-  const refs = d.details?.refs, input = doorInput(d.id);
-  const link = (url, text) => typeof url === 'string' && url.startsWith('https://github.com/')
-    ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${text}</a>` : text;
+// The task detail's read-only evidence walk: each intent's change points with
+// their acceptance lines, tests and code, and the door.
+function changeWalk(d, content) {
+  const refs = d.details?.refs;
   const door = content.door;
   const badge = door ? `<aside class="door-evidence"><b class="door-badge ${door.kind === 'one-way' ? 'one-way' : 'two-way'}">${esc(door.kind === 'one-way' ? t("doorOneWay") : t("doorTwoWay"))}</b><p>${esc(words(door.reason))}</p><p><b>${esc(t("doorRollback"))}</b> ${esc(words(door.rollback))}</p></aside>` : '';
   const rows = (content.intent || []).map((intent, index) => {
     const number = index + 1;
     const points = content.change_points.map((point,i)=>({point,i})).filter(({point})=>point.intent===number);
-    return `<li class="intent-row change-intent"><b>${esc(t("intentHeading"))} ${number}</b> · ${esc(words(intent.text))}` + points.map(({point,i})=>{
-      const ref = refs?.points?.[i], key = JSON.stringify([d.id,i,detailOnly]);
-      return `<section class="change-point"><p class="change-how">${esc(words(point.how))}</p>` +
-        (ref ? `<ul class="change-acceptance">${(ref.acceptance || []).map(n=>`<li>${link(refs.spec_url,`${esc(t("specAcceptance"))} ${n+1} · ${esc(words(refs.acceptance?.[n] || ''))}`)}</li>`).join('')}</ul>` +
-          `<ul class="change-tests">${(ref.tests || []).map(test=>`<li>${link(test.url,`${esc(test.file)}:${test.line == null ? '—' : esc(test.line)} · ${esc(test.name)}`)}</li>`).join('')}</ul>` +
-          `<details class="change-code" data-change-code="${esc(key)}"${openChangeCode.has(key) ? ' open' : ''}><summary>${esc(t("showCode"))}</summary>${(ref.code || []).map(code=>`<div>${link(code.url,`${esc(code.file)}${code.start == null ? '' : ':'+esc(code.start)}${code.kind ? ' · '+esc(code.kind) : ''}`)}${code.snippet ? `<pre>${esc(code.snippet)}</pre>` : ''}</div>`).join('')}${ref.more ? `<p>${esc(t("codeMore").replace('{n}',ref.more))}</p>` : ''}</details>` : '') + '</section>';
-    }).join('') + (!detailOnly ? `<label class="intent-reviewed"><input type="checkbox" data-id="${esc(d.id)}" data-review-intent="${number}"${input.reviewed.includes(number) ? ' checked' : ''}${locked ? ' disabled' : ''}>${esc(t("intentReviewed"))}</label>` : '') + '</li>';
+    return `<li class="intent-row change-intent"><b>${esc(t("intentHeading"))} ${number}</b> · ${esc(words(intent.text))}` +
+      points.map(({point,i}) => `<section class="change-point"><p class="change-how">${esc(words(point.how))}</p>${pointEvidence(d, refs?.points?.[i], JSON.stringify([d.id,i,true]))}</section>`).join('') + '</li>';
   }).join('');
-  const check = !detailOnly && door?.kind === 'one-way' && content.check ? `<section class="door-check"><p>${esc(words(content.check.q))}</p>${content.check.options.map((option,i)=>`<button type="button" data-id="${esc(d.id)}" data-door-answer="${i}" aria-pressed="${input.answer===i}"${locked ? ' disabled' : ''}>${esc(words(option))}</button>`).join('')}<p class="door-feedback" role="status">${esc(doorMessages.get(d.id) || (doorReady(d) ? t("doorConfirmed") : t("doorUnconfirmed")))}</p></section>` : '';
   const status = refs ? `<p class="change-status">${esc(t("gate_ci"))}: ${esc(String(d.gates?.ci ?? '—'))} · ${esc(t("gate_approval"))}: ${esc(String(d.gates?.approval ?? '—'))}</p>` : '';
-  return `<section class="change-walk"><h4>${esc(t("intentHeading"))}</h4><ol>${rows}</ol>${badge}${status}${check}</section>`;
+  return `<section class="change-walk"><h4>${esc(t("intentHeading"))}</h4><ol>${rows}</ol>${badge}${status}</section>`;
+}
+const githubLink = (url, text) => typeof url === 'string' && url.startsWith('https://github.com/')
+  ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${text}</a>` : text;
+// one change point's acceptance lines, tests and code, as the card's refs name them
+function pointEvidence(d, ref, key) {
+  const refs = d.details?.refs;
+  if (!ref) return '';
+  return `<ul class="change-acceptance">${(ref.acceptance || []).map(n=>`<li>${githubLink(refs.spec_url,`${esc(t("specAcceptance"))} ${n+1} · ${esc(words(refs.acceptance?.[n] || ''))}`)}</li>`).join('')}</ul>` +
+    `<ul class="change-tests tests">${(ref.tests || []).map(test=>`<li class="testref">${ICON.test}${githubLink(test.url,`<code>${esc(test.file)}:${test.line == null ? '—' : esc(test.line)}</code> <b>${esc(test.name)}</b>`)}</li>`).join('')}</ul>` +
+    `<details class="change-code hunk" data-change-code="${esc(key)}"${openChangeCode.has(key) ? ' open' : ''}><summary>${ICON.code}${esc(t("showCode"))}</summary>${(ref.code || []).map(code=>`<div>${githubLink(code.url,`<code>${esc(code.file)}${code.start == null ? '' : ':'+esc(code.start)}</code>${code.kind ? ' · '+esc(code.kind) : ''}`)}${code.snippet ? `<pre>${esc(code.snippet)}</pre>` : ''}</div>`).join('')}${ref.more ? `<p>${esc(t("codeMore").replace('{n}',ref.more))}</p>` : ''}</details>`;
 }
 let walkLoader;
 function mountWalk(root) {
@@ -1353,7 +1301,9 @@ function mountWalk(root) {
 }
 function walkHost(d, content, detailOnly) {
   if (!content.scene && (detailOnly || !d.details?.walk)) return '';
-  return `<div data-walk-host="${esc(JSON.stringify({id:d.id, scene:content.scene, walk:detailOnly ? null : d.details?.walk, intents:content.intent, pr:d.pr, diffUrl:(latest?.pr_urls_by_project?.[projOf(d) || ""] || prUrls || {})[d.pr], detailOnly}))}"></div>`;
+  return `<div data-walk-host="${esc(JSON.stringify({id:d.id, scene:content.scene, walk:detailOnly ? null : d.details?.walk, intents:content.intent, pr:d.pr, diffUrl:(latest?.pr_urls_by_project?.[projOf(d) || ""] || prUrls || {})[d.pr], detailOnly,
+    // T-289: a one-way card opens on its evidence, any other on its walk
+    open:!detailOnly && d.details?.walk?.status === 'valid' && content.door?.kind !== 'one-way'}))}"></div>`;
 }
 // T-270: every new card carries why, how and a glossary of the terms it uses.
 // An older card without how or glossary renders exactly as it did before.
@@ -1369,64 +1319,176 @@ function plainBlock(content) {
     (glossary.length ? `<section class="card-glossary"><h4>${esc(t('card.glossary'))}</h4><dl>` +
       glossary.map(g => `<dt>${esc(words(g.term))}</dt><dd>${esc(words(g.text))}</dd>`).join('') + '</dl></section>' : '');
 }
-function intentBody(d, content, locked, detailOnly = false) {
-  const pick = picks.get(d.id);
-  const sentence = (field, index, text) => detailOnly ? steSentence(d, field, index, text) : said(words(text), d);
+// T-289: the prototype's icons, drawn inline so they take the text colour.
+const ICON = {
+  tick: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+  plus: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2"/></svg>',
+  minus: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2"/></svg>',
+  code: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4L2 8l4 4M10 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>',
+  test: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2v4L2.5 13a1 1 0 00.9 1.5h9.2a1 1 0 00.9-1.5L10 6V2M5 2h6" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>',
+  spec: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3M6 8h4M6 11h4" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>',
+  git: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3.5" r="1.8" stroke="currentColor" fill="none" stroke-width="1.3"/><circle cx="4" cy="12.5" r="1.8" stroke="currentColor" fill="none" stroke-width="1.3"/><circle cx="12" cy="6" r="1.8" stroke="currentColor" fill="none" stroke-width="1.3"/><path d="M4 5.3v5.4M12 7.8c0 3-8 1.5-8 3" stroke="currentColor" fill="none" stroke-width="1.3"/></svg>',
+  door1: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 18V3h8v15M13 10h1" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M2 18h16" stroke="currentColor" stroke-width="1.6"/><path d="M15 6l3 3-3 3" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>',
+  door2: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 18V3h8v15M13 10h1" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M2 18h16" stroke="currentColor" stroke-width="1.6"/><path d="M15 5l3 2.5-3 2.5M18 12.5l-3 2.5 3 2.5" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>',
+  eye: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 8s2.6-5 7-5 7 5 7 5-2.6 5-7 5-7-5-7-5z" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="8" cy="8" r="2" fill="currentColor"/></svg>',
+  lock: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1" fill="currentColor"/><path d="M5 7V5a3 3 0 016 0v2" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>',
+};
+// the intent a done line names, as "Intent 2:" or its Chinese form, or 0
+const intentOf = item => Number(String(item?.text || '').match(/^(?:Intent|\u610f\u5716)\s*(\d+)\s*[:\uff1a]/)?.[1] || 0);
+// a merge card's CI and review, as pills beside its pull request
+function statusPills(d) {
+  if (d.kind !== 'merge' || !d.gates) return [];
+  const ci = gatePassed(d.gates, 'ci'), review = gatePassed(d.gates, 'approval');
+  return [`<span class="pill${ci ? ' ok' : ''}">${ci ? ICON.tick : ''}${esc(t(ci ? 'pillCi' : 'pillCiPending'))}</span>`,
+    `<span class="pill${review ? ' ok' : ''}">${ICON.eye}${esc(t(review ? 'pillReview' : 'pillReviewPending'))}</span>`];
+}
+function doorChip(door, short = false) {
+  const one = door.kind === 'one-way';
+  return `<span class="doorchip ${one ? 'one-way' : 'two-way'}">${one ? ICON.door1 : ICON.door2}${esc(t(one ? (short ? 'doorChipOne' : 'doorOneWay') : (short ? 'doorChipTwo' : 'doorTwoWay')))}</span>`;
+}
+// behind "Why you see this": the explanation, why, how, glossary, notes and outcome
+function whyDrawer(d, content) {
+  const list = items => `<ul>${items.filter(x => x && typeof x.text === 'string').map(x => `<li class="${x.kind === 'caution' ? 'warn' : ''}">${said(words(x.text), d)}</li>`).join('')}</ul>`;
+  const part = (key, html) => html ? `<section><h4>${esc(t(key))}</h4>${html}</section>` : '';
+  const plain = plainBlock(content);
+  return part('explanationHeading', `<p class="explanation">${said(content ? words(content.explanation || '') : t('missingDetails'), d)}</p>`) +
+    (plain || part('whyHeading', (content?.why || []).length ? `<div class="intent-why">${list(content.why)}</div>` : '')) +
+    part('notesHeading', (content?.notes || []).length ? list(content.notes) : '') +
+    part('outcomeHeading', content?.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome), d)}</p>` : '');
+}
+const changesLabel = n => n === 1 ? t('kpChange') : t('kpChanges').replace('{n}', n);
+// "What this change must do": one row per intent, with its status
+function kpSection(d, content) {
+  const reviewed = doorInput(d.id).reviewed, points = content.change_points || [];
+  return `<section class="kpsec"><h3>${esc(t('kpHeading'))}</h3><p class="lead">${esc(t('kpLead'))}</p><ol class="kp">` +
+    (content.intent || []).map((intent, i) => {
+      const n = i + 1, changes = points.filter(p => p.intent === n).length;
+      const state = reviewed.includes(n) ? 'ok' : changes || (content.done || []).some(x => intentOf(x) === n) ? 'ev' : 'todo';
+      return `<li class="intent-row kp-${state}"><div class="kprow"><span class="kn">${state === 'ok' ? ICON.tick : n}</span>` +
+        `<span class="kt">${said(words(intent.text), d)}</span><span class="ks">${esc(t(state === 'ok' ? 'kpChecked' : state === 'ev' ? 'kpEvidence' : 'kpPlanned'))}` +
+        `${changes ? ` · ${esc(changesLabel(changes))}` : ''}</span><span class="kg"></span></div></li>`;
+    }).join('') + `</ol></section>`;
+}
+// The Intent check tab: each intent as a step, with its acceptance lines,
+// change points, tests and evidence, and the captain's tick; then scope.
+function intentCheck(d, content, locked) {
+  const input = doorInput(d.id), points = content.change_points || [], done = content.done || [];
+  const steps = (content.intent || []).map((intent, i) => {
+    const n = i + 1, key = JSON.stringify([d.id, n]), ok = input.reviewed.includes(n);
+    const mine = points.map((point, j) => ({point, j})).filter(x => x.point.intent === n);
+    const paired = done.filter(x => intentOf(x) === n && n <= (content.intent || []).length);
+    const body = mine.map(({point, j}) => `<div class="hop change change-point"><span class="cpn">${j + 1}</span><div><p class="how change-how">${esc(words(point.how))}</p>` +
+        pointEvidence(d, d.details?.refs?.points?.[j], JSON.stringify([d.id, j, false])) + `</div></div>`).join('') +
+      paired.map(x => `<div class="hop ev">${ICON.tick}<p class="how alignment-row">${said(words(x.text), d)}</p></div>`).join('') +
+      (mine.length || paired.length ? '' : `<p class="notest">${esc(t('kpPlanned'))}</p>`) +
+      (points.length ? `<label class="mark-reviewed intent-reviewed"><input type="checkbox" data-id="${esc(d.id)}" data-review-intent="${n}"${ok ? ' checked' : ''}${locked ? ' disabled' : ''}>${esc(t("intentReviewed"))}</label>` : '');
+    return `<li class="step${ok ? ' ok' : ''}"><details data-step="${esc(key)}"${closedSteps.has(key) ? '' : ' open'}><summary><span class="sn">${ok ? ICON.tick : n}</span>` +
+      `<span class="st"><small>${esc(t('intentHeading'))} ${n}</small>${said(words(intent.text), d)}</span><span class="sc">${mine.length ? esc(changesLabel(mine.length)) : ''}</span></summary>` +
+      `<div class="stepbody">${body}</div></details></li>`;
+  }).join('');
+  const unpaired = done.filter(x => !(intentOf(x) > 0 && intentOf(x) <= (content.intent || []).length));
+  const chips = (field, cls) => (content[field] || []).map(text => `<li class="chip ${cls}">${said(words(text), d)}</li>`).join('');
+  const scope = (content.scope_in || []).length || (content.scope_out || []).length
+    ? `<div><h4>${esc(t('scopeHeading'))}</h4><ul class="chips" aria-label="${esc(t('scopeHeading'))}">${chips('scope_in', 'in scope_in')}${chips('scope_out', 'out scope_out')}</ul></div>` : '';
+  const refs = d.details?.refs;
+  return `<ol class="walk">${steps}</ol>` +
+    (unpaired.length ? `<ul class="plain-alignment" aria-label="${esc(t('alignmentHeading'))}">${unpaired.map(x => `<li class="alignment-row">${said(words(x.text), d)}</li>`).join('')}</ul>` : '') +
+    (refs ? `<p class="change-status">${esc(t("gate_ci"))}: ${esc(String(d.gates?.ci ?? '—'))} · ${esc(t("gate_approval"))}: ${esc(String(d.gates?.approval ?? '—'))}</p>` : '') +
+    (scope ? `<div class="meta2">${scope}</div>` : '');
+}
+// An intent card's body: the intent rows, How it works, then the walk and the
+// intent check as two tabs (walk.js fills the walk and switches the tabs).
+function cardBody(d, content, locked) {
+  const host = walkHost(d, content, false), points = content.change_points || [];
+  const counter = points.length ? ` <i>${doorInput(d.id).reviewed.length}/${(content.intent || []).length}</i>` : '';
+  return kpSection(d, content) +
+    `<section class="hero intent-how"><h3>${esc(t('howHeading'))}</h3>${d.diagram === false || content.scene ? '' : DIAGRAM.embed(d.diagram_name || d.id)}${fallback(d, content)}${host}</section>` +
+    `<section class="align"><div class="tabs" role="tablist">` +
+    (host ? `<button type="button" role="tab" data-code-tab aria-selected="false">${esc(t('walkDiff'))}</button>` : '') +
+    `<button type="button" role="tab" data-check-tab aria-selected="true">${esc(t('walkIntentCheck'))}${counter}</button></div>` +
+    (host ? `<div class="tabpane" data-code-panel role="tabpanel" hidden></div>` : '') +
+    `<div class="tabpane" data-check-panel role="tabpanel">${intentCheck(d, content, locked)}</div></section>` +
+    retroItemsHtml(d, content, locked, 'intent');
+}
+// The fixed decision bar: the signal-flag tiles and the send button, and above
+// them the sheet with the door, the comprehension check, the full options and
+// the questions.
+function decisionBar(d, content, locked) {
+  const pick = picks.get(d.id), door = content?.door, open = openDecisionSheets.has(d.id);
+  const keys = d.purpose === 'retro' ? ['A','C'] : ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])];
+  const label = k => { const o = content?.options?.[k]; return o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'); };
+  // T-118: what the option does when chosen, as the server will carry it out
+  const effectOf = k => d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
+  const effect = k => { const e = effectOf(k); return e ? ` <i class="eff">→ ${esc(effectLabel(e))}</i>` : ''; };
+  // a tile's name: its text is hidden on a phone, so the name carries it
+  const tileName = k => [k, label(k)].filter(Boolean).join(' · ') + (effectOf(k) ? ` → ${effectLabel(effectOf(k))}` : '');
+  // a one-way merge stays locked until every intent is checked and the check is answered
+  const doorLocked = k => !locked && mergeDoorNeeded(d, k) && !doorReady(d);
+  const state = (k, extra = '') => `${locked ? ' disabled' : doorLocked(k) ? ' aria-disabled="true"' : ''}${tipAttr()}${extra}`;
+  const tiles = keys.map(k => `<button type="button" class="mflag opt f-${k}" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" aria-label="${esc(tileName(k))}"${state(k, ` title="${esc(label(k))}"`)}>` +
+    `<b>${doorLocked(k) ? ICON.lock : k}</b><span>${esc(label(k))}${effect(k)}</span></button>`).join('') +
+    (d.purpose === 'retro' ? '' : `<button type="button" class="mflag opt f-custom" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" aria-label="${esc(t('customChoice'))}"${state('custom')}><b aria-hidden="true">&#9998;</b><span>${esc(t('customChoice'))}</span></button>`);
+  const flags = keys.map(k => { const o = content?.options?.[k];
+    return `<button type="button" class="flagbtn f-${k}" data-id="${esc(d.id)}" data-pick="${k}" aria-pressed="${pick === k}"${state(k)}><span class="fl">${doorLocked(k) ? ICON.lock : k}</span>` +
+      `<span class="fb"><b>${esc(label(k))}${effect(k)}</b>${o ? `<span class="pro">${ICON.plus}<span><span class="vh">${esc(t('pros'))} </span>${said(words(o.pros), d)}</span></span><span class="con">${ICON.minus}<span><span class="vh">${esc(t('cons'))} </span>${said(words(o.cons), d)}</span></span>` : ''}</span></button>`; }).join('');
+  const input = doorInput(d.id), need = (content?.intent || []).length;
+  const check = door?.kind === 'one-way' && content.check ? `<div class="understand door-check"><h4>${esc(t('beforeUnlock'))}</h4>` +
+    `<p class="prog"><span class="bar"><i style="width:${need ? Math.round(100 * input.reviewed.length / need) : 0}%"></i></span>${esc(t('intentsChecked').replace('{have}', input.reviewed.length).replace('{need}', need))}</p>` +
+    `<fieldset><legend>${esc(words(content.check.q))}</legend>${content.check.options.map((option, i) => `<button type="button" class="${input.answer === i ? (doorReady(d) ? 'right' : doorMessages.has(d.id) ? 'wrong' : '') : ''}" data-id="${esc(d.id)}" data-door-answer="${i}" aria-pressed="${input.answer === i}"${locked ? ' disabled' : ''}>${esc(words(option))}</button>`).join('')}</fieldset>` +
+    `<p class="door-feedback why2" role="status">${esc(doorMessages.get(d.id) || (doorReady(d) ? t("doorConfirmed") : t("doorUnconfirmed")))}</p></div>` : '';
+  const doorPanel = door ? `<div class="door ${door.kind === 'one-way' ? 'one' : 'two'}">${door.kind === 'one-way' ? ICON.door1 : ICON.door2}<div><b>${esc(t(door.kind === 'one-way' ? 'doorOneWay' : 'doorTwoWay'))}</b>` +
+    `<p>${esc(words(door.reason))}</p><p class="rb"><small>${esc(t('doorRollback'))}</small>${esc(words(door.rollback))}</p></div></div>` : '';
+  const questions = (content?.questions || []).length ? `<section class="qs confirm-questions"><h4>${esc(t('confirmQuestions'))}</h4>` +
+    content.questions.map((q, index) => { const a = answers.get(d.id)?.[index];
+      return `<div class="q confirm-question"><p>${said(words(q.text), d)}</p><div class="question-controls"><span class="seg">` +
+        ['yes','no'].map(value => `<button type="button" data-id="${esc(d.id)}" data-question="${index}" data-ok="${value}" aria-pressed="${a?.ok === (value === 'yes')}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t(value === 'yes' ? 'answerYes' : 'answerNo'))}</button>`).join('') +
+        `</span><label ${a?.ok === false ? '' : 'hidden'}>${esc(t('answerText'))}<textarea data-id="${esc(d.id)}" data-question="${index}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(a?.text || '')}</textarea></label></div></div>`; }).join('') + '</section>' : '';
+  const lockedKeys = keys.filter(doorLocked);
+  const missing = need - input.reviewed.length;
+  const lockText = lockedKeys.length ? [missing > 0 ? t('lockIntents').replace('{n}', missing) : '', doorReady(d) ? '' : t('lockQuestion')].filter(Boolean).join(t('lockJoin')) : '';
+  return `<div class="dbar decision-bar" role="region" aria-label="${esc(t('yourCall'))}">` +
+    `<div class="dsheet decision-sheet" role="dialog" aria-label="${esc(t("decisionDetails"))}" id="sheet-${esc(d.id)}" data-id="${esc(d.id)}"${open ? '' : ' hidden'}><div class="dsheet-in">` +
+    `<button type="button" class="dclose" data-decision-close data-id="${esc(d.id)}">${esc(t("decisionClose"))}</button>` +
+    doorPanel + check + `<h4>${esc(t('optionsHeading'))}</h4><div class="flags">${flags}</div>` + questions + retroItemsHtml(d, content, locked, 'sheet') + `</div></div>` +
+    `<div class="drow">${door ? doorChip(door, true) : ''}${lockText ? `<span class="lockmsg">${ICON.lock}<span>${esc(lockText)}</span></span>` : ''}` +
+    `<span class="mini" role="group" aria-label="${esc(t('optionsHeading'))}">${tiles}</span>` +
+    `<label class="dcustom" ${pick === 'custom' ? '' : 'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>` +
+    `<span class="validation" id="validation-${esc(d.id)}"></span>` +
+    (refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : '') +
+    `<button type="button" class="more2" data-decision-details data-id="${esc(d.id)}" aria-controls="sheet-${esc(d.id)}" aria-expanded="${open}">${esc(t(open ? 'decisionHide' : 'decisionMore'))}</button>` +
+    `<button type="button" class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(sendLabel(d.id))}</button></div></div>`;
+}
+// the send button names the choice it sends
+const sendLabel = id => sent.has(id) ? t('sending') : !picks.get(id) ? t('pickOption') : picks.get(id) === 'custom' ? t('confirmOrder') : t('sendChoice').replace('{k}', picks.get(id));
+// The task detail's read-only explanation, with each sentence's STE report.
+// T-289: the open card has its own layout (cardBody below).
+function intentBody(d, content) {
+  const sentence = (field, index, text) => steSentence(d, field, index, text);
   const list = html => `<ul>${html}</ul>`;
   const hasItems = field => Array.isArray(content[field]) && content[field].length > 0;
   const sentences = (field, numbered = false) => sectionItems(d, field, content[field] || [], (item, index) =>
     `<li>${numbered ? `<b>${esc(t('intentHeading'))} ${index + 1}</b> · ` : ''}${sentence(field, index, item.text)}</li>`, list);
   const intent = `<section><h4>${esc(t('intentHeading'))}</h4>${sentences('intent', true)}` +
-    (detailOnly && hasItems('why') ? `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${sentence('why',index,item.text)}</span>`)}</div>` : '') + '</section>';
+    (hasItems('why') ? `<div class="intent-why"><b>${esc(t('whyHeading'))}</b> ${sectionItems(d, 'why', content.why || [], (item,index) => `<span>${sentence('why',index,item.text)}</span>`)}</div>` : '') + '</section>';
   const how = `<section class="intent-how"><h4>${esc(t('howHeading'))}</h4>` +
-    (d.diagram === false || content.scene ? '' : DIAGRAM.embed(d.diagram_name || d.id)) + `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>${walkHost(d,content,detailOnly)}</section>` +
+    (d.diagram === false || content.scene ? '' : DIAGRAM.embed(d.diagram_name || d.id)) + fallback(d, content) + walkHost(d,content,true) + `</section>` +
     // T-270: why, how and glossary follow the diagram on cards that carry them
     plainBlock(content);
-  const visibleIntents = revealedSections.has(JSON.stringify([d.id, 'intent'])) ? (content.intent || []) : (content.intent || []).slice(0,6);
-  const visibleDone = revealedSections.has(JSON.stringify([d.id, 'done'])) ? (content.done || []) : (content.done || []).slice(0,6);
-  const parent = item => {
-    const match = item.text.match(/^(?:Intent|\u610f\u5716)\s+(\d+)[:\uff1a]/);
-    const n = match ? Number(match[1]) : 0;
-    return n > 0 && n <= visibleIntents.length ? n : 0;
-  };
-  const doneRow = (item, nested = false) => `<li class="alignment-row">${nested ? '<span aria-hidden="true">✓ </span>' : ''}${said(words(item.text),d)}</li>`;
-  const alignment = hasItems('done') ? (detailOnly
-    ? `<section><h4>${esc(t('alignmentHeading'))}</h4>${sentences('done')}</section>`
-    : `<div class="plain-alignment"><ul aria-label="${esc(t('alignmentHeading'))}">${visibleDone.filter(item => !parent(item)).map(item => doneRow(item)).join('')}</ul>` +
-      sectionItems(d, 'done', content.done || [], () => '') + '</div>') : '';
+  const alignment = hasItems('done') ? `<section><h4>${esc(t('alignmentHeading'))}</h4>${sentences('done')}</section>` : '';
   const scopeItems = ['scope_in','scope_out'].flatMap(field => (content[field] || []).map(text => ({field, text})));
   const scopeKey = JSON.stringify([d.id, 'scope']);
   const shownScope = revealedSections.has(scopeKey) ? scopeItems : scopeItems.slice(0,6);
   const scope = scopeItems.length ? `<section><h4>${esc(t('scopeHeading'))}</h4><div class="intent-scope">` +
-    ['scope_in','scope_out'].filter(hasItems).map(field => `<div class="${detailOnly ? '' : field}"><h5>${esc(t(field === 'scope_in' ? 'scopeIn' : 'scopeOut'))}</h5><ul>${shownScope.filter(item => item.field === field).map(item => `<li>${said(words(item.text),d)}</li>`).join('')}</ul></div>`).join('') +
+    ['scope_in','scope_out'].filter(hasItems).map(field => `<div><h5>${esc(t(field === 'scope_in' ? 'scopeIn' : 'scopeOut'))}</h5><ul>${shownScope.filter(item => item.field === field).map(item => `<li>${said(words(item.text),d)}</li>`).join('')}</ul></div>`).join('') +
     `</div>${shownScope.length < scopeItems.length ? `<button type="button" class="show-more" data-reveal="${esc(scopeKey)}">${esc(t('showMore').replace('{n}',scopeItems.length - shownScope.length))}</button>` : ''}</section>` : '';
   const notes = hasItems('notes') ? `<section><h4>${esc(t('notesHeading'))}</h4>` +
     sectionItems(d, 'notes', content.notes || [], (note,index) => `<aside class="intent-${note.kind === 'caution' ? 'caution' : 'note'}"><b>${esc(t(note.kind === 'caution' ? 'cautionHeading' : 'noteHeading'))}</b><p>${sentence('notes',index,note.text)}</p></aside>`) + '</section>' : '';
-  if (detailOnly && hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,true)}${how}${alignment}${scope}${notes}</div>`;
-  if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`;
-  const options = `<section class="acts intent-options">` +
-    (d.purpose === 'retro' ? ['A','C'] : ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])]).map(k => {
-      const o = content.options?.[k];
-      const eff = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
-      return `<button class="opt option-box" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked || (mergeDoorNeeded(d,k) && !doorReady(d)) ? 'disabled' : ''}${tipAttr()}><span><b>${k}</b> · ${esc(o ? words(o.description) : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}${eff ? ` <i class="eff">→ ${esc(effectLabel(eff))}</i>` : ''}</span>` +
-        (o ? `<span class="tradeoffs"><b>${esc(t('pros'))}</b> ${esc(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${esc(words(o.cons))}</span>` : '') + '</button>';
-    }).join('') + (d.purpose === 'retro' ? '' :
-    `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t('customChoice'))}</button>` +
-    `<label ${pick === 'custom' ? '' : 'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>`) + `</section>`;
-  const footer = `<footer class="acts intent-footer"><span class="validation" id="validation-${esc(d.id)}"></span>` +
-    (refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : '') +
-    `<button class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(sent.has(d.id) ? t('sending') : t('confirmOrder'))}</button></footer>`;
-  const pairedIntent = `<section><h4>${esc(t('intentHeading'))}</h4>` +
-    sectionItems(d, 'intent', content.intent || [], (item,index) => `<li class="intent-row"><b>${esc(t('intentHeading'))} ${index+1}</b> · ${said(words(item.text),d)}` +
-      (visibleDone.some(item => parent(item) === index+1) ? `<ul aria-label="${esc(t('alignmentHeading'))}">${visibleDone.filter(item => parent(item) === index+1).map(item => doneRow(item,true)).join('')}</ul>` : '') + '</li>', list) +
-    alignment + '</section>';
-  const why = `<details class="why-disclosure" data-why="${esc(d.id)}"${openWhys.has(d.id) ? ' open' : ''}><summary>${esc(t("whyYouSeeThis"))}</summary>` +
-    `<p class="explanation">${said(words(content.explanation || ''),d)}</p>` +
-    (hasItems('why') ? `<div class="intent-why">${sentences('why')}</div>` : '') +
-    (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome),d)}</p>` : '') + '</details>';
-  const items = retroItemsHtml(d, content, locked, 'intent');
-  if (hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,false)}${how}${scope}${notes}</div>${items}${why}${designCompare(d)}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
-  return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>${items}${why}${designCompare(d)}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
+  return `<div class="intent-alignment">${hasItems('change_points') ? changeWalk(d,content,true) : intent}${how}${alignment}${scope}${notes}</div>`;
+}
+// the before and after in words, for a card whose drawing is missing
+function fallback(d, content) {
+  return `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before || (content.before_nodes || []).map(node => node.label).join(' → ')), d)}</p></section>` +
+    `<span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after || (content.after_nodes || []).map(node => node.label).join(' → ')), d)}</p></section></div>`;
 }
 // T-298: a UI change's merge card shows each page's prototype and result
 // screenshots side by side, closed until the captain opens the toggle. The
@@ -1443,40 +1505,35 @@ function designCompare(d) {
       shot(x.prototype, say(s.prototype_label), x) + shot(x.head, say(s.head_label), x) + '</figure>').join('') + '</section>').join('') : '') +
     '</details>';
 }
-function decisionDetailsButton(d) {
-  return `<button type="button" data-decision-details data-id="${esc(d.id)}" aria-controls="sheet-${esc(d.id)}" aria-expanded="${openDecisionSheets.has(d.id)}">${esc(t("decisionDetails"))}</button>`;
+function openDecisionSheet(id) {
+  openDecisionSheets.add(id); render(latest);
+  document.getElementById(`sheet-${id}`)?.querySelector('[data-decision-close]')?.focus();
 }
 function closeDecisionSheet(id) {
   openDecisionSheets.delete(id); render(latest);
   document.getElementById(`card-${id}`)?.querySelector('[data-decision-details]')?.focus({preventScroll:true});
 }
-function decisionSheet(d, content, locked) {
-  const hasItems = field => Array.isArray(content?.[field]) && content[field].length > 0;
-  const questions = hasItems('questions') ? `<section class="confirm-questions"><h4>${esc(t('confirmQuestions'))}</h4>` +
-    sectionItems(d, 'questions', content.questions, (q,index) => {
-      const a = answers.get(d.id)?.[index];
-      return `<div class="confirm-question"><p>${said(words(q.text),d)}</p><div class="question-controls">` +
-        ['yes','no'].map(value => `<button type="button" data-id="${esc(d.id)}" data-question="${index}" data-ok="${value}" aria-pressed="${a?.ok === (value === 'yes')}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(t(value === 'yes' ? 'answerYes' : 'answerNo'))}</button>`).join('') +
-        `<label ${a?.ok === false ? '' : 'hidden'}>${esc(t('answerText'))}<textarea data-id="${esc(d.id)}" data-question="${index}" ${locked ? 'disabled' : ''}${tipAttr()}>${esc(a?.text || '')}</textarea></label></div></div>`;
-    }) + '</section>' : '';
-  return `<div class="decision-sheet" role="dialog" aria-label="${esc(t("decisionDetails"))}" id="sheet-${esc(d.id)}" data-id="${esc(d.id)}" ${openDecisionSheets.has(d.id) ? '' : 'hidden'}>` +
-    `<button type="button" data-decision-close data-id="${esc(d.id)}">${esc(t("decisionClose"))}</button><h4>${esc(t('optionsHeading'))}</h4>` +
-    Object.entries(content?.options || {}).map(([key,o]) => `<section><b>${esc(key)} · ${said(words(o.description),d)}</b><p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros),d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons),d)}</p></section>`).join('') + questions + plainBlock(content) +
-    retroItemsHtml(d, content, locked, 'sheet') + '</div>';
-}
+// The bar is fixed to the viewport; the open card keeps room for the whole
+// bar - its row of tiles and, when open, its sheet - below its last line, and
+// the page scrolls a control above the bar, so nothing on the card hides
+// behind it.
 const decisionBarObserver = new ResizeObserver(entries => {
   for (const {target} of entries) {
-    const card = target.closest('.dcard'), height = `${target.getBoundingClientRect().height}px`;
-    card.style.setProperty('--decision-bar-height', height);
-    if (card.parentElement.id === 'deck') card.style.paddingBottom = height;
+    const card = target.closest('.dcard');
+    const fixed = getComputedStyle(target).position === 'fixed';
+    const height = fixed ? Math.ceil(target.getBoundingClientRect().height) : 0;
+    if (card && !card.hidden) card.style.paddingBottom = `${height + 24}px`;
+    document.documentElement.style.setProperty('--dbar-h', `${height}px`);
   }
 });
 function syncDecisionBars() {
   decisionBarObserver.disconnect();
-  document.querySelectorAll('#deck .decision-bar').forEach(bar => decisionBarObserver.observe(bar));
+  const bars = document.querySelectorAll('#deck .dcard:not([hidden]) .dbar');
+  if (!bars.length) document.documentElement.style.setProperty('--dbar-h', '0px');
+  bars.forEach(bar => decisionBarObserver.observe(bar));
 }
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || document.querySelector('.board-sheet[open]') || activeTab !== 'decisions' || openTaskKey || menuOpen || confirming) return;
+  if (event.key !== 'Escape' || activeTab !== 'decisions' || openTaskKey || menuOpen || confirming) return;
   const focusedSheet = document.activeElement?.closest('.decision-sheet');
   const sheet = focusedSheet?.checkVisibility() ? focusedSheet
     : [...document.querySelectorAll('.decision-sheet:not([hidden])')].find(sheet => sheet.checkVisibility());

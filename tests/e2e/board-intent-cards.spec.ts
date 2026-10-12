@@ -17,9 +17,9 @@ for (const empty of [false, true]) test(`intent-only card omits optional content
   try {
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('#card-D-211');
-    await expect(card.locator('.intent-alignment h4')).toHaveText(['Intent', 'How it works']);
+    await expect(card.locator('h3')).toHaveText(['What this change must do', 'How it works']);
     await expect(card.locator('.decision-sheet h4')).toHaveText(['Options']);
-    await expect(card.locator('.intent-why, .intent-outcome, .intent-scope, .confirm-questions')).toHaveCount(0);
+    await expect(card.locator('.intent-why, .intent-outcome, .meta2, .chip, .confirm-questions, .why .nb')).toHaveCount(0);
     await expect(card.locator('.confirm')).toBeDisabled();
     await card.locator('[data-c="A"]').click();
     await expect(card.locator('.confirm')).toBeEnabled();
@@ -33,9 +33,10 @@ for (const field of ['scope_in', 'scope_out']) test(`one-sided scope renders onl
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);
-    const scope = page.locator('#card-D-211 .intent-scope');
-    await expect(scope.locator('h5')).toHaveCount(1);
-    await expect(scope.locator('li')).toHaveText([field === 'scope_in' ? 'Board cards' : 'Other pages']);
+    const scope = page.locator('#card-D-211 .meta2');
+    await expect(scope.locator('h4')).toHaveText(['Scope']);
+    await expect(scope.locator('.chip')).toHaveText([field === 'scope_in' ? 'Board cards' : 'Other pages']);
+    await expect(scope.locator('.chip')).toHaveClass(new RegExp(`\\b${field === 'scope_in' ? 'in' : 'out'}\\b`));
   } finally {await stopBoard(b);}
 });
 
@@ -49,7 +50,7 @@ for (const missingRules of [false, true]) test(`intent sections and stored chips
   try {
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('#card-D-211');
-    await expect(card.locator('.intent-alignment')).toBeVisible();
+    await expect(card.locator('.align')).toBeVisible();
     for (const text of ['Intent', 'How it works', 'Board cards', 'Other pages', 'The card shows the result.', 'Check the scope.', 'Do not dispatch yet.']) await expect(card).toContainText(text);
     await expect(card.locator('.ste-pill')).toHaveText('STE · 6/7');
     await expect(card.locator('[aria-label="Alignment"]')).toHaveCount(1);
@@ -60,7 +61,7 @@ for (const missingRules of [false, true]) test(`intent sections and stored chips
     if (missingRules) expect(state.ste_rules).toEqual([]);
     else expect(state.ste_rules).toContainEqual({id:'R3',en:'Use one instruction per step.','zh-TW':'每個步驟只寫一個指令。'});
     await expect(card.locator('script')).toHaveCount(0);
-    await expect(page.locator('#card-D-212 .intent-alignment')).toHaveCount(0);
+    await expect(page.locator('#card-D-212 .align')).toHaveCount(0);
     await card.locator('[data-c="A"]').click();
     await expect(card.locator('.confirm')).toBeDisabled();
     await card.locator('[data-decision-details]').click();
@@ -101,7 +102,7 @@ test('intent card without a report renders without chips and read-only controls 
   const context=await browser.newContext(), guest=await context.newPage();
   try {
     await guest.goto(`${b.url}/?lang=en`);
-    await expect(guest.locator('.intent-alignment')).toBeVisible();
+    await expect(guest.locator('#card-D-211 .align')).toBeVisible();
     await expect(guest.locator('.ste-chip,.ste-pill')).toHaveCount(0);
     for (const control of await guest.locator('[data-question]').all()) await expect(control).toBeDisabled();
   } finally {await context.close(); await stopBoard(b);}

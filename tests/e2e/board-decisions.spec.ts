@@ -1,4 +1,4 @@
-import { openCrewSheet } from './lib/board';
+import { showCrew, openCard } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -17,9 +17,9 @@ test("the captain merges from the board", async ({ page }) => {
   const b = await startBoard(makeRoot([...CREW]));
   try {
   await page.goto(`${b.url}/?lang=zh-TW`);
-  await openCrewSheet(page);
+  await showCrew(page);
   await expect(page.locator("#roster .rrow").first()).toBeVisible();
-  await page.locator("#crewSheet [data-sheet-close]").click();
+  await page.locator("#tabDecisions").click();
   const card = page.locator(".dcard").first();
   await expect(card).toBeVisible();
   await expect(card.locator(".gates li")).toHaveCount(6);   // six named gates
@@ -76,10 +76,10 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
     expect(existsSync(join(b.root, 'state/decisions/D-1.json'))).toBe(false);
     await card.locator('.confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
-    await expect(page.locator('#capstage')).toBeVisible();
+    // T-289: the portrait is hidden, as in the prototype; its pose still follows the order
+    await expect(page.locator('#capstage')).toBeHidden();
     await expect(page.locator('#capstage')).toHaveAttribute('data-pose', 'order');
     await expect(page.locator('#capstage .capimg')).toHaveCSS('filter', /drop-shadow/);
-    await expect(page.locator('#capstage .capimg')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, -6)');
     await expect(page.locator('#capstage .lbl span')).toHaveText(EN.capOrder);
     const stored = JSON.parse(readFileSync(join(b.root, 'state/decisions/D-1.json'), 'utf8'));
     expect(stored.chosen).toBe('custom');
@@ -91,7 +91,6 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
     await expect(page.locator('#orderFeedback script')).toHaveCount(0);
     await expect(page.locator('#capstage')).toHaveAttribute('data-pose','idle',{timeout:15_000});
     await expect(page.locator('#capstage .capimg')).toHaveCSS('filter','none');
-    await expect(page.locator('#capstage .capimg')).toHaveCSS('transform','none');
     await expect(page.locator('#capstage .lbl span')).toHaveText(CN.capDeciding);
   } finally { await stopBoard(b); }
 });
@@ -108,17 +107,17 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);
-    // the second decision is a strip until it is opened in place, and it
+    // the second decision waits in the queue until it is opened, and it
     // stays open through a language switch
-    await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', false);
-    await page.locator('#strip-D-2 > summary').click();
-    await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', true);
+    await expect(page.locator('#card-D-2')).toBeHidden();
+    await openCard(page, 'D-2');
     for (const lang of ['en','zh-TW','zh-CN']) {
       await page.locator(`[data-l="${lang}"]`).click();
-      await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', true);
+      await expect(page.locator('#card-D-2')).toBeVisible();
       for (const [id, d, cn] of [['D-1', details, CN_DETAILS[0]], ['D-2', second, CN_DETAILS[1]]] as const) {
         const want = lang === 'en' ? d.en : lang === 'zh-TW' ? d['zh-TW'] : cn;
         const card = page.locator(`#card-${id}`);
+        await openCard(page, id);
         for (const field of ['title','explanation'] as const) await expect(card).toContainText(want[field]);
         await card.locator('[data-decision-details]').click();
         for (const opt of Object.values(want.options)) for (const value of Object.values(opt)) await expect(card).toContainText(value);
@@ -128,8 +127,9 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
         await expect(frame.locator('body')).toContainText(want.after);
         await expect(frame.locator('h1,button,.gates,.lanes')).toHaveCount(0);
       }
-      if (lang === 'zh-CN') await expect(page.locator('#card-D-2 h3')).toHaveText('限制审查重试');
-      await expect(page.locator('#card-D-1').locator('iframe:visible, .change-fallback:visible')).toHaveCount(1);
+      if (lang === 'zh-CN') await expect(page.locator('#card-D-2 h2')).toHaveText('限制审查重试');
+      // only the open card is shown, and the loop leaves D-2 open
+      await expect(page.locator('#card-D-2').locator('iframe:visible, .change-fallback:visible')).toHaveCount(1);
     }
     await expect(page.locator('.dcard img,.dcard script')).toHaveCount(0);
     await page.locator('#card-D-2 [data-c="B"]').click();
@@ -182,11 +182,7 @@ test('a skill-update card is answered, and a refused answer shows the server err
     await page.goto(`${b.url}/?lang=en`);
     await expect(page.locator('#card-D-SK-001')).toHaveCount(1);
     await expect(page.locator('#card-D-SK-01')).toHaveCount(1);
-    // whichever sorts second is a strip, opened in place
-    for (const id of ['D-SK-001','D-SK-01']) {
-      const strip = page.locator(`#strip-${id}`);
-      if (await strip.count()) await strip.locator('summary').click();
-    }
+    // whichever sorts second waits in the queue
     // diagram.js accepts D-SK-<n> like server.ts: the well-formed id embeds and
     // shows its drawing, the malformed one embeds nothing
     const frame = page.locator('#card-D-SK-001 iframe.dg[data-decision="D-SK-001"]');
@@ -208,6 +204,7 @@ test('a skill-update card is answered, and a refused answer shows the server err
     });
     const rerender = () => page.evaluate(() => fetch('/api/state').then(r => r.json()).then((window as any).render));
     const bad = page.locator('#card-D-SK-01');
+    await openCard(page, 'D-SK-01');
     await bad.locator('[data-c="A"]').click();
     await bad.locator('.confirm').click();
     await expect(bad.locator('.refused')).toContainText('bad decision id');
@@ -238,6 +235,7 @@ test('a skill-update card is answered, and a refused answer shows the server err
       await held; return route.continue();
     });
     const card = page.locator('#card-D-SK-001');
+    await openCard(page, 'D-SK-001');
     await card.locator('[data-c="A"]').click();
     await card.locator('.confirm').click();
     await expect(card.locator('.refused')).toContainText('refused once by the test');
@@ -271,12 +269,12 @@ test('decision kind badges lead every card and strip in both locales with readab
     for (const [lang, labels] of [['en', ['Merge','Dispatch','Repin','Decision']], ['zh-TW', ['合併','派工','重新固定','決定']]] as const) {
       await page.locator(`[data-l="${lang}"]`).click();
       for (let i = 0; i < cards.length; i++) {
-        const meta = page.locator(`#card-${cards[i].id} > .meta`);
+        const meta = page.locator(`#card-${cards[i].id} .capmeta`);
         await expect(meta.locator('.kbadge')).toHaveCount(1);
         await expect(meta.locator(':scope > :first-child')).toHaveClass(`kbadge k-${kinds[i]}`);
         await expect(meta.locator('.kbadge')).toHaveText(labels[i]);
         if (i) {
-          const summary = page.locator(`#strip-${cards[i].id} > summary`);
+          const summary = page.locator(`#queue-${cards[i].id}`);
           await expect(summary.locator('.kbadge')).toHaveCount(1);
           await expect(summary.locator(':scope > :first-child')).toHaveClass(`kbadge k-${kinds[i]}`);
           await expect(summary.locator('.kbadge')).toHaveText(labels[i]);

@@ -297,30 +297,33 @@ FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E6 --type dispatched 
 assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-E6")|.stage' <<<"$(st)")" \
   "once work moves the task, the readiness record no longer holds it in ready"
 
-# and the page renders the D button only where the card offers D. The
-# options markup is lifted out of index.html and run as written, because
-# the e2e spec is out of this task's scope.
+# and the page renders the D tile only where the card offers D. The
+# decision bar is lifted out of index.html and run as written.
 dbtn="$(cd "$e" && bun -e '
 const src = require("fs").readFileSync("board/public/index.html", "utf8");
-const at = src.indexOf("const options = [");
-const end = src.indexOf(".join(\x27\x27);", at);
-if (at < 0 || end < 0) { console.log("FAIL no options markup"); process.exit(1); }
-const expr = src.slice(at + "const options = ".length, end + ".join(\x27\x27)".length);
-// tipAttr is the read-only tooltip (T-145): nothing in a tab that can write,
-// the reason as a title in one that cannot
-const render = new Function("d", "content", "pick", "locked", "esc", "words", "t", "said", "tipAttr", "return " + expr);
+const at = src.indexOf("function decisionBar(");
+const end = src.indexOf("\n}\n", at);
+if (at < 0 || end < 0) { console.log("FAIL no decision bar markup"); process.exit(1); }
+// the decision bar (T-289) is run as written, with the page state it reads
+// stubbed: no pick, no open sheet, no door
+const deps = { picks: new Map(), openDecisionSheets: new Set(), answers: new Map(), drafts: new Map(), refused: new Map(), doorMessages: new Map(),
+  esc: String, words: String, t: String, said: String, effectLabel: String, ICON: {}, mergeDoorNeeded: () => false, doorReady: () => true,
+  doorInput: () => ({ reviewed: [] }), retroItemsHtml: () => "", doorChip: () => "", sendLabel: () => "send" };
+const make = tip => new Function(...Object.keys(deps), "tipAttr", src.slice(at, end + 2) + "; return decisionBar;")(...Object.values(deps), tip);
 const opts = (keys) => Object.fromEntries(keys.map(k => [k, { description: "do " + k, pros: "p", cons: "c" }]));
 const card = (keys) => ({ id: "D-1", kind: "choice", details: { en: { options: opts(keys) } } });
-const out = (keys, locked = false) => render(card(keys), { options: opts(keys) }, undefined, locked, String, String, String, String,
-  locked ? () => " title=\"readOnlyTip\"" : () => "");
+// tipAttr is the read-only tooltip (T-145): nothing in a tab that can write,
+// the reason as a title in one that cannot
+const out = (keys, locked = false) => make(locked ? () => " title=\"readOnlyTip\"" : () => "")(card(keys), { options: opts(keys) }, locked);
+const tile = /<button type="button" class="mflag opt f-([A-D])"[^>]*>/g;
 const four = out(["A", "B", "C", "D"]), three = out(["A", "B", "C"]);
-if (!/data-c="D"[^>]*>D · do D</.test(four)) { console.log("FAIL no D button: " + four); process.exit(1); }
+if (!/data-c="D"[^>]*><b>D<\/b><span>do D/.test(four)) { console.log("FAIL no D button: " + four); process.exit(1); }
 if (/data-c="D"/.test(three)) { console.log("FAIL invented D"); process.exit(1); }
 // a card that is answered, or in a tab that cannot write (T-122), is drawn
 // with every option disabled; one that can still be answered with none
-if (/disabled/.test(four)) { console.log("FAIL an open card is disabled: " + four); process.exit(1); }
-const shut = out(["A", "B", "C", "D"], true);
-if ((shut.match(/<button[^>]*\sdisabled title="readOnlyTip">/g) || []).length !== 4) { console.log("FAIL a locked card still takes a choice: " + shut); process.exit(1); }
+if ((four.match(tile) || []).some(b => / disabled/.test(b))) { console.log("FAIL an open card is disabled: " + four); process.exit(1); }
+const shut = (out(["A", "B", "C", "D"], true).match(tile) || []);
+if (shut.length !== 4 || !shut.every(b => / disabled title="readOnlyTip"/.test(b))) { console.log("FAIL a locked card still takes a choice: " + shut); process.exit(1); }
 console.log("ok");
 ')"
 assert_eq "ok" "$dbtn" "the page shows a D button on a card that offers D, and only there, and disables every option on a card that is locked"

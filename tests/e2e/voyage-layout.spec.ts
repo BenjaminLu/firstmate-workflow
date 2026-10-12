@@ -44,9 +44,9 @@ for (const c of cases) test(`loading the ${c.name} stage never moves the tabs`, 
   const b = await startBoard(makeRoot(['working']));
   try {
     await pausedBoard(page, b, c.viewport, {local:{'board.voyage.size':c.size}});
-    const tabsBefore = await box(page, '#tabs'), mountBefore = await box(page, '#voyage-mount');
+    const tabsBefore = await box(page, '#pagetabs'), mountBefore = await box(page, '#voyage-mount');
     await runUntilMounted(page);
-    const tabsAfter = await box(page, '#tabs'), mountAfter = await box(page, '#voyage-mount');
+    const tabsAfter = await box(page, '#pagetabs'), mountAfter = await box(page, '#voyage-mount');
     const iframe = await box(page, '#voyage-stage');
     expect(iframe.height).toBe(c.stage);
     expect(tabsAfter.y, 'the tab bar moved when the stage loaded').toBe(tabsBefore.y);

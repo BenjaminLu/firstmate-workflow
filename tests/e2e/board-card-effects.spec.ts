@@ -37,6 +37,11 @@ test('T-118: an answered card leaves the captain lane, and a park chosen on a ca
     await expect(inLane('captain','T-031')).toHaveCount(1);
     // the card says what each option does before the captain picks it
     await expect(page.locator('#card-D-1020 .opt[data-c="B"] .eff')).toHaveText(`→ ${EN.effectPark}`);
+    // a reader hears the same: the tile's name carries its option and effect,
+    // and each trade-off says whether it is an advantage or a cost
+    await expect(page.locator('#card-D-1020 .mflag[data-c="B"]')).toHaveAccessibleName(`B · Keep individual reads → ${EN.effectPark}`);
+    await expect(page.locator('#card-D-1020 .flagbtn[data-pick="A"] .pro')).toHaveText(`${EN.pros} Fewer reads`);
+    await expect(page.locator('#card-D-1020 .flagbtn[data-pick="A"] .con')).toHaveText(`${EN.cons} Uses memory`);
     await page.locator('#card-D-1020 .opt[data-c="B"]').click();
     await page.locator('#card-D-1020 .confirm').click();
     // the park is carried out: the parked event, and the card leaves the lane
@@ -223,16 +228,19 @@ test('T-118: reopening moves a merged card out of merged, and a card under a fin
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);
-    await expect(page.locator('[data-lane="merged"] [data-task="T-117"]')).toHaveCount(1);
+    // T-289: the merged lane is hidden; a merged task is in the history
+    await expect(page.locator('[data-lane="merged"]')).toHaveCount(0);
+    await expect(page.locator('#history [data-task="T-117"]')).toHaveCount(1);
     // the card under the merged task is shown, and says the task is final
     await expect(page.locator('#card-D-1118 .final-note')).toContainText(
       EN.finalNote.replace('{task}','T-117').replace('{stage}',EN.laneMerged));
     await page.locator('#card-D-1118 .opt[data-c="C"]').click();
     await page.locator('#card-D-1118 .confirm').click();
     await expect(page.locator('#card-D-1118')).toHaveCount(0);
-    // the merged card offers reopening, behind a confirm step that needs a reason
+    // the merged card offers reopening from the history, behind a confirm step that needs a reason
     await showFleet(page);
-    await page.locator('[data-lane="merged"] [data-menu="T-117"]').click();
+    await page.locator('#history summary').click();
+    await page.locator('#history [data-menu="T-117"]').click();
     await expect(page.locator('[data-task="T-117"] .cacts button')).toHaveText([EN.reopen]);
     await page.locator('[data-task="T-117"] [data-act="reopen"]').click();
     const box = page.locator('#dropConfirm');
@@ -244,7 +252,7 @@ test('T-118: reopening moves a merged card out of merged, and a card under a fin
     await go.click();
     // out of merged: with no later events it is untouched work again, and
     // shows its own pull request, not the one the wrong card merged
-    await expect(page.locator('[data-lane="merged"] [data-task="T-117"]')).toHaveCount(0);
+    await expect(page.locator('#history [data-task="T-117"]')).toHaveCount(0);
     const card = page.locator('[data-lane="ready"] [data-task="T-117"]');
     await expect(card).toHaveCount(1);
     await expect(card.locator('.pr')).toHaveText('#97');

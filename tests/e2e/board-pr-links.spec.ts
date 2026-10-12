@@ -59,7 +59,9 @@ test('every pull request number links to its pull request on the registered repo
     // the top right of each lane card
     await isLink(card('ready','T-A').locator('.hd a'), 7);
     await isLink(card('captain','T-W').locator('.hd a'), 8);
-    await isLink(card('merged','T-M').locator('.hd a'), 9);
+    // T-289: the merged lane is hidden; a merged task is in the history
+    await expect(card('merged','T-M')).toHaveCount(0);
+    await isLink(page.locator('#history [data-history="T-M"] .hd a'), 9);
     // the history rows, the decision card, the roster and the log
     await isLink(page.locator('#history .history-cards a.pr'), 9);
     await isLink(page.locator('#card-D-8 .links a[data-pr]'), 8);
@@ -72,7 +74,7 @@ test('every pull request number links to its pull request on the registered repo
     // a #n that is not the line's own pr, and one on a line with no pr
     await isLink(page.locator('#log a', {hasText:'#5'}), 5);
     // a #n in a title, a decision's text and a crewman's activity
-    await isLink(card('merged','T-M').locator('.t a'), 4);
+    await isLink(page.locator('#history [data-history="T-M"] .t a'), 4);
     await isLink(page.locator('#card-D-8 .explanation a'), 6);
     await isLink(page.locator('#roster [data-roster="worker-w"] .act a'), 3);
     // T-054: a board of one project renders as it always did - no project

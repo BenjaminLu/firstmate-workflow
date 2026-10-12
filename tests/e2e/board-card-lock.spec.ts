@@ -57,7 +57,10 @@ for (const status of [200, 409]) test(`answer controls lock immediately and sett
   } finally {release(); await stopBoard(b);}
 });
 
-for (const diagram of [false, true]) test(`intent sections keep order, phone width and disclosures; diagram ${diagram}`,  async ({page}) => {
+// T-289: an open intent card reads as the prototype's: header, intent rows,
+// How it works, then the walk and intent check; its explanation waits behind
+// "Why you see this", and its options and questions are in the decision bar.
+for (const diagram of [false, true]) test(`intent card keeps the prototype reading order, phone width and disclosures; diagram ${diagram}`,  async ({page}) => {
   const root = makeRoot([], false), d = intentCard();
   d.details.en.done = Array.from({length:7}, (_, i) => ({text:`Alignment item ${i + 1}.`}));
   writeFileSync(join(root, 'state/pending/D-211.json'), JSON.stringify(d));
@@ -67,33 +70,36 @@ for (const diagram of [false, true]) test(`intent sections keep order, phone wid
     await page.setViewportSize({width:390, height:844});
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('#card-D-211');
-    await expect(card.locator('.intent-alignment h4')).toHaveText(['Intent','How it works','Scope','Notes']);
-    await expect(card.locator('.meta > .kbadge:first-child')).toHaveCount(1);
+    await expect(card.locator(':scope > *')).toHaveClass([/caphead/, /kpsec/, /hero/, /align/, /dbar/]);
+    await expect(card.locator('h3')).toHaveText(['What this change must do', 'How it works']);
+    await expect(card.locator('.align > .tabs [role=tab]')).toHaveText(['Intent check']);
+    await expect(card.locator('.capmeta > .kbadge:first-child')).toHaveCount(1);
     await expect(card.locator('.decision-sheet h4')).toHaveText(['Options','Questions to confirm']);
-    for (const selector of ['.explanation', '.decision-sheet .tradeoffs', '.opt'])
-      await expect(card.locator(selector).first()).toHaveCSS('font-size', '16px');
+    await expect(card.locator('.explanation')).toBeHidden();
+    await card.getByRole('button', {name:/^Why you see this/}).click();
+    await expect(card.locator('.explanation')).toBeVisible();
+    // every done line that names no intent is listed whole, under the steps
     const alignment = card.locator('.plain-alignment');
-    await expect(alignment.locator('li')).toHaveCount(6);
+    await expect(alignment.locator('li')).toHaveCount(7);
     await card.locator('[data-c="A"]').click();
     await card.locator('[data-decision-details]').click();
     await card.locator('[data-question="0"][data-ok="no"]').click();
     await card.locator('textarea[data-question="0"]').fill('Preserved answer');
     await card.locator('[data-decision-close]').click();
-    await alignment.getByRole('button', {name:'Show more (1)', exact:true}).click();
-    await expect(alignment.locator('li')).toHaveCount(7);
     await expect(card.locator('[data-c="A"]')).toHaveAttribute('aria-pressed','true');
     // Observe the next server state push, rather than a local click re-render.
     d.details.en.title = 'Refreshed intent card';
     writeFileSync(join(root, 'state/pending/.D-211.tmp'), JSON.stringify(d));
     renameSync(join(root, 'state/pending/.D-211.tmp'), join(root, 'state/pending/D-211.json'));
-    await expect(card.locator('h3')).toHaveText('Refreshed intent card');
+    await expect(card.locator('h2')).toHaveText('Refreshed intent card');
     await expect(alignment.locator('li')).toHaveCount(7);
     await expect(card.locator('[data-c="A"]')).toHaveAttribute('aria-pressed','true');
+    await expect(card.locator('.explanation')).toBeVisible();
     await expect(card.locator('textarea[data-question="0"]')).toHaveValue('Preserved answer');
-    const how = card.locator('section').filter({has:page.getByRole('heading', {name:'How it works', exact:true})});
+    const how = card.locator('section.hero');
     await expect(how.locator('iframe:visible, .change-fallback:visible')).toHaveCount(1);
     await expect(how.locator(diagram ? 'iframe' : '.change-fallback')).toBeVisible();
-    expect(await card.locator('section').evaluateAll(sections => sections.every(el => {
+    expect(await card.locator('section, header').evaluateAll(sections => sections.every(el => {
       const box = el.getBoundingClientRect();
       return box.left >= 0 && box.right <= innerWidth && el.scrollWidth <= el.clientWidth + 1;
     }))).toBe(true);
