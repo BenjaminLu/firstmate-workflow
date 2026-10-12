@@ -1088,8 +1088,12 @@ const detailToolbar = id => `<nav class="detail-toolbar detail-crumb" aria-label
   (id ? `<span aria-hidden="true">›</span><b>${esc(id)}</b>` : '') + `</nav>`;
 // The sticky tab row sits under the sticky top bar; the detail sits under both.
 const positionTaskDetail = () => {
-  const top = document.querySelector('.top').getBoundingClientRect(), tabs = document.getElementById('pagetabs').getBoundingClientRect();
+  const tabRow = document.getElementById('pagetabs');
+  const top = document.querySelector('.top').getBoundingClientRect(), tabs = tabRow.getBoundingClientRect();
   document.documentElement.style.setProperty('--top-h', Math.ceil(top.height) + 'px');
+  // what stays stuck to the top of the window: the top bar, and the tab row
+  // where it is sticky (not on a phone); a scrolled-to control lands below it
+  document.documentElement.style.setProperty('--stick-h', Math.ceil(top.height + (getComputedStyle(tabRow).position === 'sticky' ? tabs.height : 0)) + 'px');
   detailPanel.style.setProperty('--task-detail-top', Math.max(0, Math.ceil(Math.max(top.bottom, tabs.bottom))) + 8 + 'px');
 };
 new ResizeObserver(positionTaskDetail).observe(document.querySelector('.top'));
@@ -1517,17 +1521,24 @@ function closeDecisionSheet(id) {
   openDecisionSheets.delete(id); render(latest);
   document.getElementById(`card-${id}`)?.querySelector('[data-decision-details]')?.focus({preventScroll:true});
 }
-// The bar is fixed to the viewport; the open card keeps room for its row of
-// tiles below its last line, so nothing on the card hides behind the bar.
+// The bar is fixed to the viewport; the open card keeps room for the whole
+// bar - its row of tiles and, when open, its sheet - below its last line, and
+// the page scrolls a control above the bar, so nothing on the card hides
+// behind it.
 const decisionBarObserver = new ResizeObserver(entries => {
   for (const {target} of entries) {
     const card = target.closest('.dcard');
-    if (card && !card.hidden) card.style.paddingBottom = `${Math.ceil(target.getBoundingClientRect().height) + 24}px`;
+    const fixed = getComputedStyle(target).position === 'fixed';
+    const height = fixed ? Math.ceil(target.getBoundingClientRect().height) : 0;
+    if (card && !card.hidden) card.style.paddingBottom = `${height + 24}px`;
+    document.documentElement.style.setProperty('--dbar-h', `${height}px`);
   }
 });
 function syncDecisionBars() {
   decisionBarObserver.disconnect();
-  document.querySelectorAll('#deck .dcard:not([hidden]) .drow').forEach(row => decisionBarObserver.observe(row));
+  const bars = document.querySelectorAll('#deck .dcard:not([hidden]) .dbar');
+  if (!bars.length) document.documentElement.style.setProperty('--dbar-h', '0px');
+  bars.forEach(bar => decisionBarObserver.observe(bar));
 }
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape' || activeTab !== 'decisions' || openTaskKey || menuOpen || confirming) return;

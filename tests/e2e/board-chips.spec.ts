@@ -43,9 +43,12 @@ for (const viewport of [{width:1200,height:900}, {width:390,height:844}]) {
       await page.setViewportSize(viewport);
       await page.goto(`${board.url}/?lang=en`);
       await showFleet(page);
-      for (const [lane, task] of [['ready','T-221'], ['review','T-222'], ['merged','T-223']]) {
+      for (const [lane, task] of [['ready','T-221'], ['review','T-222']]) {
         await expect(page.locator(`[data-lane="${lane}"] [data-task="${task}"] .hd .pchip`)).toHaveCount(2);
       }
+      // T-289: the merged lane is hidden; a merged task is in the history
+      await expect(page.locator('[data-lane="merged"]')).toHaveCount(0);
+      await expect(page.locator('#history [data-history="T-223"] .hd .pchip')).toHaveCount(2);
       await expect(page.locator('[data-lane="review"] .hd a[data-pr]').first()).toBeVisible();
       await expect(page.locator('[data-lane="ready"] .cmenu').first()).toBeVisible();
       await page.locator('#history > summary').click();

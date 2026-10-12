@@ -131,6 +131,30 @@ test('a locked one-way merge opens the sheet, and its ticks and check unlock A',
   } finally { await stopBoard(b); }
 });
 
+for (const viewport of [{width:1280,height:720}, {width:390,height:844}]) test(`with the sheet open, a card control scrolled into view is not under the fixed bar or the sticky header at ${viewport.width}px`, async ({page}) => {
+  const root = makeRoot([], false);
+  writeFileSync(join(root,'state/pending/D-9242.json'),JSON.stringify(changePointCard('one-way')));
+  const b = await startBoard(root);
+  try {
+    await page.setViewportSize(viewport);
+    await page.goto(`${b.url}/?lang=en`);
+    await openDecisionDetails(page, 'D-9242');
+    const card = page.locator('#card-D-9242'), bar = card.locator('.dbar');
+    // the card keeps room for the whole bar, sheet included
+    await expect.poll(async () => await card.evaluate((el, bar) => parseFloat(getComputedStyle(el).paddingBottom) - bar!.getBoundingClientRect().height,
+      await bar.elementHandle())).toBeGreaterThanOrEqual(0);
+    // a pointer can reach the card's last checkbox: scrolled to it, nothing covers it
+    await card.locator('[data-review-intent="2"]').check({trial:true, timeout:10_000});
+    // and scrolled to the top of the window, it lands below the sticky header
+    const hit = await card.locator('[data-review-intent="2"]').evaluate(el => {
+      el.scrollIntoView({block:'start'});
+      const r = el.getBoundingClientRect(), at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return at === el || Boolean(el.closest('label')?.contains(at));
+    });
+    expect(hit, 'scrolled to the top, the checkbox is uncovered').toBe(true);
+  } finally { await stopBoard(b); }
+});
+
 for (const door of ['one-way', 'two-way'] as const) test(`a ${door} card with a walk opens on ${door === 'one-way' ? 'its evidence' : 'Walk the diff'}`, async ({page}) => {
   const root = makeRoot([], false), d = sceneWalkCard('both');
   for (const locale of ['en', 'zh-TW']) d.details[locale].door.kind = door;
@@ -147,7 +171,8 @@ for (const door of ['one-way', 'two-way'] as const) test(`a ${door} card with a 
     await expect(check).toHaveAttribute('aria-selected', String(door === 'one-way'));
     await walk.click();
     // the walk: intent tabs, then key blocks | code | explanation
-    await expect(card.locator('.wtabs [role=tab]')).toHaveCount(2);
+    // one tab per intent (the card has two), then "Other changes"
+    await expect(card.locator('.wtabs [role=tab] b')).toHaveText([`${EN.intentHeading} 1`, `${EN.intentHeading} 2`, EN.walkOther]);
     for (const area of ['.dtoc', '.dcode', '.dexplain']) await expect(card.locator(`.dwalk ${area}`)).toBeVisible();
     const [toc, code, explain] = await Promise.all(['.dtoc', '.dcode', '.dexplain'].map(async area => (await card.locator(`.dwalk ${area}`).boundingBox())!));
     expect(toc.x + toc.width).toBeLessThanOrEqual(code.x + 1);
