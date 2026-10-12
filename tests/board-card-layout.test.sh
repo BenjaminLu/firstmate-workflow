@@ -13,23 +13,30 @@ def body(name):
     return match.group(1) if match else ''
 answer = body('answer')
 intent = body('intentBody')
+card = body('cardBody')
+bar = body('decisionBar')
+drawer = body('whyDrawer')
 keys = ['intentHeading', 'howHeading', 'alignmentHeading', 'scopeHeading', 'notesHeading']
 positions = [intent.find("t('" + key + "')") for key in keys]
-def fragment_heading(name, key):
-    fragment = re.search(r'^  const ' + name + r' = (.*?)(?=^  (?:const |if |return )|\Z)', intent, re.M | re.S)
-    return bool(fragment and "<h4>${esc(t('" + key + "'))}</h4>" in fragment.group(1))
-captain = intent.split('if (detailOnly) return', 1)[-1].split('\n', 1)[-1]
+# T-289: the open card reads as the approved prototype: header, intent rows,
+# How it works, then Walk the diff and Intent check, then the decision bar.
+full = re.search(r'const full = \(d, index, total\) => \{(.*?)\n  \};', html, re.S)
+full = full.group(1) if full else ''
+order = [full.find(part) for part in ['const header = `<header class="caphead', 'cardBody(d, content, locked)', 'header + body + designCompare(d) + decisionBar(d, content, locked)']]
+card_order = [card.find(part) for part in ['kpSection(d, content)', '<section class="hero', '<section class="align"', "t('walkDiff')", "t('walkIntentCheck')", 'intentCheck(d, content, locked)']]
 checks = [
     ('answered set declared', bool(re.search(r'\banswered\s*=\s*new Set\(\)', html))),
-    ('full card lock includes answered', bool(re.search(r'const full = d =>.*?const locked = [^;]*answered.has\(d.id\)', html, re.S))),
+    ('full card lock includes answered', bool(re.search(r'const locked = [^;]*answered.has\(d.id\)', full))),
     ('answer first guard rejects answered', 'answered.has(id)' in answer.split('\n')[0] if answer else False),
     ('successful answer locks before clearing sent', bool(re.search(r'if \(!r.error\) answered.add\(id\);\s*sent.delete\(id\)', answer))),
     ('validate retains answer lock', 'answered.has(id)' in body('validate')),
     ('render retires absent answered ids', bool(re.search(r'for \(const id of answered\).*?pendingIds.has\(id\).*?answered.delete\(id\)', html))),
-    ('detailOnly keeps intent/how/alignment/scope/notes', 'if (detailOnly) return `<div class="intent-alignment">${intent}${how}${alignment}${scope}${notes}</div>`' in intent),
-    ('captain body keeps intent/how/scope/notes', 'return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>' in captain),
-    *[(f'captain {name} binds {key}', fragment_heading(name, key)) for name, key in
-      [('pairedIntent', 'intentHeading'), ('how', 'howHeading'), ('scope', 'scopeHeading'), ('notes', 'notesHeading')]],
+    ('the card reads header, body, then the decision bar', all(p >= 0 for p in order) and order == sorted(order)),
+    ('the body reads intent rows, How it works, then the walk and the check', all(p >= 0 for p in card_order) and card_order == sorted(card_order)),
+    ('the header keeps the prose behind "Why you see this"', 't("whyYouSeeThis")' in full and 'whyDrawer(d, content)' in full and "openWhys.has(d.id) ? '' : ' hidden'" in full),
+    ('the drawer holds explanation, why, notes and outcome', all(k in drawer for k in ["'explanationHeading'", "'whyHeading'", "'notesHeading'", "'outcomeHeading'", 'plainBlock(content)'])),
+    ('the bar is the fixed flag bar with its sheet', all(k in bar for k in ['class="dbar decision-bar"', 'class="dsheet decision-sheet"', 'class="mflag opt f-', 'class="flagbtn f-', 'data-decision-details'])),
+    ('detail keeps intent/how/alignment/scope/notes', 'return `<div class="intent-alignment">${hasItems(\'change_points\') ? changeWalk(d,content,true) : intent}${how}${alignment}${scope}${notes}</div>`' in intent),
     ('detail headings are complete and ordered', all(p >= 0 for p in positions) and positions == sorted(positions)),
     ('intentBody replaces old alignment title', bool(intent) and "t('intentAlignment')" not in intent),
     ('optional Why line requires items', "hasItems('why') ?" in intent),
@@ -37,8 +44,8 @@ checks = [
     ('optional scope requires items', 'const scope = scopeItems.length ?' in intent),
     ('optional scope columns require items', "['scope_in','scope_out'].filter(hasItems).map" in intent),
     ('optional notes require items', "const notes = hasItems('notes') ?" in intent),
-    ('optional questions require items', "const questions = hasItems('questions') ?" in body('decisionSheet')),
-    ('optional outcome requires nonempty text', "content?.intent && content.outcome?.trim() ?" in html),
+    ('optional questions require items', "const questions = (content?.questions || []).length ?" in bar),
+    ('optional outcome requires nonempty text', "content?.outcome?.trim() ?" in drawer),
 ]
 for locale in ['en', 'zh-TW']:
     dictionary = json.loads((root / f'i18n/ui.{locale}.json').read_text())

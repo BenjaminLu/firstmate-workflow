@@ -57,11 +57,11 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await expect(page.locator('[data-roster="worker-a"] .pchip')).toHaveText('alpha');
     await expect(page.locator('[data-roster="worker-b"] .pchip')).toHaveText('beta');
     // decision cards: every project's in one list, oldest first, each with its chip
-    await expect(page.locator('#pcount')).toHaveText('2');
-    await expect(page.locator('#deck > .dcard')).toHaveAttribute('id', 'card-D-beta-T001-1');
-    await expect(page.locator('#card-D-beta-T001-1 > .meta .pchip')).toHaveText('beta');
+    await expect(page.locator('#tabDecisions .badge2')).toHaveText('2');
+    await expect(page.locator('#deck > .dcard:not([hidden])')).toHaveAttribute('id', 'card-D-beta-T001-1');
+    await expect(page.locator('#card-D-beta-T001-1 .capmeta .pchip')).toHaveText('beta');
     await expect(page.locator('#card-D-beta-T001-1 .links a[data-pr]')).toHaveAttribute('href', 'https://github.com/example-org/beta-app/pull/7');
-    await expect(page.locator('#strip-D-alpha-T001-1 > summary .pchip')).toHaveText('alpha');
+    await expect(page.locator('#queue-D-alpha-T001-1 .pchip')).toHaveText('alpha');
     for (const choice of ['A', 'B'] as const)
       await expect(page.locator(`#card-D-beta-T001-1 [data-c="${choice}"]`)).toContainText(details.en.options[choice].description);
     await expect(page.locator('#card-D-beta-T001-1 .links a[data-open="design.md"]'))
@@ -83,7 +83,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await expect(page.locator('#card-D-beta-T001-1')).toHaveCount(0);
     expect(existsSync(join(root, 'state/pending/D-alpha-T001-1.json'))).toBe(true);
     // Alpha's card is still pending on the one main page.
-    await expect(page.locator('#pcount')).toHaveText('1');
+    await expect(page.locator('#tabDecisions .badge2')).toHaveText('1');
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '', {timeout:15_000})
       .toContain('--project beta');
     expect(JSON.parse(readFileSync(join(projectState(root, 'beta'),'decisions/D-beta-T001-1.json'),'utf8')).merge).toBe('running');
@@ -97,7 +97,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     // The optional beta filter is read-only here; the answer was made on the main page.
     await page.goto(`${b.url}/?lang=en&project=beta`);
     await expect(page.locator('#lanes [data-task="T-001"] .t')).toHaveText('beta one');
-    await expect(page.locator('#pcount')).toHaveText('');
+    await expect(page.locator('#tabDecisions .badge2')).toBeHidden();
     await expect(page.locator('#deck .dcard')).toHaveCount(0);
 
     // ?project= shows one project: its cards, its crew and its count
@@ -106,7 +106,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await expect(page.locator('[data-task="T-001"]')).toHaveAttribute('data-project', 'alpha');
     await expect(page.locator('[data-roster="worker-b"]')).toHaveCount(0);
     await expect(page.locator('[data-roster="worker-a"]')).toHaveCount(1);
-    await expect(page.locator('#pcount')).toHaveText('1');
+    await expect(page.locator('#tabDecisions .badge2')).toHaveText('1');
   } finally { rmSync(hold, {force:true}); await stopBoard(b); }
 });
 
@@ -240,8 +240,8 @@ test('a board of one project shows no project chip anywhere, and says a merge ou
     await expect(page.locator('[data-roster="worker-a"]')).toHaveCount(1);
     await expect(page.locator('#history .history-cards .card', {hasText:'T-3'})).toHaveCount(1);
     // the owned id shows its project as it did before this task: plain text
-    await expect(page.locator(`#card-${owned} > .meta`)).toHaveText(`Decision ${owned} · fixture · T-1`);
-    await expect(page.locator(`#card-${owned} > .meta .project`)).toHaveAttribute('class', 'project');
+    await expect(page.locator(`#card-${owned} .capmeta`)).toHaveText(`Decision ${owned} · fixture · T-1`);
+    await expect(page.locator(`#card-${owned} .capmeta .project`)).toHaveAttribute('class', 'project');
     // the merge whose outcome GitHub could not tell: named, and marked unknown
     const row = page.locator('#merging-D-fixture-T4-1');
     await expect(row).toHaveClass(/unknown/, {timeout:15_000});

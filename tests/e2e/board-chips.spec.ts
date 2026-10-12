@@ -1,4 +1,4 @@
-import { showFleet, openCrewSheet } from './lib/board';
+import { showFleet, showCrew } from './lib/board';
 import { expect } from '@playwright/test';
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -59,11 +59,11 @@ for (const viewport of [{width:1200,height:900}, {width:390,height:844}]) {
       const ready = page.locator(`[data-lane="ready"] [data-project="${projects[1]}"][data-task="T-221"]`);
       await ready.locator('.cmenu').click();
       await ready.locator('[data-act="drop"]').click();
-      for (const selector of ['#dropConfirm .pchip', '#roster .pj.pchip', '#deck .meta .pchip', '.dstrip > summary .pchip', '#merging .pchip']) {
-        if (selector.startsWith('#roster')) await openCrewSheet(page);
+      for (const selector of ['#dropConfirm .pchip', '#roster .pj.pchip', '#deck .meta .pchip', '.qitem .pchip', '#merging .pchip']) {
+        if (selector.startsWith('#roster')) await showCrew(page);
         else {
-          if (await page.locator('#crewSheet').isVisible()) await page.locator('#crewSheet [data-sheet-close]').click();
-          if (selector.startsWith('#deck') || selector.startsWith('.dstrip')) await page.locator('#tabDecisions').click();
+          if (selector.startsWith('#deck') || selector.startsWith('.qitem') || selector.startsWith('#merging')) await page.locator('#tabDecisions').click();
+          if (selector.startsWith('#dropConfirm')) await showFleet(page);
         }
         await expect(page.locator(selector).first()).toBeVisible();
         if (selector.startsWith('#roster')) chips.push(...await collectChips());

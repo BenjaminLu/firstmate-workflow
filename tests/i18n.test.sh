@@ -24,10 +24,10 @@ for k in logLoadOlder logLoadFailed staleCursor badCursor; do
   assert_ok "jq -e --arg k '$k' 'has(\$k)' '$en' >/dev/null && jq -e --arg k '$k' 'has(\$k)' '$tw' >/dev/null" "log paging key $k exists in both dictionaries"
 done
 
-# T-246: every tab, sheet and client pager label exists in both dictionaries.
-for key in tabDecisions tabFleet secLog sheetCrew sheetLog sheetClose sheetBack pagerFirst pagerPrev pagerNext pagerPosition; do
+# T-246, T-289: every page tab and client pager label exists in both dictionaries.
+for key in tabDecisions tabFleet tabCrew tabLog tabFleetOpen tabWaiting pagerFirst pagerPrev pagerNext pagerPosition; do
   for dictionary in "$en" "$tw"; do
-    assert_ok "jq -e '.${key} | type == \"string\" and length > 0' '$dictionary' >/dev/null" "T-246 $key in $dictionary"
+    assert_ok "jq -e '.${key} | type == \"string\" and length > 0' '$dictionary' >/dev/null" "page tab $key in $dictionary"
   done
 done
 

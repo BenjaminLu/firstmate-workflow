@@ -3,6 +3,7 @@
 // bin/lib/fm_capture_server.py tests/e2e/capture-server.sh
 // tests/e2e/lib/capture-server.ts tests/e2e/lib/fixture.ts tests/e2e/lib/capture-pages.py
 // tests/e2e/lib/capture-observer.mjs tests/e2e/lib/failfirst-reporter.ts
+// tests/e2e/lib/capture-fixture.ts tests/e2e/lib/fixture-state.ts
 import { test, expect, type TestInfo } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
@@ -36,8 +37,8 @@ test('capture: served page has content', async ({}, info) => {
 for (const [view, selector, content] of [
   ['Decisions', '#decisionsPanel #card-D-1', 'SK-007'],
   ['Fleet', '#fleetPanel .card[data-task="SK-007"]', 'SK-007'],
-  ['Crew', '#crewSheet[open] #roster .rrow', 'FIRSTMATE'],
-  ['Log', '#logSheet[open] #log li', 'worker-5'],
+  ['Crew', '#crewPanel #roster .rrow', 'FIRSTMATE'],
+  ['Log', '#logPanel #log li', 'worker-5'],
 ]) {
   test(`capture: ${view} view has visible content`, async ({}, info) => {
     const {pages} = capture('served', info);
@@ -64,4 +65,17 @@ test('capture: file pages unchanged', async ({}, info) => {
   expect(pages).toHaveLength(1);
   expect(pages[0].url).toMatch(/^file:/);
   expect(pages[0].text).toContain('file fixture');
+});
+
+// T-289: the prototype is screenshotted from the same data as the board: the
+// capture fixture's /api/state, written whole for it to serve.
+test('fixture state: the capture fixture is written as the prototype snapshot', async ({}, info) => {
+  const out = info.outputPath('api_state.json');
+  const result = spawnSync('bun', ['run', 'tests/e2e/lib/fixture-state.ts', out], {encoding: 'utf8'});
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  const state = JSON.parse(readFileSync(out, 'utf8'));
+  expect(state.pending.map((d: {id: string}) => d.id)).toEqual(['D-1']);
+  expect(state.tasks.map((t: {id: string}) => t.id)).toContain('SK-007');
+  expect(state.lanes).toContain('merged');
+  expect(state.crew.length).toBeGreaterThan(1);
 });

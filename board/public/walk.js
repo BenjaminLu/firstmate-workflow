@@ -1,4 +1,6 @@
 // Read-only scene and retained diff walk. Loaded only by opted-in cards.
+// T-289: the scene is drawn as the prototype's "How it works"; the walk fills
+// the card's "Walk the diff" tab, beside its "Intent check" tab.
 (() => {
   const states = new Map();
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -8,13 +10,13 @@
       if (host.dataset.walkMounted === raw + lang && host.firstElementChild) return;
       host.dataset.walkMounted = raw + lang;
       let data; try { data = JSON.parse(raw); } catch { return; }
-      const card = host.closest('.intent-alignment') || host.parentElement;
+      const card = host.closest('.cap') || host.closest('.intent-alignment') || host.parentElement;
       const locale = value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || value?.en || '');
       let scene = data.scene;
       const walk = data.walk;
       const valid = walk?.status === 'valid';
       const fresh = !states.has(data.id);
-      const state = states.get(data.id) || {phase: reduced() ? 1 : 0, playing: false, intent:1, block:0, opened:false, other:false, highlight:[]};
+      const state = states.get(data.id) || {phase: reduced() ? 1 : 0, playing: false, intent:1, block:0, opened:data.open === true, other:false, highlight:[]};
       state.dispose?.();
       states.set(data.id, state);
       const link = (url, label) => typeof url === 'string' && url.startsWith('https://github.com/') ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${label}</a>` : label;
@@ -42,7 +44,7 @@
             positions.set(node.id, {x:node.lane * 240 + 25, y:60 + slots[node.lane]++ * 100});
           }
           const height = 95 + Math.max(...slots) * 100;
-          const lanes = scene.lanes.map((lane,i) => `<text x="${i*240+120}" y="25" text-anchor="middle">${esc(words(lane.label))}</text>`).join('');
+          const lanes = scene.lanes.map((lane,i) => `<g class="scene-lane"><rect x="${i*240+8}" y="4" width="224" height="${height-8}" rx="6"/><text x="${i*240+18}" y="25">${esc(words(lane.label))}</text></g>`).join('');
           const edges = scene.edges.map(edge => {
             const a=positions.get(edge.from), b=positions.get(edge.to);
             if (!a || !b) throw Error('layout');
@@ -70,9 +72,9 @@
           }).join('');
           const nodes = scene.nodes.map(node => {
             const p=positions.get(node.id);
-            return `<g data-scene-id="${esc(node.id)}" data-state="${esc(node.state)}" data-change="${esc(node.change || '')}" class="scene-node kind-${esc(node.kind)}" transform="translate(${p.x},${p.y})"><rect width="190" height="50" rx="${node.kind==='decision' ? 22 : node.kind==='store' ? 0 : 8}"/><text x="95" y="29" text-anchor="middle">${esc(words(node.label))}</text>${node.change ? `<text x="178" y="10" class="scene-number">${esc(node.change)}</text>` : ''}</g>`;
+            return `<g data-scene-id="${esc(node.id)}" data-state="${esc(node.state)}" data-change="${esc(node.change || '')}" class="scene-node kind-${esc(node.kind)}" transform="translate(${p.x},${p.y})"><rect width="190" height="50" rx="${node.kind==='decision' ? 22 : node.kind==='store' ? 0 : 8}"/><text x="95" y="29" text-anchor="middle">${esc(words(node.label))}</text>${node.change ? `<g class="cbadge scene-number"><circle cx="176" cy="14" r="10"/><text x="176" y="18" text-anchor="middle">${esc(node.change.replace(/^c/, ''))}</text></g>` : ''}</g>`;
           }).join('');
-          animation = `<section class="scene-view"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("howHeading"))}">${lanes}${edges}${nodes}<circle class="scene-token" r="6"/></svg><div class="scene-controls"><button data-play>${esc(label.play)}</button><input data-scrub type="range" min="0" max="2" step="0.01" value="${state.phase}" aria-label="${esc(label.scrub)}">${[label.before,label.change,label.after].map((text,i)=>`<button data-phase="${i}">${esc(text)}</button>`).join('')}</div><div class="scene-badges">${scene.changes.map(c=>`<button data-badge="${esc(c.id)}">${esc(c.id)} · ${esc(words(c.text))}</button>`).join('')}</div>${scene.counter ? `<p class="scene-counter">${esc(words(scene.counter.label))}: <span data-counter></span></p>` : ''}<div class="scene-banner" hidden></div></section>`;
+          animation = `<section class="scene-view hero2"><div class="scene-banner hfocus" hidden></div><div class="scene-controls hctl" role="toolbar" aria-label="${esc(t("howHeading"))}"><span class="seg2">${[label.before,label.change,label.after].map((text,i)=>`<button type="button" data-phase="${i}">${esc(text)}</button>`).join('')}</span><button type="button" class="hplay" data-play></button><input class="hscrub" data-scrub type="range" min="0" max="2" step="0.01" value="${state.phase}" aria-label="${esc(label.scrub)}">${scene.counter ? `<span class="hcount scene-counter"><b data-counter></b> ${esc(words(scene.counter.label))}</span>` : ''}</div><svg class="herosvg" viewBox="0 0 ${width} ${height}" style="max-width:${Math.round(width*1.4)}px" role="img" aria-label="${esc(t("howHeading"))}">${lanes}${edges}${nodes}<circle class="scene-token token" r="6"/></svg><ol class="scene-badges hchanges">${scene.changes.map(c=>`<li><button type="button" data-badge="${esc(c.id)}"><span class="cn2">${esc(c.id.replace(/^c/, ''))}</span><span>${esc(words(c.text))}</span><span class="go2">${esc(label.its)}</span></button></li>`).join('')}</ol></section>`;
         }
       } catch { animation=''; scene=null; positions.clear(); paths.clear(); }
       const reasons = {
@@ -110,20 +112,22 @@
         "walk check failed":t("walkReasonWalkCheckFailed"),
       };
       const message = walk?.status === 'stale' ? `${esc(label.stale)} · ${esc(label.head)} <code>${esc((walk.reviewed_head || '').slice(0,7))}</code>` : `${esc(label.absent)}${walk?.reason ? ' · '+esc(reasons[walk.reason] || reasons['walk check failed']) : ''}`;
-      host.innerHTML = animation + (!data.detailOnly ? `<section class="diff-walk"><h4>${esc(label.diff)}</h4><div role="tablist"><button data-check-tab role="tab" aria-selected="${!state.opened}">${esc(label.check)}</button><button data-code-tab role="tab" aria-selected="${state.opened}">${esc(label.code)}</button></div><div data-check-panel></div><div data-code-panel${state.opened ? '' : ' hidden'}>${valid ? `<p class="walk-head">${esc(label.head)} <code>${esc(walk.head.slice(0,7))}</code></p><div class="walk-tabs" role="tablist">${(data.intents || []).map((intent,i)=>`<button data-intent-tab="${i+1}" role="tab">${esc(t("intentHeading"))} ${i+1}</button>`).join('')}<button data-other-tab role="tab">${esc(label.other)}</button></div><div class="walk-navigation"><button data-previous>${esc(label.previous)}</button><button data-next>${esc(label.next)}</button></div><div data-blocks tabindex="0"></div>` : `<p role="status">${message}</p>`}</div></section>` : '');
+      host.innerHTML = animation;
+      const codePanel = data.detailOnly ? null : card.querySelector('[data-code-panel]');
+      // the walk opens on the intent tabs, plus "Other changes"
+      if (codePanel) codePanel.innerHTML = `<div class="diff-walk dwalk2">${valid ? `<p class="walk-head kcount">${esc(label.head)} <code>${esc(walk.head.slice(0,7))}</code></p><div class="walk-tabs wtabs" role="tablist">${(data.intents || []).map((intent,i)=>`<button type="button" data-intent-tab="${i+1}" role="tab"><b>${esc(t("intentHeading"))} ${i+1}</b><span>${esc(words(intent?.text || ''))}</span></button>`).join('')}<button type="button" data-other-tab role="tab"><b>${esc(label.other)}</b><span>${esc(String(walk.other.length))}</span></button></div><div class="dwalk" data-blocks tabindex="0"></div>` : `<p role="status">${message}</p>`}</div>`;
       const fallback = host.parentElement.querySelector('.change-fallback');
       if (fallback) fallback.hidden = Boolean(animation);
-      const checkPanel=host.querySelector('[data-check-panel]');
-      if (checkPanel) {
-        const check=card.querySelector('.door-check');
-        if (check) checkPanel.append(check);
-      }
+      const checkPanel = data.detailOnly ? null : card.querySelector('[data-check-panel]');
+      const codeTab = data.detailOnly ? null : card.querySelector('[data-code-tab]'), checkTab = data.detailOnly ? null : card.querySelector('[data-check-tab]');
       let frame, last;
       state.dispose = () => { if (frame) cancelAnimationFrame(frame); frame = null; };
       function stop() { state.playing=false; if(frame) cancelAnimationFrame(frame); frame=null; paint(); }
       function paint() {
         if (!animation) return;
-        host.querySelector('[data-play]').textContent=state.playing ? label.pause : label.play;
+        const playButton=host.querySelector('[data-play]');
+        // the icon is drawn in CSS: the scene's drawing is the section's one svg
+        playButton.innerHTML=`<span class="pi${state.playing ? ' pause' : ''}" aria-hidden="true"></span><span class="vh">${esc(state.playing ? label.pause : label.play)}</span>`;
         host.querySelector('[data-scrub]').value=state.phase;
         host.querySelector('.scene-view').dataset.phase=state.phase < .67 ? 'before' : state.phase < 1.34 ? 'change' : 'after';
         host.querySelectorAll('[data-scene-id]').forEach(el => {
@@ -151,11 +155,12 @@
       }
       function play() { if(!animation || reduced())return; if(state.playing){stop();return;}if(state.phase>=2)state.phase=0;state.playing=true;last=performance.now();frame=requestAnimationFrame(tick);paint(); }
       function showBlocks() {
-        const panel=host.querySelector('[data-blocks]'); if(!panel)return;
-        host.querySelectorAll('[data-intent-tab]').forEach(el=>el.setAttribute('aria-selected',String(!state.other && Number(el.dataset.intentTab)===state.intent)));
-        host.querySelector('[data-other-tab]').setAttribute('aria-selected',String(state.other));
+        const panel=codePanel?.querySelector('[data-blocks]'); if(!panel)return;
+        codePanel.querySelectorAll('[data-intent-tab]').forEach(el=>el.setAttribute('aria-selected',String(!state.other && Number(el.dataset.intentTab)===state.intent)));
+        codePanel.querySelector('[data-other-tab]').setAttribute('aria-selected',String(state.other));
+        panel.classList.toggle('dwalk',!state.other);
         if(state.other) {
-          panel.innerHTML=`<ul class="walk-other">${walk.other.map(file=>`<li>${link(file.url || (walk.intents.flatMap(i=>i.key)[0]?.url || (data.diffUrl ? data.diffUrl + '/files' : '')).split('#')[0],esc(file.file))} · ${esc(file.hunks)}${file.kinds ? ' · '+esc(file.kinds.join(', ')) : ''}</li>`).join('')}</ul>`;
+          panel.innerHTML=`<ul class="walk-other otherpane">${walk.other.map(file=>`<li>${link(file.url || (walk.intents.flatMap(i=>i.key)[0]?.url || (data.diffUrl ? data.diffUrl + '/files' : '')).split('#')[0],esc(file.file))} · ${esc(file.hunks)}${file.kinds ? ' · '+esc(file.kinds.join(', ')) : ''}</li>`).join('')}</ul>`;
           panel.querySelectorAll('.walk-other a').forEach(async (a, i) => {
             const bytes = new TextEncoder().encode(walk.other[i].file);
             const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -164,7 +169,16 @@
           return;
         }
         const keys=keyFor(state.intent); state.block=Math.min(state.block,Math.max(0,keys.length-1));
-        panel.innerHTML=keys.length ? keys.map((block,i)=>`<article class="walk-block${i===state.block ? ' active' : ''}" data-block="${i}"><h5>${link(block.url,esc(block.file)+':'+esc(block.start))}</h5><p class="walk-note">${esc(locale(block.note))}</p>${block.truncated ? `<p>${esc(label.omitted).replace('{before}',esc(block.truncated.before)).replace('{after}',esc(block.truncated.after))}</p>` : ''}<pre>${block.rows.map(row=>`<span class="walk-row ${esc(row.type)}${block.line_note?.line === (block.side==='L' ? row.old : row.new) ? ' noted' : ''}"><span class="walk-line">${esc(row.old ?? '')}\t${esc(row.new ?? '')}</span> ${esc(row.text)}${block.line_note?.line === (block.side==='L' ? row.old : row.new) ? `<em>${esc(locale(block.line_note))}</em>` : ''}</span>`).join('')}</pre></article>`).join('') : `<p>${esc(label.empty)}</p>`;
+        // the key blocks on the left, the current block's code in the middle, and
+        // its explanation with the step controls on the right
+        const block=keys[state.block], noted=row=>block.line_note?.line === (block.side==='L' ? row.old : row.new);
+        panel.innerHTML=keys.length ? `<nav class="dtoc"><ol class="ksteps">${keys.map((key,i)=>`<li><button type="button" class="walk-block${i===state.block ? ' active' : ''}" data-block="${i}" aria-current="${i===state.block}"><span class="wi">${i+1}</span><span><code>${esc(key.file.split('/').pop())}:${esc(key.start)}</code><small>${esc(locale(key.note))}</small></span></button></li>`).join('')}</ol></nav>` +
+          `<section class="dcode"><header><code>${link(block.url,esc(block.file)+':'+esc(block.start))}</code></header><div class="crows">${block.rows.map(row=>`<div class="walk-row crow ${esc(row.type)}${noted(row) ? ' noted crit' : ''}"><span class="walk-line cn">${esc(row.old ?? '')}\t${esc(row.new ?? '')}</span><span class="cm" aria-hidden="true">${row.type==='add' ? '+' : row.type==='del' ? '-' : ''}</span><code>${esc(row.text)}</code>${noted(row) ? `<em class="cnote">${esc(locale(block.line_note))}</em>` : ''}</div>`).join('')}</div></section>` +
+          `<aside class="dexplain"><div class="dnav walk-navigation"><button type="button" data-previous aria-label="${esc(label.previous)}">↑</button><span class="dpos">${state.block+1} / ${keys.length}</span><button type="button" data-next aria-label="${esc(label.next)}">↓</button><span class="dprog"><i style="width:${Math.round(100*(state.block+1)/keys.length)}%"></i></span></div>` +
+          `<p class="walk-note dnote">${esc(locale(block.note))}</p>${block.truncated ? `<p class="whelp">${esc(label.omitted).replace('{before}',esc(block.truncated.before)).replace('{after}',esc(block.truncated.after))}</p>` : ''}</aside>` : `<p>${esc(label.empty)}</p>`;
+        const move = delta => { state.block=Math.max(0,Math.min(keys.length-1,state.block+delta));showBlocks(); };
+        panel.querySelector('[data-previous]')?.addEventListener('click',()=>move(-1));
+        panel.querySelector('[data-next]')?.addEventListener('click',()=>move(1));
         panel.querySelectorAll('[data-block]').forEach(el=>el.onclick=()=>{state.block=Number(el.dataset.block);lightStep();showBlocks();});
         lightStep();
       }
@@ -172,12 +186,13 @@
         const block=keyFor(state.intent)[state.block], ids=[...(block?.step?.nodes || []),...(block?.step?.edges || [])];
         host.querySelectorAll('[data-scene-id]').forEach(el=>el.classList.toggle('scene-lit',ids.includes(el.dataset.sceneId)));
       }
-      function openIntent(n) {state.intent=n;state.block=0;state.other=false;state.opened=true;tabs();showBlocks();host.querySelector('.diff-walk')?.scrollIntoView({block:'nearest'});}
+      function openIntent(n) {state.intent=n;state.block=0;state.other=false;state.opened=true;tabs();showBlocks();codePanel?.scrollIntoView({block:'nearest'});}
       function tabs() {
-        host.querySelector('[data-code-panel]')?.toggleAttribute('hidden',!state.opened);
+        if (!codePanel) return;
+        codePanel.toggleAttribute('hidden',!state.opened);
         checkPanel?.toggleAttribute('hidden',state.opened);
-        host.querySelector('[data-code-tab]')?.setAttribute('aria-selected',String(state.opened));
-        host.querySelector('[data-check-tab]')?.setAttribute('aria-selected',String(!state.opened));
+        codeTab?.setAttribute('aria-selected',String(state.opened));
+        checkTab?.setAttribute('aria-selected',String(!state.opened));
       }
       // The banner's inputs live in the card state, so a remount (an update or
       // a locale switch) rebuilds it in the current locale with the same target.
@@ -198,12 +213,13 @@
       }
       card.querySelectorAll('.intent-row').forEach((row,i) => {
         row.querySelectorAll('.walk-intent-link').forEach(el=>el.remove());
+        const slot=row.querySelector('.kg') || row;
         const number=i+1, changes=scene?.changes.filter(c=>c.intents.includes(number)) || [];
         if(!scene && !valid)return;
         const button=document.createElement('button');button.type='button';button.className='walk-intent-link';
         button.textContent=changes.length ? changes.map(c=>c.id).join(' · ') : label.its;
         if(!scene && !keyFor(number).length)button.disabled=true;
-        button.onclick=()=>highlight(number,changes.map(c=>c.id));row.append(button);
+        button.onclick=()=>highlight(number,changes.map(c=>c.id));slot.append(button);
       });
       host.querySelector('[data-play]')?.addEventListener('click',play);
       host.querySelector('[data-scrub]')?.addEventListener('input',e=>{const value=Number(e.target.value);stop();state.phase=value;paint();});
@@ -214,14 +230,12 @@
         highlight(change.intents[0],[id],Boolean(target));
         if(target){openIntent(target.intent);state.block=target.key.findIndex(b=>b.changes?.includes(id));showBlocks();}
       });
-      host.querySelector('[data-code-tab]')?.addEventListener('click',()=>{state.opened=true;tabs();showBlocks();});
-      host.querySelector('[data-check-tab]')?.addEventListener('click',()=>{state.opened=false;tabs();});
-      host.querySelectorAll('[data-intent-tab]').forEach(el=>el.onclick=()=>openIntent(Number(el.dataset.intentTab)));
-      host.querySelector('[data-other-tab]')?.addEventListener('click',()=>{state.other=true;showBlocks();});
-      const move = delta => { state.block=Math.max(0,Math.min(keyFor(state.intent).length-1,state.block+delta));showBlocks(); };
-      host.querySelector('[data-previous]')?.addEventListener('click',()=>move(-1));
-      host.querySelector('[data-next]')?.addEventListener('click',()=>move(1));
-      host.querySelector('[data-blocks]')?.addEventListener('keydown',e=>{
+      // the card's two tabs outlive a remount, so they take one handler each
+      if (codeTab) codeTab.onclick=()=>{state.opened=true;tabs();showBlocks();};
+      if (checkTab && codePanel) checkTab.onclick=()=>{state.opened=false;tabs();};
+      codePanel?.querySelectorAll('[data-intent-tab]').forEach(el=>el.onclick=()=>openIntent(Number(el.dataset.intentTab)));
+      codePanel?.querySelector('[data-other-tab]')?.addEventListener('click',()=>{state.other=true;showBlocks();});
+      codePanel?.querySelector('[data-blocks]')?.addEventListener('keydown',e=>{
         if(e.key==='ArrowUp' || e.key==='ArrowDown'){e.preventDefault();state.block=Math.max(0,Math.min(keyFor(state.intent).length-1,state.block+(e.key==='ArrowDown'?1:-1)));showBlocks();}
         if(e.code==='Space'){e.preventDefault();play();}
       });

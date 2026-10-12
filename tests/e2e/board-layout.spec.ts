@@ -1,4 +1,4 @@
-import { showFleet, openCrewSheet, openLogSheet } from './lib/board';
+import { showFleet, showCrew, showLog } from './lib/board';
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
@@ -9,7 +9,7 @@ import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimes
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { EN, TW, CN, T040_KEYS, T057_KEYS, CN_ACTIVITY, CN_DETAILS, CREW, emitFixture, emit, CN_T058, useBoard } from "./lib/board";
-test('the prototype layout: engine badge, six lanes, portrait and strips, roster rows', async ({page}) => {
+test('the prototype layout: engine badge, open lanes, card queue, Crew and Log pages', async ({page}) => {
   test.setTimeout(90_000);
   const root = makeRoot(['working','gate','review']);
   // names nothing could have hard-coded
@@ -28,11 +28,13 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   // the one-time sign-in's POST /login answers nothing; every other POST counts
   let posts = 0; page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname !== '/login') posts++; });
   try {
-    await page.setViewportSize({width:1280,height:900});
+    await page.setViewportSize({width:1440,height:900});
     await page.goto(`${b.url}/?lang=en`);
     await expect(page.locator('#roster .rrow').first()).toBeAttached();
     await expect(page.locator('#scene, #captain')).toHaveCount(0);
-    await expect(page.locator('#secbar #rosterBtn')).toHaveCount(1);
+    // T-289: one row of four page tabs replaces the summary strip and its sheets
+    await expect(page.locator('#pagetabs [role="tab"]')).toHaveCount(4);
+    await expect(page.locator('#secbar, #rosterBtn, #logBtn, .board-sheet')).toHaveCount(0);
 
     // V7: the engine from config.yaml, marked when review runs elsewhere
     await expect(page.locator('#engine')).toHaveText('vendor-alpha ⇄ vendor-beta');
@@ -42,25 +44,23 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     await expect(page.locator('#engine')).toHaveText('vendor-alpha');
     await expect(page.locator('#engine')).not.toHaveClass(/\bx\b/);
 
-    // waiting on you counts the decisions, beside the other four
-    await expect(page.locator('[data-count="waiting"] b')).toHaveText('2');
-    expect(await page.locator('.counts [data-count]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.count)))
-      .toEqual(['merged','inflight','waiting','blocked','ready','backlog']);
+    // the Decisions tab counts the waiting cards; the counts band is gone
+    await expect(page.locator('#tabDecisions .badge2')).toHaveText('2');
+    await expect(page.locator('#counts, [data-count]')).toHaveCount(0);
 
     await showFleet(page);
-    // seven lanes in one row, left to right in lifecycle order
+    // the open lanes in one row, left to right in lifecycle order; the merged
+    // lane is hidden, as in the prototype, and merged tasks are in the history
     const lanes = page.locator('#lanes .lane');
     expect(await lanes.evaluateAll(els => els.map(e => (e as HTMLElement).dataset.lane)))
-      .toEqual(['backlog','ready','working','gate','review','captain','merged']);
+      .toEqual(['backlog','ready','working','gate','review','captain']);
     // ready and backlog each render with their own count, and the header
     // count is the lane's count: one derivation, shown twice
     for (const k of ['ready','backlog']) {
       const n = await page.locator(`[data-lane="${k}"] .card`).count();
       expect(n, `${k} lane has cards`).toBeGreaterThan(0);
       await expect(page.locator(`[data-lane="${k}"] h3 i`)).toHaveText(String(n));
-      await expect(page.locator(`[data-count="${k}"] b`)).toHaveText(String(n));
       await expect(page.locator(`[data-lane="${k}"] h3`)).toContainText(EN[k === 'ready' ? 'laneReady' : 'laneBacklog']);
-      await expect(page.locator(`[data-count="${k}"] span`)).toHaveText(EN[k]);
     }
     // a ready card could start now and shows no blocker
     await expect(page.locator('[data-lane="ready"] [data-task="T-READY"]')).toHaveCount(1);
@@ -82,57 +82,53 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     await expect(page.locator(`[data-lane="captain"] [data-task="${spec.tasks[2].id}"] .badge`))
       .toHaveText(`D-2 · ${EN.optionsN.replace('{n}','3')}`);
 
-    // the portrait sits beside the first full card; the next is a strip that
-    // opens in place and keeps the two-stage confirmation
+    // one card is open at a time; the queue above it opens the next, which
+    // keeps the two-stage confirmation. The portrait is the prototype's: hidden.
     await page.locator('#tabDecisions').click();
-    const portrait = (await page.locator('#capstage').boundingBox())!, card = (await page.locator('#card-D-1').boundingBox())!;
-    expect(portrait.x + portrait.width).toBeLessThanOrEqual(card.x);
-    await expect(page.locator('#capstage .lbl')).toContainText(EN.roleCaptain);
+    await expect(page.locator('#capstage')).toBeHidden();
     await expect(page.locator('#capstage .capimg')).toHaveAttribute('src', '/voyage2d/captain.webp');
-    await expect(page.locator('#capstage .fig')).toHaveCount(0);
-    await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', false);
-    await expect(page.locator('#card-D-2 .confirm')).toBeHidden();
-    await page.locator('#strip-D-2 > summary').click();
+    await expect(page.locator('.qitem')).toHaveCount(2);
+    await expect(page.locator('#queue-D-1')).toHaveAttribute('aria-current', 'true');
+    await expect(page.locator('#card-D-2')).toBeHidden();
+    await page.locator('#queue-D-2').click();
+    await expect(page.locator('#card-D-1')).toBeHidden();
     await expect(page.locator('#card-D-2 .confirm')).toBeVisible();
     await expect(page.locator('#card-D-2 .confirm')).toBeDisabled();
     await page.locator('#card-D-2 [data-c="B"]').click();
     await expect(page.locator('#card-D-2 .opt[data-c="B"]')).toHaveCSS('outline-style', 'solid');
-    await expect(page.locator('#card-D-2 .opt[data-c="B"]')).toHaveCSS('outline-width', '2px');
+    await expect(page.locator('#card-D-2 .opt[data-c="B"]')).toHaveCSS('outline-width', '3px');
     await expect(page.locator('#card-D-2 .confirm')).toBeEnabled();
-    await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', true);
+    await expect(page.locator('#queue-D-2 .picked')).toHaveText('B');
+    await page.locator('#queue-D-1').click();
     await expect(page.locator('#card-D-1 .links')).toContainText(`${EN.viewPr} #99`);
 
     // roster rows; a bar only for the one with bounded progress, never a %
-    await openCrewSheet(page);
+    await showCrew(page);
     await expect(page.locator('.roster li.rrow')).toHaveCount(4 + 1);
     await expect(page.locator('.roster .pb')).toHaveCount(1);
     await expect(page.locator('.roster [data-roster="worker-1"] .pb')).toHaveAttribute('aria-valuemax','5');
     expect(await page.locator('#shipregion').innerText()).not.toMatch(/\d+\s*%/);
-    await page.locator('#crewSheet [data-sheet-close]').click();
+    // an older stored "roster hidden" never hides the Crew page's roster
     await page.evaluate(() => localStorage.setItem('board.roster','hidden'));
     await page.reload();
-    await expect(page.locator('#crewSheet')).toBeHidden();
-    await openCrewSheet(page);
+    await showCrew(page);
     await expect(page.locator('#roster')).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem('board.roster'))).toBe('hidden');
     await page.setViewportSize({width:1440,height:900});
-    await openLogSheet(page);
+    await showLog(page);
     expect((await page.locator('.logwrap').boundingBox())!.width).toBeGreaterThan(1200);
-    await page.locator('#logSheet [data-sheet-close]').click();
 
     // every width, every locale, and doubled text: nothing overflows the page
-    await page.addStyleTag({content:'body{font-size:32px} .card .t,.roster .jb,.log li,.dcard h3,.explanation,.tradeoffs,.acts button,.dstrip>summary{font-size:32px}'});
+    await page.addStyleTag({content:'body{font-size:32px} .card .t,.roster .jb,.log li,.dcard h2,.explanation,.flagbtn b,.mflag,.kt{font-size:32px}'});
     for (const locale of ['en','zh-TW','zh-CN']) {
       await page.locator(`[data-l="${locale}"]`).click();
       const want = locale === 'en' ? EN : locale === 'zh-TW' ? TW : CN;
-      await expect(page.locator('[data-count="waiting"] span')).toHaveText(want.waitingOnYou);
+      await expect(page.locator('#tabDecisions .lb')).toHaveText(want.tabDecisions);
       await expect(page.locator('[data-task="T-DECIDED"] .t')).toHaveText(
         locale === 'en' ? 'a decided title' : locale === 'zh-TW' ? '決定的標題' : '决定的标题');
       await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(want.titleMissing);
       await expect(queued).toContainText(want.blockedOn);
-      await expect(page.locator('#rosterBtn')).toHaveText(want.rosterBtn);
-      await expect(page.locator('[data-count="ready"] span')).toHaveText(want.ready);
-      await expect(page.locator('[data-count="backlog"] span')).toHaveText(want.backlog);
+      await expect(page.locator('#tabCrew .lb')).toHaveText(want.tabCrew);
       await expect(page.locator('[data-lane="ready"] h3')).toContainText(want.laneReady);
       await expect(page.locator('[data-lane="backlog"] h3')).toContainText(want.laneBacklog);
       if (locale === 'zh-CN') {
@@ -149,16 +145,14 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
       }
       for (const width of [320,390,768,1280]) {
         await page.setViewportSize({width,height:844});
-        // measure each moved region where it is shown: the Fleet page, then each sheet open over it
+        // measure each page where it is shown
         for (const region of ['decisions','fleet','crew','log'] as const) {
           if (region === 'fleet') { await showFleet(page); await expect(page.locator('#lanes .card').first()).toBeVisible(); }
-          if (region === 'crew') { await openCrewSheet(page); await expect(page.locator('#roster .rrow').first()).toBeVisible(); }
-          if (region === 'log') { await openLogSheet(page); await expect(page.locator('#log li').first()).toBeVisible(); }
+          if (region === 'crew') { await showCrew(page); await expect(page.locator('#roster .rrow').first()).toBeVisible(); }
+          if (region === 'log') { await showLog(page); await expect(page.locator('#log li').first()).toBeVisible(); }
           expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1), `${region} at ${width}`).toBe(true);
-          if (region === 'crew' || region === 'log')
-            expect(await page.locator(`#${region}Sheet`).evaluate(el=>el.scrollWidth<=el.clientWidth+1), `${region} sheet at ${width}`).toBe(true);
+          expect(await page.locator(`#${region}Panel`).evaluate(el=>el.scrollWidth<=el.clientWidth+1), `${region} page at ${width}`).toBe(true);
         }
-        await page.locator('#logSheet [data-sheet-close]').click();
         await page.locator('#tabDecisions').click();
       }
       await page.setViewportSize({width:1280,height:900});
@@ -172,7 +166,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     await expect(page.locator('[data-lane="backlog"] [data-task="T-QUEUE"]')).toHaveCount(0);
     await expect(page.locator('[data-task="T-QUEUE"] .dep')).toHaveCount(0);
     const readyNow = await page.locator('[data-lane="ready"] .card').count();
-    await expect(page.locator('[data-count="ready"] b')).toHaveText(String(readyNow));
+    await expect(page.locator('[data-lane="ready"] h3 i')).toHaveText(String(readyNow));
   } finally {await stopBoard(b);}
 });
 

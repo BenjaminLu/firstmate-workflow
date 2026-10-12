@@ -2437,21 +2437,27 @@ Captain decision D-047 (T-040) chose full layout parity with
 `design/proposals/2026-09-20-captain-board/prototype.html`, without invented
 percentages. The regions below are that layout.
 
+T-289 ports the pages from the approved v2 prototype (`state/prototypes/board-v2/`,
+final version v10, captain 2026-10-07): its HTML and CSS are the source of
+truth for the skeleton, the card, type and density. Every page has a sticky
+top bar, the full-width voyage stage, then one sticky row of four tabs.
+
 | Region | What it holds |
 |---|---|
-| Header | brand, the engine badge, green-light state, the theme toggle and the language switch |
-| Sea header | merged / in flight / waiting on you / blocked / ready / backlog; waiting on you is the number of pending decisions |
-| Decisions tab | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place; each card and strip starts with a coloured kind badge (T-227) |
-| Voyage | the 2.5D stage (T-125) is the only ship view; crew, captain, handoffs and merge salvos live there |
-| Summary bar | crew button with aboard count, and log button with the latest event; each opens a modal sheet |
-| Fleet tab | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
-| Log sheet | tri-lingual summaries from `events.jsonl`, with a Load older control and client pages of 12 lines |
+| Top bar | brand, the theme button, the Run retrospective button, the engine badge, green-light state and the language switch; sticky |
+| Voyage | the full-width 2.5D stage (T-125) straight under the top bar is the only ship view; crew, captain, handoffs and merge salvos live there |
+| Page tabs | Decisions (with a red count of pending cards), Fleet (with its open-task count), Crew (with the crew count) and Log; one sticky row; there is no counts band and no summary strip |
+| Decisions | a queue of every pending card, oldest first, each item with its kind badge (T-227), task, door and headline; one card open at a time, as the prototype reads it: the header (kind, door badge, condensed headline, pull request, CI and review pills, "Why you see this"), the intent rows, How it works, then Walk the diff and Intent check as tabs; the fixed decision bar at the bottom; the captain's portrait is hidden, as in the prototype |
+| Fleet | the open lanes left to right: backlog, ready, work, gate, review, captain; task titles clamp to three lines; the merged lane is hidden, and every closed and merged task is in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
+| Crew | the roster as a page, with the aboard count |
+| Log | tri-lingual summaries from `events.jsonl`, with a Load older control and client pages of 12 lines |
 
 **Shell themes and stage (T-241).** `board.css`, loaded after the inline style,
 provides one token system. `board.js` sets `html[data-theme]` from `board.theme`
-in localStorage, falling back to the system colour scheme. The top bar's 32px
-half-circle icon toggles the theme and remembers it per viewer. Its title and
-accessible label follow the language switch. Storage reads and writes for the
+in localStorage, falling back to the system colour scheme. The top bar's theme
+button, in the prototype's style, names the theme it switches to ("Dark" or
+"Light") beside a moon or sun icon, and remembers the choice per viewer. Its
+title and accessible label follow the language switch. Storage reads and writes for the
 theme and language tolerate denied storage and keep working for the session.
 
 | Token | Light | Dark |
@@ -2472,9 +2478,8 @@ harbour, muted foreground to fog, and brass/ok/bad/accent to
 signal/kelp/flag-red/flag-blue. Light text accents override brass #7A5600,
 warn #8A4B00, wait #6B2FA0, ok #1E6B47, bad #B3261E and accent #1D4F91
 for at least 4.5:1 contrast on all three light surfaces. A light-only rule set
-covers literal roster and count text colours. Kind badges, pressed buttons,
-the portrait gradient and the gold action gradient keep their original colours;
-the portrait label keeps its original brass ink. `ship.css` stays unchanged.
+covers literal roster text colours. Kind badges, pressed buttons and the
+prototype's signal-flag letters keep their own fills. `ship.css` stays unchanged.
 Type tokens are 13/15/17/21/26/33/41px, spacing is 4/8/12/16/24/32/48px,
 and chip/panel radii are 4/8px. The shell adds no shadows.
 
@@ -2488,33 +2493,44 @@ margins, is at most 160px tall so the first card starts within an 844px viewport
 The size control is hidden in full and hidden modes. Full mode always fills
 the screen and restores the panel size on exit; existing mode/hidden keys,
 drawer homes and Escape handling stay intact. Reduced motion disables the
-size transition. The captain cards retain their T-245 layout.
+size transition. The captain card takes the prototype's layout (T-289).
 
-**Tabs and sheets (T-246).** Below the pinned voyage, `#tabs` is a tablist
-with Decisions and Fleet at the same level. Decisions holds `#deckwrap` and
+**Page tabs (T-246, T-289).** Below the pinned voyage, `#pagetabs` is one
+tablist with Decisions, Fleet, Crew and Log at the same level, each with its
+own tab panel; nothing opens over a page. Decisions holds `#deckwrap` and
 `#capstage`; Fleet holds the full-width `.lanes-wrap`, including parked cards,
-the drop target and confirmation, and history. Decisions shows the pending
-count when positive. On load, any pending card selects Decisions; otherwise
-`board.tab` restores the viewer's choice, defaulting to Decisions. Storage
-failures leave session navigation working. The game keeps its region homes
-inside these panels when moving workflow regions into and out of its drawer.
+the drop target and confirmation, and history; Crew holds `#shipregion`; Log
+holds `.logwrap`. On load, any pending card selects Decisions; otherwise
+`board.tab` restores the viewer's page, defaulting to Decisions. Storage
+failures leave session navigation working. Left and Right arrows move between
+the tabs, and Home and End go to the first and the last. Switching pages first
+closes Fleet detail. The game keeps its region homes inside these panels when
+moving workflow regions into and out of its drawer. Below 760px the tab row
+scrolls with the page and the tab counts are hidden, so the first card stays
+in the phone's first screen.
 
-`#secbar` holds the crew button and aboard count plus the log button and latest
-event. Crew and log start closed and open as modal dialogs, with titled headers,
-close buttons and Escape dismissal; focus returns to the opener. Opening a
-sheet or switching tabs first closes Fleet detail. A sheet takes Escape before
-a decision details sheet, and prevents the voyage's double-Escape gesture.
-Roster rows and log lines do not open task details. Below 760px the tabs and
-the summary bar share one compact row, so the first decision card stays in
-the phone's first screen; the latest event shortens to fit that row.
+A task opened on the Fleet page is the prototype's list | detail pair from
+761px up, and replaces the list below that. The detail is headed by the
+breadcrumb "‹ Fleet › T-xxx", whose first step closes the detail and returns
+focus to the card. Escape closes the detail only; the next Escape does not
+change the page. Roster rows and log lines do not open task details.
 
-Both sheets are 96vw wide, capped at 1480px; the log is 80vh tall. Below 760px
-they fill the width. The crew sheet uses 15px text and uncapped row heights,
-with readable names, tasks and columns; a project chip stays on one line
-and its column is as wide as the chip; below 760px each member is a stacked
-block without horizontal scrolling. Opening crew sets `SHIP.rosterOn` true;
-legacy `board.roster=hidden` no longer hides its rows, and the board never
-writes that key. Sort and grouping preferences remain unchanged.
+The Crew page uses 15px text and uncapped row heights, with readable names,
+tasks and columns; a project chip stays on one line and its column is as wide
+as the chip; below 761px each member is a stacked block without horizontal
+scrolling. The page sets `SHIP.rosterOn` true; legacy `board.roster=hidden`
+no longer hides its rows, and the board never writes that key. Sort and
+grouping preferences remain unchanged.
+
+The decision bar is fixed to the bottom of the viewport on Decisions only. It
+holds the door chip, the lock reason of a locked one-way merge, one
+signal-flag tile per option (the custom answer is one more tile), the
+"Door, checks, pros and cons" button and the send button, which names the
+choice. That button opens the bar's sheet above it: the door and its
+rollback, the one-way comprehension check, the full options with their pros
+and cons, and the questions. A locked tile opens the sheet. The sheet takes
+Escape and returns focus to its button. The explanation, why, how, glossary,
+notes and outcome sit behind "Why you see this" in the card header.
 
 History retains its closed default and its open state across renders. Its
 client pages show 12 cards, parked pages show 6, and log pages show 12 across

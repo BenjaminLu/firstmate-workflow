@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import { test, makeRoot, startBoard, stopBoard, writeTasks } from './lib/fixture';
 import { changePointCard } from './lib/intent-card';
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { showFleet } from './lib/board';
+import { showFleet, openDecisionDetails } from './lib/board';
 import { join } from 'node:path';
 
 for (const kind of ['one-way','two-way'] as const) test(`${kind} evidence walk starts with closed code`, async ({page}) => {
@@ -21,12 +21,15 @@ for (const kind of ['one-way','two-way'] as const) test(`${kind} evidence walk s
       await expect(merge).toBeDisabled();
       await card.locator('[data-review-intent="1"]').check();
       await card.locator('[data-review-intent="2"]').check();
+      // T-289: the comprehension check is in the decision bar's sheet
+      await openDecisionDetails(page, 'D-9242');
       await card.locator('[data-door-answer="1"]').click();
       await expect(card.locator('.door-feedback')).toContainText('Keep the saved records.');
       await expect(merge).toBeDisabled();
       await card.locator('[data-door-answer="0"]').click();
       await expect(merge).toBeEnabled();
       await expect(card.locator('.change-code[open]')).toHaveCount(0);
+      await card.locator('[data-decision-close]').click();
       await card.locator('[data-review-intent="1"]').uncheck();
       await expect(merge).toBeDisabled();
       await card.locator('[data-review-intent="1"]').check();
@@ -54,6 +57,8 @@ for (const locale of ['en','zh-TW']) for (const status of [400,409]) test(`${loc
     const card = page.locator('#card-D-9242');
     await card.locator('[data-review-intent="1"]').check();
     await card.locator('[data-review-intent="2"]').check();
+    // T-289: the comprehension check is in the decision bar's sheet
+    await openDecisionDetails(page, 'D-9242');
     await card.locator('[data-door-answer="0"]').click();
     await expect(card.locator('[data-c="A"]')).toBeEnabled();
     await card.locator('[data-c="A"]').click();
@@ -97,6 +102,8 @@ test('stale correct confirmation cannot unlock changed input', async ({page}) =>
     await card.locator('[data-review-intent="1"]').check();
     await card.locator('[data-review-intent="2"]').check();
     const staleResponse = page.waitForResponse(r=>new URL(r.url()).pathname==='/decisions/check-door' && r.request().postDataJSON().check_answer===0);
+    // T-289: the comprehension check is in the decision bar's sheet
+    await openDecisionDetails(page, 'D-9242');
     await card.locator('[data-door-answer="0"]').click(); await seen;
     await card.locator('[data-door-answer="1"]').click();
     await expect(card.locator('.door-feedback')).toContainText('Keep the saved records.');
@@ -158,6 +165,8 @@ test('authenticated voyage command refuses a one-way merge and main card complet
     const card = page.locator('#card-D-9242');
     await card.locator('[data-review-intent="1"]').check();
     await card.locator('[data-review-intent="2"]').check();
+    // T-289: the comprehension check is in the decision bar's sheet
+    await openDecisionDetails(page, 'D-9242');
     await card.locator('[data-door-answer="0"]').click();
     await expect(card.locator('[data-c="A"]')).toBeEnabled();
     await card.locator('[data-c="A"]').click(); await card.locator('.confirm').click();

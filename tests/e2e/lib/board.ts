@@ -15,7 +15,8 @@ export const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',aboa
   alsoWaiting:'其他待决（点开就地展开）',
   engine:'引擎',gateFailed:'闸门未过',viewDesign:'design.md',
   laneWorking:'施工',laneGate:'闸门',laneReview:'审核',capDeciding:'在后甲板上裁决',
-  ready:'就绪',backlog:'待办',laneReady:'就绪',laneBacklog:'待办'};
+  ready:'就绪',backlog:'待办',laneReady:'就绪',laneBacklog:'待办',
+  tabDecisions:'决策',tabFleet:'舰队',tabCrew:'船员',tabLog:'日志',crewAboard:'船上船员 {n}/{max}'};
 // Every key T-040 added. Each must have an oracle above, and the board's own
 // conversion must reproduce it: an oracle only some keys are checked against
 // let 閘門未過 ship half-converted.
@@ -67,7 +68,7 @@ const open = async (page: Page, lang: string, how: "query" | "stored" = "query",
     await page.evaluate((l) => localStorage.setItem("board.lang", l), lang);
     await page.goto(url);                 // no query parameter this time
   }
-  await expect(page.locator("#rosterBtn")).not.toHaveText("");
+  await expect(page.locator("#tabCrew .lb")).not.toHaveText("");
   await expect(page.locator("#roster .rrow").first()).toBeAttached();
 };
   return { board, open };
@@ -78,26 +79,28 @@ export const emit = (root:string, type:string, pr:number) => {
   expect(r.status).toBe(0);
 };
 
-// Navigate through the same controls as the captain; sheets never stack.
-export async function showFleet(page: Page) {
-  await expect(page.locator("#tabFleet")).not.toHaveText("");
-  const sheet = page.locator('.board-sheet[open]');
-  if (await sheet.count()) await sheet.locator('[data-sheet-close]').click();
-  await page.locator('#tabFleet').click();
+// Navigate through the same controls as the captain: four page tabs at one
+// level (T-289), so a page never opens over another.
+async function showPage(page: Page, tab: string, panel: string, what: string) {
+  await expect(page.locator(`${tab} .lb`)).not.toHaveText("");
+  await page.locator(tab).click();
   // T-274: a lost click fails here, not later on an invisible card. Never
   // click again: a retry would hide the bug.
-  await expect(page.locator('#tabFleet'), 'the Fleet tab click was lost').toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('#fleetPanel'), 'the Fleet panel did not open').toBeVisible();
+  await expect(page.locator(tab), `the ${what} tab click was lost`).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator(panel), `the ${what} panel did not open`).toBeVisible();
 }
-export async function openCrewSheet(page: Page) {
-  await expect(page.locator("#rosterBtn")).not.toHaveText("");
-  const log = page.locator('#logSheet[open]');
-  if (await log.count()) await log.locator('[data-sheet-close]').click();
-  if (!await page.locator('#crewSheet').isVisible()) await page.locator('#rosterBtn').click();
+export const showFleet = (page: Page) => showPage(page, '#tabFleet', '#fleetPanel', 'Fleet');
+export const showCrew = (page: Page) => showPage(page, '#tabCrew', '#crewPanel', 'Crew');
+export const showLog = (page: Page) => showPage(page, '#tabLog', '#logPanel', 'Log');
+// One card is open at a time; its queue item opens another.
+export async function openCard(page: Page, id: string) {
+  if (await page.locator(`#queue-${id}`).count()) await page.locator(`#queue-${id}`).click();
+  await expect(page.locator(`#card-${id}`)).toBeVisible();
 }
-export async function openLogSheet(page: Page) {
-  await expect(page.locator("#logBtn")).not.toHaveText("");
-  const crew = page.locator('#crewSheet[open]');
-  if (await crew.count()) await crew.locator('[data-sheet-close]').click();
-  if (!await page.locator('#logSheet').isVisible()) await page.locator('#logBtn').click();
+// The decision bar's sheet holds the door, its check, the full options and the questions.
+export async function openDecisionDetails(page: Page, id: string) {
+  await openCard(page, id);
+  const sheet = page.locator(`#sheet-${id}`);
+  if (!await sheet.isVisible()) await page.locator(`#card-${id} [data-decision-details]`).click();
+  await expect(sheet).toBeVisible();
 }

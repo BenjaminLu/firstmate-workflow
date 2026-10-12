@@ -3,7 +3,7 @@ import { test, makeRoot, startBoard, stopBoard, writeTasks, writeProjects, proje
 import { sceneWalkCard } from './lib/intent-card';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { showFleet } from './lib/board';
+import { showFleet, openDecisionDetails } from './lib/board';
 
 async function setup(page: any, mode: 'both'|'scene'|'walk'|'stale' = 'both') {
   const root = makeRoot([], false);
@@ -68,6 +68,8 @@ test('one-way evidence unlock never depends on opening code',async({page})=>{
   try {
     await card.locator('[data-review-intent="1"]').check();
     await card.locator('[data-review-intent="2"]').check();
+    // T-289: the comprehension check is in the decision bar's sheet
+    await openDecisionDetails(page, 'D-9242');
     await card.locator('[data-door-answer="1"]').click();
     await expect(card.locator('[data-c="A"]')).toBeDisabled();
     await card.locator('[data-door-answer="0"]').click();

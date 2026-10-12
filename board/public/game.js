@@ -42,8 +42,9 @@
   const stage=document.createElement('div');stage.id='voyage-mount';
   const drawer=document.createElement('aside');drawer.id='voyage-drawer';
   bar.append(toggle,sizeButton,drawerButton);panel.append(bar,stage,drawer);
-  document.querySelector('#counts').before(panel);
-  const homes=['#readOnly','#counts','#deckwrap','.lanes-wrap'].map(selector=>{
+  // T-289: the full-width stage comes straight after the top bar, as in the prototype
+  document.querySelector('.top').after(panel);
+  const homes=['#readOnly','#deckwrap','.lanes-wrap'].map(selector=>{
     const node=document.querySelector(selector), marker=document.createComment('voyage workflow home');
     node.before(marker);return {node,marker};
   });

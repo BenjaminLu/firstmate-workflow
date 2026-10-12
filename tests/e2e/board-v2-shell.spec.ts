@@ -1,9 +1,9 @@
-import { openCrewSheet, openLogSheet } from './lib/board';
+import { showCrew, showLog, openCard, openDecisionDetails } from './lib/board';
 import { expect, type Page } from '@playwright/test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, makeRoot, startBoard, stopBoard, details } from './lib/fixture';
-import { TW } from './lib/board';
+import { TW, EN } from './lib/board';
 
 const palettes = {
   light: ['#EEF2F0','#FFFFFF','#F6F8F7','#10233B','#5B6B7A','#CBD5D2','#F2B90F','#C2372C','#1D4F91','#2F7D5B'],
@@ -107,18 +107,28 @@ for(const initialWidth of [390,1440]) test(`unstored size follows viewport until
   } finally {await stopBoard(b);}
 });
 
-test('320px language controls fit with doubled default text',async({page})=>{
+// T-289: the prototype's top bar: the theme button names the theme it
+// switches to, beside the retrospective button in the same style
+test('320px top bar controls fit with doubled default text',async({page})=>{
   const b=await startBoard(makeRoot(['working']));
   try {
-    await page.setViewportSize({width:320,height:844}); await page.goto(b.url+'/?lang=en');
-    await page.addStyleTag({content:'body{font-size:32px} .card .t,.roster .jb,.log li,.dcard h3,.explanation,.tradeoffs,.acts button,.dstrip>summary{font-size:32px}'});
+    await page.setViewportSize({width:320,height:844}); await page.emulateMedia({colorScheme:'light'}); await page.goto(b.url+'/?lang=en');
+    await page.addStyleTag({content:'body{font-size:32px} .card .t,.roster .jb,.log li,.dcard h2,.explanation,.flagbtn b,.mflag{font-size:32px}'});
     for(const locale of ['en','zh-TW','zh-CN']) {
       await page.locator(`[data-l="${locale}"]`).click(); await noScroll(page);
-      for(const button of await page.locator('.langs button:visible').all()) {
+      for(const button of await page.locator('.top button:visible').all()) {
         const r=(await button.boundingBox())!; expect(r.x).toBeGreaterThanOrEqual(0); expect(r.x+r.width).toBeLessThanOrEqual(320);
       }
-      await expect(page.locator('#themeToggle')).toHaveCSS('width','32px');
-      await expect(page.locator('#themeToggle')).toHaveCSS('height','32px');
+    }
+    await page.locator('[data-l="en"]').click();
+    const toggle=page.locator('#themeToggle');
+    await expect(toggle).toHaveText(EN.themeDark, {useInnerText:true});
+    await expect(toggle).toHaveAccessibleName(EN.themeToggle);
+    await toggle.click();
+    await expect(toggle).toHaveText(EN.themeLight, {useInnerText:true});
+    for(const control of [toggle,page.locator('#retroRun')]) {
+      await expect(control).toHaveCSS('min-height','36px');
+      await expect(control).toHaveCSS('border-radius','4px');
     }
   } finally {await stopBoard(b);}
 });
@@ -172,20 +182,18 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
     });
     await page.goto(b.url+'/?lang=en');
     await expect.poll(()=>isolatedEventStreams, {message:'contrast fixture must fulfill /events with HTTP 204'}).toBeGreaterThan(0);
-    await expect(page.locator('[data-count="waiting"] b')).toHaveText('2');
+    await expect(page.locator('#tabDecisions .badge2')).toHaveText('2');
     await expect(page.locator('#engine')).toBeVisible();
     await expect(page.locator('#readOnly')).toBeVisible();
-    await page.locator('.dstrip > summary').click();
-    await openCrewSheet(page);
+    await showCrew(page);
     await page.locator('.rgroupbtn').click();
     await expect(page.locator('.roster h4.rgroup').first()).toBeVisible();
     await expect(page.locator(`.roster [data-roster="${warningCrewId}"] .rm.warn`)).toBeVisible({timeout:15000});
     const vendorWarn=page.locator(`.roster [data-roster="${warningCrewId}"] .rv.warn`);
     await expect(vendorWarn).toBeVisible({timeout:15000});
-    await openLogSheet(page);
+    await showLog(page);
     await expect(page.locator('#log .k-greenlit')).toBeVisible();
-    await page.locator('#logSheet [data-sheet-close]').click();
-    await openCrewSheet(page);
+    await showCrew(page);
     expect(await page.evaluate(()=>{
       const s=getComputedStyle(document.documentElement);
       return ['brass','warn','wait','ok','bad','accent','fg','fg2','fg3'].map(k=>s.getPropertyValue('--'+k).trim().toUpperCase());
@@ -202,26 +210,31 @@ for(const width of [1440,390]) test(`light text contrast sweep at ${width}`,asyn
       for(const root of roots) for(const el of [root,...root.querySelectorAll('*')]) {
         if(!(el instanceof HTMLElement) || !el.checkVisibility() || ![...el.childNodes].some(n=>n.nodeType===Node.TEXT_NODE && n.textContent?.trim())) continue;
         // Frames are separate documents; the voyage bar is outside these roots.
-        if(el.closest('iframe,#voyage-bar,.kbadge,[aria-pressed="true"]')) continue;
+        // The flag letters sit on the prototype's hatched and signal fills.
+        if(el.closest('iframe,#voyage-bar,.kbadge,[aria-pressed="true"],.mflag b,.flagbtn .fl')) continue;
         const chain:Element[]=[];for(let n:Element|null=el;n;n=n.parentElement)chain.push(n);
         let bg=rgba(getComputedStyle(document.body).backgroundColor);
         const unknown=chain.some(n=>getComputedStyle(n).backgroundImage!=='none');
         if(unknown) {
-          if(el.matches('.capstage .lbl,.capstage .lbl b,.capstage .lbl span')) bg=rgba('#140f22');
-          else if(el.matches('.acts .go')) bg=rgba('#b8862c');
-          else {failures.push(el.tagName+'.'+el.className+': unknown background image');continue;}
+          failures.push(el.tagName+'.'+el.className+': unknown background image');continue;
         } else for(const n of chain.reverse()) bg=over(rgba(getComputedStyle(n).backgroundColor),bg);
         const fg=over(rgba(getComputedStyle(el).color),bg), a=lum(fg), b=lum(bg), ratio=(Math.max(a,b)+.05)/(Math.min(a,b)+.05);
         checked++;if(ratio<4.5) failures.push(`${el.tagName}.${el.className} ${el.textContent?.trim().slice(0,60)}: ${ratio.toFixed(2)}`);
       }
       return {checked,failures};
     },selector);
-    // each sheet's region is swept while its sheet is open, so its text is measured, not skipped
-    const crewPass=await sweep('.top,#readOnly,.counts,#deckwrap,#shipregion');
-    await openLogSheet(page);
+    // each page is swept while it shows, so its text is measured, not skipped
+    const crewPass=await sweep('#shipregion');
+    await page.locator('#tabDecisions').click();
+    await openCard(page,'D-2');
+    await page.locator('#card-D-2 .why').click();
+    await openDecisionDetails(page,'D-2');
+    const deckPass=await sweep('.top,#readOnly,#watch,#pagetabs,#deckwrap');
+    expect(deckPass.checked).toBeGreaterThan(0);
+    await showLog(page);
     const logPass=await sweep('.logwrap');
     expect(logPass.checked).toBeGreaterThan(0);
-    const result={checked:crewPass.checked+logPass.checked,failures:[...crewPass.failures,...logPass.failures]};
+    const result={checked:crewPass.checked+deckPass.checked+logPass.checked,failures:[...crewPass.failures,...deckPass.failures,...logPass.failures]};
     expect(result.checked).toBeGreaterThan(60);
     expect(result.failures).toEqual([]);
   } finally {await stopBoard(b);}

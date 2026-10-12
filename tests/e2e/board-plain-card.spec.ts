@@ -36,7 +36,7 @@ function plainCard(id = 'D-270') {
   return {id, kind:'choice', task:'T-270', details:content};
 }
 
-// The plain block sits directly in the card, the sheet or the intent column.
+// T-289: the plain block sits behind "Why you see this", in the card header's drawer.
 async function expectPlain(scope: Locator, lang: keyof typeof WANT) {
   const want = WANT[lang];
   await expect(scope.locator(':scope > .plain-why-how h4, :scope > .card-glossary h4')).toHaveText(want.labels);
@@ -55,12 +55,14 @@ test('a non-intent card shows why, how and glossary in three languages', async (
   try {
     for (const lang of ['en', 'zh-TW', 'zh-CN'] as const) {
       await page.goto(`${b.url}/?lang=${lang}`);
-      const card = page.locator('#card-D-270');
-      // the main card: one plain block, outside the decision sheet
-      await expectPlain(card, lang);
-      // the decision sheet repeats it for the captain who opens the details
-      await card.locator('[data-decision-details]').click();
-      await expectPlain(card.locator('.decision-sheet'), lang);
+      const card = page.locator('#card-D-270'), drawer = card.locator('.caphead .drawer');
+      // one plain block, closed until the captain asks why the card is there
+      await expect(drawer).toBeHidden();
+      await card.locator('.caphead .why').click();
+      await expect(drawer).toBeVisible();
+      await expectPlain(drawer, lang);
+      await expect(card.locator('.plain-why-how')).toHaveCount(1);
+      await expect(card.locator('.decision-sheet .plain-why-how, .decision-sheet .card-glossary')).toHaveCount(0);
     }
     // bin/lib/fm_plain.py converts with the same table to the same text
     const python = spawnSync('python3', ['-c', [
@@ -81,8 +83,8 @@ test('the enriched walk card shows why, how and glossary', async ({page}) => {
     for (const lang of ['en', 'zh-TW', 'zh-CN'] as const) {
       await page.goto(`${b.url}/?lang=${lang}`);
       const card = page.locator('#card-D-9242');
-      await expect(card.locator('.change-walk')).toHaveCount(1);
-      await expectPlain(card.locator('.intent-alignment').first(), lang);
+      await expect(card.locator('.walk .change-point')).toHaveCount(2);
+      await expectPlain(card.locator('.caphead .drawer'), lang);
     }
   } finally { await stopBoard(b); }
 });
@@ -97,8 +99,8 @@ test('an older card without how or glossary renders as before', async ({page}) =
       await page.goto(`${b.url}/?lang=${lang}`);
       await expect(page.locator('#card-D-211, #card-D-212')).toHaveCount(2);
       await expect(page.locator('.plain-why-how, .card-glossary')).toHaveCount(0);
-      // the older intent card keeps its why where it always was
-      await expect(page.locator('#card-D-211 .why-disclosure .intent-why')).toHaveCount(1);
+      // the older intent card keeps its why behind "Why you see this"
+      await expect(page.locator('#card-D-211 .caphead .drawer .intent-why')).toHaveCount(1);
     }
   } finally { await stopBoard(b); }
 });
