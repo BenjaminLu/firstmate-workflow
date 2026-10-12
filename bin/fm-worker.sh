@@ -1448,6 +1448,34 @@ fm_round_pinned worker "$spec" || exit 65
 # after a repin - reads the spec and the code, then asks or plans. A failed
 # read says first: the instructions cost less than a missed question.
 spec_first="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_first_round.py" "$FM_RUN_DIR")" || spec_first=first
+# T-302: on the self project that first round changes no file and returns one
+# plan; the next round builds only once firstmate has accepted it. Only a run
+# whose first round on these bytes wrote plan-required is held to this, so a
+# task already in flight goes on as before. FM_PLAN_FIRST=0 keeps the
+# build-first round for the suites that predate T-302 (tests/lib.sh).
+plan_mode=off; plan_state='{}'; plan_fix=''
+if [ "$FM_EXTERNAL" = 0 ] && [ "${FM_PLAN_FIRST:-1}" != 0 ]; then
+  if [ "$spec_first" = first ]; then
+    python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$FM_RUN_DIR/pinned/spec.json" > "$FM_RUN_DIR/plan-required" || exit 70
+  fi
+  plan_state="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plan.py" state --run "$FM_RUN_DIR" \
+    --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" --task "$TASK" \
+    --round "$round_number" --head "$round_head")" || {
+    _fm_wip_done=1
+    echo "fm-worker: the plan state of $TASK does not read; no round starts" >&2; exit 65; }
+  plan_mode="$(jq -r .mode <<<"$plan_state")"
+  plan_fix="$(jq -r '(.fix // []) | join(", ")' <<<"$plan_state")"
+fi
+if [ "$plan_mode" = unaccepted ]; then
+  _fm_wip_done=1
+  plan_round="$(jq -r .plan_round <<<"$plan_state")"; plan_head="$(jq -r .plan_head <<<"$plan_state")"
+  echo "fm-worker: the plan from round $plan_round is not accepted; no build round starts" >&2
+  echo "fm-worker: firstmate accepts it with bin/lib/fm-evidence.sh --task $TASK accept-plan --round $plan_round --head $plan_head --file <answers>" >&2
+  emit --type gate_failed --en "build refused: the plan from round $plan_round is not accepted" \
+    --tw "拒絕實作：第 $plan_round 輪的計畫尚未獲得接受"
+  exit 65
+fi
 
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
@@ -1477,14 +1505,37 @@ spec_first="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_first_round.py" "$FM_RU
       printf 'If edited, it is restored to the pin before publishing.\n'
     fi
   fi
-  if [ "$round_two" = 0 ] && [ -z "$PR" ]; then
+  if [ "$round_two" = 0 ] && [ -z "$PR" ] && [ "$plan_mode" != plan ]; then
     printf '\nIf this round needs firstmate before implementation, write a standalone\n'
     printf '`SCOPE-BLOCKED:%s` or `ASK-<reason>:%s` marker and the question to `.fm-say.md`.\n' "$TASK" "$TASK"
     printf 'The launcher opens a draft pull request and posts your question there, even\n'
     printf 'when you change no implementation. This replaces the premature-question rule\n'
     printf 'in the worker instructions above for these first-round requests.\n'
   fi
-  if [ "$spec_first" = first ]; then
+  if [ "$plan_mode" = plan ]; then
+    printf '\n---\n\n# Read first, then return one plan\n\n'
+    printf 'This is your first round on this spec: a new task, or the first round after\n'
+    printf 'a repin. This round changes no file. Read the approved spec (%s/spec.json)\n' "$FM_PINNED_DIR"
+    printf 'and the code it touches, write one plan into `.fm-say.md`, and stop.\n'
+    printf 'A round that changes a file is refused: the change is saved under\n'
+    printf 'state/rescued/, the tree is restored, and nothing is pushed.\n\n'
+    printf 'The plan holds, all at once:\n\n'
+    printf -- '- Every question you have. Ask when the spec is unclear, when it does not\n'
+    printf '  match the code, when it changes a rule but does not say what happens to\n'
+    printf '  records and tasks already in flight, or when it lists `design/design.md`\n'
+    printf '  but does not name the numbered section (§N or §N.M) it edits. Write one\n'
+    printf '  standalone `ASK-SPEC:%s` line and every question under it, numbered.\n' "$TASK"
+    printf '  Never keep a question back for a later round.\n'
+    printf -- '- The files you will change.\n'
+    printf -- '- One table row for each done line below, numbered by its position:\n\n'
+    printf '  | <number> | <the test that proves it> | <where it runs: CI job or suite> | <how it fails on the base> |\n\n'
+    printf '  A Why or What line may point to the Done row that proves it (`see 6`).\n'
+    printf '  A plan without a row for a done line is refused, naming the line.\n\n'
+    printf 'The done lines:\n\n'
+    jq -r '.acceptance // [] | to_entries[] | "\(.key + 1). \(.value)"' <<<"$spec"
+    printf '\nFirstmate accepts the plan and records its answers. The next round builds;\n'
+    printf 'the launcher starts no build round on a plan firstmate has not accepted.\n'
+  elif [ "$spec_first" = first ]; then
     printf '\n---\n\n# Read first, then ask or plan\n\n'
     printf 'This is your first round on this spec: a new task, or the first round after\n'
     printf 'a repin. Before you change any file, read the approved spec (%s/spec.json)\n' "$FM_PINNED_DIR"
@@ -1501,6 +1552,22 @@ spec_first="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_first_round.py" "$FM_RU
   printf '\n---\n\n'
   if [ "$round_two" = 1 ]; then
     printf '\n# This is not the first round\n\nYour branch already carries your earlier work. Build on it.\n'
+  fi
+  if [ "$plan_mode" = accepted ] && [ "$(jq -r .built <<<"$plan_state")" = false ]; then
+    printf '\n# Your plan was accepted\n\n'
+    printf 'Firstmate accepted the plan you returned in round %s. Build it now. Its answers:\n\n' \
+      "$(jq -r .plan_round <<<"$plan_state")"
+    jq -r .answers <<<"$plan_state"
+    printf '\n---\n'
+  fi
+  if [ -n "$plan_fix" ]; then
+    printf '\n# Fix the whole class\n\n'
+    printf 'This round fixes a problem (%s). For each one, find every other place in\n' "$plan_fix"
+    printf 'the change with the same cause and fix it too. If you have questions, list\n'
+    printf 'all of them at once. Your report in `.fm-say.md` holds, for each class:\n\n'
+    printf '    SWEPT:%s <the class>\n      searched: <how you searched>\n' "$TASK"
+    printf '      <each place you checked>\n      found N, fixed M\n\n'
+    printf 'A round that changes files without this block is refused before anything is published.\n\n---\n'
   fi
   cat "$round_context"
   # A worker round that finds its tree restored mid-run is told so in its
@@ -1951,9 +2018,81 @@ local_tests_record() {
 local_tests_record
 asked=0
 say_has_words "$say" && asked=1
+# T-302: the note the plan and class checks read, without the local results.
+plan_note() {
+  local out
+  out="$(scratch_new)" || return 1
+  scratch_add "$out"
+  if [ ! -e "$say" ]; then : > "$out"
+  elif ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_local_tests.py" strip "$say" > "$out" 2>/dev/null </dev/null; then
+    cp "$say" "$out" || return 1
+  fi
+  printf '%s' "$out"
+}
+plan_refuse() {   # plan_refuse <why, en> <why, zh-TW>: keep the note, publish nothing
+  _fm_wip_done=1
+  if [ -s "$say" ]; then
+    fm_evidence report --round "$round_number" --actor "$NAME" --head "$round_head" --file "$say" --refused \
+      || echo "fm-worker: the refused round's report could not be retained" >&2
+  fi
+  rm -f "$say"
+  echo "fm-worker: $1; nothing is pushed" >&2
+  emit --type gate_failed ${PR:+--pr "$PR"} --en "$1" --tw "$2"
+  exit 1
+}
+# The round's own file changes as a patch: tracked files against the index
+# (a round cannot write the index) and every untracked file.
+plan_set_aside() {   # plan_set_aside <patch>
+  local f excludes=(-- . ":(exclude).fm-say.md" ":(exclude).fm-prompt.md" ":(exclude)design/tasks/")
+  mkdir -p "$(dirname "$1")" || return 1
+  git -C "$tree" diff --binary "${excludes[@]}" > "$1" || return 1
+  while IFS= read -r -d '' f; do
+    git -C "$tree" diff --binary --no-index /dev/null "$f" >> "$1"
+    [ $? -le 1 ] || return 1
+  done < <(git -C "$tree" ls-files -z -o --exclude-standard "${excludes[@]}")
+  git -C "$tree" restore --worktree "${excludes[@]}" 2>/dev/null || true
+  git -C "$tree" clean -fdq "${excludes[@]}"
+}
+plan_retained=0
+if [ "$plan_mode" = plan ]; then
+  if worker_changed_files; then
+    plan_patch="$FM_STATE_DIR/rescued/$NAME.patch"
+    plan_set_aside "$plan_patch" || echo "fm-worker: the round's changes could not all be set aside at $plan_patch" >&2
+    plan_refuse "a first round changes no file; its changes are saved at ${plan_patch#"$REPO"/} and the tree is restored" \
+      "第一輪不改任何檔案；改動已存到 ${plan_patch#"$REPO"/}，工作樹已還原"
+  fi
+  plan_text="$(plan_note)" || exit 70
+  plan_missing="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plan.py" check-plan \
+    --spec "$FM_RUN_DIR/pinned/spec.json" --file "$plan_text" 2>&1)" \
+    || plan_refuse "the plan does not cover every done line: $(printf '%s' "$plan_missing" | tr '\n' ';' | sed 's/;$//')" \
+         "計畫缺少完成條件 $(sed -n 's/^the plan has no row for done line \([0-9]*\):.*/\1/p' <<<"$plan_missing" | paste -sd, -) 的證明列"
+  fm_evidence report --round "$round_number" --actor "$NAME" --head "$round_head" --file "$say" \
+      --plan "$(jq -r .spec_sha256 <<<"$plan_state")" || {
+    _fm_wip_done=1
+    echo "fm-worker: the plan could not be retained; it is kept in state/unsent" >&2
+    mkdir -p "$FM_STATE_DIR/unsent" && cp "$say" "$FM_STATE_DIR/unsent/${NAME}.md"
+    exit 70; }
+  plan_retained=1
+  emit_status "Plan returned; firstmate accepts it before the build" "已交出計畫；firstmate 接受後才開始實作"
+  if ! rebuild_publishes; then
+    _fm_wip_done=1
+    rm -f "$say"
+    echo "fm-worker: the first round returned its plan; nothing is pushed until firstmate accepts it" >&2
+    printf '%s\n' "$branch"
+    exit 0
+  fi
+fi
+# T-302: a round that fixes a problem lists the places it checked for the
+# same cause, or nothing it changed is published.
+if [ -n "$plan_fix" ] && worker_changed_files; then
+  class_text="$(plan_note)" || exit 70
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plan.py" check-class --task "$TASK" --file "$class_text" >/dev/null 2>&1 \
+    || plan_refuse "this round fixes a problem ($plan_fix), but its report has no complete SWEPT:$TASK block (searched: and found N, fixed M)" \
+         "這輪在修正問題（${plan_fix}），但報告沒有列出檢查過的同類地方"
+fi
 # Retain first, even when no PR exists or optional publication later fails.
 # The whole note, results block included, whenever it is not empty.
-if [ -s "$say" ]; then
+if [ -s "$say" ] && [ "$plan_retained" = 0 ]; then
   fm_evidence report --round "$round_number" --actor "$NAME" --head "$round_head" --file "$say" || {
     echo "fm-worker: local report retention failed; preserving the note for recovery" >&2
     mkdir -p "$FM_STATE_DIR/unsent"

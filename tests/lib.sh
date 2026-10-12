@@ -1,6 +1,9 @@
 # shellcheck shell=bash
 # Minimal assertions. Sourced by every *.test.sh.
 _fails=0
+# Suites written before T-302 run a self worker's first round as a build
+# round; tests/worker-plan-first.test.sh unsets this to test the plan round.
+export FM_PLAN_FIRST=0
 _t() { printf '    %-52s' "$1"; }
 ok()   { printf 'ok\n'; }
 bad()  { printf 'FAIL\n      %s\n' "$1"; _fails=$((_fails+1)); }
