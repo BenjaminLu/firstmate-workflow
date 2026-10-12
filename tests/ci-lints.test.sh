@@ -1030,6 +1030,22 @@ case "$final_ci_rc:$out" in
 esac
 assert_eq '0' "$final_ci_rc" "the cleaned fixture CI exits successfully"
 assert_contains "$out" "ci: green" "and the fixture is green again once every plant is pulled"
+
+# T-294: a checkout without this repository's own task specs. The registry
+# names the self project and a tasks directory that is not there; the fast
+# stage says so and passes.
+cp "$ROOT/bin/fm-herdr.py" "$q/bin/"; project_storage_fixture "$q/bin/"
+{ printf 'default_project: self-host\nprojects:\n'
+  printf '  self-host:\n    repo: .\n    github: o/engine\n    base: main\n    required_check: ci\n'
+  printf '    design: design/design.md\n    tasks: design/tasks\n'
+} > "$q/config.yaml"
+rm -rf "$q/design"
+self_skip_rc=0
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || self_skip_rc=$?
+[ "$self_skip_rc" = 0 ] || printf 'fast stage exited %s; captured output follows:\n%s\n' "$self_skip_rc" "$out"
+assert_eq '0' "$self_skip_rc" "ci: self task directory absent is skipped"
+assert_contains "$out" "- project self-host: design/tasks not in this checkout (skipped)" \
+  "ci: self task directory absent is skipped, with a line that names it"
 rm -rf "$q"
 
 

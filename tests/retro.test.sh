@@ -53,14 +53,15 @@ for mode in ok dup substituted reordered too-many adds-without-why; do
        assert_contains "$(cat "$d/error")" 'items' "retro items: $mode names the items field" ;;
   esac
 done
-spec="$ROOT/design/tasks/T-230.json"
+# a copy of T-230's pinned spec, so the suite never reads design/tasks (T-294)
+spec="$ROOT/tests/fixtures/retro/T-230.json"
 python3 "$ROOT/bin/lib/fm_ste.py" check-explain "$spec" > /dev/null 2>&1
 assert_eq 0 "$?" 'an old pinned spec explanation still validates unchanged'
-python3 - "$ROOT" "$d/explain.json" <<'PY'
+python3 - "$ROOT" "$d/explain.json" "$spec" <<'PY'
 import json, sys
 sys.path.insert(0, sys.argv[1] + '/tests/lib')
 from ste_cases import retro_card
-spec = json.load(open(sys.argv[1] + '/design/tasks/T-230.json'))
+spec = json.load(open(sys.argv[3]))
 for lang in ('en', 'zh-TW'):
     spec['explain'][lang]['items'] = retro_card('ok')[lang]['items']
 json.dump(spec, open(sys.argv[2], 'w'))

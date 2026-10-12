@@ -1177,7 +1177,8 @@ stage "dag"
 # every registered project (design section 15.2): every file parses, its id
 # is its file name, its dependencies exist, and nothing waits on itself.
 # Nothing generated is committed, so there is no copy to agree with. A tree
-# with no registry has the one directory, design/tasks.
+# with no registry has the one directory, design/tasks. A self directory missing
+# from the checkout is skipped, as an external one is (T-294).
 dag_check() {   # dag_check <label> <dir>
   local label="$1" dir="$2" problems n
   if problems="$(fm_tasks_check "$dir" 2>&1)"; then
@@ -1207,7 +1208,9 @@ else
     elif [ "$(fm_project_get "$name" repo config.yaml)" != . ]; then
       skip "project ${name}: $tasks not on this machine"
     else
-      flunk "project ${name}: $tasks does not exist"
+      # T-294: this repository's own specs need not be committed, so a
+      # fresh checkout may have no task directory; a present one is checked
+      skip "project ${name}: $tasks not in this checkout"
     fi
   done
   if [ "$self_checked" = 0 ] && { [ -e design/tasks ] || [ -e design/tasks.json ]; }; then
