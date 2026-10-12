@@ -76,9 +76,10 @@ assert binds == [(r, r) for r in ['/device-tools', '/process-tools', '/usr']], \
 PYMOUNTS
 assert_eq "0" "$?" "Linux native device and process mounts survive toolchain reads"
 
-# T-284: a spec preflight pins the card and the pull-request draft beside the
-# spec; pinned_of() admits each only with the hash the launcher exported.
-pinned_case() {  # pinned_case <card hash: match|wrong|unset>; prints the path or the error
+# T-284 let a spec preflight pin the card and the pull-request draft beside
+# the spec, each with an exported hash. T-297 removed the preflight: pinned_of()
+# admits the spec alone again, whatever hash variables a shell still carries.
+pinned_case() {  # pinned_case <spec|match|unset>; prints the path or the error
   python3 - "$ROOT" "$1" <<'PYPINNED'
 import hashlib, os, shutil, sys, tempfile
 sys.path.insert(0, sys.argv[1] + '/bin/lib')
@@ -87,8 +88,9 @@ base = os.path.realpath(tempfile.mkdtemp())
 path = os.path.join(base, 'pinned')
 os.mkdir(path, 0o755)
 try:
-    for name, body in (('spec.json', b'{"id":"T-1"}'), ('card.json', b'{"title":"card"}'),
-                       ('pr-authoring.json', b'{"subject":"Add it"}')):
+    files = (('spec.json', b'{"id":"T-1"}'), ('card.json', b'{"title":"card"}'),
+             ('pr-authoring.json', b'{"subject":"Add it"}'))
+    for name, body in files[:1] if sys.argv[2] == 'spec' else files:
         with open(os.path.join(path, name), 'wb') as handle:
             handle.write(body)
         os.chmod(os.path.join(path, name), 0o444)
@@ -96,10 +98,9 @@ try:
                     'spec.json': 'FM_SPEC_PREFLIGHT'}[name]] = hashlib.sha256(body).hexdigest()
     os.environ['FM_PINNED_DIR'] = path
     os.environ.pop('FM_RUN_DIR', None)
-    if sys.argv[2] == 'wrong':
-        os.environ['FM_SPEC_PREFLIGHT_CARD'] = '0' * 64
-    elif sys.argv[2] == 'unset':
-        del os.environ['FM_SPEC_PREFLIGHT_CARD']
+    if sys.argv[2] == 'unset':
+        for env in ('FM_SPEC_PREFLIGHT_CARD', 'FM_SPEC_PREFLIGHT_PR_AUTHORING'):
+            del os.environ[env]
     try:
         print('ok' if policy.pinned_of() == path else 'wrong path')
     except ValueError as error:
@@ -110,9 +111,9 @@ finally:
     shutil.rmtree(base)
 PYPINNED
 }
-assert_eq "ok" "$(pinned_case match)" "pinned card and draft accepted with matching hashes"
-assert_eq "pinned file does not match its preflight hash" "$(pinned_case wrong)" "pinned card with a wrong hash refused"
-assert_eq "invalid pinned folder contents" "$(pinned_case unset)" "pinned card without its variable refused"
+assert_eq "ok" "$(pinned_case spec)" "a pinned spec alone is accepted"
+assert_eq "invalid pinned folder contents" "$(pinned_case match)" "a pinned card and draft are refused even with matching hashes"
+assert_eq "invalid pinned folder contents" "$(pinned_case unset)" "a pinned card and draft without variables are refused"
 
 # --- fm_policy: one policy per role ------------------------------------------
 pol worker 'vendor: mock

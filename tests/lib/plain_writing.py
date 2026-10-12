@@ -130,32 +130,6 @@ class MechanicalChecks(unittest.TestCase):
                          [f['check'] for f in fm.lint('The board shows it.', 'en', GLOSSARY, [])])
         self.assertEqual([], fm.lint('The board shows it.', 'en', GLOSSARY, ['board']))
 
-    def test_protected_tokens(self):
-        fm = plain()
-        self.assertEqual(fm.protected('Keep 3 in `a b` at bin/x.py:12 for T-1 and D-a-1 and abcdef12.'),
-                         fm.protected('For T-1 and D-a-1 and abcdef12, keep 3 in `a b` at bin/x.py:12.'))
-        self.assertNotEqual(fm.protected('Keep 3 retries.'), fm.protected('Keep retries.'))
-
-    def test_every_hash_form_is_guarded_for_every_rewrite_kind(self):
-        # A hash of seven or more hexadecimal characters is protected with no
-        # digit required and in either case: abcdefa and ABC123DEF.
-        fm = plain()
-        kinds = (('spec', fm.spec_prose, lambda text: {'title': 'T', 'acceptance': [text]}),
-                 ('card', fm.card_prose, lambda text: {'en': {'why': [{'kind': 'fact', 'text': text}]}}),
-                 ('pr-authoring', fm.pr_prose, lambda text: {'problem': text}))
-        for name, allowed, doc in kinds:
-            for old, new in (('Revert abcdefa now.', 'Revert fedcbaf now.'),
-                             ('Revert ABC123DEF now.', 'Revert ABC123AAA now.')):
-                with self.subTest(kind=name, old=old):
-                    with self.assertRaisesRegex(ValueError, 'protected tokens changed'):
-                        fm.compare(doc(old), doc(new), allowed)
-                    fm.compare(doc(old), doc(old.replace('Revert', 'Undo')), allowed)
-            with self.subTest(kind=name, word='defaced'):
-                # An ordinary word made only of a-f letters is a token too; a
-                # rewrite that keeps it unchanged is not reported.
-                fm.compare(doc('The defaced page stays.'), doc('The defaced page is kept.'), allowed)
-                self.assertEqual([], fm.glued('The defaced page stays.'))
-
     def test_zh_cn_rendering_applies_rows_in_file_order(self):
         fm = plain()
         rows = [['船員名冊', '船员名册'], ['船員', '船员'], ['員', '员']]
@@ -385,7 +359,6 @@ class FrozenCodeRoot(unittest.TestCase):
 
     def readers(self):
         envelope = PullRequestBody().envelope()
-        spec = json.dumps(dict(id='T-X', scope=['src/**'], acceptance=['works']))
         return {
             'check-plain': lambda: subprocess.run(
                 [sys.executable, str(self.frozen / 'bin/lib/fm_ste.py'), 'check-plain', str(self.card)],
@@ -393,9 +366,6 @@ class FrozenCodeRoot(unittest.TestCase):
             'pull-request rendering': lambda: self.frozen_python(
                 'import fm_self_pr\nprint(fm_self_pr.render(json.loads(sys.argv[2]), {"id": "T-X", "acceptance": ["x"]},'
                 ' "a" * 40, [])["body"])', json.dumps(envelope)),
-            'spec preflight': lambda: self.frozen_python(
-                'import fm_spec_preflight\nprint(fm_spec_preflight.prompt("T-X", sys.argv[2].encode(), "a" * 40,'
-                ' code=sys.argv[1], card=open(sys.argv[3], "rb").read()))', spec, str(self.card)),
         }
 
     def broken(self, name, how):
@@ -420,8 +390,7 @@ class FrozenCodeRoot(unittest.TestCase):
     def test_tw2cn_readers_refuse_naming_the_frozen_file(self):
         for how in ('missing', 'unreadable'):
             for reader, run in (('zh-CN rendering', lambda: self.frozen_python(
-                                    'import fm_plain\nprint(fm_plain.to_cn("看板", fm_plain.tw2cn_rows()))')),
-                                ('spec preflight', self.readers()['spec preflight'])):
+                                    'import fm_plain\nprint(fm_plain.to_cn("看板", fm_plain.tw2cn_rows()))')),):
                 with self.subTest(how=how, reader=reader):
                     self.setUp()
                     path = self.broken('tw2cn.tsv', how)
@@ -466,11 +435,6 @@ class FrozenCodeRoot(unittest.TestCase):
                                     'print(fm_plain.find_terms("The zebra.", "en", fm_plain.load_glossary()))')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(['FROZEN-ROW', '[]'], result.stdout.split('\n')[:2])
-        details = card(); details['zh-TW']['title'] = '凍結看板'; self.card.write_text(json.dumps(details, ensure_ascii=False))
-        result = self.readers()['spec preflight']()
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn('FROZEN-ROW', result.stdout)
-        self.assertNotIn('LIVE-ROW', result.stdout)
 
 
 class PullRequestBody(unittest.TestCase):
@@ -510,81 +474,6 @@ class PullRequestBody(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'glued-number "All13"'):
             fm_self_pr.validate(draft, spec, sources, prose_checks=True)
         self.assertIn('All13', fm_self_pr.render(envelope, spec, 'a' * 40, [])['body'])
-
-
-def stock_publication():
-    """tests/lib/self_pr_authoring.py's real pin and seal fixture (it reads its
-    root from argv at import)."""
-    saved = sys.argv[:]
-    sys.argv.insert(1, str(ROOT))
-    try:
-        import self_pr_authoring
-    finally:
-        sys.argv[:] = saved
-    return self_pr_authoring
-
-
-class SealAfterRewrite(unittest.TestCase):
-    """Change 14 integration: a preflight receipt with an accepted spec rewrite
-    hands over a draft that seal() accepts against the rewritten approved spec.
-    Uses the real retain(), pin creation and fm_self_pr.py seal."""
-
-    def setUp(self):
-        stock = stock_publication()
-        self.pr = stock.pr
-        for name in ('run_ok', 'git', 'seed_preflight', 'author', 'pin_create'):
-            setattr(type(self), name, getattr(stock.StockPublication, name))
-        stock.StockPublication.setUp(self)
-
-    def preflight_then_seal(self, draft_rewrite):
-        from fm_evidence import Store
-        from fm_spec_preflight import retain
-        task_file = self.repo / 'design/tasks/T-259.json'
-        submitted_spec = task_file.read_bytes()
-        submitted_draft = (self.state / 'pr-authoring/T-259.json').read_bytes()
-        new_spec = dict(json.loads(submitted_spec), title='Self pull requests explain the approved intent and the observed scope')
-        blocks = '```json fm-reworded-spec\n' + json.dumps(new_spec) + '\n```\n'
-        if draft_rewrite:
-            blocks += ('```json fm-reworded-pr-authoring\n'
-                       + json.dumps(dict(self.draft, **draft_rewrite)) + '\n```\n')
-        answer = ('Summary.\n' + blocks + '1. ok: the rewritten title and draft keep their meaning.\n'
-                  'PREFLIGHT-COMPLETE:T-259\n\nSPEC-OK:T-259\n')
-        record = retain(Store(self.state, self.evidence_project, 'T-259'), submitted_spec, 'a' * 40,
-                        'reviewer-fixture', 2, answer, dict(level='legacy', vendor='claude'),
-                        pr_authoring=submitted_draft)
-        spec_entry, draft_entry = record['rewrite']['spec'], record['rewrite']['pr-authoring']
-        self.assertEqual('accepted', spec_entry['status'], spec_entry)
-        self.assertEqual('accepted', draft_entry['status'], draft_entry)
-        # firstmate puts exactly the accepted bytes in the task file and the draft.
-        task_file.write_bytes(spec_entry['text'].encode('utf-8'))
-        self.git('add', 'design/tasks/T-259.json'); self.git('commit', '-qm', 'reviewed spec wording')
-        self.git('push', '-q', 'origin', 'main')
-        (self.state / 'pr-authoring/T-259.json').write_bytes(draft_entry['text'].encode('utf-8'))
-        pin = self.pin_create()
-        self.assertEqual(spec_entry['text'], pin['snapshots']['spec']['text'], 'the pin holds the rewritten spec')
-        sealed = self.subprocess.run([sys.executable, str(self.repo / 'bin/lib/fm_self_pr.py'), 'seal', '--task', 'T-259'],
-                                     env=self.pin_env, capture_output=True, text=True)
-        self.assertEqual(0, sealed.returncode, sealed.stdout + sealed.stderr)
-        envelope = json.loads(sealed.stdout)
-        self.assertEqual(self.pr.source_digests(pin['snapshots']), envelope['sources'])
-        self.assertEqual(hashlib.sha256(spec_entry['text'].encode('utf-8')).hexdigest(),
-                         envelope['sources']['spec']['sha256'], 'seal() binds the rewritten spec')
-        for key in ('design', 'contract', 'conventions'):
-            self.assertEqual(self.draft['sources'][key], envelope['sources'][key], key + ' source entry stays')
-        self.assertEqual([n['index'] for n in self.draft['intent_notes']],
-                         [n['index'] for n in envelope['draft']['intent_notes']], 'acceptance indexes stay')
-        return envelope
-
-    def test_spec_and_draft_rewritten_together_seal(self):
-        approach = 'Bind the authored prose to approved sources and render the exact-head context.'
-        envelope = self.preflight_then_seal(dict(approach=approach))
-        self.assertEqual(approach, envelope['draft']['approach'])
-        self.assertEqual(self.draft['problem'], envelope['draft']['problem'])
-
-    def test_spec_rewrite_with_unchanged_draft_prose_seals(self):
-        envelope = self.preflight_then_seal(None)
-        for field in ('subject', 'problem', 'expected_result', 'approach', 'intent_notes'):
-            self.assertEqual(self.draft[field], envelope['draft'][field], field + ' prose stays')
 
 
 if __name__ == '__main__':

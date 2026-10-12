@@ -57,7 +57,7 @@ grants no scope-gate authority. Existing/human/adopted metadata is preserved.
 ## Code walk in the final verdict (T-244)
 
 For a task PR code review, include at most one fenced `walk` JSON block in the
-final verdict. Spec preflight does not produce a walk. Copy hunk ids from the
+final verdict. Copy hunk ids from the
 prompt's `## Hunk ids`; never compute them or annotate the raw diff. Choose up
 to five key blocks per intent and at most forty overall. Do not list the other
 hunks: the trusted producer computes their complement by file.
@@ -228,57 +228,13 @@ resolved, or a worker edit, changes the patch and needs a new review. Base
 commits touching files the change reviewed no longer void it. CI and the gates
 always rerun on the head being merged; they are firstmate's, not yours.
 
-Spec preflight is one fresh review of a proposed spec (T-288). A spec states
-what to build, why, and when it is done; how is the worker's job, checked by
-pull request review. Read the spec with the code at hand and answer four
-questions: is it clear, is it the right thing to build, is there a simpler way,
-and does it contradict the code or another rule. Do not ask for implementation
-detail such as callers or line numbers. Two checks stay: a task that changes a
-validation rule, lint, gate, schema or stored-record format must say what
-happens to records and tasks already in flight, and a spec whose scope lists
-design/design.md must name the numbered section it edits. Write a free-form
-review; each gap names the acceptance line it concerns and suggests a rewrite.
-Every gap belongs in this one review. The last line is `SPEC-OK:<task>` or
-`SPEC-GAPS:<task>`. Every pass is a first pass: the prompt holds no earlier
-review, and nothing is compared with one. This does not change the
-implementation-review standing list below.
-
-Readability is part of every preflight (T-270). Read the
-spec, and the card and pull-request draft when the run includes them, as
-[plain-writing.md](../firstmate/plain-writing.md) describes: as a backend
-engineer with three to five years of experience who has never seen this
-repository. For a readability problem, quote the exact sentence and say where
-that reader gets stuck. A wording problem your rewrite fixes is not a gap; say
-the rewrite fixes it. A problem that no clear rewrite can fix without changing
-the meaning is a gap with a suggested rewrite. Check the card in en, zh-TW and
-the rendered zh-CN; a word left in Traditional characters in zh-CN is a problem
-to report with the zh-TW rewording or the exact missing `i18n/tw2cn.tsv` rows.
-
-You may fix the wording yourself, each kind at most once, in a block that
-opens with one of these exact lines and closes with a line of three
-backquotes, placed before the final line:
-
-- ```` ```json fm-reworded-spec ````: the whole spec. Only `title` and the
-  text of each acceptance line may change; the acceptance list keeps its
-  length and order.
-- ```` ```json fm-reworded-card ````: the whole card. Only titles,
-  explanations, before, after, outcome, option description, pros and cons,
-  the text of why, how, notes and questions items, node labels and
-  change_table text may change.
-- ```` ```json fm-reworded-pr-authoring ````: the whole pull-request draft.
-  Only subject, problem, expected_result, approach and the intent_notes notes
-  may change.
-
-Keep every code span, path, file:line, hash, task number, decision id and
-number in the same string; the launcher refuses a rewrite that drops, adds or
-moves one, and it revalidates the result. For each rewritten string, state in
-the review that it keeps its meaning. A rewrite that would change a
-condition or obligation is a gap, not a rewrite. Never rewrite
-`public_title`, `public_summary` or `public_changes`: report a readability
-problem there as a gap, and check that public fields hold no private prose.
-A refused or duplicate block makes the outcome `rewrite-refused`; an unclosed
-block hides your verdict and the run fails. Nothing inside a block is read as
-a verdict.
+There is no spec preflight any more (T-297): no reviewer reads a proposed spec
+before dispatch, and none rewords a spec, a card or a pull-request draft. In its
+first round on a spec - a new task, or the first round after a repin - the
+worker reads the spec with the code, then asks firstmate or writes a short plan
+(files it will change, how it proves done) in its round report. In a code
+review, read that plan as evidence of what the worker understood; it is never
+approval, and the standing list below is unchanged.
 
 An APPROVE final of an implementation review may also carry one block that
 opens with the line ```` ```json fm-merge-card ````, written in the same review call by
@@ -373,8 +329,8 @@ item of the same list is a protocol error, and so is an open item with
 neither. firstmate checks each patch against the reviewed head; a patch that
 does not apply is reported, not refused. You stay read-only: propose the fix
 in your answer and never edit, commit or push a file, because a reviewer that
-wrote the code would be approving its own work. This rule is for code review
-only, not spec preflight, and an APPROVE needs no fix proposals. The review
+wrote the code would be approving its own work. This rule is for code review,
+and an APPROVE needs no fix proposals. The review
 after your REJECT goes to another reviewer name.
 
 Tag every item `[must-fix]` or `[follow-up]` on its first line (T-276), for
@@ -510,8 +466,9 @@ For every diff changing a validation rule, lint, gate, schema or stored-record
 format, check the spec's treatment of existing records and tasks already in
 flight. A missing migration clause or a migration without a test is a REJECT
 finding, tied to acceptance and the standing-list protocol. Check all callers,
-mirrors, fixtures and tests affected by the changed rule. Prior spec preflight is
-proposal evidence, never implementation approval or a substitute for the gates.
+mirrors, fixtures and tests affected by the changed rule. A spec preflight receipt
+stored before T-297, like the worker's first-round plan, is proposal evidence,
+never implementation approval or a substitute for the gates.
 
 ## Retro mode (T-273)
 

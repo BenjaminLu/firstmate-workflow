@@ -42,7 +42,7 @@ class LocalSelfSpec(unittest.TestCase):
     def test_repin_keeps_local_self_provenance(self):
         self.event(task='T-X')
         self.p.create()
-        self.spec.write_text('{"id":"T-X","scope":["changed/**"]}')
+        self.spec.write_text('{"id":"T-X","scope":["changed/**"],"acceptance":["works"]}')
         self.decision()
         pin = self.p.create(decision='D-1')
         self.assertEqual(pin['version'], 2)
@@ -104,7 +104,9 @@ class LocalSelfSpec(unittest.TestCase):
         (home / 'tasks').mkdir(parents=True)
         state = home / 'state'
         state.mkdir()
-        (home / 'tasks/T-X.json').write_text(self.spec.read_text())
+        # T-297: an external spec pins only with a valid public title.
+        (home / 'tasks/T-X.json').write_text(json.dumps(dict(json.loads(self.spec.read_text()),
+                                                             public_title='Keep the private widget')))
         (home / 'design.md').write_text('external design')
         (home / 'CONVENTIONS.md').write_text('external conventions')
         (state / 'config.yaml').write_text('project:\n  check: true\n')

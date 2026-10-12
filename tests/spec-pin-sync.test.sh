@@ -15,7 +15,6 @@ sync_fixture() {
   git -C "$repo" add config.yaml .gitignore
   git -C "$repo" commit -qm contract; git -C "$repo" push -q origin main
   printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-03T00:00:00Z"}' > "$repo/state/events.jsonl"
-  seed_spec_preflight "$repo" T-Z "" firstmate-workflow
   seed_self_pr_authoring "$repo" T-Z firstmate-workflow
   cat > "$repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
@@ -51,7 +50,6 @@ sync_repin() {
   # command substitutions cannot prove this byte-preserving contract.
   printf '\n\n' >> "$d/v2.json"
   cp "$d/v2.json" "$repo/design/tasks/T-Z.json"
-  seed_spec_preflight "$repo" T-Z "" firstmate-workflow
   seed_self_pr_authoring "$repo" T-Z firstmate-workflow
   "$ROOT/bin/fm-project.sh" repin --repo "$repo" --project firstmate-workflow --task T-Z --decision D-sync > "$d/repin.out" 2>&1
   assert_eq 0 "$?" 'setup: captain decision authorizes v2'
@@ -144,7 +142,6 @@ rm -rf "$d"
 sync_fixture
 git -C "$repo" rm -q --cached design/tasks/T-Z.json
 git -C "$repo" commit -qm 'task not yet on main'; git -C "$repo" push -q origin main
-seed_spec_preflight "$repo" T-Z "" firstmate-workflow
 seed_self_pr_authoring "$repo" T-Z firstmate-workflow
 printf ':\n' > "$d/step.sh"
 sync_round

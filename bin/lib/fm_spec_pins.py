@@ -28,8 +28,20 @@ TASK_DISPATCH_COMMIT = 'f61b71457f18c4aec744ae1b9ff84b1bd5b84728'
 LEGACY_REASON = 'Pre-T-171 cross-task direct-order approval replaced by this task captain choice'
 
 
-class PreflightRefused(ValueError):
-    """Exact selected bytes failed preflight; never try legacy source fallback."""
+class SpecRefused(ValueError):
+    """Exact selected bytes failed the pin-time spec check (T-297); never try
+    legacy source fallback."""
+
+
+def spec_check(task, text, env=None):
+    """Every check the removed spec preflight ran before its reviewer. env
+    names the project being pinned (FM_EXTERNAL, FM_PR_TITLE); the process
+    environment is the default."""
+    from fm_spec_preflight import check
+    try:
+        check(task, text.encode('utf-8'), env)
+    except (ValueError, KeyError, TypeError) as error:
+        raise SpecRefused(str(error) or type(error).__name__) from error
 
 
 def digest(text):
@@ -121,6 +133,7 @@ class Pins:
         self.target = Path(env['FM_TARGET_ROOT'])
         self.state = Path(env['FM_STATE_DIR'])
         self.external = env.get('FM_EXTERNAL') == '1'
+        self.spec_env = {key: env[key] for key in ('FM_EXTERNAL', 'FM_PR_TITLE') if key in env}
         self.project = env.get('FM_PROJECT') or 'firstmate-workflow'
         self.tasks = Path(env['FM_TASKS_DIR'])
         self.design = Path(env['FM_DESIGN'])
@@ -442,32 +455,34 @@ class Pins:
             return approval
         return None
 
-    def preflight(self, project, spec_ref=None):
-        """Read the prospective spec before dispatch can publish any work.
+    def check(self, spec_ref=None):
+        """Check the prospective spec before dispatch can publish any work.
 
-        Existing pins fail closed. Legacy inputs that cannot produce a pin
-        retain their original file-byte check without granting gate authority.
+        An existing pin was checked when it was written and is not checked
+        again (T-297); a legacy unapproved task never pins and is not checked.
+        An approved task whose sources cannot be collected yet (an external
+        target not yet cloned) is checked from its task file's bytes.
         """
-        from fm_evidence import Store
-        from fm_spec_preflight import require_ok
-        pin = self.resolve(if_present=True)
-        if pin:
-            data = pin['snapshots']['spec']['text'].encode('utf-8')
-        else:
-            try:
-                approval = self.approval(None)
-                if approval is None:
-                    raise ValueError('legacy unapproved input')
-                _, _, snapshots, _ = self.collect()
-            except (ValueError, OSError, KeyError, TypeError):
-                data = (self.tasks / (self.task + '.json')).read_bytes()
-            else:
-                if spec_ref and not self.external:
-                    self.approved_branch_spec(None, snapshots, approval, spec_ref)
-                data = snapshots['spec']['text'].encode('utf-8')
-        require_ok(Store(self.state, project, self.task, external=self.external), data)
+        if self.resolve(if_present=True):
+            return
+        try:
+            approval = self.approval(None)
+        except (ValueError, OSError, KeyError, TypeError):
+            approval = None
+        if approval is None:
+            return
+        try:
+            _, _, snapshots, _ = self.collect()
+        except (ValueError, OSError, KeyError, TypeError):
+            spec = self.tasks / (self.task + '.json')
+            if spec.is_file():
+                spec_check(self.task, spec.read_bytes().decode('utf-8', 'replace'), self.spec_env)
+            return
+        if spec_ref and not self.external:
+            self.approved_branch_spec(None, snapshots, approval, spec_ref)
+        spec_check(self.task, snapshots['spec']['text'], self.spec_env)
 
-    def create(self, decision=None, resume=False, spec_worktree=None, require_preflight=None):
+    def create(self, decision=None, resume=False, spec_worktree=None):
         if list(self.directory.glob('*.json')) and not decision:
             return self.resolve()
         approval = self.approval(decision)
@@ -487,16 +502,9 @@ class Pins:
         if decision:
             old = self.resolve(for_repin=True)
             self.check_repin(old, decision, snapshots, approval)
-        if require_preflight:
-            # Check the final selected bytes, including an approved resumed branch,
-            # before publishing the first pin. Existing pins are checked by dispatch.
-            from fm_evidence import Store
-            from fm_spec_preflight import require_ok
-            try:
-                require_ok(Store(self.state, require_preflight, self.task, external=self.external),
-                           snapshots['spec']['text'].encode('utf-8'))
-            except (ValueError, OSError, KeyError, TypeError) as error:
-                raise PreflightRefused(str(error)) from error
+        # Check the final selected bytes, including an approved resumed branch,
+        # before publishing a pin or a repin (T-297).
+        spec_check(self.task, snapshots['spec']['text'], self.spec_env)
         self.directory.mkdir(parents=True, exist_ok=True)
         lock = self.directory / '.lock'
         if lock.is_symlink():
@@ -586,11 +594,13 @@ class Pins:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['create', 'resolve', 'scope', 'preflight'])
+    # 'preflight' and --require-preflight are what launchers written before
+    # T-297 still pass; they mean check and nothing (no SPEC-OK is read).
+    parser.add_argument('command', choices=['create', 'resolve', 'scope', 'check', 'preflight'])
     parser.add_argument('--task', required=True)
     parser.add_argument('--decision')
     parser.add_argument('--resume', action='store_true')
-    parser.add_argument('--require-preflight', metavar='EVIDENCE_PROJECT')
+    parser.add_argument('--require-preflight', metavar='EVIDENCE_PROJECT', help='ignored since T-297')
     parser.add_argument('--spec-worktree')
     parser.add_argument('--spec-ref')
     parser.add_argument('--if-present', action='store_true')
@@ -599,11 +609,11 @@ def main():
     args = parser.parse_args()
     try:
         pins = Pins(os.environ, args.task)
-        if args.command == 'preflight':
-            pins.preflight(args.require_preflight, args.spec_ref)
+        if args.command in ('check', 'preflight'):
+            pins.check(args.spec_ref)
             return 0
         if args.command == 'create':
-            pin = pins.create(args.decision, args.resume, args.spec_worktree, args.require_preflight)
+            pin = pins.create(args.decision, args.resume, args.spec_worktree)
             if pin is None:
                 print('fm-pin: no dispatch authorization; no pin written', file=sys.stderr)
                 return 3
@@ -615,7 +625,7 @@ def main():
                 return 3
         print(json.dumps(pin))
         return 0
-    except PreflightRefused as error:
+    except SpecRefused as error:
         print('fm-pin: ' + str(error), file=sys.stderr)
         return 66  # private launcher status, translated to dispatch refusal 65
     except (ValueError, OSError, KeyError, TypeError) as error:

@@ -392,19 +392,22 @@ class Authority(unittest.TestCase):
             with self.subTest(branch=branch), self.assertRaisesRegex(ValueError, 'protected base'):
                 self.adopt.check(dict(view, headRefName=branch), self.value, 'T-1', self.env, self.root, False, [])
 
-    def test_adopt_preflight_validation(self):
-        from fm_spec_preflight import prompt
+    def test_adopt_pin_validation(self):
+        # T-297: the adopt checks the spec preflight ran now refuse at pin time.
+        from fm_spec_pins import SpecRefused, spec_check
         spec = dict(id='T-1', scope=['app'], acceptance=['Work'], public_title='Improve feature',
                     public_summary='Improve the feature.', adopt=self.value)
         for value in [None, {}, dict(self.value, pr=True), dict(self.value, pr=0),
                       dict(self.value, head='bad'), dict(self.value, extra=1),
                       *[dict(self.value, base=b) for b in ['', '-x', 'a b', 'a..b', 'a~b', 'a^b', 'a:b', 'a\\b']]]:
             with self.subTest(value=value), patch.dict(os.environ, FM_EXTERNAL='1'):
-                with self.assertRaisesRegex(ValueError, 'adopt'):
-                    prompt('T-1', json.dumps(dict(spec, adopt=value)).encode(), 'main')
+                with self.assertRaisesRegex(SpecRefused, 'adopt'):
+                    spec_check('T-1', json.dumps(dict(spec, adopt=value)))
+        with patch.dict(os.environ, FM_EXTERNAL='1'):
+            spec_check('T-1', json.dumps(spec))
         with patch.dict(os.environ, FM_EXTERNAL='0'):
-            with self.assertRaisesRegex(ValueError, 'adopt'):
-                prompt('T-1', json.dumps(spec).encode(), 'main')
+            with self.assertRaisesRegex(SpecRefused, 'adopt'):
+                spec_check('T-1', json.dumps(spec))
 
 
 class BaseBinding(AdoptionRounds):
@@ -811,7 +814,7 @@ if __name__ == '__main__':
     OWNER_MODE = group
     selected = {'adoption': [(AdoptionRounds, 'test_adopt_'), (Authority, 'test_adopt_'),
                              (BaseBinding, 'test_base_'), (AdoptionPilot, 'test_pilot_')],
-                'preflight': [(Authority, 'test_adopt_preflight')],
+                'pin': [(Authority, 'test_adopt_pin_validation')],
                 'base': [(BaseBinding, 'test_base_required'), (BaseBinding, 'test_base_restack')],
                 'restack': [(AdoptedRestack, 'test_restack_')],
                 'decide': [(OwnerChecks, 'test_owner_')], 'merge': [(OwnerChecks, 'test_owner_')]}[group]

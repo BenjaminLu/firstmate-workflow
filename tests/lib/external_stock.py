@@ -24,7 +24,51 @@ def run(argv, env, **kwargs):
     return result.stdout.strip()
 
 
-def scenario(stop_owner=False, public_title=None, card_only=False):
+def refuse_public_fields(engine, home, env):
+    """pin: external public fields checked (T-297). The checks the spec
+    preflight ran on public fields refuse at pin time, through the real
+    fm_pin and the project's PR title style, and write no pin."""
+    spec_path = home / 'tasks/T-051.json'
+    valid = json.loads(spec_path.read_text())
+    valid.update(public_title='Draw the fixture widget in blue', public_summary='The fixture widget uses blue.')
+    # A slash chain is path-like to the public text check, which runs first.
+    cases = [(None, None, None),
+             ('public_summary', 'The widget shows All13 rows.', 'glued-number "All13"'),
+             ('public_summary', 'The widget shows red/green/blue rows.', 'public_summary: path-like'),
+             ('public_title', None, 'external spec needs a valid public_title'),
+             ('public_title', 'T-051: Draw the widget', 'must not start with a task id')]
+    for field, value, message in cases:
+        spec = dict(valid)
+        if field and value is None:
+            spec.pop(field)
+        elif field:
+            spec[field] = value
+        spec_path.write_text(json.dumps(spec))
+        # The worker's early check runs before the target is cloned; the pin
+        # itself is written after fm_external_prepare. Both refuse.
+        for step, script in (('check', 'fm_pin check --task T-051'),
+                             ('create', 'fm_external_prepare && fm_target_validate && fm_external_base '
+                                        '&& fm_pin create --task T-051')):
+            result = subprocess.run(['bash', '-c', '. "$1/bin/fm-config.sh" && fm_storage_init "$1" app && '
+                                     + script, '_', str(engine)],
+                                    env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+            pins = list((home / 'state/pins/T-051').glob('*.json'))
+            if message is None:
+                # The valid control passes; remove its pin so each case is a first pin.
+                assert result.returncode == 0, (step, result.stdout + result.stderr)
+                for pin in pins:
+                    pin.unlink()
+                continue
+            assert result.returncode == 66, (
+                step, field, value, result.returncode, result.stdout + result.stderr)
+            assert message in result.stderr, (step, message, result.stderr)
+            assert not pins, ('a refused spec wrote a pin', step, field, value)
+
+
+DEFAULT_TITLE = 'Build the fixture widget'
+
+
+def scenario(stop_owner=False, public_title=None, card_only=False, pin_refusals=False):
     with tempfile.TemporaryDirectory(prefix='external-stock-') as tmp:
         scratch = Path(tmp)
         engine = scratch / 'engine'
@@ -83,9 +127,10 @@ with open(sys.argv[4], 'a') as log:
                 captain='captain', intent='Private acceptance sentinel', product='Private product sentinel',
                 required_checks=['ci'], contract={'check': 'true'}, post='local'))
         (home / 'tasks').mkdir(exist_ok=True)
+        # T-297: an external spec pins only with a valid public title.
         (home / 'tasks/T-051.json').write_text(json.dumps(dict(id='T-051',
             title='Private title sentinel', depends_on=[], scope=['implementation'],
-            acceptance=['Private acceptance sentinel'])))
+            acceptance=['Private acceptance sentinel'], public_title=DEFAULT_TITLE)))
         if public_title is not None:
             spec_path = home / 'tasks/T-051.json'
             spec = json.loads(spec_path.read_text())
@@ -93,14 +138,13 @@ with open(sys.argv[4], 'a') as log:
             spec_path.write_text(json.dumps(spec))
         (home / 'design.md').write_text('Private design sentinel\n')
         state = home / 'state'
-        # Shared helper resolves the external Store layout under private state.
-        # Dependency: tests/lib/spec-preflight.sh
-        run(['bash', '-c',
-             '. "$1/tests/lib/spec-preflight.sh"; ROOT="$1"; '
-             'seed_spec_preflight "$2" T-051 "$3/tasks/T-051.json" app "$3/state"',
-             'seed-preflight', str(root), str(engine), str(home)], env)
+        state.mkdir(exist_ok=True)
+        # T-297: no spec preflight receipt; the pin checks the spec itself.
         (state / 'events.jsonl').write_text(json.dumps(dict(type='greenlit', actor='captain',
             project='app', ts='2026-10-02T00:00:00Z', data={}))+'\n')
+        if pin_refusals:
+            refuse_public_fields(engine, home, env)
+            return
         if card_only:
             decision = 'D-app-T051-1'
             (state / 'ready').mkdir(exist_ok=True)
@@ -234,10 +278,7 @@ os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.arg
                 paths = run(['git', '-C', str(remote), 'ls-tree', '-r', '--name-only', 't-051-work'], env)
                 assert paths.splitlines() == ['base-content', 'implementation'], paths
                 message = run(['git', '-C', str(target), 'log', '-1', '--format=%s'], env)
-                if public_title is None:
-                    assert message == "T-051: Save the round's changes", message
-                else:
-                    assert message == public_title, message
+                assert message == (public_title or DEFAULT_TITLE), message
                 calls = [json.loads(line) for line in (scratch / 'gh.jsonl').read_text().splitlines()]
                 create = next(call for call in calls if call[:2] == ['pr', 'create'])
                 assert create[create.index('--repo')+1] == 'owner/app'

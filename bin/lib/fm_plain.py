@@ -3,11 +3,9 @@
 
 The rules live in skills/firstmate/plain-writing.md and the terms in
 i18n/glossary.json. This module only holds the mechanical part: glued
-numbers, slash chains, unexplained glossary terms, the protected-token guard
-for reviewer rewrites, rewrite-block extraction and the zh-CN rendering the
-board uses. None of it can judge meaning.
+numbers, slash chains, unexplained glossary terms, fenced-block extraction
+and the zh-CN rendering the board uses. None of it can judge meaning.
 """
-from collections import Counter
 import datetime
 import json
 import os
@@ -30,7 +28,6 @@ VERSION = r'\bv?\d+(?:\.\d+)+\b|\bv\d+\b'
 MARKER = (r'\b(?:APPROVE|REJECT|SPEC-OK|SPEC-GAPS|PREFLIGHT-COMPLETE|CRITERIA-COMPLETE|REGRESSION'
           r'|NEW-GROUND|MISSED|SCOPE-BLOCKED|SWEPT|ASK-[A-Z][A-Z-]*|WORKER_[A-Z_]+):\S*'
           r'|^\s*EVIDENCE:.*$|<!--.*?-->')
-FILE_LINE = r'[A-Za-z0-9_./-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?'
 
 
 def _path(token):
@@ -264,47 +261,10 @@ def to_cn(text, rows):
     return text
 
 
-def card_cn(details, rows):
-    """The zh-CN card the board shows: zh-TW strings through the table."""
-    def walk(value):
-        if isinstance(value, str):
-            return to_cn(value, rows)
-        if isinstance(value, list):
-            return [walk(v) for v in value]
-        if isinstance(value, dict):
-            return {k: walk(v) for k, v in value.items()}
-        return value
-    return walk((details or {}).get('zh-TW', {}))
-
-
-# --- reviewer rewrites --------------------------------------------------------
-
-def protected(text):
-    """Multiset of tokens a rewrite must keep (Change 6)."""
-    tokens = []
-
-    def take(pattern, value, flags=0):
-        tokens.extend(m.group() for m in re.finditer(pattern, value, flags))
-        return re.sub(pattern, ' ', value, flags=flags)
-
-    rest = take(CODE, text)
-    rest = take(URL, rest)
-    rest = take(FILE_LINE, rest)
-    kept = []
-    for token in rest.split():
-        if _path(token):
-            tokens.append(token.strip('()[]{}<>"\'.,;:!?'))
-        else:
-            kept.append(token)
-    rest = ' '.join(kept)
-    for pattern in (HASH, TASK, DECISION):
-        rest = take(pattern, rest)
-    take(r'\d+(?:[.,]\d+)*', rest)
-    return Counter(tokens)
-
+# --- fenced blocks in answers ---------------------------------------------------
 
 def blocks(answer):
-    """{kind: [content, ...]} for each rewrite fence; 'unclosed' on a missing end."""
+    """{kind: [content, ...]} for each named fence; 'unclosed' on a missing end."""
     found = {kind: [] for kind in BLOCKS}
     lines = answer.splitlines()
     i, fence = 0, None
@@ -344,82 +304,6 @@ def without(text, kinds=('fm-merge-card',)):
             continue
         out.append(line)
     return '\n'.join(out)
-
-
-def candidate(found, kind, solicited=True):
-    """(text, None) for one usable block, (None, reason) when refused, or (None, None)."""
-    contents = found.get(kind, [])
-    if not contents:
-        return None, None
-    if not solicited:
-        return None, 'unsolicited'
-    if len(contents) > 1:
-        return None, 'duplicate'
-    if contents[0] is None:
-        return None, 'unclosed'
-    try:
-        value = json.loads(contents[0])
-    except ValueError:
-        return None, 'not-an-object'
-    if not isinstance(value, dict):
-        return None, 'not-an-object'
-    return contents[0], None
-
-
-def _guard(old, new, where):
-    if protected(old) != protected(new):
-        raise ValueError(where + ': protected tokens changed')
-
-
-def compare(old, new, allowed, where=''):
-    """Identical except strings at allowed paths, which keep protected tokens.
-
-    `allowed(path)` gets a tuple of keys and indexes from the root.
-    """
-    def walk(a, b, path):
-        label = where + '.'.join(str(p) for p in path)
-        if allowed(path) and isinstance(a, str) and isinstance(b, str):
-            if a != b:
-                _guard(a, b, label)
-            return
-        if type(a) is not type(b):
-            raise ValueError(label + ': changed type')
-        if isinstance(a, dict):
-            if set(a) != set(b):
-                raise ValueError(label + ': changed keys')
-            for key in a:
-                walk(a[key], b[key], path + (key,))
-        elif isinstance(a, list):
-            if len(a) != len(b):
-                raise ValueError(label + ': changed list length')
-            for index, (x, y) in enumerate(zip(a, b)):
-                walk(x, y, path + (index,))
-        elif a != b:
-            raise ValueError(label + ': only prose may change')
-    walk(old, new, ())
-
-
-def spec_prose(path):
-    return path == ('title',) or (len(path) == 2 and path[0] == 'acceptance')
-
-
-def card_prose(path):
-    if len(path) < 2 or path[0] not in LOCALES:
-        return False
-    rest = path[1:]
-    if rest in (('title',), ('explanation',), ('before',), ('after',), ('outcome',)):
-        return True
-    if len(rest) == 3 and rest[0] == 'options' and rest[2] in ('description', 'pros', 'cons'):
-        return True
-    if len(rest) == 3 and rest[0] in ('why', 'how', 'notes', 'questions', 'change_table') and rest[2] == 'text':
-        return True
-    return len(rest) == 3 and rest[0] in ('before_nodes', 'after_nodes') and rest[2] == 'label'
-
-
-def pr_prose(path):
-    if path in (('subject',), ('problem',), ('expected_result',), ('approach',)):
-        return True
-    return len(path) == 3 and path[0] == 'intent_notes' and path[2] == 'note'
 
 
 # --- advisory log -------------------------------------------------------------

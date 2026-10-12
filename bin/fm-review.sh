@@ -41,18 +41,22 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
 # shellcheck source=bin/adapters/_lib.sh
 . "$_fm_alib"
 fm_args=("$@")
+# T-297: the spec preflight is removed. Its flag, with any of its old inputs,
+# refuses before anything else is read.
+for _arg in "$@"; do
+  if [ "$_arg" = --spec-preflight ]; then
+    echo "fm-review: the spec preflight is removed; the worker's first round now checks the spec" >&2
+    exit 64
+  fi
+done
 
 REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''; ROUND_GIVEN=''
-SPEC_PREFLIGHT=''; SPEC_FILE=''; CARD_FILE=''; PR_AUTHORING_FILE=''; RETRO=''
+RETRO=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --spec-preflight) SPEC_PREFLIGHT=1; shift ;;
     --retro) fm_need "fm-review" "$@"; RETRO="${2-}"; shift; shift ;;
     --retro-cross) RETRO=${RETRO:-cross}; shift ;;
-    --spec) fm_need "fm-review" "$@"; SPEC_FILE="${2-}"; shift 2 ;;
-    --card) fm_need "fm-review" "$@"; CARD_FILE="${2-}"; shift 2 ;;
-    --pr-authoring) fm_need "fm-review" "$@"; PR_AUTHORING_FILE="${2-}"; shift 2 ;;
     --project) fm_need "fm-review" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --task) fm_need "fm-review" "$@"; TASK="${2-}"; shift 2 ;;
     --branch) fm_need "fm-review" "$@"; BRANCH="${2-}"; shift 2 ;;
@@ -69,7 +73,7 @@ done
 if [ -n "$RETRO" ]; then
   exec bash "${FM_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}/bin/lib/fm-retro-review.sh" ${fm_args[@]+"${fm_args[@]}"}
 fi
-[ -n "$TASK" ] && { [ -n "$BRANCH" ] || [ -n "$SPEC_PREFLIGHT" ]; } || {
+[ -n "$TASK" ] && [ -n "$BRANCH" ] || {
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
 # How long a round given --pr waits for the head's required checks before it
 # starts the reviewer anyway, and how often it asks GitHub meanwhile (T-153).
@@ -77,16 +81,6 @@ CI_WAIT="${FM_REVIEW_CI_WAIT:-1200}"; CI_POLL="${FM_REVIEW_CI_POLL:-30}"
 case "$CI_WAIT" in ''|*[!0-9]*) echo "fm-review: FM_REVIEW_CI_WAIT must be whole seconds" >&2; exit 64 ;; esac
 case "$CI_POLL" in ''|*[!0-9]*|0) echo "fm-review: FM_REVIEW_CI_POLL must be whole seconds, at least 1" >&2; exit 64 ;; esac
 CI_WAIT=$((10#$CI_WAIT)); CI_POLL=$((10#$CI_POLL))
-if [ -n "$SPEC_FILE" ]; then
-  SPEC_FILE="$(cd -- "$(dirname -- "$SPEC_FILE")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "$SPEC_FILE")")" || exit 64
-fi
-# The card and pull-request draft reviewed in the same preflight (T-270).
-for _input in CARD_FILE PR_AUTHORING_FILE; do
-  [ -n "${!_input}" ] || continue
-  [ -n "$SPEC_PREFLIGHT" ] || { echo 'fm-review: --card and --pr-authoring require --spec-preflight' >&2; exit 64; }
-  [ -f "${!_input}" ] || { echo "fm-review: no file at ${!_input}" >&2; exit 64; }
-  printf -v "$_input" '%s' "$(cd -- "$(dirname -- "${!_input}")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "${!_input}")")" || exit 64
-done
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
@@ -98,7 +92,7 @@ if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ];
 fi
 fm_conventions "" >/dev/null || exit 65
 fm_refuse_herdr_bypass fm-review || exit $?
-# Pin before the first managed launch, including spec preflight. A short-lived
+# Pin before the first managed launch. A short-lived
 # launcher shell must not become the owner, nor be walked again after it exits.
 if review_owner="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_lifeline.py" session-owner 2>&1)"; then
   export FM_SESSION_PID="$review_owner"
@@ -111,13 +105,8 @@ fm_external_prepare || exit 65
 fm_target_validate || exit 65
 fm_external_base || exit 65
 BASE="${FM_BASE:-$BASE}"
-# Clear inherited mode bindings; only this explicit flag creates a preflight.
+# A preflight binding inherited from an old launcher's shell is not this round's.
 unset FM_SPEC_PREFLIGHT
-if [ -n "$SPEC_PREFLIGHT" ]; then
-  # shellcheck source=bin/lib/fm-spec-preflight.sh
-  . "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-spec-preflight.sh"
-fi
-[ -z "$SPEC_FILE" ] || { echo 'fm-review: --spec requires --spec-preflight' >&2; exit 64; }
 
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched
@@ -130,8 +119,8 @@ fi
 # The actor carries the review round (T-116): the one --round names, else
 # the allocation reads it from the log. Never one inherited from the shell.
 if [ -n "$ROUND_GIVEN" ]; then export FM_ROUND="$ROUND"; else unset FM_ROUND; fi
-# T-272: the review after a REJECT goes to another reviewer name. Spec
-# preflight never reaches here, and a worker never reads this.
+# T-272: the review after a REJECT goes to another reviewer name. A worker
+# never reads this.
 FM_AVOID_REVIEWER="$(fm_evidence avoid-reviewer)" || {
   echo 'fm-review: the latest REJECT reviewer could not be read from local evidence' >&2; exit 65; }
 export FM_AVOID_REVIEWER

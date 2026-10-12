@@ -21,7 +21,7 @@ mkdir -p "$d/design/tasks" "$d/src"
 git -C "$d" init -q -b main
 git -C "$d" config user.email fixture@example.invalid
 git -C "$d" config user.name Fixture
-printf '{"id":"T-X","scope":["src/**"]}\n' > "$d/design/tasks/T-X.json"
+printf '{"id":"T-X","scope":["src/**"],"acceptance":["works"]}\n' > "$d/design/tasks/T-X.json"
 printf 'design\n' > "$d/design/design.md"
 printf 'project:\n  check: touch %s/command-ran; exit 91\n  unrunnable: Missing test credentials\n' "$d" > "$d/config.yaml"
 printf 'old\n' > "$d/src/value"

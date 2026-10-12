@@ -75,7 +75,7 @@ git -C "$d" config user.name fixture
 mkdir -p "$d/design/tasks" "$d/bin" "$d/tests"
 echo old > "$d/bin/value"
 echo design > "$d/design/design.md"
-echo '{"id":"T-X","scope":["bin/**","tests/**"]}' > "$d/design/tasks/T-X.json"
+echo '{"id":"T-X","scope":["bin/**","tests/**"],"acceptance":["works"]}' > "$d/design/tasks/T-X.json"
 printf 'state/\ngate.lock\n' > "$d/.gitignore"
 git -C "$d" add -A; git -C "$d" commit -qm base
 seed_spec_pin "$d" T-X

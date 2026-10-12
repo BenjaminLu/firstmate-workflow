@@ -161,7 +161,7 @@ orphaned processes is a fuse that should reap zero; anything it reaps is a
 bug to report, not routine cleanup.
 
 A review pins its session owner at start as `FM_SESSION_PID`, before managed
-launch and spec preflight. Exit 75 from `fm-review.sh` means no session owns
+launch. Exit 75 from `fm-review.sh` means no session owns
 that review: start it in the foreground of the session, use the harness's
 background mode, or explicitly name the owner with `FM_SESSION_PID`.
 
@@ -322,8 +322,8 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   "parked by the captain" (answer B) and "captain chose to narrow the scope"
   (answer A). Do not brief or dispatch a stopped, parked or narrowed task:
   `bin/fm-worker.sh` refuses it with exit 65. For answer A, write a smaller
-  spec, preflight it and raise the usual repin card; the repin, approved after
-  the answer, with a SPEC-OK for its exact bytes, releases the task. A task
+  spec and raise the usual repin card; the repin, approved after the answer,
+  releases the task by itself (T-297: no SPEC-OK record). A task
   with no spec pin resumes only through a new budget card the captain answers
   C. `fm_round_budget.py history --task <id>` prints the full round history
   from private state.
@@ -844,7 +844,7 @@ current-change review remain required; mocks do not prove real window visibility
 
 ## Author and verify captain decisions
 
-An answer with `chosen: "change"` means revise the spec from the captain's answers, re-run preflight and raise a new card; never act on `picked`.
+An answer with `chosen: "change"` means revise the spec from the captain's answers and raise a new card; never act on `picked`.
 
 Prepare complete authored content and a bespoke before/after/options diagram
 before exposing any pending card. Never publish an empty/title-only card to patch
@@ -949,7 +949,7 @@ walks or copy dispatch-only prose as different intents. Missing or mismatched
 intents refuse the request, and autopilot waits for corrected authored details.
 The captain confirms one-way doors on the main card, including when a game
 request is refused; never auto-confirm or bypass the server check.
-After a spec with explain passes preflight, run `bin/fm-diagram.sh --task <id>
+After a spec with explain passes `bin/lib/fm_ste.py check-explain`, run `bin/fm-diagram.sh --task <id>
 [--project <name>]` to generate its three locale diagrams for the task panel.
 The panel uses the newest dispatch/repin/merge card's details when present and
 otherwise the spec explain; old tasks need no retroactive explain block.
@@ -1209,10 +1209,10 @@ These are the only spec prose for public commits and PRs. Keep the fields only
 in the external task spec under `FM_HOME/projects/<name>/tasks/`; never copy real
 external titles or repository names into tracked engine files. External titles
 have no firstmate task prefix. When the effective `pr_title` is `conventional`,
-preflight requires a subject such as `fix(api): deduct the fee`; an optional
+the pin requires a subject such as `fix(api): deduct the fee`; an optional
 `[KEY-123] ` prefix must come from the spec author, never firstmate. STE checks
-the prose after `: ` for conventional subjects in both preflight and rendering.
-Existing SPEC-OK receipts stay valid; a pinned plain title still publishes under
+the prose after `: ` for conventional subjects both at pin time and in rendering.
+An existing pin keeps its checked title; a pinned plain title still publishes under
 a later conventional setting with a warning, and invalid or absent public text
 keeps the generic fallback.
 
@@ -1601,64 +1601,54 @@ controls change presentation only. Keep the selected project and use the
 board's authenticated decision/task controls; game fights never authorize or
 write workflow changes. The standalone Playground uses simulated data only.
 
-## Spec preflight before dispatch and repin (T-185)
+## Spec checks at pin time and the worker's first round (T-297)
 
-Before every dispatch and every repin, obtain a recorded `SPEC-OK:<task>` for
-exactly the spec bytes to be pinned, using
-`bin/fm-review.sh --spec-preflight --task <task> --spec <file>` (and the selected
-`--project`). This is an isolated read-only review on the current base. A spec
-states what to build, why, and when it is done; how is the worker's job,
-checked by pull request review. The reviewer reads the spec with the code at
-hand and answers four questions: is it clear, is it the right thing to build,
-is there a simpler way, and does it contradict the code or another rule. It
-does not ask for callers, line numbers or other implementation detail. Its
-answer is a free-form review whose last line is `SPEC-OK:<task>` or
-`SPEC-GAPS:<task>`; each gap names its acceptance line and suggests a rewrite.
-Read the whole review and fix every gap in one amendment; a `SPEC-GAPS` verdict
-cannot be waved through.
+The spec preflight is removed (T-297): it did not settle, and each pass pulled
+code detail back into short specs. The captain's dispatch card stays the
+approval of what to build and why. A spec states what to build, why, and when
+it is done; how is the worker's job, checked by pull request review. No step
+needs a SPEC-OK record: not pinning, repinning, worker dispatch, the release of
+a round-budget hold, or the older publication path for a task with no pin.
 
-Every pass is a first pass (T-288). The prompt holds no earlier review, only
-the reasons an earlier rewrite was refused, and the answer is judged on the new
-bytes alone. Bytes that once got `SPEC-GAPS` still cannot get `SPEC-OK`.
-Receipts written before T-288, with or without a `standing` list, stay readable
-and still authorize their exact bytes.
-Approval for different bytes cannot authorize dispatch, including after a repin.
+Pinning and repinning check the exact bytes they pin: the task identity, scope
+and acceptance lines, the `explain` and walk fields, the `adopt` block (external
+projects only), and for an external project the public fields - a valid
+`public_title` for the project's PR title style, and no glued numbers or slash
+chains in `public_title`, `public_summary` or `public_changes`. A refused spec
+writes no pin, and the worker starts no round; fix the spec and dispatch again.
 
-A task gets 3 preflight passes (receipts written since T-288; older receipts
-do not count). A fourth `--spec-preflight` runs no reviewer: it exits 65 and
-raises a captain card with three choices: narrow the spec, park the task, or
-allow one more pass. Any answer starts a new count of 3 passes. The card holds
-only the task id, counts and verdicts, so it is the same for an external
-project. If raising the card failed, the message says which step to finish by
-hand: either request the recorded card with the `bin/fm-decide.sh --request`
-line it prints, or raise the card yourself and run `fm_preflight_budget.py
-record-card --task <id> --id <decision id>` inside the project environment
-(`fm_storage_init`). After answer A, preflight only
-the narrowed spec; after answer B, do not preflight the task again until the
-captain asks for it.
+In its first round on a new task, and in its first round after a repin, the
+worker reads the spec and the code before it changes a file. It asks through
+the question path (`ASK-SPEC:<task>` in `.fm-say.md`) and stops when the spec
+is unclear, does not match the code, changes a rule but does not say what
+happens to records and tasks already in flight, or lists design/design.md
+without naming the numbered section it edits. Otherwise it writes a short plan
+(files it will change, how it proves done) into its round report and goes on in
+the same round. Answer a question by amending the spec and repinning it, or in
+the next brief. A plan in the round report does not prove that the worker read
+the code; firstmate must read the plan.
 
 Every task changing a validation rule, lint, gate, schema or stored-record format
 must state what happens to existing records and tasks already in flight and name
-a test proving that migration. The final-line check does not prove that the
-reviewer read each acceptance line; firstmate must read the recorded review.
+a test proving that migration.
 
 `skills/firstmate/rule-inventory.json` lists every rule sentence of this file
 (T-279), and the gate's `rule inventory` stage refuses a rule sentence with no
 entry. A spec that adds or rewords such a sentence must list
 `skills/firstmate/rule-inventory.json` in its scope and add or update the entry.
 
-Migration of preflight itself: existing pins and evidence stay immutable. Already
-running rounds finish on their frozen launchers; their next worker dispatch needs
-an exact-byte preflight, even if the pin predates this rule. There is no automatic
-SPEC-OK backfill. A held task can preflight its exported pinned spec without
-repinning it; changed bytes need the normal authorized repin and a new preflight.
-Missing approval exits 65 with the command to run. Do not modify a live launcher.
+Work already in flight: existing pins, running workers, open pull requests and
+stored preflight receipts keep working. A stored receipt is kept and read but not
+required, and a SPEC-GAPS receipt does not stop a spec from pinning. An answer
+to a leftover preflight pass-budget card changes nothing. A task held by the
+round budget is released by an approved repin alone. Launchers written before
+T-297 still pass their old preflight calls. Do not modify a live launcher.
 
 Design edits go into their numbered home, never onto the end of design.md
 (T-189). Parallel branches that each appended a section to the end of the file
 all conflicted in its final hunk, and every resolved conflict voided an APPROVE.
-Preflight check 5 enforces this in the spec; the CI `hygiene` stage enforces
-it in the file.
+The worker's first round asks when a spec does not name the section; the CI
+`hygiene` stage enforces it in the file.
 
 - A task that lists design/design.md in its scope names, in its acceptance, the
   numbered section it edits (§N or §N.M).
@@ -1676,9 +1666,8 @@ it in the file.
 
 Accepted limit: §15.10 is the last numbered subsection, so two parallel tasks
 that both edit §15.10 itself can still meet at the end of the file. Every other
-home is mid-file. Existing specs that list design/design.md without naming a
-section are checked at their next preflight; a SPEC-OK already recorded for a
-spec's exact current bytes stays valid.
+home is mid-file. An existing spec that lists design/design.md without naming a
+section is asked about in the worker's next first round on that spec.
 
 ### Plain writing in specs and cards (T-270)
 
@@ -1692,19 +1681,11 @@ and refuses one that lacks these or uses a term it does not list; it stores
 each id as `{id, term, text}`. When you copy an existing card, convert its
 stored glossary objects back to ids first.
 
-Review a dispatch or repin card and the pull-request draft in the same
-preflight as the spec: `bin/fm-review.sh --spec-preflight --task <task> --spec
-<file> --card <details.json> --pr-authoring state/pr-authoring/<task>.json`.
-The reviewer may return improved wording in `fm-reworded-spec`,
-`fm-reworded-card` and `fm-reworded-pr-authoring` blocks. The launcher prints
-`fm-review: reworded <kind> <path> sha256 <sha>` for each accepted rewrite.
-Put exactly those bytes in the task file, in the card request and in the
-pull-request draft; a receipt with a spec rewrite authorizes only the
-rewritten bytes. Request a dispatch or repin card with the reviewed card bytes.
-A `rewrite-refused` outcome exits 65 like `SPEC-GAPS`: fix the reason or the
-wording yourself and preflight again. The reviewer never rewrites
-`public_title`, `public_summary` or `public_changes`; fix a readability gap in
-those fields yourself.
+No reviewer rewords a spec, a card or a pull-request draft (T-297 removed the
+spec preflight that did). A card keeps the check-plain check when it is
+requested, and a pull-request draft keeps the plain-text checks when it is
+sealed. The external public fields are checked when the spec is pinned; fix a
+readability problem in them yourself.
 
 A merge card built by the autopilot takes its title, why, how, notes and
 glossary from the `fm-merge-card` block of the review that the six-gate
@@ -1739,7 +1720,7 @@ A deliberate new-wrapper transplant into old code has no migration guarantee.
 
 ## Small changes (T-277)
 
-A small change skips spec preflight and the captain's repin card. It is either
+A small change skips the captain's repin card. It is either
 a path record (1 to 5 exact files under `tests/`, `docs/` or `README.md` that
 the pinned scope does not cover) or an erratum (a typo fix in the pinned title
 or one acceptance line). A pin version takes at most 3 records.

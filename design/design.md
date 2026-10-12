@@ -451,15 +451,15 @@ recovery. One-way requires a bilingual `check` (question, 2–4 options, feedbac
 and `about.intent`) and top-level integer `check_answer`. Two-way forbids them.
 Top-level `change_refs` aligns with the points and names normalized repository
 files, named tests and 0-based acceptance indices. Orphan fields and invalid
-indices refuse preflight. The correct option must occur verbatim in its intent,
+indices refuse the pin (T-297). The correct option must occur verbatim in its intent,
 its points' how text or the door reason/rollback in both locales; feedback alone
 is not evidence. Bilingual meaning and truthful comprehension need review. Both locales
 need intent, aligned done items and both node lists. `fm_ste.py check-explain
 <spec.json>` shares the field, sentence and node-label rules above; structural
 errors exit 64 and STE failures exit 65. No explain prints `{"explain": false}`
-and exits zero. Task validation and spec preflight import the checker lazily
-only for specs with explain, so older specs and isolated config readers keep
-working. After successful preflight, firstmate runs `fm-diagram.sh --task <id>
+and exits zero. Task validation and the pin-time spec check import the checker
+lazily only for specs with explain, so older specs and isolated config readers
+keep working. After a successful `check-explain`, firstmate runs `fm-diagram.sh --task <id>
 [--project <name>]` to draw the explain nodes in all three locales. Task drawings
 use `task-<project>-<id>.<lang>.html`, or `task-<id>.<lang>.html` for a nameless
 default project, in the same self/external diagram stores as decision drawings.
@@ -1290,12 +1290,12 @@ launcher refuses missing/stale prose, source/ref conflicts, symlinks or state
 escapes before model execution/commit/push. Crew cannot author seals or approval.
 
 Captain decision D-firstmate-workflow-T259-1 permits an explicit unsealed-legacy
-publication envelope only for stock-authorized/preflighted first dispatch with
-no existing pin and absent required contract/design. Exact available approved
+publication envelope only for stock-authorized first dispatch with no existing
+pin and absent required contract/design; since T-297 it needs no SPEC-OK record. Exact available approved
 bytes retain their digests; unavailable sources use explicit absent sentinels.
 An available config with no gate contract retains its config digest and marks
-contract absent. No unavailable hash is invented. Corrupt existing pins, stale
-preflight, unsupported failure causes and absent prose still refuse. This mode
+contract absent. No unavailable hash is invented. Corrupt existing pins,
+unsupported failure causes and absent prose still refuse. This mode
 has no pin version/digest and labels publication pin unavailable and scope gate
 not authorized by the envelope. Existing no-pin warnings and scope refusal stay.
 
@@ -1359,8 +1359,8 @@ Glossary section that lists every `i18n/glossary.json` term the title and body
 use. A question draft gets the same Why section and glossary. Sealing a new
 draft refuses glued numbers and slash chains in its prose fields; rendering an
 already sealed envelope keeps only its structural checks. For an external
-project the public fields of the spec supply the text; spec preflight refuses
-glued numbers and slash chains there, while each publishing round keeps
+project the public fields of the spec supply the text; the pin refuses glued
+numbers and slash chains there (T-297), while each publishing round keeps
 `fm_public_text.validate()` unchanged, and the project's template and title
 style win over the plain-writing rules.
 
@@ -1657,131 +1657,82 @@ check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 
 ### Spec preflight and migration (T-185)
 
-Before every dispatch and repin, firstmate runs
-`bin/fm-review.sh --spec-preflight --task <task> --spec <file>` with the selected
-project. The reviewer gets an independent read-only checkout of the current base
-and the exact proposed bytes, not a worker report or implementation verdict.
-A spec states what to build, why, and when it is done; how is the worker's
-job, checked by pull request review (T-288). The reviewer reads the spec with the
-code at hand and answers four questions: is it clear, is it the right thing to
-build, is there a simpler way, and does it contradict the code or another rule.
-It does not ask for implementation detail such as callers or line numbers. A
-task that changes a validation, lint, gate, schema or record rule must still say
-what happens to records and tasks already in flight, and the reviewer checks
-that it says it. Check 5 (T-189): when the scope lists design/design.md, the
-acceptance names the numbered section (§N or §N.M) it edits and adds nothing
-after the last one.
+T-297 removed the spec preflight; the next subsection replaces this one. This
+heading stays only so that older task prompts that anchor it still resolve.
 
-The answer is a free-form review. Each gap names the acceptance line it concerns
-and suggests a rewrite; a reviewer rewrite of the spec text goes through the
-accepted-rewrite path (T-270). The last line is `SPEC-OK:<task>` or
-`SPEC-GAPS:<task>`, once, unquoted and unfenced; retention refuses any other
-final line with a message that names the expected line. No numbered list and no
-`PREFLIGHT-COMPLETE:<task>` line is required.
+### The worker's first-round plan (T-297)
 
-Every pass is a first pass (T-288). The prompt holds no earlier review, and the
-answer is checked with no comparison to an earlier one; the carried standing
-list of T-248 and T-284 (kept numbers, done/open moves, NEW-GROUND and MISSED
-labels, one item per acceptance line) is gone. Two rules carry over: bytes that
-once got SPEC-GAPS cannot get SPEC-OK, and the reasons an earlier rewrite was
-refused go into the next prompt. Readers take no write lock or directory
-creation step. The final-line check does not prove that the reviewer read each
-acceptance line.
+The spec preflight of T-185, T-270 and T-288 is removed. A review of each spec
+by a fresh model before dispatch did not settle (T-285 took eleven passes; one
+evening six specs used up their passes), and each pass pulled code detail back
+into short specs. The worker reads the code anyway and finds real mismatches
+better (captain, 2026-10-11). The captain's dispatch card stays the approval of
+what to build and why. A spec states what to build, why, and when it is done;
+how is the worker's job, checked by pull request review.
 
-A pass is a preflight that wrote a receipt with a verdict. Receipts written
-since T-288 carry `pass_budget: 1`; a task gets at most 3 of them after its last
-answered budget card (`bin/lib/fm_preflight_budget.py`, cards in
-`<project state>/preflight-budget/<task>.json`, answers in the decision record
-of the same id). A fourth `--spec-preflight` allocates no identity and runs no
-reviewer: it exits 65 and raises a captain card with three choices, narrow the
-spec, park the task, or allow one more pass. While the card waits, every pass
-is refused and names it; any answer starts a new count. The card holds only the
-task id, the counts and each pass's verdict, never spec or review text, so an
-external project gets the same card.
+**Pin-time checks.** Every check the preflight ran on a submitted spec before
+its reviewer now runs when a pin or repin is written (`bin/lib/fm_spec_pins.py`,
+through `fm_spec_preflight.check()`): the task identity, scope and acceptance
+lines; the `explain` block and the walk fields (`change_refs`, `check_answer`);
+`adopt`, which only an external project may carry and which must pass
+`fm_adopt.validate`; and for an external project `fm_public_text.validate()` of
+`public_title`, `public_summary` and `public_changes` under the project's
+`pr_title` style, then the plain-writing checks (glued numbers, slash chains).
+`fm_pin create` and `fm_pin check` read that style from the project's PR format,
+as the preflight launcher did. A refusal exits 66 from `fm_spec_pins.py` (65
+from the worker) and writes no pin. The worker's read-only prospective check
+(`fm_pin check`) still runs before freezing the launcher, allocating a crew
+identity, publishing a PID or dispatch event, creating a branch or worktree, or
+arming the EXIT checkpoint. An approved task whose sources cannot be collected
+yet (an external target not yet cloned) is checked from its task file; a legacy
+task with no approval never pins and is not checked; an existing pin is not
+checked again.
 
-Existing preflight records stay immutable and keep binding their exact bytes.
-Receipts written before T-288, with or without `standing` and `missed`, stay
-readable: they all carry a numbered list, so the verdict the relaxed decision
-parser reads from them is unchanged, and a pin or repin that relied on one is
-unaffected. They never count toward the pass budget, so a task with 3 or more
-of them still gets its passes. A vendor run begun with the old prompt still ends
-with its verdict line and is retained. Running workers are unaffected.
+**No SPEC-OK record.** No step reads a SPEC-OK record: pinning, repinning,
+worker dispatch, the release of a round-budget hold by a later repin (§7), and
+publication through the unsealed-legacy stock path (§5.4). The reviewer's
+rewording of specs, dispatch and repin cards and pull-request drafts goes with
+the `fm-reworded-*` blocks. Cards keep `check-plain` at request time and drafts
+keep the plain-text checks at sealing. `bin/fm-review.sh --spec-preflight`, with
+or without `--card` or `--pr-authoring`, exits 64 and prints one line saying
+that the worker's first round now checks the spec.
 
-The launcher retains signed `spec-preflight` evidence in the same project-local
-store as briefs and verdicts, bound to the spec SHA-256 and observed base. Managed
-Codex retains authenticated final provenance with explicit mode and spec binding;
-other supported vendors remain labelled legacy and use their actual final output.
-Ordinary reviewer completion, approval and authentication rules are unchanged.
-Preflight identities carry `mode: spec-preflight` and use a separate `-sp-`
-actor namespace with their own attempts. They do not advance ordinary review
-rounds or attempts. Older preflight directories remain readable and are excluded
-from ordinary attempt counting without rewriting their identity records.
-No preflight result is gate 6 approval, CI evidence or permission to merge.
+**The first round.** In its first round on a new task, and in its first round
+after a repin, the worker reads the spec and the code before it changes a file.
+Such a round is one where no earlier worker run of the same project and task
+had the same bytes in its `pinned/spec.json` (`bin/lib/fm_first_round.py`); its
+prompt carries a "Read first, then ask or plan" section. The worker asks through
+the existing question path (a standalone `ASK-SPEC:<task>` in `.fm-say.md`) and
+stops when the spec is unclear, does not match the code, changes a rule but
+does not say what happens to records and tasks already in flight, or lists
+design/design.md without naming the numbered section (§N or §N.M) it edits.
+Otherwise it writes a short plan (files it will change, how it proves done)
+into its round report and goes on in the same round. Firstmate reads the plan;
+a plan does not prove that the worker read the code. A task that changes a
+validation, lint, gate, schema or record rule must still say what happens to
+records and tasks already in flight, and missing or untested migration in a
+rule-changing diff is a REJECT finding.
 
-Every new worker invocation requires SPEC-OK for its exact pinned bytes. Missing,
-different or changed bytes exit 65 with the preflight command. A read-only
-prospective-pin check runs before freezing the launcher, allocating a crew
-identity, publishing a PID or dispatch event, creating a branch/worktree, or
-arming the EXIT checkpoint. Resumed self tasks take their spec from the approved
-pin, or from the local task file before the first pin, never from a branch
-commit; legacy unpinned inputs still require their exact bytes.
-SPEC-GAPS requires
-an amended spec, not an override on the same bytes. A repin therefore needs fresh
-preflight when its spec changes. Existing records and pins are not rewritten or
-grandfathered: export their exact spec bytes and preflight them before the next
-worker dispatch. Already running rounds finish with frozen code; no live launcher
-is edited. Tests cover missing and mismatched receipts, exact-byte admission,
-changed pins, existing pins without receipts, and mode-bound final selection.
-Missing or untested migration in a rule-changing diff is a REJECT finding.
-
-Readability (T-270) is part of every preflight. `prompt()` loads
-`skills/firstmate/plain-writing.md` and `i18n/glossary.json` from the frozen
-code root only, and refuses with exit 65, before any model runs, when either is
-missing or unreadable. A readability finding quotes the exact sentence; a wording
-problem fixed by the reviewer's rewrite is not a gap, one no rewrite can fix
-without changing meaning is a gap. `--card <details.json>` and `--pr-authoring <file>` add a dispatch or
-repin card (reviewed in en, zh-TW and the zh-CN text that `i18n/tw2cn.tsv`
-renders) and the pull-request draft to the same run, as read-only pinned copies
-whose SHA-256 the run binds.
-
-The reviewer may return three rewrite blocks before its final line, each opening with an
-exact line ```` ```json fm-reworded-spec ````, ```` ```json fm-reworded-card ````
-or ```` ```json fm-reworded-pr-authoring ```` and closing with a line of three
-backquotes. A second block of one kind is refused as `duplicate`, content that
-is not one JSON object as `not-an-object`, and a card or draft block without that
-input as `unsolicited`; an unclosed block hides the verdict, so the run fails
-and retains nothing. Guards: a spec rewrite may change only `title` and each
-acceptance line's text (never `public_title`, `public_summary` or
-`public_changes`); a card rewrite only its prose fields; a draft rewrite only
-its subject, problem, expected result, approach and intent notes. Every changed
-string keeps the same multiset of protected tokens (code spans, paths,
-file:line references, hexadecimal hashes of seven or more characters in either
-case and with or without a digit, task numbers, decision ids and numbers). The
-result is revalidated: the spec by every check a submitted spec meets, the card
-by `check-plain`, the draft by `fm_self_pr.py` validation against the rewritten
-spec, whose digest the launcher writes into the draft's sources.
-
-The receipt keeps `spec_sha256` of the submitted bytes and the reviewer's own
-verdict, and adds `rewrite`: per kind the rewritten SHA-256, a status
-(`accepted`, `refused`, `unused` under SPEC-GAPS, or `unchanged`), any refusal
-reason and the submitted card or draft SHA-256. Any refused rewrite makes the
-effective outcome `rewrite-refused`, which exits 65 like SPEC-GAPS, authorizes
-nothing, and puts its reasons into the next prompt. A
-SPEC-OK receipt with an accepted spec rewrite authorizes only the rewritten
-bytes; one without a spec rewrite authorizes the submitted bytes, as every older
-receipt does. Bytes any receipt marked SPEC-GAPS are never authorized. The
-launcher writes each accepted rewrite byte for byte to
-`spec-preflight/out/{spec,card,pr-authoring}.reworded.json` and prints
-`fm-review: reworded <kind> <path> sha256 <sha>`. Existing receipts are not
-rewritten.
+**Work already in flight.** Existing pins, running workers, open pull requests
+and stored `spec-preflight` receipts keep working. Receipts stay immutable and
+readable: `fm_evidence` still checks their signature and final line, the
+decision parser reads their verdict as before, and the board shows old
+preflight crew rows unchanged (§8). Nothing requires a receipt, and a SPEC-GAPS
+receipt does not stop its bytes from pinning. An answer to a leftover
+pass-budget card changes nothing, because nothing reads
+`<project state>/preflight-budget/` any more. Launchers written before T-297
+still call `fm_spec_pins.py preflight --require-preflight` and
+`fm_spec_preflight.py require`; both calls are kept and pass. The launcher, its
+prompt, the pass budget and their tests are deleted; the code that reads and
+checks stored receipts stays.
 
 ### Small changes (T-277)
 
-A repin (amend, preflight, captain card, repin) is right for a change of
+A repin (amend, captain card, repin) is right for a change of
 meaning and too costly for a few test lines. A small change is either a path
 record (exact files under `tests/`, `docs/` or `README.md` that the pinned scope
 does not cover) or an erratum (a typo fix in the pinned title or one acceptance
-line). It needs no preflight and no card. Every other change, including any
+line). It needs no card. Every other change, including any
 production file, any glob, any change of meaning and any external project,
 keeps the full process.
 
@@ -1803,9 +1754,9 @@ for the title), `before` (the pinned string with earlier errata of the same pin
 applied in record order) and `after`. No other spec key takes an erratum; the
 pinned bytes and the task file never change.
 
-**Typo guard.** A mechanical filter, deliberately stricter than the T-270
-rewrite guard and independent of it; meaning stays firstmate's and the
-reviewer's judgment. The whitespace sequence is identical, at most 3 word
+**Typo guard.** A mechanical filter, deliberately strict (it was stricter than
+the reviewer-rewrite guard that T-297 removed, and never shared code with it);
+meaning stays firstmate's and the reviewer's judgment. The whitespace sequence is identical, at most 3 word
 positions differ, each pair is within Levenshtein distance 2, and no changed
 word holds a digit, backquote, `/`, `_`, `=` or `.`, starts with `T-` or `D-`,
 looks like a hexadecimal hash of 7 or more letters, only gains letters at one
@@ -2199,8 +2150,7 @@ decision only the captain can make carries instead one indented continuation
 line `DECISION:<task-id> <question>` with its own task ID and a non-empty
 question; an unindented line, another task's ID or an empty question is not a
 decision line. Reviewers stay read-only: they propose and never edit, commit
-or push. The rule binds code review only, not spec preflight, and an APPROVE
-needs no proposals. `fm-review.sh` says so in every round's prompt, round one
+or push. The rule binds code review, and an APPROVE needs no proposals. `fm-review.sh` says so in every round's prompt, round one
 included.
 
 `fixes()` in `bin/lib/fm_evidence.py` reads proposals from the verdict's raw
@@ -2300,9 +2250,10 @@ REJECT wake once under `budget-continue-<id>`. B (park) and A (narrow) hold
 the task: advance returns before any gate or wake, after one wake per card,
 and `fm-worker.sh` refuses the round (exit 65) before allocating an identity.
 The hold ends at a repin whose version exceeds the card's recorded pin
-version, whose captain approval is later than the answer, and whose exact spec
-bytes have a SPEC-OK; the budget then becomes the card's round count plus
-`rounds`. A task with no pin resumes only through a second card for the same
+version and whose captain approval is later than the answer; that approved
+repin alone releases it, with no SPEC-OK record (T-297). A task already held
+when T-297 landed is released the same way. The budget then becomes the card's
+round count plus `rounds`. A task with no pin resumes only through a second card for the same
 verdict that the captain answers C.
 
 **Migration (T-276).** `retain_verdict` writes `severity_protocol: 1` on every
@@ -2649,7 +2600,7 @@ and nothing else. The events that give a lane:
 | `dispatched`, `commit_pushed` | working |
 | `pr_opened`, `gate_passed`, `review_opened`, `approved` | review |
 | `gate_failed`, `review_failed`, `worker_crashed` | gate (blocked) |
-| `agent_lost` | gate (blocked), unless the task was given a lane since the lost actor last spoke; a spec preflight loss only removes its crewman |
+| `agent_lost` | gate (blocked), unless the task was given a lane since the lost actor last spoke; the loss of an old spec preflight run (before T-297) only removes its crewman |
 | `merged` | merged (final) |
 | `closed` (a drop) | closed (final) |
 | `parked` / `unparked` | the parked group, until unparked / the lane the other events give |
@@ -2688,8 +2639,9 @@ Precedence, highest first:
    Once the card is answered or withdrawn, the park places it.
 5. **Liveness.** A crewman's `agent_lost` (below) blocks its task, with a
    `lost` badge naming the actor, unless the task was given a lane after the
-   crewman last spoke - a redispatch, another round's review. A spec preflight
-   loss only removes its crewman, with no task lane change or lost badge.
+   crewman last spoke - a redispatch, another round's review. The loss of an
+   old spec preflight run (before T-297) only removes its crewman, with no task
+   lane change or lost badge.
 6. **The log.** Otherwise the lane of the task's last lane-giving event.
 
 **Crew liveness (T-118).** A crewman is aboard only while its run is alive,
@@ -2706,7 +2658,7 @@ the loss once in the log and not the close after it, and blocks the task by
 the rule above. An `agent_finished` arriving after the loss changes nothing:
 the run is already off the deck and the task is where its events put it. A
 loss already written is not written again. A `dispatched` brings the actor
-back aboard, as it always has. A spec preflight's loss only removes the
+back aboard, as it always has. An old spec preflight's loss only removes the
 crewman: none of that actor's events changes a task's stage or lost-round mark.
 
 **Card effects (T-118).** An answer does what its option says, carried out
@@ -2818,7 +2770,9 @@ ship, salute or audio. The board retains the crew roster and decision deck.
 
 ### The crew
 
-**Spec preflight visibility (T-191).** A preflight boards as a reviewer in
+**Spec preflight visibility (T-191).** T-297 removed the spec preflight; no new
+preflight starts, and the board shows the crew rows of preflights that ran
+before it unchanged, as follows. A preflight boards as a reviewer in
 phase `review`, using neutral `crew_status` events with `mode: spec-preflight`.
 Its first event carries its recorded name, vendor and requested model; each
 vendor attempt refreshes these through the chain's prepare callback. Every
@@ -2833,8 +2787,9 @@ cause no lost-round badge. The board's handoff `peer()` excludes them; voyage
 marks them as preflights and its reviewer lookup excludes them from review
 scrolls and approval rituals while still showing their lookout action.
 
-`agent_finished` removes the crewman on every exit after identity allocation.
-The matching actor/spec-SHA evidence gives `preflight_outcome: spec-ok` or
+The removed launcher's `agent_finished` removed the crewman on every exit after
+identity allocation, and the board still reads those events as follows. The
+matching actor/spec-SHA evidence gives `preflight_outcome: spec-ok` or
 `spec-gaps`, both with `result: ok`. Without that receipt, signal exits are
 `interrupted`, exits before the vendor chain starts are `refused`, and other
 exits are `failed`, all with `result: failed`. No `review_opened` is emitted:
@@ -3667,7 +3622,8 @@ reconcile: for each non-`firstmate` actor whose last event is not
 process receipts (not task-level pidfiles). Actors with no live process receive
 one `agent_lost` (T-118, crew liveness above) and then `agent_finished`, both
 under that exact actor with `data.status: process_gone`, so the
-event-sourced crew list matches process reality. For a spec preflight, the
+event-sourced crew list matches process reality. For an old spec preflight run
+(the preflight is removed by T-297), the
 run's identity.json supplies `mode: spec-preflight` to both `agent_lost` and
 its closing `agent_finished`; its loss pushes no `lost:` wake and rings no
 firstmate doorbell. Task-level reconcile alone
@@ -3785,7 +3741,7 @@ a long-lived process never ends up owned by the shell that launched it. A keeper
 hands its own owner on to what it starts. A process that must outlive its
 starter names the longer-lived owner it belongs to, never none.
 A review resolves `session-owner` before its first managed launch and before
-spec preflight or identity allocation, then exports the returned pid as
+identity allocation, then exports the returned pid as
 `FM_SESSION_PID`. Later launches retain that owner even if the starting shell
 exits. A refusal (the resolver's exit 70) becomes `fm-review.sh` exit 75 with
 guidance: start in the foreground of the session, use the harness's background
@@ -3860,7 +3816,7 @@ with a namespaced id and timestamp. Its whitespace is collapsed and its line
 is limited to 300 characters. Only the engine's firstmate doorbells are rung,
 not its autopilot doorbells, so one watch hears every project. The original
 project queue and doorbells remain unchanged; existing wakes are not backfilled.
-A lost spec preflight is the exception:
+A lost old spec preflight run (from before T-297) is the exception:
 the deck reconcile writes `agent_lost` and its closing `agent_finished` with
 `data.mode: spec-preflight`, but pushes no `lost:` wake. The autopilot likewise
 queues no lost/failed-round wake for an actor whose event history carries that
@@ -4522,8 +4478,8 @@ precedence. Quoted identities, explicit SSH variants and transport failure
 status are preserved with the same timeout policy.
 
 The audited shell callers are worker ls-remote/fetch/push (including rebuild),
-checkpoint push, carry-base self/external fetch, project clone/fetch, review clone/fetch and spec-preflight
-clone/fetch. Python callers are binding private fetch, stack push/fetch,
+checkpoint push, carry-base self/external fetch, project clone/fetch and review clone/fetch
+(the spec-preflight clone/fetch went with the preflight, T-297). Python callers are binding private fetch, stack push/fetch,
 autopilot review fetch and onboarding clone; Pilot checked/probe/command
 forward prepared child environments. Local Git calls and raw operator Git
 are unchanged. Preparation uses each caller's frozen code, never a live
@@ -5587,7 +5543,8 @@ It installs exit cleanup immediately, before resolving the physical path;
 if allocation fails or the resolved path plus `/projects` exceeds 84
 characters, it refuses with exit 70. It exports this fixed `CURSOR_DATA_DIR`,
 overwriting any inherited value. `FM_ADAPTER_ARGS` supplies argv, not an
-environment override. The model-list preflight remains before allocation.
+environment override. The model-list check (cursor's own, not the spec
+preflight that T-297 removed) remains before allocation.
 
 Only sandbox `run` mode receives `--write=<cursor data>`; `plain` receives
 the variable without a write grant. Every exit, including the existing
@@ -6269,7 +6226,7 @@ repository is accepted; HTTP 404 protection is unknown, never proof of absent
 protection. `fm project add` records a bounded inspection privately, offers at
 most three missing-contract question groups, then writes CONVENTIONS.md only
 with explicit captain-confirmed checks, policy, product intent and commands.
-The same confirmation writes an initial private design.md beside it (T-226): firstmate's own reference for the project, seeded from the confirmed product intent, captain intent, checks and policy, stored only under FM_HOME and refused by the publication guard if a round stages its bytes. Its front matter records based_on, the base commit it was last checked against. Every fm project sync (and so every external round, review and preflight, and the watcher's re-inspection) compares based_on with origin/<base>; when the base moved, it prints the commits and changed files, records them in state/onboarding/design-check.json and pushes one design_stale wake per new base, so firstmate reviews and corrects the file and runs fm-project.sh design-checked <name>. The check never blocks a dispatch and never edits the file; onboarding never overwrites an existing design.md.
+The same confirmation writes an initial private design.md beside it (T-226): firstmate's own reference for the project, seeded from the confirmed product intent, captain intent, checks and policy, stored only under FM_HOME and refused by the publication guard if a round stages its bytes. Its front matter records based_on, the base commit it was last checked against. Every fm project sync (and so every external round and review, and the watcher's re-inspection) compares based_on with origin/<base>; when the base moved, it prints the commits and changed files, records them in state/onboarding/design-check.json and pushes one design_stale wake per new base, so firstmate reviews and corrects the file and runs fm-project.sh design-checked <name>. The check never blocks a dispatch and never edits the file; onboarding never overwrites an existing design.md.
 The public engine registry carries routing only; command configuration is
 `FM_HOME/projects/<name>/state/config.yaml`. Onboarding inserts the routing entry
 into the existing `projects:` block, allowing a trailing comment on its header
@@ -6735,8 +6692,8 @@ Owner files use the same data-only `key: <JSON or bare enum>` line parser, with
 blank and comment lines ignored; only these three keys and `branch_prefix` are
 allowed. Bare values
 use `[a-z][a-z0-9_-]*`; quote `"zh-TW"` and `"zh-CN"` as JSON. Missing owner files
-supply no default; symlinked, unreadable or invalid ones make preflight refuse
-and the worker refuse branch selection with exit 65. Invalid format fields in
+supply no default; symlinked, unreadable or invalid ones make the pin refuse
+(T-297) and the worker refuse branch selection with exit 65. Invalid format fields in
 CONVENTIONS refuse the project through the shared policy reader. Owner defaults
 are read at round time, not pinned or copied into CONVENTIONS. Onboarding writes
 format fields only from the captain's explicit answers. Firstmate git holds no
@@ -6749,13 +6706,13 @@ inferred values and takes this field only from captain answers or explicit
 conventions edits. The existing policy question presents the recorded reviewers
 as the request recommendation, preserving the three-question contract.
 
-Preflight requires a valid `public_title`. With `pr_title: conventional`, it
-also requires a conventional subject such as `fix(api): deduct the fee`, with
+The pin requires a valid `public_title` (T-297; the spec preflight checked it
+before). With `pr_title: conventional`, it also requires a conventional subject such as `fix(api): deduct the fee`, with
 an optional author-supplied `[KEY-123] ` ticket prefix. Firstmate never invents
-a ticket. Both preflight and rendering apply STE to the text after `: ` for
+a ticket. Both the pin and rendering apply STE to the text after `: ` for
 recognized conventional subjects. Rendering accepts a previously pinned plain
 title under a later conventional setting, warns once, and still publishes it.
-Existing SPEC-OK receipts and pins need no repin. Public prose stays English
+Existing pins need no repin, and no SPEC-OK receipt is needed. Public prose stays English
 ASCII with no paths; `pr_language` does not translate prose in v1.
 
 The renderer emits the confirmed headings verbatim and in order. Classification

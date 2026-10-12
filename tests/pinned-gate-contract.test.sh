@@ -14,7 +14,7 @@ git -C "$d" config user.name fixture
 mkdir -p "$d/design/tasks" "$d/src" "$d/tests"
 echo old > "$d/src/value"
 echo design > "$d/design/design.md"
-echo '{"id":"T-X","scope":["src/**","tests/**","config.yaml","notes/**"]}' > "$d/design/tasks/T-X.json"
+echo '{"id":"T-X","scope":["src/**","tests/**","config.yaml","notes/**"],"acceptance":["works"]}' > "$d/design/tasks/T-X.json"
 printf 'state/\ngate.lock\n' > "$d/.gitignore"
 cat > "$d/config.yaml" <<'YAML'
 project:
@@ -65,7 +65,7 @@ git -C "$d" config user.name fixture
 mkdir -p "$d/design/tasks" "$d/src" "$d/tests"
 echo old > "$d/src/value"
 echo design > "$d/design/design.md"
-echo '{"id":"T-X","scope":["src/**","tests/**","config.yaml"]}' > "$d/design/tasks/T-X.json"
+echo '{"id":"T-X","scope":["src/**","tests/**","config.yaml"],"acceptance":["works"]}' > "$d/design/tasks/T-X.json"
 printf 'state/\ngate.lock\n' > "$d/.gitignore"
 cat > "$d/config.yaml" <<'YAML'
 project:

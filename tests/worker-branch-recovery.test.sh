@@ -59,7 +59,6 @@ d21="$(fixture)"; r21="$d21/repo"; GH21="$(ghstub "$d21")"
 long_title='a mock task with a title long enough that slugging it truncates to twenty eight characters'
 jq --arg t "$long_title" '.title=$t' "$r21/design/tasks/T-Z.json" > "$r21/design/T-Z.next"
 mv "$r21/design/T-Z.next" "$r21/design/tasks/T-Z.json"
-seed_spec_preflight "$r21" T-Z
 ( cd "$r21" && git add -A && git commit -qm retitle && git push -q origin main )
 seed_self_pr_authoring "$r21" T-Z self
 cat > "$r21/bin/adapters/mock.sh" <<'M'
@@ -107,7 +106,6 @@ d22="$(fixture)"; r22="$d22/repo"; GH22="$(ghstub "$d22")"
 long_title='a mock task whose title is long enough that a fresh slug truncates differently'
 jq --arg t "$long_title" '.title=$t' "$r22/design/tasks/T-Z.json" > "$r22/design/T-Z.next"
 mv "$r22/design/T-Z.next" "$r22/design/tasks/T-Z.json"
-seed_spec_preflight "$r22" T-Z
 ( cd "$r22" && git add -A && git commit -qm retitle && git push -q origin main )
 seed_self_pr_authoring "$r22" T-Z self
 cat > "$r22/bin/adapters/mock.sh" <<'M'

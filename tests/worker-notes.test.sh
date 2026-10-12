@@ -97,7 +97,6 @@ for question_seed in seeded committed; do
   dq="$(fixture)"; rq="$dq/repo"; GHq="$(ghstub "$dq")"
   jq -n '{id:"T-Q",title:"question",scope:["src/**","design/tasks/T-Q.json"],acceptance:["needs clarification"]}' \
     > "$rq/design/tasks/T-Q.json"
-  seed_spec_preflight "$rq" T-Q
   seed_self_pr_authoring "$rq" T-Q self
   if [ "$question_seed" = committed ]; then
     mkdir -p "$rq/state/worktrees"

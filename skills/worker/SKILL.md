@@ -172,6 +172,22 @@ that starts a background process on purpose stops it or ends its owner:
 `bin/ci.sh` turns a suite red for any process still running when it ends
 (T-151).
 
+## Read first, then ask or plan
+
+Your first round on a new task, and your first round after a repin, starts by
+reading: the approved spec in `pinned/` and the code it touches, before you
+change any file. The prompt says when a round is such a round. No reviewer
+checks a spec before dispatch any more (T-297); this check is yours.
+
+- Ask, and stop, when the spec is unclear, does not match the code, changes a
+  rule but does not say what happens to records and tasks already in flight,
+  or lists `design/design.md` without naming the numbered section (§N or §N.M)
+  it edits. Write the standalone `ASK-SPEC:<task>` marker and the question to
+  `.fm-say.md`, and change no file.
+- Otherwise write a short plan into `.fm-say.md` before you change a file: the
+  files you will change and how you will prove the task is done. Then do the
+  work in the same round.
+
 ## Rounds
 
 Start from firstmate's approved brief supplied in the prompt and the evidence it names —

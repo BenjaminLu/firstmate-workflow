@@ -741,7 +741,7 @@ class ExternalIsolation(GateEngine, unittest.TestCase):
         self.xstate = home / 'state'
         (home / 'tasks').mkdir(parents=True)
         self.xstate.mkdir()
-        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["src/**"]}')
+        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["src/**"],"acceptance":["works"],"public_title":"Keep the private widget"}')
         (home / 'design.md').write_text('private design')
         (home / 'CONVENTIONS.md').write_text('private conventions')
         (self.xstate / 'config.yaml').write_text('project:\n  check: private-check\n')

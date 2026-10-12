@@ -71,7 +71,7 @@ if [ "${1:-}" = repin ]; then
 fi
 
 # Small changes (T-277): firstmate records exact test/docs paths or a typo fix
-# against the current pin, outside any round, with no preflight and no card.
+# against the current pin, outside any round, with no card.
 if [ "${1:-}" = small-change ]; then
   shift
   if [ "${FM_EXTERNAL:-0}" = 1 ]; then

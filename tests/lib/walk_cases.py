@@ -48,8 +48,8 @@ class Scene(unittest.TestCase):
                                      'check-explain', str(path)], capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_scene_preflight_accepts(self):
-        fm_spec_preflight.prompt('T-001', json.dumps(spec()).encode(), 'a' * 40)
+    def test_scene_pin_check_accepts(self):
+        fm_spec_preflight.check('T-001', json.dumps(spec()).encode())
 
     def test_field_errors(self):
         cases = [

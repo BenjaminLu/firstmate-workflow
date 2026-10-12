@@ -88,8 +88,10 @@ with open(sys.argv[4], 'a') as log:
                 'allow_rebase_merge': False, 'delete_branch_on_merge': False})
         self.policy(True)
         (self.home / 'tasks').mkdir(exist_ok=True)
+        # T-297: an external spec pins only with a valid public title.
         spec = json.dumps(dict(id='T-223', title='Private rebuild fixture', depends_on=[],
-                              scope=['app'], acceptance=['Keep both intentions.']))
+                              scope=['app'], acceptance=['Keep both intentions.'],
+                              public_title='Keep both changes'))
         (self.home / 'tasks/T-223.json').write_text(spec)
         (self.home / 'design.md').write_text('Private design.\n')
         self.state = self.home / 'state'

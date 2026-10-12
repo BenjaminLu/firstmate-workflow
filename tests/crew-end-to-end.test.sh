@@ -25,8 +25,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
-# shellcheck source=tests/lib/spec-preflight.sh
-. "$ROOT/tests/lib/spec-preflight.sh"
 
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - crew e2e skipped"; exit 0; }
 
@@ -57,8 +55,6 @@ printf '{"id":"T-1","title":"first","activity":{"en":"Build the first fixture","
 # second worker's T-278 overlap check must let it start from main.
 printf '{"id":"T-2","title":"second","scope":["lib/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-2.json"
 printf '## 6. Gates\nApproved fixture.\n## 8. Board\n' > "$r/design/design.md"
-seed_spec_preflight "$r" T-1
-seed_spec_preflight "$r" T-2
 
 
 mkdir -p "$d/stub"

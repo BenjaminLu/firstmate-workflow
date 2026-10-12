@@ -524,7 +524,7 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'type':'
         private = self.root/'home/projects/example-app'
         (private/'state').mkdir(parents=True)
         (private/'tasks').mkdir()
-        shutil.copyfile(self.repo/'design/tasks/T-264.json', private/'tasks/T-264.json')
+        (private/'tasks/T-264.json').write_text(json.dumps({**json.loads((self.repo/'design/tasks/T-264.json').read_text()), 'public_title': 'Keep the locked reader working'}))
         (private/'CONVENTIONS.md').write_text('Private external conventions\n')
         (private/'design.md').write_text('External approved design\n')
         shutil.copyfile(self.repo/'config.yaml', private/'state/config.yaml')

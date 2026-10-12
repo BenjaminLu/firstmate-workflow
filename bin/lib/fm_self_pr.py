@@ -133,7 +133,7 @@ def authority(task, evidence_project, prospective=False):
 
     For legacy mode re-run stock creation's source collector. Only absence of
     required design or gate contract may explain inability to pin; all other
-    collector errors refuse. Spec bytes follow stock's exact legacy preflight.
+    collector errors refuse. No step needs a SPEC-OK record (T-297).
     """
     from fm_spec_pins import Pins, contract, digest, git
     state_path(os.environ['FM_STATE_DIR'], 'pr-authoring/'+task+'.json')
@@ -141,9 +141,7 @@ def authority(task, evidence_project, prospective=False):
     if pins.external: raise ValueError('self authoring cannot consume external records')
     pin = pins.resolve(if_present=True)
     if pin:
-        pins.preflight(evidence_project)
         return pins, pin, pin['snapshots'], pin['approval'], None
-    pins.preflight(evidence_project)
     approval = pins.approval(None)
     if not approval and not prospective: raise ValueError('legacy publication requires retained stock dispatch authorization')
     try:
@@ -187,12 +185,6 @@ def authority(task, evidence_project, prospective=False):
     # Config bytes are available even when they contain no contract. Preserve
     # their digest and label absent contract separately, never invent a hash.
     snapshots['contract']['absent'] = missing_contract
-    from fm_evidence import Store
-    from fm_spec_preflight import require_ok
-    exact_spec = (pins.tasks/(task+'.json')).read_bytes()
-    if exact_spec != snapshots['spec']['text'].encode():
-        raise ValueError('legacy stock preflight source mismatch')
-    require_ok(Store(pins.state, evidence_project, task), exact_spec)
     reason = dict(missing_sources=[name for name, missing in
                                    (('contract', missing_contract), ('design', missing_design)) if missing],
                   stock_reason=failure)

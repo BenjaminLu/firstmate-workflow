@@ -28,11 +28,11 @@ bad = copy.deepcopy(spec)
 bad['explain']['en']['done'] = [dict(kind='fact', text='The check passes.')]
 assert 'Intent 1' in cli(bad, 64).stderr
 try:
-    fm_spec_preflight.prompt('T-001', json.dumps(bad), 'a' * 40)
+    fm_spec_preflight.check('T-001', json.dumps(bad).encode())
 except ValueError as error:
     assert 'explain' in str(error)
 else:
-    raise AssertionError('preflight accepted missing alignment')
+    raise AssertionError('the pin-time spec check accepted missing alignment')
 bad = copy.deepcopy(spec)
 bad['explain']['en']['before_nodes'] *= 2
 assert 'counts' in cli(bad, 64).stderr

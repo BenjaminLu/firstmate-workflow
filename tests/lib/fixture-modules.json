@@ -23,6 +23,7 @@
         "bin/lib/fm_origin.py",
         "bin/lib/fm_concurrent.py",
         "bin/lib/fm_spec_pins.py",
+        "bin/lib/fm_spec_preflight.py",
         "bin/lib/fm_merge_outcome.py",
         "bin/lib/fm_project_paths.py",
         "bin/lib/fm-stack.sh",

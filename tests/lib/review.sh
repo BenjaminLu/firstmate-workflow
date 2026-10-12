@@ -67,7 +67,7 @@ fixture() {
   binding_service_fixture "$d/repo"  # unrelated orchestration cases; real head checks in role-prompts
   stack_base_fixture bin
   cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
-  # T-270: the spec preflight prompt reads the writing rules and glossary
+  # T-270: the plain-writing advisory lint reads the writing rules and glossary
   mkdir -p "$d/repo/skills/firstmate" "$d/repo/i18n"
   cp "$ROOT/skills/firstmate/plain-writing.md" "$d/repo/skills/firstmate/"
   cp "$ROOT/i18n/glossary.json" "$ROOT/i18n/tw2cn.tsv" "$d/repo/i18n/"

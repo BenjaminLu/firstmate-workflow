@@ -54,7 +54,6 @@ assert_fail "test -f '$r/state/worktrees/T-Z/.fm-prompt.md'" "the prompt is clea
 dn="$(fixture)"; rn="$dn/repo"; GHn="$(ghstub "$dn")"
 jq -n '{id:"T-N",title:"a new task",scope:["src/**","design/tasks/T-N.json"],acceptance:["it exists"]}' \
   > "$rn/design/tasks/T-N.json"
-seed_spec_preflight "$rn" T-N
 seed_self_pr_authoring "$rn" T-N self
 assert_eq "!! design/tasks/T-N.json" "$(git -C "$rn" status --porcelain --ignored --untracked-files=all -- design/tasks/T-N.json)" \
   "the new task's spec is untracked in the dispatching repository"
@@ -69,7 +68,6 @@ assert_contains "$(git -C "$rn" show --stat --format= "$bn")" "mock.txt" "the ro
 # was and changes nothing else changed nothing
 dn2="$(fixture)"; rn2="$dn2/repo"; GHn2="$(ghstub "$dn2")"
 jq -n '{id:"T-N",title:"a new task",scope:["src/**"],acceptance:["it exists"]}' > "$rn2/design/tasks/T-N.json"
-seed_spec_preflight "$rn2" T-N
 seed_self_pr_authoring "$rn2" T-N self
 outn2="$(cd "$rn2" && FM_ROOT="$rn2" FM_GH="$GHn2" FM_MOCK_FILE=design/tasks/T-N.json \
   FM_MOCK_BODY="$(cat "$rn2/design/tasks/T-N.json")" bin/fm-worker.sh --task T-N --name worker-n2 2>&1)"
@@ -100,7 +98,6 @@ for leftover in empty commit dirty spec spec_pr spec_index; do
   mkdir -p "$rl/state/worktrees"
   git -C "$rl" worktree add -q -b "$bl" "$tl" main
   jq -n '{id:"T-N",title:"a new task",scope:["src/**"],acceptance:["WIDENED_SPEC"]}' > "$rl/design/tasks/T-N.json"
-  seed_spec_preflight "$rl" T-N
   seed_self_pr_authoring "$rl" T-N self
   case "$leftover" in
     commit)
@@ -111,12 +108,11 @@ for leftover in empty commit dirty spec spec_pr spec_index; do
       # Establish immutable approved branch intent before the mutable root widens.
       cp "$rl/design/tasks/T-N.json" "$dl/widened-spec.json"
       cp "$tl/design/tasks/T-N.json" "$rl/design/tasks/T-N.json"
-      seed_spec_preflight "$rl" T-N "$tl/design/tasks/T-N.json"
       seed_self_pr_authoring "$rl" T-N self
       (
         . "$ROOT/bin/fm-config.sh"
         fm_storage_init "$rl" || exit 65
-        fm_pin create --task T-N --require-preflight self >/dev/null
+        fm_pin create --task T-N >/dev/null
       ) || exit 1
       cp "$dl/widened-spec.json" "$rl/design/tasks/T-N.json"
       seed_self_pr_authoring "$rl" T-N self ;;

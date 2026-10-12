@@ -20,8 +20,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
-# shellcheck source=tests/lib/spec-preflight.sh
-. "$ROOT/tests/lib/spec-preflight.sh"
 
 RC="$ROOT/bin/fm-reconcile.sh"
 
@@ -669,7 +667,6 @@ for terminal in CLOSED MERGED; do
     [ -f "$ROOT/bin/fm-guard.sh" ] && cp "$ROOT/bin/fm-guard.sh" "$d/bin/"
     mkdir -p "$d/design/tasks" "$d/stub" "$d/state/worktrees/T-011"
     echo '{"id":"T-011","title":"test","scope":[]}' > "$d/design/tasks/T-011.json"
-    seed_spec_preflight "$d" T-011
     cat > "$d/stub/git" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -690,7 +687,7 @@ SH
     [ "$timing" != historical ] || echo '{"type":"dispatched","task":"T-011"}' >> "$d/state/events.jsonl"
     startup_failed=0
     ready_or_refused() {
-      [ -f "$d/ready" ] || grep '^fm-spec-preflight:' "$d/worker-launch.log" >/dev/null 2>&1
+      [ -f "$d/ready" ] || grep '^fm-pin:' "$d/worker-launch.log" >/dev/null 2>&1
     }
     for round in 1 2; do
       dead_pid > "$d/state/worktrees/T-011.pid"
