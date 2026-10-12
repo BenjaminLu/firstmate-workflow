@@ -186,7 +186,8 @@
     {"id": "R-187", "file": "skills/firstmate/SKILL.md", "heading": "Process rules (2026-09-25)", "quote": "Do not expect a block from a round launched on code older than T-275", "class": "judgement"},
     {"id": "R-188", "file": "skills/firstmate/SKILL.md", "heading": "Firstmate startup contract", "quote": "new specs are local, git-ignored files bound by approved pins and never committed", "class": "enforced", "evidence": [{"file": "bin/lib/fm_spec_pins.py", "text": "task spec in diff: "}]},
     {"id": "R-189", "file": "skills/firstmate/SKILL.md", "heading": "T-138 signed evidence and merge candidates", "quote": "include it as a local, git-ignored file before review; never commit it", "class": "enforced", "evidence": [{"file": "bin/lib/fm_spec_pins.py", "text": "task spec in diff: "}]},
-    {"id": "R-192", "file": "skills/firstmate/SKILL.md", "heading": "Spec checks at pin time and the worker's first round (T-297)", "quote": "A plan in the round report does not prove that the worker read the code; firstmate must read the plan.", "class": "judgement"}
+    {"id": "R-192", "file": "skills/firstmate/SKILL.md", "heading": "Spec checks at pin time and the worker's first round (T-297)", "quote": "A plan in the round report does not prove that the worker read the code; firstmate must read the plan.", "class": "judgement"},
+    {"id": "R-193", "file": "skills/firstmate/SKILL.md", "heading": "Designer round (T-298)", "quote": "A UI change never merges without a design APPROVE on its exact head.", "class": "enforced", "evidence": [{"file": "bin/lib/fm_design.py", "text": "lane design: missing"}]}
   ],
   "retired": ["R-052", "R-055", "R-158", "R-174", "R-190", "R-191"]
 }

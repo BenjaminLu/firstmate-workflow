@@ -391,6 +391,13 @@ class MechanicalLoop:
         rows = Store(str(self.state), self.ctx['evidence_project'], task, external=self.ctx['external']).verdicts()
         return rows[-1] if rows else {}
 
+    def design_verdict(self, task):
+        """T-298: the task's latest design review, {} when there is none."""
+        from fm_evidence import Store
+        rows = Store(str(self.state), self.ctx['evidence_project'], task,
+                     external=self.ctx['external']).verdicts('design')
+        return rows[-1] if rows else {}
+
     def attention(self, reason, task, pr, en, tw):
         self.queue(f'{reason}-{pr["number"]}-{pr["head"]["sha"]}', task, en, tw)
 
@@ -569,6 +576,11 @@ class MechanicalLoop:
         if verdict.get('verdict') == 'REJECT' and verdict.get('head') == head:
             self.reject_wake(task, pr, verdict)
             return
+        # T-298: a design REJECT on this head goes to the worker the same way
+        design = self.design_verdict(task)
+        if design.get('verdict') == 'REJECT' and design.get('head') == head:
+            self.design_reject_wake(task, pr, design)
+            return
         if budget['state'] in ('stop', 'waiting'):
             self.budget_stop(task, pr, budget)
             return
@@ -635,6 +647,10 @@ class MechanicalLoop:
         if verdict.get('head') != head: bound = None
         inputs = [pr['number'], head, pr['base']['sha'], checks,
                   bound, details, slot['release']]
+        # T-298: a new design verdict on this head lets the gate run again; a
+        # pull request with none keeps exactly the inputs it had before.
+        if design.get('head') == head:
+            inputs.append({field: design.get(field) for field in ('head', 'verdict', 'signature', 'round', 'actor')})
         if getattr(self, 'queue_mode', 'off') in ('enabled', 'drain'):
             import fm_autopilot_queue as Q
             q = self.data['self_queue']; member = q['members'].get(str(pr['number']))
@@ -655,7 +671,8 @@ class MechanicalLoop:
             from fm_small_change import store_digest
             inputs.append(store_digest(self.state, task))
         fingerprint = key(inputs)
-        round_number = 1 + sum(r.get('type') == 'review_opened' and r.get('task') == task for r in self.rows())
+        round_number = 1 + sum(r.get('type') == 'review_opened' and r.get('task') == task
+                               and (r.get('data') or {}).get('lane') != 'design' for r in self.rows())
         number = str(pr['number'])
         if self.data['advanced'].get(number, {}).get('fingerprint') == fingerprint:
             return
@@ -689,7 +706,7 @@ class MechanicalLoop:
             import fm_autopilot_queue as Q
             q = self.data['self_queue']; m = q['members'][str(pr['number'])]
             extra['queue_binding'] = Q.binding(q, m)
-            Q.transition(q, str(pr['number']), 'waiting-review' if kind == 'review' else 'verifying',
+            Q.transition(q, str(pr['number']), 'waiting-review' if kind in ('review', 'design-review') else 'verifying',
                          'owned-' + kind, self.clock())
         identity = key([kind, task, pr, extra, argv, len(self.data.setdefault('jobs', {}))])
         jobs = self.data.setdefault('jobs', {})
@@ -786,6 +803,47 @@ class MechanicalLoop:
                        f'審查啟動失敗：{error}；請手動啟動或排除原因')
             self.save()
 
+    def launch_design_review(self, task, pr, round_number=1):
+        """T-298: the designer round on this head, beside the code review."""
+        from fm_autopilot import key
+        number, head = pr['number'], pr['head']['sha']
+        if self.job_for('design-review', number, head) is not None:
+            return
+        try:
+            verdict_before = key(self.design_verdict(task))
+            self.start_job('design-review', task, pr,
+                self.script('fm-review.sh', '--designer', '--task', task, '--branch', pr['head']['ref'],
+                            '--pr', number, '--round', round_number), verdict_before=verdict_before)
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+            if self.job_for('design-review', number, head) is None:
+                self.data.setdefault('jobs', {})[key(['design-review-launch', number, head])] = dict(
+                    kind='design-review', task=task, number=number, head=head, state='uncertain', path='')
+            self.queue(f'design-review-launch-{number}-{head}', task,
+                       f'Design review launch failed at {head[:12]}: {error}; launch it by hand or fix the cause',
+                       f'設計審查啟動失敗：{error}；請手動啟動或排除原因')
+            self.save()
+
+    @staticmethod
+    def missing_reviews(output):
+        """The review lanes gate 6 reported missing; code alone for an older gate."""
+        lanes = [lane for lane in ('code', 'design') if f'lane {lane}: missing' in output]
+        if not lanes and 'lane design:' not in output:
+            lanes = ['code']
+        return lanes
+
+    def design_reject_wake(self, task, pr, verdict):
+        """T-298: a design REJECT counts toward the budget and wakes for a brief."""
+        budget = self.round_budget(task, pr)
+        if budget is None: return
+        if budget['state'] in ('parked', 'narrow'):
+            self.budget_hold(task, pr, budget)
+            return
+        if budget['state'] in ('stop', 'waiting'):
+            self.budget_stop(task, pr, budget)
+            return
+        self.attention('design-reject', task, pr, f'{task} design REJECT: brief needed',
+                       f'{task} 設計審查拒絕：需要 firstmate 撰寫工作簡報')
+
     def job_completed(self, result):
         if hasattr(self, 'refresh_queue'): self.refresh_queue()
         self._queue_continuation = result
@@ -815,14 +873,14 @@ class MechanicalLoop:
                 Q.transition(q, number, 'blocked', 'failed-owned-' + kind, self.clock())
                 self.queue_release(number)
                 self.save()
-        if (kind in ('gate', 'protocol', 'review') and self.landed(task, pr)
+        if (kind in ('gate', 'protocol', 'review', 'design-review') and self.landed(task, pr)
                 and not (getattr(self, 'queue_mode', 'off') != 'off' and self.queue_carry_active(task, pr))): return
-        if kind in ('gate', 'protocol', 'review'):
+        if kind in ('gate', 'protocol', 'review', 'design-review'):
             # T-276: a stopped or held task starts no gate, review or merge card;
             # a review result follows only the budget path in reject_wake.
             import fm_round_budget
             budget = self.round_budget(task, pr)
-            if budget is None or (kind != 'review' and budget['state'] in fm_round_budget.HELD):
+            if budget is None or (kind not in ('review', 'design-review') and budget['state'] in fm_round_budget.HELD):
                 self.data['next_poll'] = 0
                 return
         said = [line for line in output.splitlines() if 'log is at' in line or 'no adapter' in line]
@@ -841,7 +899,12 @@ class MechanicalLoop:
                 if self.authoritative_head(task, pr) != pr['head']['sha']:
                     self.attention('head', task, pr, f'{task}: authoritative head changed; regate', f'{task}：遠端版本已變更，需要重新檢查關卡')
                     return
-                self.launch_review(task, pr, result['round'])
+                # T-298: whichever of code and design review is missing, both at once
+                for lane in MechanicalLoop.missing_reviews(output):
+                    if lane == 'design':
+                        self.launch_design_review(task, pr, result['round'])
+                    else:
+                        self.launch_review(task, pr, result['round'])
             elif code == 0:
                 self.merge_card(task, pr, result['base'])
             elif 1 <= code <= 5:
@@ -870,6 +933,18 @@ class MechanicalLoop:
                                f'{task}：審查未完成，需要 firstmate 檢查紀錄' + suffix)
             elif verdict.get('verdict') == 'REJECT':
                 self.reject_wake(task, pr, verdict)
+            self.data['next_poll'] = 0
+        elif kind == 'design-review':
+            verdict = self.design_verdict(task)
+            from fm_autopilot import key
+            if code or not verdict or result.get('verdict_before') == key(verdict) or verdict.get('head') != pr['head']['sha']:
+                reason = {2:'no designer engine was available', 3:'the designer produced no verdict',
+                          65:'the page capture or design review configuration failed'}.get(
+                              code, 'the design round failed' if code else 'the designer produced no verdict')
+                self.attention('design-review', task, pr, f'{task}: {reason}' + suffix,
+                               f'{task}：設計審查未完成，需要 firstmate 檢查紀錄' + suffix)
+            elif verdict.get('verdict') == 'REJECT':
+                self.design_reject_wake(task, pr, verdict)
             self.data['next_poll'] = 0
 
     def reject_wake(self, task, pr, verdict):

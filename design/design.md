@@ -180,6 +180,52 @@ files inside their own worktree, exit. Everything else — commit, push,
 firstmate writes no code. It dispatches, it summarises, it puts decisions on
 the board, and it waits for the captain.
 
+### The designer (T-298)
+
+Code review checks logic, not layout, and a board that drifted from its
+approved prototype showed it (captain rule, 2026-10-11). So every pull
+request that touches pages also gets a **designer**: a reviewer-role round
+with its own skill, `skills/designer/SKILL.md`, started by
+`bin/fm-review.sh --designer`. It shares the reviewer's launcher, OS sandbox,
+crew policy and signed local evidence, and it starts with a fresh context
+each time. Its engine is `designer: vendor/model` in `config.yaml`, and the
+reviewer's when that is absent. Its actor is `reviewer-<name>-ds-<task>-r<n>`
+and its verdicts are the `design` lane of the task's evidence, separate from
+the code reviewer's; a design round takes the number of the code round it
+reviews and opens no round of its own.
+
+The designer judges rendered pages, never a browser of its own: the
+launcher captures them outside the sandbox before the model starts and
+hands the screenshots in as read-only files (`bin/lib/fm_design.py`,
+`bin/lib/fm-design-capture.mjs`). Every page the change touches - the spec's
+`design.pages`, then every changed HTML page - is captured at the web widths
+320, 390, 768, 1440 and 1920 plus both edges of every CSS width breakpoint,
+in light and dark (apps: small phone, large phone and tablet, portrait and
+landscape), for the head and, when `design.prototype` names a folder under
+`state/prototypes/`, for that prototype. One failed screenshot fails the
+capture, and no round starts. The kept copy is under
+`state/design/<task>/<head>/`, where the merge card reads it.
+
+What a round may read under `state/` is its own: every round reads its own
+`pinned/` folder, and a worker its `local-tests/` folder, read-only. The OS
+sandbox grants them, and the Claude adapter's own permission rules carve them
+out of its `state/` deny as well, so a prompt that points to
+`pinned/spec.json` can be followed. A designer round also reads, read-only,
+the one prototype folder its task names in `design.prototype`
+(`FM_PROTOTYPE_DIR`, exactly `state/prototypes/<name>`), so a REJECT can cite
+the prototype's HTML and CSS. Its copy of the captured pages, in a temp
+folder outside `state/` (`FM_DESIGN_SHOTS_DIR`), is read-only to it under
+both the OS sandbox and the Claude adapter's rules. No round reads another round's folders, another
+prototype or any other part of `state/`.
+
+The designer compares the pages one by one and ends with APPROVE or REJECT.
+Its findings use the code reviewer's standing list and fix proposals, and
+each names the page, the viewport, the problem and a fix. Without a
+prototype it reviews with the general rules in its skill.
+`bin/fm-review.sh --designer --prototype state/prototypes/<name> --task <id>`
+runs the same round on a prototype folder before the captain sees it; that
+verdict is the `prototype` lane, recorded and gating nothing.
+
 ---
 
 ## 5. Contracts
@@ -1654,6 +1700,35 @@ An undeclared `check` where gate 4 must fall back to it, or a failed `setup`,
 fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 `setup` once in the checkout and reports the contract; `status` only reports it.
+
+### The design gate (T-298)
+
+A pull request is a **UI change** when its diff touches a path matching the
+project's `ui` globs, `projects.<name>.ui` in `config.yaml`. A declared list
+replaces the defaults, which cover page files: `**/*.html`, `**/*.css`,
+`**/*.scss`, `**/*.tsx`, `**/*.jsx`, `**/*.vue` and `**/*.svelte`. This
+repository declares the defaults plus `board/public/**`.
+
+Gate 6 reports two lanes. `lane code` is the reviewer's approval, unchanged.
+`lane design` is `not-needed` for a pull request that is not a UI change,
+which therefore runs no designer round and merges exactly as before; for a UI
+change it needs the latest design verdict to be a signed APPROVE bound to the
+same head, with no later design REJECT. Gate 6 passes only when both lanes
+do. The autopilot reads the two lines and starts whichever review is missing,
+code and design at the same time on the same head, without waking firstmate.
+A design REJECT reaches the worker like any review finding: the next worker
+prompt carries it in its context pack and local review history, and the
+round budget counts its round as a REJECT round (T-276). The code and design
+lanes keep separate standing lists, so the budget's stall check keys each
+must-fix item by its lane: design item 1 and code item 1 are different
+findings, and a round that rejects on both lanes carries both lists. The merge card of a
+UI change shows each page's prototype and result screenshots side by side
+behind a toggle.
+
+The gate applies to pull requests whose head is pushed after T-298 merges. A
+UI pull request already open or approved then keeps its current path; nothing
+is retroactive. The capture needs a browser wherever it runs: the project's
+`setup` installs Chromium, and the CI workflow installs it for the tests.
 
 ### Spec preflight and migration (T-185)
 

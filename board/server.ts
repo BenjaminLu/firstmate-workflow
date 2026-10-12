@@ -1744,6 +1744,34 @@ const later = (a: unknown, b: unknown) => {
   return !Number.isFinite(x) || !Number.isFinite(y) || x + 1000 > y;
 };
 
+// T-298: the pages the engine's design capture took for a UI change's design
+// review (the board only reads the files; it runs no capture), kept under state/design/<task>/<head>/. A merge card carries each
+// page's prototype and head screenshots, which /design-shot serves.
+const DESIGN_TASK = /^(T|SK)-[0-9]{3,}$/, DESIGN_HEAD = /^[0-9a-f]{40,64}$/;
+const DESIGN_FILE = /^(head|prototype)\/[A-Za-z0-9._-]+\.png$/;
+const designShots = (state: string, project: unknown, task: unknown, head: unknown) => {
+  if (typeof task !== "string" || typeof head !== "string" || !DESIGN_TASK.test(task) || !DESIGN_HEAD.test(head)) return null;
+  const file = join(state, "design", task, head, "manifest.json");
+  if (!existsSync(file)) return null;
+  try {
+    const m = JSON.parse(readFileSync(file, "utf8"));
+    const url = (f: unknown) => typeof f === "string" && DESIGN_FILE.test(f)
+      ? `/design-shot?${new URLSearchParams({ ...(typeof project === "string" && project ? { project } : {}), task, head, file: f })}` : null;
+    return {
+      label: { en: "Compare pages", "zh-TW": "比對頁面" },
+      prototype_label: { en: "Prototype", "zh-TW": "原型" },
+      head_label: { en: "Result", "zh-TW": "結果" },
+      pages: (Array.isArray(m.pages) ? m.pages : []).map((p: any) => ({
+        page: String(p.page ?? ""),
+        shots: (Array.isArray(p.shots) ? p.shots : []).map((x: any) => ({
+          viewport: String(x.viewport ?? ""), scheme: String(x.scheme ?? ""),
+          head: url(x.head), prototype: url(x.prototype),
+        })),
+      })),
+    };
+  } catch { return null; }
+};
+
 // when the board first saw each pending card's file, by file name
 const firstSeen = new Map<string, number>();
 // Decisions the captain has been asked for but has not answered.
@@ -1807,7 +1835,9 @@ const pendingIn = (dir: string, events?: Event[]) => {
       const final = d.task != null ? finalTasks.get(within(d.project, d.task)) ?? null : null;
       // answerable: POST /decisions takes this id; a card under any other
       // name is listed, and the page shows the refusal when it is answered
-      return [{ card: { ...d, owner: ownerOf(d.id), answerable: isDecisionId(String(d.id ?? "")), task_final: final }, at: asked(d, f) }];
+      const shots = d.kind === "merge" ? designShots(dirname(dir), d.project, d.task, d.expected_head ?? d.head) : null;
+      return [{ card: { ...d, owner: ownerOf(d.id), answerable: isDecisionId(String(d.id ?? "")), task_final: final,
+        ...(shots ? { design_shots: shots } : {}) }, at: asked(d, f) }];
     } catch { return []; }
   });
 };
@@ -3012,6 +3042,21 @@ const server = Bun.serve({
       if (!abs) return json({ error: "outside the repository" }, 403);
       if (statSync(abs).size > 512 * 1024) return json({ error: "too large to show" }, 413);
       return new Response(readFileSync(abs), { headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+
+    // T-298: one captured screenshot of a UI change, for its merge card
+    if (url.pathname === "/design-shot") {
+      if (req.method !== "GET") return json({ error: "GET only" }, 405);
+      const task = url.searchParams.get("task") ?? "", head = url.searchParams.get("head") ?? "";
+      const file = url.searchParams.get("file") ?? "";
+      if (!DESIGN_TASK.test(task) || !DESIGN_HEAD.test(head) || !DESIGN_FILE.test(file)) return new Response("not found", { status: 404 });
+      const project = only && registry().projects.has(only) ? only : defaultProject();
+      const base = join(stateDir(project), "design", task, head);
+      const p = join(base, file);
+      if (!existsSync(p)) return new Response("not found", { status: 404 });
+      const real = realpathSync(p), root = realpathSync(base);
+      if (!real.startsWith(root + "/") || !statSync(real).isFile()) return new Response("not found", { status: 404 });
+      return new Response(readFileSync(real), { headers: { "content-type": "image/png", "cache-control": "no-store" } });
     }
 
     if (url.pathname === "/" || url.pathname === "") return serveFile("index.html");

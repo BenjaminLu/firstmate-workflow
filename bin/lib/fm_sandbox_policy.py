@@ -210,6 +210,25 @@ def local_tests_of():
     return path
 
 
+def prototype_of(pinned):
+    """A designer round's one prototype folder (T-298), read-only like
+    pinned/: exactly <state>/prototypes/<name> of the round's own state, the
+    one its task names in design.prototype. Only a designer round names one."""
+    path = os.environ.get('FM_PROTOTYPE_DIR', '')
+    if not path:
+        return None
+    if os.environ.get('FM_MODEL_ROLE') != 'designer':
+        raise ValueError('only a designer round reads a prototype folder')
+    if not pinned:
+        raise ValueError('a prototype folder needs the round\'s pinned folder')
+    if not os.path.isabs(path) or real(path) != path or os.path.islink(path) or not os.path.isdir(path):
+        raise ValueError('invalid prototype folder path')
+    state = os.path.dirname(os.path.dirname(os.path.dirname(pinned)))
+    if os.path.dirname(path) != os.path.join(state, 'prototypes'):
+        raise ValueError('prototype folder is not one under the round\'s state/prototypes/')
+    return path
+
+
 def pinned_state(path):
     # runs/<actor>/pinned; only the selected child is ever exposed.
     state = os.path.dirname(os.path.dirname(os.path.dirname(path)))
@@ -288,6 +307,10 @@ def darwin(p, roots, reads, own, port, listening, *, root):
     if local:
         lines += ['(allow file-read* %s)' % sub([local]),
                   '(deny file-write* %s)' % sub([local])]
+    proto = prototype_of(pinned)
+    if proto:
+        lines += ['(allow file-read* %s)' % sub([proto]),
+                  '(deny file-write* %s)' % sub([proto])]
     git_own = own_git(roots[0]) if roots else None
     if roots and p.get('review_root_readonly'):
         lines.append('(deny file-write* (subpath %s))' % sbpl(roots[0]))
@@ -383,6 +406,9 @@ def linux(p, roots, reads, own, sock):
     local = local_tests_of()
     if local:
         a += ['--ro-bind', local, local]
+    proto = prototype_of(pinned)
+    if proto:
+        a += ['--ro-bind', proto, proto]
     if sock:
         a += ['--bind', sock, sock]
     a += ['--chdir', roots[0], '--']

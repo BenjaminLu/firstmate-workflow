@@ -470,6 +470,17 @@ mirrors, fixtures and tests affected by the changed rule. A spec preflight recei
 stored before T-297, like the worker's first-round plan, is proposal evidence,
 never implementation approval or a substitute for the gates.
 
+## The designer beside you (T-298)
+
+A pull request that touches pages (the project's `ui` globs) also gets a
+designer round on the same head, at the same time as yours: a reviewer round
+with its own skill, `skills/designer/SKILL.md`, that judges the rendered
+pages, not the code. Its verdict is a separate lane in the local evidence:
+your closed list holds only code reviews, and gate 6 needs both approvals on
+a UI change. Review the logic and leave layout and look to the designer; a
+layout defect you meet while reading the code may still be a finding when it
+breaks what the spec asks for.
+
 ## Retro mode (T-273)
 
 `bin/fm-review.sh --retro <run-id> --project <name>` (one project) and

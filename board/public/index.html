@@ -498,7 +498,7 @@ const refused = new Map();
 // strips the captain has opened in place; the first card is always open
 const expanded = new Set();
 const revealedSections = new Set();
-const openDecisionSheets = new Set(), openWhys = new Set();
+const openDecisionSheets = new Set(), openWhys = new Set(), openDesigns = new Set();
 let latest, feedback = null, orderUntil = 0, orderTimer;
 // T-122: whether this tab holds the captain's credential, as /api/session
 // says, and false from the moment a write is refused for the lack of it.
@@ -828,7 +828,7 @@ function render(s) {
   // first, so answering one never moves another
   const pend = [...(s.pending || [])];
   const pendingIds = new Set(pend.map(d => d.id));
-  for (const set of [openDecisionSheets, openWhys]) for (const id of set) if (!pendingIds.has(id)) set.delete(id);
+  for (const set of [openDecisionSheets, openWhys, openDesigns]) for (const id of set) if (!pendingIds.has(id)) set.delete(id);
   for (const id of answered) if (!pendingIds.has(id)) answered.delete(id);
   for (const key of revealedSections) if (!pendingIds.has(JSON.parse(key)[0])) revealedSections.delete(key);
   for (const id of [...picks.keys()]) if (!pendingIds.has(id)) picks.delete(id);
@@ -922,7 +922,7 @@ function render(s) {
       (d.kind === "merge" && GATES().some(({name}) => gates?.[name] === "not_runnable")
         ? `<p class="ci-only-evidence" role="note">${esc(t('ciOnlyEvidence'))}</p>` : '') +
       (content?.intent ? `</section>${intentBody(d, content, locked)}` :
-      retroItemsHtml(d, content, locked) +
+      retroItemsHtml(d, content, locked) + designCompare(d) +
       `<div class="decision-bar">${decisionDetailsButton(d)}<div class="acts">${options}
          ${d.purpose === 'retro' ? '' : `<button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
          <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>`}
@@ -949,6 +949,13 @@ function render(s) {
     document.getElementById(`sheet-${button.dataset.id}`)?.querySelector('[data-decision-close]')?.focus();
   });
   deck.querySelectorAll('[data-decision-close]').forEach(button => button.onclick = () => closeDecisionSheet(button.dataset.id));
+  deck.querySelectorAll('[data-design]').forEach(el => {
+    el.querySelector('summary').onclick = event => {
+      event.preventDefault();
+      if (openDesigns.has(el.dataset.design)) openDesigns.delete(el.dataset.design); else openDesigns.add(el.dataset.design);
+      render(latest);   // the screenshots load only once the toggle is open
+    };
+  });
   deck.querySelectorAll('[data-why]').forEach(el => {
     el.querySelector('summary').onclick = event => {
       event.preventDefault();
@@ -1418,8 +1425,23 @@ function intentBody(d, content, locked, detailOnly = false) {
     (hasItems('why') ? `<div class="intent-why">${sentences('why')}</div>` : '') +
     (content?.intent && content.outcome?.trim() ? `<p class="intent-outcome">${said(words(content.outcome),d)}</p>` : '') + '</details>';
   const items = retroItemsHtml(d, content, locked, 'intent');
-  if (hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,false)}${how}${scope}${notes}</div>${items}${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
-  return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>${items}${why}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
+  if (hasItems('change_points')) return `<div class="intent-alignment">${changeWalk(d,content,locked,false)}${how}${scope}${notes}</div>${items}${why}${designCompare(d)}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
+  return `<div class="intent-alignment">${pairedIntent}${how}${scope}${notes}</div>${items}${why}${designCompare(d)}<div class="decision-bar">${decisionDetailsButton(d)}${options}${footer}</div>${decisionSheet(d,content,locked)}`;
+}
+// T-298: a UI change's merge card shows each page's prototype and result
+// screenshots side by side, closed until the captain opens the toggle. The
+// labels come with the card in both languages.
+function designCompare(d) {
+  const s = d.design_shots;
+  if (!s || !Array.isArray(s.pages) || !s.pages.length) return '';
+  const say = o => lang === 'zh-CN' ? cn(o?.['zh-TW'] ?? o?.en ?? '') : (o?.[lang] ?? o?.en ?? '');
+  const shot = (src, label, x) => `<div class="design-side"><b>${esc(label)}</b>` +
+    (src ? `<img loading="lazy" src="${esc(src)}" alt="${esc(`${label} ${x.viewport} ${x.scheme}`)}">` : '<span class="design-none">—</span>') + '</div>';
+  return `<details class="design-compare" data-design="${esc(d.id)}"${openDesigns.has(d.id) ? ' open' : ''}><summary>${esc(say(s.label))}</summary>` +
+    (openDesigns.has(d.id) ? s.pages.map(p => `<section><h5>${esc(p.page)}</h5>` + p.shots.map(x =>
+      `<figure class="design-pair"><figcaption>${esc(x.viewport)} · ${esc(x.scheme)}</figcaption>` +
+      shot(x.prototype, say(s.prototype_label), x) + shot(x.head, say(s.head_label), x) + '</figure>').join('') + '</section>').join('') : '') +
+    '</details>';
 }
 function decisionDetailsButton(d) {
   return `<button type="button" data-decision-details data-id="${esc(d.id)}" aria-controls="sheet-${esc(d.id)}" aria-expanded="${openDecisionSheets.has(d.id)}">${esc(t("decisionDetails"))}</button>`;

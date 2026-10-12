@@ -599,20 +599,28 @@ class Store:
                      and r.get('authorized') is True and r['actor'] == 'firstmate'
                      and r['round'] == round_number and r['head'] == head), None)
 
-    def verdicts(self):
-        reviewer = os.environ.get('FM_REVIEWER_LOGIN', '')
-        return [r for r in self.records() if r['kind'] == 'verdict'
-                and (not reviewer or r.get('login', r['actor']) == reviewer)]
+    def verdicts(self, lane='code'):
+        """One lane's verdicts (T-298): code review, design review or a prototype check.
 
-    def history(self, reviewer=False):
+        A record without a lane is a code review, as every record was before."""
+        reviewer = os.environ.get('FM_REVIEWER_LOGIN', '')
+        return [r for r in self.records() if r['kind'] == 'verdict' and r.get('lane', 'code') == lane
+                and (lane != 'code' or not reviewer or r.get('login', r['actor']) == reviewer)]
+
+    def history(self, reviewer=False, lane=None):
+        """Every review the worker must answer; a reviewer reads only its own lane."""
         output = []
         login = os.environ.get('FM_REVIEWER_LOGIN', '')
         for record in self.records():
             if record['kind'] == 'verdict':
-                if login and record.get('login', record['actor']) != login:
+                kind = record.get('lane', 'code')
+                if kind == 'prototype' or (lane and kind != lane):
+                    continue
+                if kind == 'code' and login and record.get('login', record['actor']) != login:
                     continue
                 fence = uuid.uuid4().hex
-                output.append(f'Local review round {record["round"]}, head {record["head"]}, '
+                label = 'Local design review' if kind == 'design' else 'Local review'
+                output.append(f'{label} round {record["round"]}, head {record["head"]}, '
                               f'reviewer {record["actor"]}, provenance {record["provenance"]["level"]}, '
                               f'seal={"signed" if record.get("signature") else "unsealed legacy"}\n----- begin {fence} -----\n'
                               f'{record["text"]}\n----- end {fence} -----')
@@ -667,6 +675,10 @@ def retain_verdict(store, args):
     if any(binding.get(k) != getattr(args, k) for k in ('head', 'base', 'patch')):
         raise ValueError('review source binding changed during round')
     identity = json.loads((run / 'identity.json').read_text())
+    # T-298: a designer round is a reviewer round whose identity says so
+    lane = 'code'
+    if identity.get('mode') == 'design':
+        lane = 'prototype' if identity.get('design_target') == 'prototype' else 'design'
     for key, value in (('project', store.project), ('task', store.task),
                        ('role', 'reviewer'), ('round', args.round)):
         actual = identity.get(key)
@@ -695,7 +707,8 @@ def retain_verdict(store, args):
     checks = fix_checks(answer, store.task, args.head, os.environ.get('FM_TARGET_ROOT', ''),
                         pinned_scope(run, store.task, args.head))
     merge_card, merge_card_status = merge_card_of(answer, decided)
-    return store.append('verdict', args.round, os.environ['FM_ACTOR'], args.head, answer,
+    extra = {} if lane == 'code' else dict(lane=lane)
+    return store.append('verdict', args.round, os.environ['FM_ACTOR'], args.head, answer, **extra,
                         verdict=decided, base=args.base, patch=args.patch,
                         merge_card=merge_card, merge_card_status=merge_card_status,
                         reviewer=identity, login=os.environ.get('FM_REVIEWER_LOGIN', os.environ['FM_ACTOR']),
@@ -725,7 +738,8 @@ def pinned_scope(run, task, head):
 
 def avoided_reviewer(store):
     """The reviewer name of the task's latest REJECT, whatever its protocol (T-272)."""
-    rejects = [r for r in store.records() if r['kind'] == 'verdict' and r.get('verdict') == 'REJECT']
+    rejects = [r for r in store.records() if r['kind'] == 'verdict' and r.get('verdict') == 'REJECT'
+               and r.get('lane', 'code') == 'code']
     if not rejects:
         return ''
     reviewer = rejects[-1].get('reviewer')
@@ -765,6 +779,8 @@ def summary(store):
         row = {key: record.get(key) for key in ('kind', 'round', 'actor', 'head', 'time')}
         if record['kind'] == 'verdict':
             row['verdict'] = record.get('verdict')
+            if record.get('lane'):
+                row['lane'] = record['lane']
         elif record['kind'] == 'brief':
             lines = record.get('text', '').splitlines()
             row['brief'] = lines[0] if lines else ''
@@ -812,6 +828,7 @@ def main():
     parser.add_argument('--reviewer', action='store_true')
     parser.add_argument('--external', action='store_true', default=None)
     parser.add_argument('--signature')
+    parser.add_argument('--lane', choices=['code', 'design'])
     args = parser.parse_args()
     if args.command == 'experiment-retain':
         # Inline admission before importing the optional module (including its
@@ -851,9 +868,9 @@ def main():
     elif args.command == 'follow-ups':
         print(json.dumps(follow_ups(store), ensure_ascii=False))
     elif args.command == 'history':
-        print(store.history(args.reviewer))
+        print(store.history(args.reviewer, args.lane))
     elif args.command == 'protocol':
-        records = store.verdicts()
+        records = store.verdicts(args.lane or 'code')
         if not records:
             raise ValueError('missing local verdict; PR comments are not fallback evidence')
         if args.signature is not None:

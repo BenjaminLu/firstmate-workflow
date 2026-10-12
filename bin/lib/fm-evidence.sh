@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
     # These are Python reader/writer options, not wrapper-owned values.
     # Keep their values in args on the following iteration; fm_need rejects
     # a missing or option-shaped value before it can enter that iteration.
-    --round|--head|--base|--patch|--actor|--file|--run|--attempt|--code|--vendor)
+    --round|--head|--base|--patch|--actor|--file|--run|--attempt|--code|--vendor|--lane)
       fm_need fm-evidence "$@"; args+=("$1"); shift ;;
     --reviewer) args+=("$1"); shift ;;
     -*) echo "fm-evidence: unknown argument $1" >&2; exit 64 ;;
