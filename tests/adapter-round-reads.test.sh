@@ -12,7 +12,7 @@ adapter="$ROOT/bin/adapters/claude.sh"
 
 # A self-project state folder: the round's own worktree and run folder, a
 # second round's run folder, and two prototypes.
-nr="$(safe_tmpdir)"; nr="$(cd "$nr" && pwd -P)"; st="$nr/state"
+nr="$(safe_tmpdir)"; st="$nr/state"
 mkdir -p "$st/worktrees/T-Z" "$st/worktrees/T-Y" "$st/runs/worker-a-t1-r1" "$st/runs/worker-b-t2-r1/pinned" \
   "$st/prototypes/proto-a" "$st/prototypes/proto-b" "$st/evidence"
 : > "$st/events.jsonl"
