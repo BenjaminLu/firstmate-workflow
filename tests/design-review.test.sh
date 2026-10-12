@@ -71,6 +71,7 @@ CONFIG
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
 if [ "$FM_ROLE" = worker ]; then
+  printf '%s\n' "${FM_PROTOTYPE_DIR:-}" > "$FM_TEST_DIR/worker-prototype"
   [ -z "${FM_CAPTURE:-}" ] || cp "$2" "$FM_CAPTURE"
   mkdir -p "$3/src"
   printf '<!doctype html><title>p</title><p>round %s</p>\n' "$RANDOM" > "$3/$FM_TEST_FILE"
@@ -134,6 +135,7 @@ review() { (cd "$repo" && bin/fm-review.sh "$@" --task T-Z --branch "$branch" --
 # --- design: non-ui pr unaffected (regression) ----------------------------
 setup_repo src/feature.txt
 assert_eq 0 "$?" 'the worker completes a change that touches no page'
+assert_eq '' "$(cat "$d/worker-prototype")" 'worker without a prototype receives none'
 review
 assert_eq 0 "$?" 'the code review signs it'
 gate6
@@ -146,6 +148,7 @@ safe_rm_rf "$d"
 # --- design: ui pr needs approve (fail-first) -----------------------------
 setup_repo src/page.html prototype
 assert_eq 0 "$?" 'the worker completes a change that touches a page'
+assert_eq "$(cd "$repo/state/prototypes/p1" && pwd -P)" "$(cat "$d/worker-prototype")" 'worker launcher selects its pinned prototype'
 review
 assert_eq 0 "$?" 'the code review signs it'
 gate6

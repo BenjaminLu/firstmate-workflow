@@ -206,6 +206,19 @@ landscape), for the head and, when `design.prototype` names a folder under
 capture, and no round starts. The kept copy is under
 `state/design/<task>/<head>/`, where the merge card reads it.
 
+T-299 adds the optional repository hook `tests/e2e/capture-server.sh`.
+The capture starts it in the exported head, waits for one JSON line with
+`pages` mapping repository paths to local `url` and optional `ready` CSS
+selectors, and closes stdin to stop it when capture ends. Its process is
+owned through the lifeline. Here it starts the board on the existing e2e
+fixture data, so the decision card, Fleet, Crew and Log have content.
+Unlisted pages and repositories without the hook still open as files;
+prototype capture is unchanged. Existing tasks need no migration: the hook
+is used when present in the captured head. During every capture the browser
+can reach only the local machine. Requests to other hosts, including web
+sockets, are blocked and listed in `requests.json` and the capture manifest;
+blocked requests do not themselves fail a screenshot.
+
 What a round may read under `state/` is its own: every round reads its own
 `pinned/` folder, and a worker its `local-tests/` folder, read-only. The OS
 sandbox grants them, and the Claude adapter's own permission rules carve them
@@ -213,7 +226,11 @@ out of its `state/` deny as well, so a prompt that points to
 `pinned/spec.json` can be followed. A designer round also reads, read-only,
 the one prototype folder its task names in `design.prototype`
 (`FM_PROTOTYPE_DIR`, exactly `state/prototypes/<name>`), so a REJECT can cite
-the prototype's HTML and CSS. Its copy of the captured pages, in a temp
+the prototype's HTML and CSS. A worker round whose pinned spec names
+`design.prototype` also reads that one folder read-only, so it can port the
+HTML and CSS; workers without one gain no prototype access. This applies
+to new rounds of existing tasks too, without copying into their worktrees.
+The designer's copy of the captured pages, in a temp
 folder outside `state/` (`FM_DESIGN_SHOTS_DIR`), is read-only to it under
 both the OS sandbox and the Claude adapter's rules. No round reads another round's folders, another
 prototype or any other part of `state/`.

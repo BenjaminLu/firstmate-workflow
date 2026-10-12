@@ -211,14 +211,13 @@ def local_tests_of():
 
 
 def prototype_of(pinned):
-    """A designer round's one prototype folder (T-298), read-only like
-    pinned/: exactly <state>/prototypes/<name> of the round's own state, the
-    one its task names in design.prototype. Only a designer round names one."""
+    """One prototype, read-only; workers must match their pinned spec (T-299)."""
     path = os.environ.get('FM_PROTOTYPE_DIR', '')
     if not path:
         return None
-    if os.environ.get('FM_MODEL_ROLE') != 'designer':
-        raise ValueError('only a designer round reads a prototype folder')
+    role = os.environ.get('FM_MODEL_ROLE')
+    if role not in ('designer', 'worker'):
+        raise ValueError('only a designer or worker round reads a prototype folder')
     if not pinned:
         raise ValueError('a prototype folder needs the round\'s pinned folder')
     if not os.path.isabs(path) or real(path) != path or os.path.islink(path) or not os.path.isdir(path):
@@ -226,6 +225,24 @@ def prototype_of(pinned):
     state = os.path.dirname(os.path.dirname(os.path.dirname(pinned)))
     if os.path.dirname(path) != os.path.join(state, 'prototypes'):
         raise ValueError('prototype folder is not one under the round\'s state/prototypes/')
+    if role == 'worker' and path != worker_prototype(pinned):
+        raise ValueError('worker prototype does not match the pinned spec')
+    return path
+
+
+def worker_prototype(pinned):
+    """Resolve from approved inputs, never from an inherited grant or worktree."""
+    with open(os.path.join(pinned, 'spec.json')) as stream:
+        spec = json.load(stream)
+    name = (spec.get('design') or {}).get('prototype')
+    if not name:
+        return None
+    state = os.path.dirname(os.path.dirname(os.path.dirname(pinned)))
+    path = name if os.path.isabs(name) else os.path.join(os.path.dirname(state), name)
+    path = os.path.abspath(path)
+    if (real(path) != path or os.path.dirname(path) != os.path.join(state, 'prototypes')
+            or not os.path.isdir(path)):
+        raise ValueError('worker prototype must be one folder under its state/prototypes/')
     return path
 
 

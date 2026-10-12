@@ -1688,8 +1688,18 @@ export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
 # what this run built is ever granted, so an inherited folder is dropped
 # first; a folder that cannot be built leaves the round as it was before.
 unset FM_LOCAL_TESTS_DIR
-# only a designer round reads a prototype folder (T-298)
+# T-299: discard inherited grants; resolve only the approved pinned task.
 unset FM_PROTOTYPE_DIR
+if [ -n "${FM_PINNED_DIR:-}" ]; then
+  worker_proto="$(python3 - "${FM_CODE_ROOT:-$REPO}/bin/lib" "$FM_PINNED_DIR" <<'PYPROTO'
+import sys
+sys.path.insert(0, sys.argv[1])
+from fm_sandbox_policy import worker_prototype
+print(worker_prototype(sys.argv[2]) or '')
+PYPROTO
+  )" || { echo "fm-worker: the pinned prototype cannot be granted" >&2; exit 65; }
+  [ -z "$worker_proto" ] || export FM_PROTOTYPE_DIR="$worker_proto"
+fi
 local_tests_why=''
 local_tests_contract() {   # the approved pin's contract, else the project's
   local template tests docs unrunnable kv envs=()

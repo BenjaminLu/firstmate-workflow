@@ -1,0 +1,24 @@
+// The same populated board used by the end-to-end tests, never live state.
+import { makeRoot, startBoard, stopBoard, writeRegistry } from './fixture';
+import { rmSync } from 'node:fs';
+// A launcher may carry a live project/state environment. The fixture owns
+// its own root and registry; retain only the lifeline's ownership variables.
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith('FM_') && !key.startsWith('FM_LIFELINE_')) delete process.env[key];
+}
+const root = makeRoot(['working', 'gate', 'review', 'working', 'gate']);
+writeRegistry(root, 'fixture/capture');
+let board: Awaited<ReturnType<typeof startBoard>> | undefined;
+try {
+  board = await startBoard(root);
+  process.stdout.write(JSON.stringify({pages: {
+    'board/public/index.html': {url: `${board.url}/?lang=en`, ready: '#roster .rrow'},
+  }}) + '\n');
+  await new Promise<void>(resolve => {
+    process.stdin.resume();
+    process.stdin.once('end', resolve);
+  });
+} finally {
+  if (board) await stopBoard(board);
+  else rmSync(root, {recursive: true, force: true});
+}

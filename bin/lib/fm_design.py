@@ -207,6 +207,7 @@ def capture_tool():
 def run_capture(planned, out, seconds=600):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    (out / 'requests.json').unlink(missing_ok=True)
     (out / 'plan.json').write_text(json.dumps(planned, indent=1))
     try:
         result = subprocess.run([*capture_tool(), str(out / 'plan.json')], stdin=subprocess.DEVNULL,
@@ -215,7 +216,7 @@ def run_capture(planned, out, seconds=600):
         raise CaptureError('the capture tool did not run: ' + str(error)) from error
     if result.returncode:
         said = (result.stderr or result.stdout).strip().splitlines()
-        raise CaptureError(f'the capture tool exited {result.returncode}' + (': ' + said[-1] if said else ''))
+        raise CaptureError(f'the capture tool exited {result.returncode}' + (': ' + '\n'.join(said[-30:]) if said else ''))
     missing = []
     for shot in planned['shots']:
         path = out / shot['file']
@@ -276,8 +277,20 @@ def capture(args):
         if folder:
             targets.append(('prototype', folder, prototype_page))
         planned = plan(page_list, kind, targets, out)
-        run_capture(planned, out)
+        from fm_capture_server import capture_server
+        with capture_server(tree) as server:
+            if server:
+                for shot in planned['shots']:
+                    served = server['pages'].get(shot['page']) if shot['target'] == 'head' else None
+                    if served:
+                        shot['url'] = served['url']
+                        if served.get('ready'):
+                            shot['ready'] = served['ready']
+            run_capture(planned, out)
     record = manifest(planned, args.task, args.head, kind, str(folder) if folder else None)
+    requests = out / 'requests.json'
+    if requests.is_file():
+        record['capture'] = json.loads(requests.read_text())
     (out / 'manifest.json').write_text(json.dumps(record, indent=1))
     return record
 
