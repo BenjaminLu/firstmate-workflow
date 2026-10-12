@@ -25,8 +25,8 @@ test('capture: served page has content', async ({}, info) => {
   const {record, server} = capture('served', info);
   expect(server).not.toBeNull();
   expect(record.pages[0].text).toContain('Cache the task index');
-  expect(record.pages[0].text).toContain('T-001');
-  expect(record.pages[0].readyText).toContain('T-001');
+  expect(record.pages[0].text).toContain('SK-007');
+  expect(record.pages[0].readyText).toContain('SK-007');
 });
 
 test('capture: remote request blocked', async ({}, info) => {
