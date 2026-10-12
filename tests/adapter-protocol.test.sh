@@ -331,10 +331,11 @@ $refusal_line" 1
     mkdir -p "$d/checkout/.git"
     ck="$(cd "$d/checkout" && pwd -P)"
     tmpd="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-    printf '#!/usr/bin/env bash\ncat > /dev/null\npwd -P > "%s/cwd.run"\nprintf "%%s\\n" "$@" > "%s/argv.run"\nenv > "%s/env.run"\nprintf "ran\\n"\nexit 0\n' \
-      "$d" "$d" "$d" > "$d/fakebin/$name"
+    { printf '#!/usr/bin/env bash\n'; fake_claude_settings "$d/argv.run.settings"
+      printf 'cat > /dev/null\npwd -P > "%s/cwd.run"\nprintf "%%s\\n" "$@" > "%s/argv.run"\nenv > "%s/env.run"\nprintf "ran\\n"\nexit 0\n' \
+      "$d" "$d" "$d"; } > "$d/fakebin/$name"
     chmod +x "$d/fakebin/$name"
-    rm -f "$d/cwd.run" "$d/argv.run" "$d/env.run"
+    rm -f "$d/cwd.run" "$d/argv.run" "$d/argv.run.settings" "$d/env.run"
     # The launcher's own state goes with it: fm_identity exports FM_ROOT at
     # the task's repository, and the checkout's scripts pick their tree from
     # FM_ROOT, so a `check` run in the checkout would gate another tree.
@@ -402,7 +403,8 @@ $denied
 $rule
 " "$name denies $rule on the command line"
           done
-          settings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$d/argv.run")"
+          # the settings are a file (T-300), kept by the fake as it ran
+          settings="$(cat "$d/argv.run.settings" 2>/dev/null)"
           assert_eq "false" "$(jq -r '.sandbox.enabled' <<< "$settings" 2>/dev/null)" \
             "$name's own sandbox is off: its proxy would route around the one that names a refused host"
           assert_eq "true" "$(jq -r '.permissions.defaultMode == "dontAsk"
@@ -473,12 +475,13 @@ $runargv
             fm_policy worker "" "$nr/carve.yaml" \
               | jq --arg s "$nr/state" '.never_read += [$s]' > "$nr/carve.json"
           )
-          printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/carve.argv"\nprintf "ran\\n"\nexit 0\n' \
-            "$nr" > "$d/fakebin/$name"
+          { printf '#!/usr/bin/env bash\n'; fake_claude_settings "$nr/carve.argv.settings"
+            printf 'cat > /dev/null\nprintf "%%s\\n" "$@" > "%s/carve.argv"\nprintf "ran\\n"\nexit 0\n' \
+              "$nr"; } > "$d/fakebin/$name"
           chmod +x "$d/fakebin/$name"
           FM_POLICY="$nr/carve.json" PATH="$d/fakebin:$closed_path" \
             "$adapter" run "$d/prompt" "$nr/state/worktrees/T-Z" "$d/log" >/dev/null 2>&1
-          csettings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$nr/carve.argv" 2>/dev/null)"
+          csettings="$(cat "$nr/carve.argv.settings" 2>/dev/null)"
           cwork="$(cd "$nr/state/worktrees/T-Z" && pwd -P)"
           swallowed="$(printf '%s' "$csettings" | jq -r --arg work "$cwork" '
             .permissions.deny[]

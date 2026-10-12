@@ -36,8 +36,8 @@ chmod 0755 "$own_run/pinned" "$own_run/local-tests"
 )
 d="$(safe_tmpdir)"; make_sandbox "$d"
 echo "do the thing" > "$d/prompt"
-printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
-  "$d" > "$d/fakebin/claude"
+{ printf '#!/usr/bin/env bash\n'; fake_claude_settings "$d/argv.settings"
+  printf 'cat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\nprintf "ran\\n"\nexit 0\n' "$d"; } > "$d/fakebin/claude"
 chmod +x "$d/fakebin/claude"
 
 # The round's env as its launcher exports it; FM_PROTOTYPE_DIR only when named.
@@ -50,11 +50,11 @@ round_env() {
 # run_round <role> [prototype]: one Claude round in the round's own tree,
 # behind the suite's recording sandbox-exec; prints its settings
 run_round() {
-  rm -f "$d/argv"
+  rm -f "$d/argv" "$d/argv.settings"
   local role="$1" proto="${2-}"
   FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" round_env "$role" "$proto" \
     "$adapter" run "$d/prompt" "$st/worktrees/T-Z" "$d/log" >"$d/out" 2>&1 || cat "$d/out" >&2
-  awk 'on{print;exit} $0=="--settings"{on=1}' "$d/argv" 2>/dev/null
+  cat "$d/argv.settings" 2>/dev/null
 }
 # denied_over <settings> <path>: every deny rule that covers <path>
 denied_over() {
