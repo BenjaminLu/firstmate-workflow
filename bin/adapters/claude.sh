@@ -132,6 +132,21 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
 allow=(Grep Glob "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
        "Read(/$tmp/**)" "Edit(/$tmp/**)" "Write(/$tmp/**)")
+# The folders the OS sandbox grants this round read-only (T-298): its own
+# pinned/ and local-tests/ folders, and for a designer round the one
+# prototype folder its task names. They sit under state/, which is
+# never_read on the self project, so without a Read rule and a carve below
+# claude's own deny would hide what the prompt points to. Read only: no Edit
+# or Write rule, and the sandbox refuses every write there anyway.
+ro=()
+for _fm_ro in "${FM_PINNED_DIR:-}" "${FM_LOCAL_TESTS_DIR:-}"; do
+  [ -n "$_fm_ro" ] || continue
+  _fm_ro="$(fm_adapter_rule_path "$_fm_ro")" || exit 64; ro+=("$_fm_ro")
+done
+if [ -n "${FM_PROTOTYPE_DIR:-}" ] && [ "${FM_MODEL_ROLE:-}" = designer ]; then
+  _fm_ro="$(fm_adapter_rule_path "$FM_PROTOTYPE_DIR")" || exit 64; ro+=("$_fm_ro")
+fi
+for _fm_ro in ${ro[@]+"${ro[@]}"}; do allow+=("Read(/$_fm_ro/**)"); done
 deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -C:*)"
       "Bash(gh:*)" "Bash(gh pr comment:*)" "Bash(gh pr review:*)" "Bash(gh pr edit:*)" "Bash(gh pr merge:*)"
       "Bash(gh pr create:*)" "Bash(gh pr close:*)" "Bash(gh pr reopen:*)" "Bash(gh pr ready:*)"
@@ -141,30 +156,45 @@ deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -
       "Bash(herdr:*)" "Bash(open:*)" "Bash(xdg-open:*)" "Bash(osascript:*)"
       "Bash(curl:*)" "Bash(wget:*)")
 # the never-readable paths, as rules too: the OS sandbox is what makes
-# every other path unreadable. A never_read path that CONTAINS the
-# round's own work or temp directory - state, on the self project, whose
-# own state/worktrees/<task> is a worker's tree, or a reviewer's
-# checkout - must not become a blanket deny of everything under it: a
-# deny beats the Read(/$work/**) / Read(/$tmp/**) allow rules above in
-# claude's own rule order, so denying the ancestor denies the round's
-# own tree too (T-123, found by a live reviewer whose own checkout was
-# refused this way under main's policy). fm_adapter_carve_deny walks
-# from that ancestor down to the protected directory and denies every
-# other entry at each level instead - state/runs/**, state/events.jsonl,
-# every other worktree - and never the branch that leads to $work or
-# $tmp themselves.
+# every other path unreadable. A never_read path that CONTAINS one of the
+# round's own folders - state, on the self project, whose own
+# state/worktrees/<task> is a worker's tree, or a reviewer's checkout, and
+# whose state/runs/<actor>/pinned is the round's pinned inputs - must not
+# become a blanket deny of everything under it: a deny beats the
+# Read(/$work/**) and other allow rules above in claude's own rule order, so
+# denying the ancestor denies the round's own folders too (T-123, found by a
+# live reviewer whose own checkout was refused this way under main's
+# policy; T-298, a worker that could not read its own pinned spec).
+# fm_adapter_carve_deny walks from that ancestor down to one kept folder and
+# denies every other entry at each level instead - state/events.jsonl,
+# every other worktree, every other round's run folder and the round's own
+# run files beside pinned/ - and never the branch that leads to a kept one.
+keep=("$work" "$tmp" ${ro[@]+"${ro[@]}"}); _fm_carved='
+'
+fm_adapter_kept() { # entry: is it a kept folder, an ancestor of one, or inside one?
+  local k
+  for k in "${keep[@]}"; do
+    case "$k" in "$1"|"$1"/*) return 0 ;; esac
+    case "$1" in "$k"/*) return 0 ;; esac
+  done
+  return 1
+}
 fm_adapter_carve_deny() {
-  local anc="$1" protect="$2" cur seg entry other
+  local anc="$1" protect="$2" cur seg entry
   cur="$anc"
-  if [ "$protect" = "$work" ]; then other="$tmp"; else other="$work"; fi
   while [ "$cur" != "$protect" ]; do
     case "$protect" in "$cur"/*) ;; *) return 0 ;; esac
     seg="${protect#"$cur"/}"; seg="${seg%%/*}"
     while IFS= read -r entry; do
       [ "${entry##*/}" = "$seg" ] && continue
       case "$entry" in *[[:space:]\"\\*\(\),]*) continue ;; esac
-      case "$other" in "$entry") continue ;; "$entry"/*) continue ;; esac
-      case "$entry" in "$other"/*) continue ;; esac
+      fm_adapter_kept "$entry" && continue
+      # each kept folder's walk passes the same siblings near the top
+      case "$_fm_carved" in *"
+$entry
+"*) continue ;; esac
+      _fm_carved="$_fm_carved$entry
+"
       deny+=("Read(/$entry/**)" "Read(/$entry)")
     done < <(find "$cur" -mindepth 1 -maxdepth 1 2>/dev/null)
     cur="$cur/$seg"
@@ -174,8 +204,9 @@ while IFS= read -r p; do
   case "$p" in /*) ;; *) continue ;; esac
   case "$p" in *[[:space:]\"\\*\(\),]*) continue ;; esac
   carved=''
-  case "$work" in "$p"|"$p"/*) fm_adapter_carve_deny "$p" "$work"; carved=1 ;; esac
-  case "$tmp" in "$p"|"$p"/*) fm_adapter_carve_deny "$p" "$tmp"; carved=1 ;; esac
+  for k in "${keep[@]}"; do
+    case "$k" in "$p"|"$p"/*) fm_adapter_carve_deny "$p" "$k"; carved=1 ;; esac
+  done
   [ -n "$carved" ] && continue
   deny+=("Read(/$p/**)" "Read(/$p)")
 done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["never_read"]))' "$FM_POLICY")

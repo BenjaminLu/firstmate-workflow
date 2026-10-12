@@ -206,6 +206,16 @@ landscape), for the head and, when `design.prototype` names a folder under
 capture, and no round starts. The kept copy is under
 `state/design/<task>/<head>/`, where the merge card reads it.
 
+What a round may read under `state/` is its own: every round reads its own
+`pinned/` folder, and a worker its `local-tests/` folder, read-only. The OS
+sandbox grants them, and the Claude adapter's own permission rules carve them
+out of its `state/` deny as well, so a prompt that points to
+`pinned/spec.json` can be followed. A designer round also reads, read-only,
+the one prototype folder its task names in `design.prototype`
+(`FM_PROTOTYPE_DIR`, exactly `state/prototypes/<name>`), so a REJECT can cite
+the prototype's HTML and CSS. No round reads another round's folders, another
+prototype or any other part of `state/`.
+
 The designer compares the pages one by one and ends with APPROVE or REJECT.
 Its findings use the code reviewer's standing list and fix proposals, and
 each names the page, the viewport, the problem and a fix. Without a

@@ -5,12 +5,12 @@ sources:
   # Written in our own words from these sources (T-298). No upstream text is
   # copied. skills/designer/NOTICE carries each license notice.
   # repo | path | commit | license | what we took
-  - pbakaus/impeccable | finish reviewer, critique | commit: MISSING (not supplied to round T-298 r1c) | Apache-2.0 | the finish pass and the critique order
-  - OneRedOak/claude-code-workflows | design review agent, design principles | commit: MISSING (not supplied to round T-298 r1c) | MIT | page-by-page review phases and severity
-  - vercel-labs/web-interface-guidelines | command | commit: MISSING (not supplied to round T-298 r1c) | MIT | the web appendix
-  - ehmo/platform-design-skills | ios, android | commit: MISSING (not supplied to round T-298 r1c) | MIT | the app appendix
-  - nextlevelbuilder/ui-ux-pro-max-skill | rules | commit: MISSING (not supplied to round T-298 r1c) | MIT | the app checklist
-  - anthropics/skills | frontend-design | commit: MISSING (not supplied to round T-298 r1c) | Apache-2.0 | the AI-default list and the no-prototype mode
+  - pbakaus/impeccable | finish reviewer, critique | commit: d631a8827f99414d2b6daba4ef08b7f8701751d7 | Apache-2.0 | the finish pass and the critique order
+  - OneRedOak/claude-code-workflows | design review agent, design principles | commit: 29a34c725313c7621f426f838ed31cf482473fb4 | MIT | page-by-page review phases and severity
+  - vercel-labs/web-interface-guidelines | command | commit: 434b7f91364665f2f733b310ec54809bf8f37937 | MIT | the web appendix
+  - ehmo/platform-design-skills | ios, android | commit: dc2be825d8b439caea78e9eaa8fb3ac23b0ff3e9 | MIT | the app appendix
+  - nextlevelbuilder/ui-ux-pro-max-skill | rules | commit: 67803eac81607188194aea9842a723b89326d90d | MIT | the app checklist
+  - anthropics/skills | skills/frontend-design | commit: dbd4588f9e1033efb41dad4bef2f7947c8993d44 | Apache-2.0 | the AI-default list and the no-prototype mode
 ---
 
 # Designer

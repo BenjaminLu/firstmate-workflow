@@ -1,46 +1,84 @@
 skills/designer/SKILL.md is written in our own words. It adapts ideas from
-the sources below; it copies no upstream text. Each source's license notice
-follows.
+the six sources below, each at the commit named; it copies no upstream text.
+Each source's copyright and license notice follows.
 
-The commit of each source was not supplied to round T-298 r1c and is
-recorded as MISSING; firstmate fills each one in from
-state/briefs/T-285-sources.md before this file is published.
-
+------------------------------------------------------------------------
 Source: pbakaus/impeccable (finish reviewer, critique)
-Commit: MISSING (not supplied to round T-298 r1c)
+Commit: d631a8827f99414d2b6daba4ef08b7f8701751d7
 License: Apache License, Version 2.0
+Attribution: ideas adapted from impeccable by its authors,
+https://github.com/pbakaus/impeccable
+
   Licensed under the Apache License, Version 2.0 (the "License"); you may
   not use this file except in compliance with the License. You may obtain a
-  copy of the License at http://www.apache.org/licenses/LICENSE-2.0. Unless
-  required by applicable law or agreed to in writing, software distributed
-  under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES
-  OR CONDITIONS OF ANY KIND, either express or implied.
+  copy of the License at
 
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+------------------------------------------------------------------------
+Source: anthropics/skills (skills/frontend-design)
+Commit: dbd4588f9e1033efb41dad4bef2f7947c8993d44
+License: Apache License, Version 2.0
+Attribution: ideas adapted from the frontend-design skill by Anthropic,
+https://github.com/anthropics/skills
+
+  Licensed under the Apache License, Version 2.0 (the "License"); you may
+  not use this file except in compliance with the License. You may obtain a
+  copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+------------------------------------------------------------------------
 Source: OneRedOak/claude-code-workflows (design review agent, design principles)
-Commit: MISSING (not supplied to round T-298 r1c)
+Commit: 29a34c725313c7621f426f838ed31cf482473fb4
 License: MIT License
+  Copyright (c) 2025 Patrick Ellis
+
+Source: vercel-labs/web-interface-guidelines (command)
+Commit: 434b7f91364665f2f733b310ec54809bf8f37937
+License: MIT License
+  Copyright (c) 2025 Vercel Labs
+
+Source: ehmo/platform-design-skills (ios, android)
+Commit: dc2be825d8b439caea78e9eaa8fb3ac23b0ff3e9
+License: MIT License
+  Copyright (c) 2026
+
+Source: nextlevelbuilder/ui-ux-pro-max-skill (rules)
+Commit: 67803eac81607188194aea9842a723b89326d90d
+License: MIT License
+  Copyright (c) 2024 Next Level Builder
+
+Each of the four MIT sources above is licensed under these terms, with its
+own copyright line as given:
+
   Permission is hereby granted, free of charge, to any person obtaining a
   copy of this software and associated documentation files (the
   "Software"), to deal in the Software without restriction, including
   without limitation the rights to use, copy, modify, merge, publish,
   distribute, sublicense, and/or sell copies of the Software, and to permit
   persons to whom the Software is furnished to do so, subject to the
-  following conditions: The above copyright notice and this permission
-  notice shall be included in all copies or substantial portions of the
-  Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+  following conditions:
 
-Source: vercel-labs/web-interface-guidelines (command)
-Commit: MISSING (not supplied to round T-298 r1c)
-License: MIT License (terms as above)
+  The above copyright notice and this permission notice shall be included
+  in all copies or substantial portions of the Software.
 
-Source: ehmo/platform-design-skills (ios, android)
-Commit: MISSING (not supplied to round T-298 r1c)
-License: MIT License (terms as above)
-
-Source: nextlevelbuilder/ui-ux-pro-max-skill (rules)
-Commit: MISSING (not supplied to round T-298 r1c)
-License: MIT License (terms as above)
-
-Source: anthropics/skills (frontend-design)
-Commit: MISSING (not supplied to round T-298 r1c)
-License: Apache License, Version 2.0 (terms as above)
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+  OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+  NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+  OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+  USE OR OTHER DEALINGS IN THE SOFTWARE.

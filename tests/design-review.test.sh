@@ -76,6 +76,7 @@ if [ "$FM_ROLE" = worker ]; then
   printf '<!doctype html><title>p</title><p>round %s</p>\n' "$RANDOM" > "$3/$FM_TEST_FILE"
 elif grep -q '^# Designer$' "$2"; then
   cp "$2" "$FM_TEST_DIR/designer-prompt.md"
+  printf '%s\n' "${FM_PROTOTYPE_DIR:-}" > "$FM_TEST_DIR/designer-prototype"
   printf 'called\n' >> "$FM_TEST_DIR/designer-called"
   if [ "$FM_TEST_DESIGN" = reject ]; then
     printf '1. [must-fix] page src/page.html, w390 light: DESIGN_FINDING the heading overlaps the menu\n```text fix-1\nfile: src/page.html:1\nchange: give the heading its own row\nfixes: the overlap at w390\nfail-first: the w390 screenshot shows the overlap\n```\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z\n' > "$3/verdict.txt"
@@ -169,6 +170,8 @@ assert_ok "test -s '$repo/state/design/T-Z/$head/manifest.json'" 'the screenshot
 assert_contains "$(cat "$d/designer-prompt.md")" 'Approved prototype' 'the designer is told a prototype exists'
 assert_contains "$(cat "$d/designer-prompt.md")" 'w390 (390x900), dark: head ' 'the designer gets each head screenshot'
 assert_lacks "$(cat "$d/designer-prompt.md")" 'Find the reason to reject' 'the designer does not get the code reviewer skill'
+assert_eq "$(cd "$repo/state/prototypes/p1" && pwd -P)" "$(cat "$d/designer-prototype" 2>/dev/null)" \
+  "the designer round is handed its task's prototype folder to read"
 gate6
 assert_eq 0 "$?" 'a design APPROVE on the head opens gate 6'
 assert_contains "$(cat "$d/gate.out")" 'lane design: ok' 'gate 6 names the design approval'

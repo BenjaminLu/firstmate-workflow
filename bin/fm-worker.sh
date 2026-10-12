@@ -1688,6 +1688,8 @@ export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
 # what this run built is ever granted, so an inherited folder is dropped
 # first; a folder that cannot be built leaves the round as it was before.
 unset FM_LOCAL_TESTS_DIR
+# only a designer round reads a prototype folder (T-298)
+unset FM_PROTOTYPE_DIR
 local_tests_why=''
 local_tests_contract() {   # the approved pin's contract, else the project's
   local template tests docs unrunnable kv envs=()

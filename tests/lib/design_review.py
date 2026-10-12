@@ -73,9 +73,21 @@ class SkillSources(unittest.TestCase):
         skill = (ROOT / 'skills/designer/SKILL.md').read_text()
         header = skill.split('\n---\n', 1)[0]
         rows = [line.strip()[2:] for line in header.splitlines() if line.strip().startswith('- ')]
+        # the sources, licenses and commits the approved spec names
         expected = {'pbakaus/impeccable': 'Apache-2.0', 'OneRedOak/claude-code-workflows': 'MIT',
                     'vercel-labs/web-interface-guidelines': 'MIT', 'ehmo/platform-design-skills': 'MIT',
                     'nextlevelbuilder/ui-ux-pro-max-skill': 'MIT', 'anthropics/skills': 'Apache-2.0'}
+        commits = {'pbakaus/impeccable': 'd631a8827f99414d2b6daba4ef08b7f8701751d7',
+                   'OneRedOak/claude-code-workflows': '29a34c725313c7621f426f838ed31cf482473fb4',
+                   'vercel-labs/web-interface-guidelines': '434b7f91364665f2f733b310ec54809bf8f37937',
+                   'ehmo/platform-design-skills': 'dc2be825d8b439caea78e9eaa8fb3ac23b0ff3e9',
+                   'nextlevelbuilder/ui-ux-pro-max-skill': '67803eac81607188194aea9842a723b89326d90d',
+                   'anthropics/skills': 'dbd4588f9e1033efb41dad4bef2f7947c8993d44'}
+        # each MIT source's own copyright line, from its LICENSE file
+        copyright = {'OneRedOak/claude-code-workflows': 'Copyright (c) 2025 Patrick Ellis',
+                     'vercel-labs/web-interface-guidelines': 'Copyright (c) 2025 Vercel Labs',
+                     'ehmo/platform-design-skills': 'Copyright (c) 2026',
+                     'nextlevelbuilder/ui-ux-pro-max-skill': 'Copyright (c) 2024 Next Level Builder'}
         found = {}
         for row in rows:
             cells = [cell.strip() for cell in row.split('|')]
@@ -86,9 +98,11 @@ class SkillSources(unittest.TestCase):
             cells = found[repo]
             self.assertIn(license, cells, repo)
             commit = next((c for c in cells if c.startswith('commit:')), '')
-            self.assertRegex(commit, r'^commit: [0-9a-f]{7,40}$', repo + ' names its commit')
+            self.assertEqual('commit: ' + commits[repo], commit, repo + ' names its commit')
             self.assertIn(repo, notice)
-            self.assertIn(commit.split(' ', 1)[1], notice, repo + ' commit in NOTICE')
+            self.assertIn('Commit: ' + commits[repo], notice, repo + ' commit in NOTICE')
+            if repo in copyright:
+                self.assertIn(copyright[repo], notice, repo + ' copyright in NOTICE')
         self.assertIn('Apache License, Version 2.0', notice)
         self.assertIn('Permission is hereby granted, free of charge', notice)
 
