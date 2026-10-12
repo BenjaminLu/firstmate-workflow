@@ -28,6 +28,9 @@ cd "$repo" || exit 1
 fm_storage_init "$repo" || exit 65
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/fixture-plan.XXXXXX")" || exit 70
 trap 'rm -rf "$scratch"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 fm_task "$task" "${FM_TASKS_DIR:-design/tasks}" > "$scratch/unpinned.json" 2>/dev/null || :
 spec_sha="$(python3 - "$code/bin/lib" "$task" "$scratch" "$(fm_evidence_project)" <<'PY'
 import hashlib, json, os, sys
