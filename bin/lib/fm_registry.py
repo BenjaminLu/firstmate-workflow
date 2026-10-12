@@ -17,7 +17,7 @@ def registry():
                   file=sys.stderr); sys.exit(65)
         spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
         herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
-    FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project', 'policy', 'projection')
+    FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project', 'policy', 'projection', 'ui')
     NAME = re.compile(r'[a-z0-9-]{1,24}$')
     GITHUB = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$')
 
@@ -100,6 +100,20 @@ def registry():
                 if key in ('project', 'policy'):
                     if value and not value.startswith('#'): refuse(name, key, 'must be a block, as in T-043')
                     entry[key] = nested
+                elif key == 'ui':
+                    # T-298: the globs that make a pull request a UI change
+                    if value and not value.startswith('#'): refuse(name, key, 'must be a list of - glob lines')
+                    globs = []
+                    for item in nested:
+                        if not item.strip() or item.lstrip().startswith('#'): continue
+                        found = re.match(r'\s*-\s+(.*)$', item)
+                        if not found: refuse(name, key, 'cannot read line: ' + item.strip())
+                        glob = herdr._project_scalar(found.group(1), 'config.yaml projects.%s.ui' % name)
+                        if not glob or glob.startswith('/') or '..' in glob.split('/'):
+                            refuse(name, key, "must name globs relative to the repository, not '%s'" % glob)
+                        globs.append(glob)
+                    if not globs: refuse(name, key, 'must list at least one glob')
+                    entry[key] = globs
                 else:
                     if nested: refuse(name, key, 'must be a one-line value')
                     entry[key] = herdr._project_scalar(value, 'config.yaml projects.%s.%s' % (name, key))
@@ -516,6 +530,9 @@ def registry():
             return str(home / child)
         if key == 'projection':
             return entry.get(key, 'comments' if entry.get('repo') == '.' else 'local')
+        if key == 'ui':
+            # empty when undeclared: the caller then uses the default page globs
+            return '\n'.join(entry.get('ui', []))
         if key in ('repo', 'github', 'base', 'required_check'):
             return entry.get(key, '')
         refuse(name, key, 'is not a registry field')

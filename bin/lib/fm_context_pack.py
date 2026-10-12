@@ -329,6 +329,13 @@ def build(args):
             data['findings'] = criteria(latest['text'], args.task)
         for path, line in re.findall(r'([A-Za-z0-9_./-]+\.[A-Za-z0-9]+):(\d+)', latest['text']):
             items.append((f'Review source {path}:{line}', collector.source(path, int(line))))
+    # T-298: a design REJECT reaches the worker like any review finding
+    designs = store.verdicts('design')
+    if designs and designs[-1]['verdict'] == 'REJECT':
+        items.append(('Latest design review (' + designs[-1]['provenance']['level'] + ')', designs[-1]['text']))
+        if 'reject' not in situations:
+            situations.append('reject')
+        data.setdefault('findings', []).extend(criteria(designs[-1]['text'], args.task))
     if not args.pr:
         situations.append('first')
         brief = brief or 'First round: the approved task spec is the brief.\n' + json.dumps(spec, indent=2)

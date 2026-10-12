@@ -18,6 +18,11 @@
 # nothing in the prompt is what stops it.
 #
 #   fm-review.sh --task T-004 --branch <name> [--repo .] [--pr 9] [--round 1]
+#   fm-review.sh --designer --task T-004 --branch <name> [--pr 9] [--round 1]
+#     (T-298: a designer round on the rendered pages of a UI change; the pages
+#     are captured here, outside the sandbox, before any model is called)
+#   fm-review.sh --designer --prototype state/prototypes/<name> --task T-004
+#     (T-298: the same round on a prototype folder; recorded, gates nothing)
 #   fm-review.sh --retro <run-id> --project <name> | --retro <run-id> --retro-cross
 #     (T-273: one retrospective round; routed to bin/lib/fm-retro-review.sh
 #     before any pull request, pin or verdict logic)
@@ -51,7 +56,7 @@ for _arg in "$@"; do
 done
 
 REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''; ROUND_GIVEN=''
-RETRO=''
+RETRO=''; LANE=code; PROTOTYPE=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -65,6 +70,8 @@ while [ $# -gt 0 ]; do
     --round) fm_need "fm-review" "$@"; ROUND="${2-}"; ROUND_GIVEN=1; shift 2 ;;
     --vendor) fm_need "fm-review" "$@"; VENDOR="${2-}"; shift 2 ;;
     --name) fm_need "fm-review" "$@"; NAME="${2-}"; shift 2 ;;
+    --designer) LANE=design; shift ;;
+    --prototype) fm_need "fm-review" "$@"; PROTOTYPE="${2-}"; LANE=design; shift 2 ;;
     *) echo "fm-review: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -72,6 +79,13 @@ done
 # reads a task, a pull request, a pin or a verdict (T-273).
 if [ -n "$RETRO" ]; then
   exec bash "${FM_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}/bin/lib/fm-retro-review.sh" ${fm_args[@]+"${fm_args[@]}"}
+fi
+# A prototype check reviews no branch: it runs against the base as it is.
+if [ -n "$PROTOTYPE" ]; then
+  [ -z "$PR" ] || { echo "fm-review: a prototype check takes no --pr; it gates nothing" >&2; exit 64; }
+  [ -d "$PROTOTYPE" ] || { echo "fm-review: no prototype folder at $PROTOTYPE" >&2; exit 64; }
+  PROTOTYPE="$(cd "$PROTOTYPE" && pwd -P)"
+  BRANCH="${BRANCH:-$BASE}"
 fi
 [ -n "$TASK" ] && [ -n "$BRANCH" ] || {
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
@@ -124,22 +138,33 @@ if [ -n "$ROUND_GIVEN" ]; then export FM_ROUND="$ROUND"; else unset FM_ROUND; fi
 FM_AVOID_REVIEWER="$(fm_evidence avoid-reviewer)" || {
   echo 'fm-review: the latest REJECT reviewer could not be read from local evidence' >&2; exit 65; }
 export FM_AVOID_REVIEWER
+# T-298: a designer round is a reviewer round in its own lane. Its engine is
+# config.yaml's `designer:`, else the reviewer's; everything else is shared.
+VROLE=reviewer
+unset FM_REVIEW_LANE FM_DESIGN_TARGET
+if [ "$LANE" = design ]; then
+  VROLE=designer; export FM_REVIEW_LANE=design
+  [ -z "$PROTOTYPE" ] || export FM_DESIGN_TARGET=prototype
+  FM_AVOID_REVIEWER=''
+fi
 fm_identity reviewer "$TASK" "$NAME" || exit 70
-unset FM_ROUND FM_AVOID_REVIEWER
+unset FM_ROUND FM_AVOID_REVIEWER FM_REVIEW_LANE FM_DESIGN_TARGET
 ROUND="$(jq -r .round "$FM_RUN_DIR/identity.json")"
 # T-146: the vendor this round starts on and the model "$FM_CONFIG" names for
 # that vendor are in identity.json from the start, so the board shows them
 # from the round's first event (the model the vendor reports joins them
 # once the round has run; a fallback vendor replaces them as it starts)
-fm_record_vendor_resolution reviewer "$VENDOR"
-head_vendor="$(fm_vendor_chain reviewer "$VENDOR" | head -1)"
-fm_record_requested "$head_vendor" "$(fm_model_for reviewer "$head_vendor" "$FM_CONFIG")"
+fm_record_vendor_resolution "$VROLE" "$VENDOR"
+head_vendor="$(fm_vendor_chain "$VROLE" "$VENDOR" | head -1)"
+fm_record_requested "$head_vendor" "$(fm_model_for "$VROLE" "$head_vendor" "$FM_CONFIG")"
 # T-116: name, role, project, task, round and attempt ride every crew
 # payload as separate fields, so the board never parses them out of the actor;
 # vendor and model beside them (T-127, T-146), read fresh for every payload
 CREW_DATA="$(jq -cn --arg role reviewer --arg name "$NAME" --argjson identity "$(fm_crew_identity)" \
   --arg en 'Work description unavailable' --arg tw '尚無工作說明' \
   '{role:$role,crew_name:$name,identity:$identity,activity:{en:$en,"zh-TW":$tw}}')"
+# a design round's events say so, so no counter takes one for a code round
+[ "$LANE" = code ] || CREW_DATA="$(jq -c '.lane="design"' <<<"$CREW_DATA")"
 # identity.json is the one record of who this run is and what it runs on;
 # every payload, crew_status included, carries it as it stands now
 crew_refresh_identity() {
@@ -195,6 +220,8 @@ emit_once() {
 emit() { emit_once "$@" || true; }
 # when the round began, in epoch seconds: set just before review_opened
 ROUND_STARTED=''
+# T-298: the round's read-only copy of the captured pages, removed at exit
+DESIGN_SHOTS=''
 
 # The run-mode checkout. The EXIT trap removes it on every exit the shell
 # handles - success, failure, INT, TERM. A SIGKILL runs no trap, so the next
@@ -253,6 +280,7 @@ finished() {
   local rc=$?
   fm_record_end "$rc"
   drop_checkout
+  [ -z "$DESIGN_SHOTS" ] || rm -rf "$DESIGN_SHOTS"
   local try=3
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
@@ -267,6 +295,7 @@ finished() {
 wake_verdict() {
   [ -n "${NAME:-}" ] && [ -n "${TASK:-}" ] || return 0
   local line="review: $TASK ${decided:-no verdict}"
+  [ "${LANE:-code}" = code ] || line="design $line"
   [ -n "${decided:-}" ] || [ "$1" -eq 0 ] || line="$line exit $1"
   [ -z "${R_HEAD:-}" ] || line="$line ${R_HEAD:0:7}"
   fm_wake_push "$REPO" "$NAME" verdict "$line${PR:+ #$PR}" \
@@ -386,7 +415,7 @@ export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
 # fm_run_chain resolves for whichever vendor an attempt runs - --vendor's,
 # or a fallback's - and hands it as FM_MODEL; a refusal it writes is
 # recorded here rather than read as the vendor being unavailable.
-export FM_MODEL_ROLE=reviewer FM_MODEL_CONFIG="$FM_CONFIG"
+export FM_MODEL_ROLE="$VROLE" FM_MODEL_CONFIG="$FM_CONFIG"
 model_refused_file="$FM_RUN_DIR/model-refused"; : > "$model_refused_file"
 export FM_MODEL_REFUSED="$model_refused_file"
 # The operator's escape hatch for a sandbox regression (T-117): only their
@@ -408,6 +437,37 @@ if [ -n "$R_HEAD" ] && R_BASE="$(git merge-base "$BASE" "$R_HEAD" 2>/dev/null)";
     jq -Rsc 'split("\u0000") | map(select(length > 0))')" || R_FILES=''
 else
   R_BASE=''
+fi
+
+# T-298: a designer round judges rendered pages, so they are captured here,
+# outside the sandbox, before any model is called: every page the change
+# touches at every viewport, light and dark, for the head and the approved
+# prototype. One failed screenshot and the round does not start. The board's
+# merge card reads the kept copy under state/design/; the round reads its own
+# copy, outside fm's state, which no round may read.
+if [ "$LANE" = design ]; then
+  emit_status "Capturing the pages of $TASK for the design review" "正在擷取 $TASK 的頁面供設計審查"
+  design_out="$FM_STATE_DIR/design/$TASK/${R_HEAD:-none}"
+  [ -z "$PROTOTYPE" ] || design_out="$FM_STATE_DIR/design/$TASK/prototype-$(date +%s)"
+  printf '%s\n' "$spec" > "$FM_RUN_DIR/design-spec.json"
+  design_args=(capture --config "$FM_CONFIG" --project "${FM_PROJECT:-}" --repo "${FM_TARGET_ROOT:-$REPO}"
+    --base "$R_BASE" --head "$R_HEAD" --task "$TASK" --spec "$FM_RUN_DIR/design-spec.json"
+    --out "$design_out" --state "$FM_STATE_DIR")
+  [ -z "$PROTOTYPE" ] || design_args+=(--prototype "$PROTOTYPE" --prototype-only)
+  rm -rf "$design_out"
+  if [ -z "$R_HEAD" ] || [ -z "$R_BASE" ] ||
+     ! design_said="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_design.py" "${design_args[@]}" 2>&1)"; then
+    echo "fm-review: ${design_said:-the head could not be resolved}; no design round started" >&2
+    emit --review-outcome infrastructure_error --type review_failed \
+         --en "page capture failed; design round $ROUND did not start" \
+         --tw "頁面擷取失敗；第 $ROUND 輪設計審查沒有開始"
+    exit 65
+  fi
+  DESIGN_SHOTS="$(mktemp -d "${TMPDIR:-/tmp}/fm-design.XXXXXX")" &&
+    DESIGN_SHOTS="$(cd "$DESIGN_SHOTS" && pwd -P)" && cp -R "$design_out/." "$DESIGN_SHOTS/" &&
+    jq --arg d "$DESIGN_SHOTS" '.read += [$d]' "$policy_file" > "$policy_file.design" &&
+    mv "$policy_file.design" "$policy_file" || {
+      echo "fm-review: could not hand the captured pages to the design round" >&2; exit 70; }
 fi
 
 # A clone rather than a worktree: a worktree shares the task's .git, so git
@@ -577,7 +637,7 @@ keep_log() {
 # launcher's own words.
 closed_list() {
   local history
-  history="$(fm_evidence history --reviewer)" || return 1
+  history="$(fm_evidence history --reviewer --lane "${LANE:-code}")" || return 1
   printf '%s\n' "$history"
   if printf '%s\n' "$history" | awk -v marker="ASK-PASS-CRITERIA:$TASK" '
     # Only the enclosing generated nonce can end a quotation. Nested fence
@@ -878,6 +938,9 @@ fi
 . "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-pinned.sh"
 fm_round_pinned reviewer "$spec" || exit 65
 {
+  # T-298: a designer round reads its own skill in place of the reviewer's
+  [ "${LANE:-code}" != design ] || cat "${FM_CODE_ROOT:-$REPO}/skills/designer/SKILL.md"
+  [ "${LANE:-code}" = design ] ||
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   if [ "$FM_EXTERNAL" = 1 ]; then fm_prompt_identity reviewer "$R_HEAD" "$R_BASE" || exit 65; fi
   cat "$FM_RUN_DIR/pinned-prompt.md"
@@ -909,6 +972,21 @@ fm_round_pinned reviewer "$spec" || exit 65
   printf '```\n\n## Hunk ids\n\n'
   if [ -n "$R_BASE" ] && [ -r "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_walk.py" ]; then
     python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_walk.py" ids --root "$REPO" --base "$R_BASE" --head "$R_HEAD" || true
+  fi
+  if [ "$LANE" = design ]; then
+    printf '\n---\n\n# The rendered pages\n\n'
+    if [ -n "$PROTOTYPE" ]; then
+      printf 'This is a prototype check: review the prototype alone. The result is recorded and gates nothing.\n\n'
+    fi
+    printf 'Every screenshot below is a PNG file you can open; the paths are read-only to you.\n'
+    printf 'Compare the pages one by one, at every viewport and in both colour schemes.\n\n'
+    jq -r --arg d "$DESIGN_SHOTS" '
+      (if .prototype then "Approved prototype: captured beside the head.\n" else "No approved prototype: review with the general rules in your skill.\n" end),
+      (.pages[] | "## Page `\(.page)`\n",
+        (.shots[] | "- \(.viewport) (\(.width)x\(.height)), \(.scheme): " +
+          ([if .head then "head \($d)/\(.head)" else empty end,
+            if .prototype then "prototype \($d)/\(.prototype)" else empty end] | join(" | "))),
+        "")' "$DESIGN_SHOTS/manifest.json"
   fi
 } > "$work/diff.md"
 : > "$work/outro.md"
@@ -1105,7 +1183,7 @@ review_is_signed() {
   return 1
 }
 adapters="${FM_CODE_ROOT:-$REPO}/bin/adapters"
-chain="$(fm_vendor_chain reviewer "$VENDOR")"
+chain="$(fm_vendor_chain "$VROLE" "$VENDOR")"
 # A crew round never runs on a login it did not check (T-121): every vendor
 # in the chain that this probe recognises has the login its round would get
 # checked right now, before any of them sees a prompt. Anything but
@@ -1485,13 +1563,13 @@ case "$decided" in
     if [ "$project_review" != fm ]; then
       emit_status "Local pre-check signed; project external review still required" "本機預檢已簽署；仍需專案外部審核"
     else
-    emit --type approved --en "reviewer signed $TASK ($provenance_level)" --tw "reviewer 已簽 ${TASK}（${provenance_level}）"
+    emit --type approved --en "$VROLE signed $TASK ($provenance_level)" --tw "$VROLE 已簽 ${TASK}（${provenance_level}）"
     emit_status "Verdict signed: APPROVE:$TASK" "已簽署裁決：APPROVE:$TASK"
     fi
     ;;
   REJECT)
     emit --review-outcome rejected --type review_failed \
-         --en "reviewer rejected $TASK" --tw "reviewer 拒絕 $TASK"
+         --en "$VROLE rejected $TASK" --tw "$VROLE 拒絕 $TASK"
     emit_status "Verdict signed: REJECT:$TASK" "已簽署裁決：REJECT:$TASK"
     ;;
 esac

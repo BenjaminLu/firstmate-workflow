@@ -55,6 +55,11 @@ html[data-theme=light] .acts .opt,html[data-theme=light] .acts .opt:disabled{col
 #deck .intent-scope .scope_out li{background:transparent;border-color:var(--fg2)}
 #deck .why-disclosure{margin:16px 0;color:var(--fg)}
 #deck .why-disclosure summary{cursor:pointer}
+#deck .design-compare{margin:16px 0;color:var(--fg)}
+#deck .design-compare summary{cursor:pointer}
+#deck .design-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+#deck .design-pair figcaption{grid-column:1 / -1;font-size:.85em;opacity:.8}
+#deck .design-side img{display:block;width:100%;height:auto;border:1px solid var(--line, #333)}
 #deck .decision-bar{position:static;background:var(--hull);background-image:none;color:var(--fg);border-top:1px solid var(--line);padding:12px;z-index:5}
 #deck > .dcard > .decision-bar{position:sticky;bottom:0}
 #deck .decision-bar .tradeoffs{display:none}

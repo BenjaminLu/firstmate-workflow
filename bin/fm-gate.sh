@@ -267,7 +267,18 @@ gate6() {
       [ "$policy" != external ] || return 0
     fi
   fi
-  fm_evidence gate --head "$head" --base "$mb" --patch "$patch" --code "${FM_CODE_ROOT:-$REPO}"
+  # T-298: a UI change also needs a design APPROVE on this exact head. Both
+  # lanes are always reported, so the autopilot starts every missing review.
+  local code=0 design=0
+  if fm_evidence gate --head "$head" --base "$mb" --patch "$patch" --code "${FM_CODE_ROOT:-$REPO}"; then
+    echo '  lane code: ok'
+  else
+    code=1; echo '  lane code: missing'
+  fi
+  python3 "$GATE_BIN/lib/fm_design.py" gate --config "$FM_CONFIG" --project "${FM_PROJECT:-}" \
+    --repo "$FM_TARGET_ROOT" --base "$mb" --head "$head" --state "$FM_STATE_DIR" \
+    --evidence-project "$(fm_evidence_project)" --task "$TASK" --code "${FM_ENGINE_ROOT:-$REPO}" || design=1
+  [ "$code" = 0 ] && [ "$design" = 0 ]
 }
 
 behind_base() {

@@ -60,10 +60,17 @@ def rounds(store):
     by_round = {}
     for record in store.verdicts():
         by_round[int(record['round'])] = record
+    # T-298: a design REJECT counts toward the budget like a code REJECT. It
+    # joins the code round it reviewed, or stands as that round on its own.
+    design = {}
+    for record in store.verdicts('design'):
+        design[int(record['round'])] = record
     rows = []
     listed_before = False
-    for number in sorted(by_round):
-        record = by_round[number]
+    for number in sorted(set(by_round) | set(design)):
+        record = by_round.get(number)
+        if record is None or (design.get(number, {}).get('verdict') == 'REJECT' and record.get('verdict') != 'REJECT'):
+            record = design[number]
         items = criteria(record.get('text', ''), store.task)
         must, follow = [], []
         for n, body in items:

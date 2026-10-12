@@ -375,13 +375,14 @@ def default_project(root):
     return None
 
 
-def review_round(root, task, project):
+def review_round(root, task, project, design=False):
     """The task's review round for a run starting now: FM_ROUND when the caller
     knows it (fm-review.sh --round), else one past the review rounds the log
     has opened on this task of this project. Only this project's: the round
     loop's own count takes every project's, so the two can differ when two
     projects share a task id. A worker's first run is round 1, and the review
-    that follows it is too."""
+    that follows it is too. A design round (T-298) counts nothing itself and
+    joins the code review round already opened on the task."""
     given = os.environ.get('FM_ROUND', '')
     if re.fullmatch(r'[1-9][0-9]{0,5}', given): return int(given)
     opened, default = 0, default_project(root)
@@ -395,8 +396,9 @@ def review_round(root, task, project):
         if event.get('type') != 'review_opened' or event.get('task') != task: continue
         # an event naming no project is the default project's
         if (event.get('project') or default) != project: continue
+        if isinstance(event.get('data'), dict) and event['data'].get('lane') == 'design': continue
         opened += 1
-    return opened + 1
+    return max(opened, 1) if design else opened + 1
 
 
 def run_is_live(run):
@@ -497,6 +499,8 @@ def allocate_identity(root, role, task, alias, owner_record=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]+', task):
         raise ValueError('invalid task identity')
     mode = 'spec-preflight' if role == 'reviewer' and os.environ.get('FM_SPEC_PREFLIGHT_MODE') == '1' else 'review'
+    if role == 'reviewer' and os.environ.get('FM_REVIEW_LANE') == 'design':
+        mode = 'design'   # T-298: its own actors and attempts, beside the code review's
     # T-272: only a code review answers a REJECT; workers and preflights avoid no one.
     avoid = (os.environ.get('FM_AVOID_REVIEWER') or None) if role == 'reviewer' and mode == 'review' else None
     root = Path(root).resolve()
@@ -506,7 +510,7 @@ def allocate_identity(root, role, task, alias, owner_record=None):
     with locked(directory / '.identity.lock'):
         # The actor carries the task's review round, not a global counter
         # (T-116): r465 read as round 465 on a task in its first round.
-        number = 1 if mode == 'spec-preflight' else review_round(root, task, project)
+        number = 1 if mode == 'spec-preflight' else review_round(root, task, project, mode == 'design')
         task_slug = re.sub('[^a-z0-9]', '', task.lower())
         # Long task IDs keep a digest so truncation cannot hide their mapping.
         if len(task_slug) > 9:
@@ -539,7 +543,7 @@ def allocate_identity(root, role, task, alias, owner_record=None):
             if run_is_live(file.parent): live.add(name)
         last = max(previous)[1] if previous else None
         while True:
-            namespace = '-sp' if mode == 'spec-preflight' else ''
+            namespace = {'spec-preflight': '-sp', 'design': '-ds'}.get(mode, '')
             suffix = f'{namespace}-{task_slug}-r{number}{attempt_mark(attempt)}'
             # Measured against the final suffix: an attempt mark added on
             # retry must not push the actor past 32 characters.
@@ -558,7 +562,9 @@ def allocate_identity(root, role, task, alias, owner_record=None):
         record = dict(actor=actor, role=role, task=task, name=name, project=project,
                       round=number, attempt=attempt, one_role=True,
                       requested_alias=alias, run=str(run), created=time.time())
-        if mode == 'spec-preflight': record['mode'] = mode
+        if mode in ('spec-preflight', 'design'): record['mode'] = mode
+        if mode == 'design' and os.environ.get('FM_DESIGN_TARGET') == 'prototype':
+            record['design_target'] = 'prototype'
         save(run / 'identity.json', record)
         # Only the CLI's actual keeper may bind a launcher at allocation.
         # In-process callers reserve an identity, not their parent's lifetime.

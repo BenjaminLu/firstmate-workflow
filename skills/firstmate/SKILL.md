@@ -752,6 +752,27 @@ execution path. After suspected offset shifts or duplicate adapter execution,
 preserve work, inspect actual final artifacts and revalidate the affected run;
 exit zero alone does not prove a sound run.
 
+### Designer round (T-298)
+
+A pull request is a UI change when its diff touches a path that matches the
+project's `ui` globs (`projects.<name>.ui` in `config.yaml`; the page-file
+defaults when absent). A UI change gets a designer round: a reviewer round
+with `skills/designer/SKILL.md`, started by `bin/fm-review.sh --designer`,
+with the same launcher, sandbox, crew policy and signed evidence, and the
+engine `designer:` names in `config.yaml`, else the reviewer's. Before the
+model starts, the launcher captures every changed page at each viewport in
+light and dark, for the head and for the spec's `design.prototype`; a failed
+capture starts no round. Gate 6 reports `lane code` and `lane design`, and
+the autopilot starts whichever review is missing, both on the same head at
+the same time. A UI change never merges without a design APPROVE on its
+exact head. A design REJECT is a review finding: write the worker's brief
+from it, and it counts toward the round budget. A pull request that is not a
+UI change runs no designer round. To have a prototype reviewed before the
+captain sees it, run `bin/fm-review.sh --designer --prototype
+state/prototypes/<name> --task <id>`; the result is recorded and gates
+nothing. The merge card of a UI change carries the prototype and result
+screenshots side by side behind a toggle.
+
 ### Mid-run crew progress (T-036)
 
 Producers (`fm-worker.sh`, `fm-review.sh`, managed herdr transport) emit

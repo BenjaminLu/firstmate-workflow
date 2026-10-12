@@ -560,6 +560,10 @@ fm_vendor_rule() {
   v="$(fm_project_vendor "$role")"
   if [ -n "$v" ]; then printf '%s\n' "$v"; return 0; fi
   [ -n "$role" ] && v="$(fm_cfg_in "$role" vendor "$f")"
+  # T-298: a designer with no vendor of its own takes the reviewer's
+  if [ -z "$v" ] && [ "$role" = designer ]; then
+    v="$(fm_vendor_rule reviewer "$f")"; printf '%s\n' "$v"; return 0
+  fi
   [ -n "$v" ] || v="$(fm_cfg vendor "$f")"
   printf '%s\n' "${v:-mock}"
 }
@@ -671,6 +675,10 @@ fm_model_for() {
   [ -n "$vendor" ] || vendor="$(fm_role_vendor "$role" "$f")"
   if [ -n "$role" ] && [ "$vendor" = "$(FM_EXTERNAL=0 fm_role_vendor "$role" "$f")" ]; then
     m="$(fm_cfg_in "$role" model "$f")"
+  fi
+  # T-298: likewise the reviewer's model, for a designer on the reviewer's vendor
+  if [ -z "$m" ] && [ "$role" = designer ] && [ "$vendor" = "$(FM_EXTERNAL=0 fm_role_vendor reviewer "$f")" ]; then
+    m="$(fm_cfg_in reviewer model "$f")"
   fi
   [ -n "$m" ] || m="$(fm_cfg_in models "$vendor" "$f")"
   if [ -z "$m" ] && [ "$vendor" = "$(FM_EXTERNAL=0 fm_role_vendor '' "$f")" ]; then
