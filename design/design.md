@@ -226,6 +226,15 @@ can reach only the local machine. Requests to other hosts, including web
 sockets, are blocked and listed in `requests.json` and the capture manifest;
 blocked requests do not themselves fail a screenshot.
 
+T-299 also adds a `*.spec.ts` case to this repository's `test` template, so
+the machine fail-first runs a changed browser test on the head and the base,
+with a reporter that prints one named result per test, and the fail-first
+job installs Chromium. Existing pins keep their frozen `test` template:
+gate 4 reads the pin, so a task pinned before T-299 runs only bash suites
+until it is repinned. The standalone CI fail-first reads the head's
+`config.yaml`, so a branch picks up browser specs once it carries the new
+config.
+
 What a round may read under `state/` is its own: every round reads its own
 `pinned/` folder, and a worker its `local-tests/` folder, read-only. The OS
 sandbox grants them, and the Claude adapter's own permission rules carve them
