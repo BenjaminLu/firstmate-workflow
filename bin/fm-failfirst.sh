@@ -44,7 +44,7 @@
 # part reports fails it, naming the suite and its shard.
 #
 # --setup replaces the declared `setup`, run in each tree before its suites
-# (CI passes the dependency install alone: the suites need no browser).
+# (CI installs dependencies and Chromium for bash and browser suites).
 # --jobs is how many suite runs go at once (default: online CPUs, at most 6).
 # --head=<ref> selects a branch without changing the caller's checkout.
 # --gate uses declared docs exemptions and falls back to project.check when

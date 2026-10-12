@@ -133,7 +133,7 @@ export CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR CLAUDE_CODE_DISABLE_NONESSENTIAL_TRA
 allow=(Grep Glob "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
        "Read(/$tmp/**)" "Edit(/$tmp/**)" "Write(/$tmp/**)")
 # The folders the OS sandbox grants this round read-only (T-298): its own
-# pinned/ and local-tests/ folders, and for a designer round the one
+# pinned/ and local-tests/ folders, and for a designer or worker round the one
 # prototype folder its task names. They sit under state/, which is
 # never_read on the self project, so without a Read rule and a carve below
 # claude's own deny would hide what the prompt points to. Read only: no Edit
@@ -143,7 +143,7 @@ for _fm_ro in "${FM_PINNED_DIR:-}" "${FM_LOCAL_TESTS_DIR:-}"; do
   [ -n "$_fm_ro" ] || continue
   _fm_ro="$(fm_adapter_rule_path "$_fm_ro")" || exit 64; ro+=("$_fm_ro")
 done
-if [ -n "${FM_PROTOTYPE_DIR:-}" ] && [ "${FM_MODEL_ROLE:-}" = designer ]; then
+if [ -n "${FM_PROTOTYPE_DIR:-}" ] && { [ "${FM_MODEL_ROLE:-}" = designer ] || [ "${FM_MODEL_ROLE:-}" = worker ]; }; then
   _fm_ro="$(fm_adapter_rule_path "$FM_PROTOTYPE_DIR")" || exit 64; ro+=("$_fm_ro")
 fi
 # and the pages fm-review.sh captured for it, which it copies to a folder

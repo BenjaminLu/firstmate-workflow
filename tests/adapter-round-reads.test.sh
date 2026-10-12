@@ -53,7 +53,7 @@ run_round() {
   rm -f "$d/argv"
   local role="$1" proto="${2-}"
   FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" round_env "$role" "$proto" \
-    "$adapter" run "$d/prompt" "$st/worktrees/T-Z" "$d/log" >"$d/out" 2>&1
+    "$adapter" run "$d/prompt" "$st/worktrees/T-Z" "$d/log" >"$d/out" 2>&1 || cat "$d/out" >&2
   awk 'on{print;exit} $0=="--settings"{on=1}' "$d/argv" 2>/dev/null
 }
 # denied_over <settings> <path>: every deny rule that covers <path>
@@ -90,6 +90,33 @@ assert_ne "" "$(denied_over "$s" "$st/prototypes/proto-a/index.html")" "a worker
 assert_eq "false" "$(allowed "$(FM_DESIGN_SHOTS_DIR="$nr/shots" run_round worker)" "Read(/$nr/shots/**)")" \
   "and a worker gets no rule for a design round's screenshots"
 
+# --- worker: prototype readable (T-299, fail-first) --------------------------
+chmod u+w "$own_run/pinned/spec.json"
+printf '{"id":"T-1","design":{"prototype":"state/prototypes/proto-a"}}\n' > "$own_run/pinned/spec.json"
+chmod 0444 "$own_run/pinned/spec.json"
+s="$(run_round worker "$st/prototypes/proto-a")"
+assert_eq "started:" "$(readable "$s" "$st/prototypes/proto-a/index.html")" 'worker: prototype readable'
+assert_eq "true" "$(allowed "$s" "Read(/$st/prototypes/proto-a/**)")" "worker has an explicit prototype read rule"
+assert_ne "" "$(denied_over "$s" "$st/prototypes/proto-b/index.html")" "worker cannot read another prototype"
+for os_ in darwin linux; do
+  out="$(FM_SANDBOX_OS=$os_ round_env worker "$st/prototypes/proto-a" \
+    "$ROOT/bin/fm-sandbox.sh" profile --policy="$nr/reads.json" --root="$st/worktrees/T-Z" --vendor=claude 2>&1)"
+  assert_eq 0 "$?" "$os_: worker may read its pinned prototype"
+  if [ "$os_" = darwin ]; then
+    assert_contains "$out" "(deny file-write* (subpath \"$st/prototypes/proto-a\"))" "worker prototype is read-only"
+  else
+    assert_contains "$out" "--ro-bind
+$st/prototypes/proto-a
+$st/prototypes/proto-a" "worker prototype is bound read-only"
+  fi
+  out="$(FM_SANDBOX_OS=$os_ round_env worker "$st/prototypes/proto-b" \
+    "$ROOT/bin/fm-sandbox.sh" profile --policy="$nr/reads.json" --root="$st/worktrees/T-Z" --vendor=claude 2>&1)"
+  assert_ne 0 "$?" "$os_: worker cannot select an unpinned prototype"
+done
+chmod u+w "$own_run/pinned/spec.json"
+printf '{"id":"T-1"}\n' > "$own_run/pinned/spec.json"
+chmod 0444 "$own_run/pinned/spec.json"
+
 # --- design: prototype readable --------------------------------------------
 mkdir -p "$nr/shots"
 s="$(FM_DESIGN_SHOTS_DIR="$nr/shots" run_round designer "$st/prototypes/proto-a")"
@@ -116,7 +143,7 @@ $st/prototypes/proto-a
 $st/prototypes/proto-a" "the Linux sandbox binds the task's prototype read-only"
 assert_lacks "$binds" "proto-b" "and binds no other prototype"
 # a prototype folder that is not one directly under the round's own
-# state/prototypes/, or one a round that is not a designer's names, refuses
+# state/prototypes/, or one a worker without a pinned prototype names, refuses
 # the sandbox profile, so no round starts with it
 for os_ in darwin linux; do
   out="$(FM_SANDBOX_OS=$os_ round_env designer "$st/evidence" \
@@ -125,7 +152,7 @@ for os_ in darwin linux; do
   assert_contains "$out" "state/prototypes/" "and says where a prototype folder must be"
   out="$(FM_SANDBOX_OS=$os_ round_env worker "$st/prototypes/proto-a" \
     "$ROOT/bin/fm-sandbox.sh" profile --policy="$nr/reads.json" --root="$st/worktrees/T-Z" --vendor=claude 2>&1)"
-  assert_ne 0 "$?" "$os_: a round that is not a designer's may not name one"
+  assert_ne 0 "$?" "$os_: a worker without a pinned prototype may not name one"
 done
 
 finish

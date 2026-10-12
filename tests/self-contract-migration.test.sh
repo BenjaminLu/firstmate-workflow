@@ -15,9 +15,17 @@ cat > "$stubs/bun" <<'STUB'
 [ "$*" = 'install --frozen-lockfile' ] || exit 90
 touch installed
 STUB
-cat > "$stubs/bunx" <<'STUB'
+pwlog="$stubs/playwright-test.log"
+: > "$pwlog"
+# A `playwright test` call is logged, and passes only on the changed tree.
+cat > "$stubs/bunx" <<STUB
 #!/usr/bin/env bash
-[ "$*" = 'playwright install chromium' ] || exit 91
+if [ "\$1 \$2" = 'playwright test' ]; then
+  echo "\$*" >> '$pwlog'
+  if [ "\$(cat bin/value)" = new ]; then echo '    spec sees new value ok'; exit 0; fi
+  echo '    spec sees new value FAIL'; exit 1
+fi
+[ "\$*" = 'playwright install chromium' ] || exit 91
 touch browser-installed
 STUB
 chmod +x "$stubs/bun" "$stubs/bunx"
@@ -42,7 +50,7 @@ expected = {
     'setup': 'bun install --frozen-lockfile && bunx playwright install chromium',
     'check': 'bin/ci.sh', 'check_env': {'FM_CI_MAX_SECONDS': '600'},
     'tests': ['tests/**', '*.test.*', '*.spec.*'],
-    'test': 'case {file} in *.test.sh) bash {file} ;; esac',
+    'test': 'case {file} in *.test.sh) bash {file} ;; *.spec.ts) bunx playwright test {file} --reporter=./tests/e2e/lib/failfirst-reporter.ts ;; esac',
     'docs': ['design/**', 'README.md', 'LICENSE', 'CODE_OF_CONDUCT.md',
              'CONTRIBUTING.md', 'SECURITY.md', '.github/ISSUE_TEMPLATE/**',
              '.github/pull_request_template.md'],
@@ -89,6 +97,40 @@ run_gate() { "$ROOT/bin/fm-gate.sh" --repo "$d" --task T-X --branch work --only 
 assert_ok run_gate "gate 4 runs the shipped registry contract snapshot"
 run_failfirst() { (cd "$d" && bash "$ROOT/bin/fm-failfirst.sh" main) > "$d.report" 2>&1; }
 assert_ok run_failfirst "standalone fail-first runs the shipped registry contract"
+# A changed browser spec runs under the shipped pin's template (T-299).
+add_spec() { # repo
+  echo "test('spec sees new value', () => {})" > "$1/tests/value.spec.ts"
+  git -C "$1" add -A; git -C "$1" commit -qm spec
+}
+add_spec "$d"
+: > "$pwlog"
+assert_ok run_gate "gate 4 passes with a changed browser spec under a new pin"
+assert_contains "$(cat "$pwlog")" 'playwright test tests/value.spec.ts' "gate 4 runs a changed browser spec under a new pin"
+# A task pinned before T-299 keeps its frozen bash-only template until repinned.
+o="$(safe_tmpdir)"
+new_case=' *.spec.ts) bunx playwright test {file} --reporter=./tests/e2e/lib/failfirst-reporter.ts ;;'
+assert_contains "$(cat "$d/config.yaml")" "$new_case" "shipped test template names browser specs"
+python3 -c 'import sys; t = open(sys.argv[1]).read(); open(sys.argv[2], "w").write(t.replace(sys.argv[3], ""))' \
+  "$d/config.yaml" "$o/config.yaml" "$new_case"
+git -C "$o" init -q -b main
+git -C "$o" config user.email a@b.c
+git -C "$o" config user.name fixture
+mkdir -p "$o/design/tasks" "$o/bin" "$o/tests"
+echo old > "$o/bin/value"
+echo design > "$o/design/design.md"
+cp "$d/design/tasks/T-X.json" "$o/design/tasks/T-X.json"
+cp "$d/.gitignore" "$o/.gitignore"
+git -C "$o" add -A; git -C "$o" commit -qm base
+seed_spec_pin "$o" T-X
+git -C "$o" checkout -qb work
+echo new > "$o/bin/value"
+cp "$d/tests/value.test.sh" "$o/tests/value.test.sh"
+git -C "$o" add -A; git -C "$o" commit -qm feature
+add_spec "$o"
+: > "$pwlog"
+run_old_gate() { FM_GATE_LOCK="$o/gate.lock" "$ROOT/bin/fm-gate.sh" --repo "$o" --task T-X --branch work --only 4 > "$o.gate" 2>&1; }
+assert_ok run_old_gate "gate 4 passes under an existing pin's bash-only template"
+assert_eq '' "$(cat "$pwlog")" "gate 4 keeps an existing pin's bash-only test template"
 printf '\nproject:\n  check: false\n' >> "$d/config.yaml"
 git -C "$d" add config.yaml; git -C "$d" commit -qm duplicate
 assert_fail run_failfirst "standalone fail-first refuses duplicate self contract locations"
