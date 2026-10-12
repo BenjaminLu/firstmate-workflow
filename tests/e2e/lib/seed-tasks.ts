@@ -9,7 +9,7 @@ export const SEED_TASKS: {id: string, title: string, milestone: string, depends_
   {"id": "T-001", "title": "repo skeleton, the one gate, and a bash test harness", "milestone": "M0", "depends_on": []},
   {"id": "T-002", "title": "fm-emit.sh, the only writer of the event log", "milestone": "M0", "depends_on": ["T-001"]},
   {"id": "T-003", "title": "the adapter contract, the mock adapter, and the contract test", "milestone": "M0", "depends_on": ["T-001"]},
-  {"id": "T-004", "title": "fm-gate.sh, the seven gates", "milestone": "M0", "depends_on": ["T-002", "T-003"]},
+  {"id": "T-004", "title": "fm-gate.sh, the merge gates", "milestone": "M0", "depends_on": ["T-002", "T-003"]},
   {"id": "T-005", "title": "fm-worker.sh: worktree, adapter, commit, pull request", "milestone": "M0", "depends_on": ["T-003", "T-004"]},
   {"id": "T-006", "title": "fm-review.sh: the reviewer sees only the diff", "milestone": "M0", "depends_on": ["T-005"]},
   {"id": "T-007", "title": "fm-dispatch.sh: the DAG, the limit, and the green-light gate", "milestone": "M0", "depends_on": ["T-005", "T-006"]},
