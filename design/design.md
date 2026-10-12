@@ -471,6 +471,22 @@ New requests require `--details <file>` with this shared data contract:
 with `description`, `pros`, `cons`. Each string is bounded to 2000 code points.
 Firstmate authors both locales on dispatch cards; the self-project merge fallback
 reuses those approved details, rather than inferring intent from task titles.
+A dispatch or repin card asks the captain to approve a task spec, so its spec
+fields come from that spec, not from firstmate's copy (T-301). With `--purpose
+dispatch` or `--purpose repin`, `fm-decide.sh` reads the task's local spec file,
+`$FM_TASKS_DIR/<task>.json`, never a pin; a missing file or one whose `id` is
+not `--task` exits 65. Each of the eight explain keys (`intent`, `why`,
+`scope_in`, `scope_out`, `done`, `notes`, `before_nodes`, `after_nodes`) that
+the spec has is copied, in both locales, into a card that omits it. A card
+that supplies one must hold the same JSON value, else it exits 65 with
+`<lang>.<field> differs from the task spec`. Keys the spec lacks stay as
+authored, and firstmate writes the title, explanation, before, after, outcome,
+options, questions and change table. The card must then carry `intent`,
+`done`, `before_nodes` and `after_nodes`, from the spec or authored when the
+spec has no explanation, or it exits 65. This runs on a copy of the details,
+before the plain-writing and STE checks, whoever builds the card. Scope, merge
+and other cards take nothing from the spec. Pending and answered cards are not
+re-checked; the rule applies from the next `--request`.
 The board escapes data as text, diagrams use the authored before/after labels,
 and zh-CN applies the same ordered TW-to-CN table as the UI. Invalid requests
 fail before a pending record is written; existing IDs cannot be replaced.
