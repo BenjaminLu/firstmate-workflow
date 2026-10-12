@@ -7425,8 +7425,25 @@ which is running or merged, is dropped without a wake; such a PR is not gated.
 A PR closed without merging is not covered, and its results still report.
 The supervisor never launches
 a worker; dispatch remains the board's intent action or an explicit command.
-Gates and reviews run as owned children. Completion receipts ring the service;
-an interrupted write is reconciled, never replayed by a restart or idle timer.
+Gates and reviews run as owned children. Completion receipts ring the service.
+A job the autopilot started that was running when it stopped, or whose child a
+signal killed, is recorded `interrupted`, never done, and resumes from its
+breakpoint (T-293, captain rule 2026-10-11). When its PR head is unchanged, the
+next poll runs the same gate, protocol or review step again on that head and
+emits one bilingual `crew_status`, so the step that would have followed happens.
+A job stopped while acting on its result re-reads the saved receipt and finishes
+only the steps not yet done: a follow-on job records the result that started
+it, a merge card records its id on the job, and a review is one per head, so
+nothing is done twice. An interrupted review starts again only when no new
+verdict was recorded and no round of the task is live; with a recorded verdict
+it closes as superseded (`superseded_by: verdict`) and advancement acts on the
+verdict as usual. A moved head closes the job as superseded, and a closed PR as
+`closed`, exactly as stale uncertain jobs are settled; a job without a packet,
+receipt, kind, PR or head closes as `unresumable`. Queue-bound jobs stay
+uncertain. The "Autopilot stopped during a child" notice is no longer queued; on
+the first start after T-293 (`migrated_t293`), an uncertain job whose notice was
+still undelivered is treated as interrupted and the notice is closed, while a
+job whose notice reached firstmate stays uncertain for firstmate to finish.
 
 #### New task discovery and question freshness (T-180)
 

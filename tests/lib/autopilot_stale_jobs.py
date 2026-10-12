@@ -98,9 +98,11 @@ class StaleJobs(unittest.TestCase):
                 self.pilot.data['jobs'] = {}; self.pilot.data['wakes'] = {}; self.calls.clear()
                 path = self.state / ('job-' + source + '.json')
                 if source == 'restart':
+                    # T-293: a restart leaves the job interrupted, with no notice.
+                    path.write_text(json.dumps(dict(kind='gate', task='T-001', pr=old, argv=['fm-gate.sh'])))
                     self.job(state='running', path=str(path))
                     self.pilot.recover_jobs()
-                    self.assertEqual(len(self.wakes_with('Autopilot stopped during a child; reconcile its log')), 1)
+                    self.assertEqual(self.wakes_with('Autopilot stopped during a child; reconcile its log'), [])
                 elif source == 'consume':
                     path.with_suffix('.result.json').write_text(json.dumps(dict(kind='gate', task='T-001',
                         pr=old, code=0, base=BASE, round=1)))
@@ -111,7 +113,7 @@ class StaleJobs(unittest.TestCase):
                     with patch.object(self.pilot, 'start_job', side_effect=OSError('launch failed')):
                         self.pilot.launch_review('T-001', old)
                 (job,) = self.pilot.data['jobs'].values()
-                self.assertEqual(job['state'], 'uncertain')
+                self.assertEqual(job['state'], 'interrupted' if source == 'restart' else 'uncertain')
                 if source == 'review-launch':
                     self.assertEqual(job['path'], '')
                 self.pull()

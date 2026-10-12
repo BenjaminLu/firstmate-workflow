@@ -63,9 +63,16 @@ class Jobs(unittest.TestCase):
             pilot.data['jobs'] = {'old':dict(task='T-001', state='running', path=tmp+'/missing.json')}
             pilot.save()
             restored = A.Pilot(ctx)
+            spawned, emitted = [], []
+            restored.spawn = lambda *a: spawned.append(a)
+            restored.emit = lambda *a, **kw: emitted.append(a)
             restored.recover_jobs(); restored.recover_jobs()
-            self.assertEqual(restored.data['jobs']['old']['state'], 'uncertain')
-            self.assertEqual(len(restored.data['wakes']), 1)
+            # T-293: with no packet it cannot run again, so it closes without a notice.
+            self.assertEqual(restored.data['jobs']['old']['state'], 'superseded')
+            self.assertEqual(restored.data['jobs']['old']['superseded_by'], 'unresumable')
+            self.assertEqual(restored.data['wakes'], {})
+            self.assertEqual(spawned, [])
+            self.assertEqual([e[0] for e in emitted], ['crew_status'])
 
 
 if __name__ == '__main__': unittest.main()
