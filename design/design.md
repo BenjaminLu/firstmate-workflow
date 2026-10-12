@@ -1784,7 +1784,7 @@ is retroactive. The capture needs a browser wherever it runs: the project's
 T-297 removed the spec preflight; the next subsection replaces this one. This
 heading stays only so that older task prompts that anchor it still resolve.
 
-### The worker's first-round plan (T-297)
+### The worker's first-round plan (T-297, T-302)
 
 The spec preflight of T-185, T-270 and T-288 is removed. A review of each spec
 by a fresh model before dispatch did not settle (T-285 took eleven passes; one
@@ -1824,18 +1824,57 @@ that the worker's first round now checks the spec.
 **The first round.** In its first round on a new task, and in its first round
 after a repin, the worker reads the spec and the code before it changes a file.
 Such a round is one where no earlier worker run of the same project and task
-had the same bytes in its `pinned/spec.json` (`bin/lib/fm_first_round.py`); its
-prompt carries a "Read first, then ask or plan" section. The worker asks through
-the existing question path (a standalone `ASK-SPEC:<task>` in `.fm-say.md`) and
-stops when the spec is unclear, does not match the code, changes a rule but
-does not say what happens to records and tasks already in flight, or lists
-design/design.md without naming the numbered section (§N or §N.M) it edits.
-Otherwise it writes a short plan (files it will change, how it proves done)
-into its round report and goes on in the same round. Firstmate reads the plan;
-a plan does not prove that the worker read the code. A task that changes a
-validation, lint, gate, schema or record rule must still say what happens to
-records and tasks already in flight, and missing or untested migration in a
-rule-changing diff is a REJECT finding.
+had the same bytes in its `pinned/spec.json` (`bin/lib/fm_first_round.py`). A
+task that changes a validation, lint, gate, schema or record rule must still
+say what happens to records and tasks already in flight, and missing or
+untested migration in a rule-changing diff is a REJECT finding.
+
+**One plan, accepted before the build (T-302).** On T-299 two questions that
+one reading could find came in two rounds, and a done line that the existing
+CI could not prove reached review; the task took about ten worker rounds. The
+captain's rule (2026-10-12): list every question at once, and fix the whole
+class of a problem. On the self project the first round on a spec's bytes
+writes `plan-required` into its run directory and its prompt carries a "Read
+first, then return one plan" section. That round changes no file and returns
+one plan in `.fm-say.md`: every question at once, under one standalone
+`ASK-SPEC:<task>` line (asked when the spec is unclear, does not match the
+code, changes a rule without saying what happens to records and tasks in
+flight, or lists design/design.md without its numbered section); the files it
+will change; and one table row per acceptance line, numbered by its position,
+naming the test that proves it, where it runs (CI job or suite) and how it
+fails on the base. A Why or What row may point to the Done row that proves it.
+The launcher (`bin/lib/fm_plan.py`) refuses a round that changes a file: it
+saves the change at `state/rescued/<name>.patch`, restores the tree, emits
+`gate_failed`, exits non-zero and pushes nothing. It refuses a plan without a
+row for a done line and names the line. A plan that passes is kept as a local
+report record marked with the sha256 of its spec bytes; the round pushes
+nothing and opens no pull request, and the next round is asked for a plan
+again until one passes. Firstmate accepts it outside any round with
+`bin/lib/fm-evidence.sh --task <id> accept-plan --round N --head H --file
+<answers>`, a `plan-accept` record holding the plan's sha256 and the answers.
+It goes to the captain only when an answer changes what or why. The launcher
+starts no build round on a kept plan with no such record (exit 65, before the
+adapter); the build round's prompt shows the answers.
+
+**Whole-class fixes (T-302).** A round that fixes a problem finds every other
+place in the change with the same cause and fixes it too. On a task held to
+the plan, the launcher treats as a fix round the build round after an accepted
+plan with answers, the round after a REJECT (no worker report since the latest
+verdict), and a round with a firstmate brief bound to its round and head once
+the build has started. Its prompt says so; a fix round that changes files
+must report at least one `SWEPT:<task>` block, each with a `searched:` line
+and `found N, fixed M`, or it is refused before anything is published. Its
+report is kept marked as refused, so the next round is still a fix round.
+
+**Rounds already in flight (T-302).** Only a run whose first round on these
+spec bytes wrote `plan-required` is held to the plan and fix-round rules, so
+a task and pull request started under an older launcher go on as before.
+External projects, later rounds, review and a rebuilt round's publication of
+its rebuild are unchanged; worker file changes in a rebuilt plan round are
+refused as above. Suites written before T-302 set `FM_PLAN_FIRST=0`
+(`tests/lib.sh`), which keeps the build-first round of T-297: its prompt
+carries the "Read first, then ask or plan" section, and the worker asks or
+writes a short plan and builds in the same round.
 
 **Work already in flight.** Existing pins, running workers, open pull requests
 and stored `spec-preflight` receipts keep working. Receipts stay immutable and
@@ -2005,7 +2044,8 @@ an ordinary no-ASK APPROVE need not re-issue the list.
    objection is a protocol violation.
 3. The latest list is the standing one. It never drops an open item; an item
    leaves only by being marked done. The worker fixes every open item in one
-   pass.
+   pass, each as a class: every place in the change with the same cause, listed
+   in its report's `SWEPT:<task-id>` block (T-302, §6).
 4. `ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an
    unclear one after a REJECT. Before edits, without a delayed round threshold, the worker writes it in
    `.fm-say.md` for script publication before touching a line and waits; that

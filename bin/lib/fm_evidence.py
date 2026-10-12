@@ -20,7 +20,8 @@ import sys
 import tempfile
 import uuid
 
-KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict', 'projection', 'spec-preflight', 'experimental-evidence'}
+KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict', 'projection', 'spec-preflight', 'experimental-evidence',
+         'plan-accept'}
 
 
 def numbered_unquoted(text):
@@ -808,10 +809,23 @@ def summary(store):
     return result
 
 
+def accept_plan(store, round_number, head, answers):
+    """Firstmate accepts the plan a first round returned, with its answers (T-302)."""
+    plans = [r for r in store.records() if r['kind'] in ('worker-report', 'ask') and r.get('plan')
+             and r['round'] == round_number and r['head'] == head]
+    if not plans:
+        raise Refused(f'no plan was returned in round {round_number} at {head or "no head"}')
+    plan = plans[-1]
+    return store.append('plan-accept', round_number, 'firstmate', head, answers, authorized=True,
+                        plan_sha256=hashlib.sha256(plan['text'].encode()).hexdigest(),
+                        plan_spec_sha256=plan['plan'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin', 'summary',
-                                            'experiment-retain', 'fixes-brief', 'avoid-reviewer', 'follow-ups'])
+                                            'experiment-retain', 'fixes-brief', 'avoid-reviewer', 'follow-ups',
+                                            'accept-plan'])
     parser.add_argument('--state', required=True)
     parser.add_argument('--project', required=True)
     parser.add_argument('--task', required=True)
@@ -829,14 +843,17 @@ def main():
     parser.add_argument('--external', action='store_true', default=None)
     parser.add_argument('--signature')
     parser.add_argument('--lane', choices=['code', 'design'])
+    parser.add_argument('--plan', default='')
+    parser.add_argument('--refused', action='store_true')
     args = parser.parse_args()
-    if args.command == 'experiment-retain':
+    if args.command in ('experiment-retain', 'accept-plan'):
         # Inline admission before importing the optional module (including its
         # bytecode cache writes), any state initialization or binding command.
         if (os.environ.get('FM_ROLE') in ('worker', 'reviewer')
                 or os.environ.get('FM_IN_ROUND') == '1'
                 or os.environ.get('FM_RUN_DIR')):
-            raise ValueError('experimental retention requires the outside-round operator')
+            raise ValueError('experimental retention requires the outside-round operator'
+                             if args.command == 'experiment-retain' else 'accepting a plan requires the outside-round operator')
     store = Store(args.state, args.project, args.task, external=args.external)
     if args.command == 'experiment-retain':
         from fm_experimental_evidence import retain
@@ -855,7 +872,12 @@ def main():
     elif args.command == 'report':
         text = Path(args.file).read_text()
         kind = 'ask' if re.search(r'^(?:ASK-[A-Z-]+|SCOPE-BLOCKED):' + re.escape(args.task) + r'\s*$', text, re.M) else 'worker-report'
-        store.append(kind, args.round, args.actor, args.head, text)
+        # T-302: a first round's plan names the spec bytes it plans for; a
+        # round the launcher refused is kept, never counted as delivered
+        fields = dict({'plan': args.plan} if args.plan else {}, **({'refused': True} if args.refused else {}))
+        store.append(kind, args.round, args.actor, args.head, text, **fields)
+    elif args.command == 'accept-plan':
+        accept_plan(store, args.round, args.head, Path(args.file).read_text())
     elif args.command == 'verdict':
         record = retain_verdict(store, args)
         Path(args.run, 'evidence-record.json').write_text(json.dumps(record))

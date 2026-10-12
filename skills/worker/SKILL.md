@@ -172,21 +172,43 @@ that starts a background process on purpose stops it or ends its owner:
 `bin/ci.sh` turns a suite red for any process still running when it ends
 (T-151).
 
-## Read first, then ask or plan
+## Read first, then return one plan
 
 Your first round on a new task, and your first round after a repin, starts by
-reading: the approved spec in `pinned/` and the code it touches, before you
-change any file. The prompt says when a round is such a round. No reviewer
-checks a spec before dispatch any more (T-297); this check is yours.
+reading: the approved spec in `pinned/` and the code it touches. The prompt
+says when a round is such a round. No reviewer checks a spec before dispatch
+any more (T-297); this check is yours.
 
-- Ask, and stop, when the spec is unclear, does not match the code, changes a
-  rule but does not say what happens to records and tasks already in flight,
-  or lists `design/design.md` without naming the numbered section (§N or §N.M)
-  it edits. Write the standalone `ASK-SPEC:<task>` marker and the question to
-  `.fm-say.md`, and change no file.
-- Otherwise write a short plan into `.fm-say.md` before you change a file: the
-  files you will change and how you will prove the task is done. Then do the
-  work in the same round.
+On the self project that round changes no file (T-302). It returns one plan in
+`.fm-say.md`, and it returns one even when you have nothing to ask:
+
+- Every question you have, all at once, under one standalone `ASK-SPEC:<task>`
+  line. Ask when the spec is unclear, does not match the code, changes a rule
+  but does not say what happens to records and tasks already in flight, or
+  lists `design/design.md` without naming the numbered section (§N or §N.M)
+  it edits. Never keep a question back for a later round.
+- The files you will change.
+- One table row for each acceptance line, numbered by its position in the
+  spec: `| N | the test that proves it | where it runs (CI job or suite) | how
+  it fails on the base |`. A Why or What line may point to the Done row that
+  proves it (`see 6`).
+
+The launcher refuses a first round that changes a file: it saves the change at
+`state/rescued/<name>.patch`, restores the tree and pushes nothing. It also
+refuses a plan that has no row for a done line, and names that line. Firstmate
+accepts the plan and records its answers; only then does the next round build,
+and its prompt shows the answers. The launcher starts no build round on a plan
+that has not been accepted.
+
+When a round fixes a problem (a review finding, a red CI line, an answer to a
+question), fix the whole class: every other place in the change with the same
+cause. Its report lists the places you checked in a `SWEPT:<task>` block, as in
+"Every finding is a class" above. On a task held to the plan, a fix round
+that changes files without a `SWEPT:` block that has a `searched:` line and a
+`found N, fixed M` line is refused before anything is published.
+
+External projects keep the T-297 round: ask and stop, or write a short plan
+into `.fm-say.md` and do the work in the same round.
 
 ## Rounds
 

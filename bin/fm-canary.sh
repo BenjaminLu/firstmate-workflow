@@ -569,6 +569,15 @@ PY_AUTHOR
       failed=1
       return 1
     fi
+    # T-302: a self round on fresh spec bytes only plans; the hostile drill
+    # needs a build round, so firstmate's acceptance of the fixture's plan is
+    # recorded first, through the same evidence path firstmate uses.
+    if ! (cd "$engine" && "${scrub[@]}" HERDR_ENV=0 FM_ROOT="$engine" \
+          bash "$engine/bin/lib/fm-fixture-plan.sh" "$engine" "$engine" "$id") >/dev/null; then
+      record_destroy "$label" "$mode" "$id" 0 'could not accept the canary self fixture plan'
+      failed=1
+      return 1
+    fi
   fi
   out="$(cd "$engine" \
     && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct \
