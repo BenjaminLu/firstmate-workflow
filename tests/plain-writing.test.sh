@@ -103,6 +103,9 @@ assert_eq 'The board shows the card.' "$(jq -r '.details.en.how[0].text' "$pendi
 before_cards="$(cd "$d/state" && find pending decisions -type f -name '*.json' -exec cksum {} + 2>/dev/null | sort)"
 own="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --allocate --task T-001)"
 jq '.en.title="Dispatch T-001: The check passes." | ."zh-TW".title="派工 T-001：檢查通過。"' "$d/term-listed.json" > "$d/dispatch.json"
+# T-301: a dispatch card needs its task spec; with no explain the card keeps its own fields
+mkdir -p "$d/design/tasks"
+printf '{"id":"T-001","scope":["src/**"],"acceptance":["The check passes."]}\n' > "$d/design/tasks/T-001.json"
 pending="$(request --request "$own" --task T-001 --purpose dispatch --details "$d/dispatch.json")"
 assert_eq 0 "$?" 'a dispatch card with why, how and glossary is raised'
 jq '. + {chosen:"A"}' "$pending" > "$d/state/decisions/$own.json"

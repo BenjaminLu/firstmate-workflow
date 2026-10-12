@@ -6,6 +6,7 @@
 #   fm-decide.sh --request D-firstmate-workflow-T047-1 --task T-047 --kind merge \
 #                --details details.json --pr 9 [--project <name>]
 #   fm-decide.sh --request <id> --task <id> --details details.json [--purpose <p>]
+#                (dispatch and repin take their spec fields from the task spec: T-301)
 #   fm-decide.sh --request D-SK-001 --task SK-001 --kind choice --title "..."
 #   fm-decide.sh --request D-1096 --kind merge-untracked --pr 96 --details details.json
 #   fm-decide.sh --request D-1000 --kind choice --purpose retro --retro-run <run-id> --details details.json
@@ -467,6 +468,19 @@ if [ "$MODE" = request ]; then
       jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null && {
         echo 'fm-decide: change_points, door and check apply only to tracked merge cards; nothing was written' >&2; exit 65;
       }
+    fi
+    # T-301: a dispatch or repin card asks the captain to approve the task's
+    # local spec, so its spec fields come from that spec, not from a copy.
+    # An omitted field is copied, a differing one is refused by name, and
+    # the card must then carry intent, done and both node lists. A copy of
+    # the details is changed, never the author's file. Before every check.
+    if [ "$PURPOSE" = dispatch ] || [ "$PURPOSE" = repin ]; then
+      [ -r "$HERE/lib/fm_card_spec.py" ] || { echo "fm-decide: missing $HERE/lib/fm_card_spec.py; nothing was written" >&2; exit 70; }
+      spec_details="$(mktemp)" || exit 70
+      trap 'rm -f "$spec_details"' EXIT
+      python3 "$HERE/lib/fm_card_spec.py" --task "$TASK" --tasks-dir "${FM_TASKS_DIR:-$REPO/design/tasks}" \
+        --details "$DETAILS" > "$spec_details" || exit 65
+      DETAILS="$spec_details"
     fi
     # T-270: every card carries why, how and a glossary list and passes the
     # plain-writing checks, for every kind, before anything is read or written.

@@ -71,6 +71,9 @@ assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-98 --task T-1 --deta
 assert_fail "test -f '$d/state/pending/D-98.json'" "invalid payload creates no partial card"
 
 # T-227: purpose is optional, recorded only for choice cards with details.
+# T-301: dispatch and repin cards take their spec fields from the task spec.
+mkdir -p "$d/design/tasks"
+python3 "$ROOT/tests/lib/ste_cases.py" fixture pass | jq '{id:"T-227",explain:map_values({intent,done,before_nodes,after_nodes})}' > "$d/design/tasks/T-227.json"
 for purpose in dispatch repin scope skill decision; do
   # Distinct ids even for equally long purpose names.
   case "$purpose" in dispatch) purpose_id=2271;; repin) purpose_id=2272;; scope) purpose_id=2273;; skill) purpose_id=2274;; decision) purpose_id=2275;; esac
