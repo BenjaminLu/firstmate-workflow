@@ -2,6 +2,7 @@
 # Real executable branches from bin/fm-worker.sh and bin/fm-review.sh.
 # Shared block harness: tests/lib/crew_blocks.py
 set -uo pipefail
+export HERDR_ENV=0   # T-305: it runs fm-worker.sh, which can raise a door card
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"

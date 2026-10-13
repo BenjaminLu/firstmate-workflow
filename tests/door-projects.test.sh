@@ -69,6 +69,14 @@ jq '.door = "two-way"' "$c/tasks/T-Z.json" > "$c/bad.json"; mv "$c/bad.json" "$c
 python3 "$ROOT/bin/lib/fm_card_spec.py" --task T-Z --tasks-dir "$c/tasks" --details "$c/details.json" \
   --config "$ROOT/config.yaml" --purpose dispatch > "$c/out" 2>&1
 assert_contains "$(cat "$c/out")" 'the spec door is not a kind and a reason' 'a malformed door is refused by name'
+# An external dispatch card (fm-decide passes --project and --state) shows the
+# door from the project's lists: with no approved list, the no-list reason.
+jq --argjson door "$TWO" '.door = $door' "$c/tasks/T-Z.json" > "$c/two.json"; mv "$c/two.json" "$c/tasks/T-Z.json"
+printf 'door:\n  base:\n    - "*.sql"\nprojects:\n  app:\n    github: owner/app\n' > "$c/config.yaml"
+mkdir -p "$c/state"
+shown="$(python3 "$ROOT/bin/lib/fm_card_spec.py" --task T-Z --tasks-dir "$c/tasks" --details "$c/details.json" \
+  --config "$c/config.yaml" --project app --state "$c/state" --purpose dispatch | jq -r '.en.door | .kind + "|" + .reason')"
+assert_contains "$shown" 'one-way|Project app has no approved sensitive list.' 'an external dispatch card shows the no-list door'
 safe_rm_rf "$c"
 
 # --- door: base list applies to every project (the self project) ----------
@@ -102,6 +110,26 @@ safe_rm_rf "$g"; rm -f "$g.out"
 gate_head src/value2
 assert_eq 0 "$gate_rc" 'a two-way head inside its lists skips fail-first'
 safe_rm_rf "$g"; rm -f "$g.out"
+
+# CI reads the same rule: where the base config declares door.base, a path no
+# list can classify makes a two-way pull request run fail-first.
+ci="$(safe_tmpdir)"
+git -C "$ci" init -q -b main; git -C "$ci" config user.email a@b.c; git -C "$ci" config user.name fixture
+mkdir -p "$ci/bin"; echo old > "$ci/bin/run.sh"
+printf 'door:\n  base:\n    - "*.sql"\nproject:\n  test: bash {file}\n' > "$ci/config.yaml"
+git -C "$ci" add -A; git -C "$ci" commit -qm base
+jq -n --arg b "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fm_door
+print(fm_door.body_line({"kind": "two-way", "reason": "A revert undoes it."}, 1))' "$ROOT/bin/lib")" \
+  '{pull_request:{body:$b}}' > "$ci.event.json"
+git -C "$ci" checkout -qb work; echo new > "$ci/bin/run.sh"; git -C "$ci" commit -qam behaviour
+out="$(cd "$ci" && GITHUB_EVENT_PATH="$ci.event.json" bash "$ROOT/bin/fm-failfirst.sh" main 2>&1)"
+assert_eq 0 "$?" 'CI passes a two-way head inside its lists'
+mkdir -p "$ci/tools"; echo x > "$ci/tools/run"; git -C "$ci" add -A; git -C "$ci" commit -qm tools
+out="$(cd "$ci" && GITHUB_EVENT_PATH="$ci.event.json" bash "$ROOT/bin/fm-failfirst.sh" main 2>&1)"
+# Fail-first: ci() read only the sensitive list, so the head stayed two-way.
+assert_eq 1 "$?" 'CI runs fail-first for an unclassified path'
+assert_contains "$out" 'The diff adds `tools`, a new top-level path that no list can classify.' 'and names the path'
+safe_rm_rf "$ci"; rm -f "$ci.event.json"
 
 # --- door: unclassified path asks the captain (what counts) ----------------
 # A new top-level path, a rename and a submodule: each makes a two-way head
@@ -139,6 +167,7 @@ assert_eq ok "$(ran test_hand_edited_list_counts_as_no_list)" 'a hand-edited lis
 assert_eq ok "$(ran test_missing_door_asks_the_captain)" 'door: missing door asks the captain (external)'
 assert_eq ok "$(ran test_unclassified_path_asks_the_captain)" 'door: unclassified path asks the captain'
 assert_eq ok "$(ran test_base_list_applies_to_an_external_project)" 'door: base list applies to every project (external)'
+assert_eq ok "$(ran test_old_external_pin_keeps_one_way)" 'a pin written before T-305 keeps its path'
 assert_eq ok "$(ran test_missing_engine_config_pins_as_before)" 'an engine with no config.yaml pins an external task as before'
 grep -q '^OK$' "$x/out" || tail -60 "$x/out"
 safe_rm_rf "$x"

@@ -356,8 +356,9 @@ def body_door(body):
 
 
 def ci(event, repo, base_ref, head):
-    """CI's door: the PR body's, one-way when the diff touches a sensitive path.
-    The sensitive list is the base's config.yaml, never the head's."""
+    """CI's door: the PR body's, one-way when the diff touches a sensitive path
+    or, where the base config declares door.base, a path no list can classify.
+    The lists are the base's config.yaml, never the head's."""
     try:
         body = (json.loads(Path(event).read_text()).get('pull_request') or {}).get('body') or ''
     except (OSError, ValueError, AttributeError):
@@ -371,6 +372,9 @@ def ci(event, repo, base_ref, head):
     for path in changed(repo, base_ref, head):
         if matched(path, globs):
             return dict(kind='one-way', said=said, forced_by=path)
+    if asking(config):
+        for path, why in odd_paths(repo, base_ref, head):
+            return dict(kind='one-way', said=said, forced_by=why.get('path', path), unclassified=why['en'])
     return dict(kind='two-way', said=said, forced_by=None)
 
 
@@ -583,7 +587,7 @@ def list_details(project, task, globs, config_text):
             after=f'清單是 {shown}，加在基本清單之上。',
             outcome='firstmate 把清單寫進 config.yaml，並保存你的回答。',
             options=dict(A=dict(description='核准這份清單。', pros='這個專案的任務可以走兩種流程。',
-                                cons='清單漏掉的路徑可能走 two-way 流程。'),
+                                cons='清單漏掉的路徑會走 two-way 流程。'),
                          B=dict(description='先修改清單。', pros='清單更符合專案。', cons='任務要等新卡。'),
                          C=dict(description='不設清單。', pros='不做任何改動。', cons='這個專案的每個任務都要等卡。')),
             intent=[dict(kind='step', text=f'為 {task} 核准 {project} 的敏感清單。')],

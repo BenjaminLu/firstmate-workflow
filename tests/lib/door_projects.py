@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
+os.environ['HERDR_ENV'] = '0'   # no real Herdr notice from a card this suite raises
 root = Path(sys.argv[1])
 sys.path.insert(0, str(root / 'bin/lib'))
 from fm_onboard import approve, infer
@@ -131,19 +132,34 @@ else: sys.exit(1)
         (self.state / 'decisions' / (ident + '.json')).write_text(json.dumps(dict(
             id=ident, task=task, project='app', kind='choice', chosen=chosen, ts='2026-10-13T01:00:00Z')))
 
+    def decide(self, *args):
+        return subprocess.run([str(self.engine / 'bin/fm-decide.sh'), '--repo', str(self.engine), *args],
+                              env=self.env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+
     def approve_list(self, globs):
-        """The list goes in only through an answered card: propose, A, apply."""
+        """The list goes in only through an answered card: propose, request, A, apply."""
+        allocated = self.decide('--allocate', '--task', 'T-305', '--project', 'app')
+        self.assertEqual(allocated.returncode, 0, allocated.stderr)
+        ident = allocated.stdout.strip()
         p = self.door('propose-list', '--state', str(self.state), '--project', 'app', '--task', 'T-305',
-                      '--id', 'D-app-T305-90', '--globs', json.dumps(globs), '--config', str(self.engine / 'config.yaml'))
+                      '--id', ident, '--globs', json.dumps(globs), '--config', str(self.engine / 'config.yaml'))
         self.assertEqual(p.returncode, 0, p.stderr)
         details = json.loads(p.stdout)
         self.assertIn('src/keys/**', details['en']['after'])
-        refused = self.door('apply-list', '--state', str(self.state), '--project', 'app', '--id', 'D-app-T305-90',
+        # the proposal is a card fm-decide accepts, not text that only looks like one
+        built = self.scratch / 'list-details.json'
+        built.write_text(p.stdout)
+        requested = self.decide('--request', ident, '--task', 'T-305', '--project', 'app',
+                                '--purpose', 'decision', '--details', str(built))
+        self.assertEqual(requested.returncode, 0, requested.stdout + requested.stderr)
+        self.assertTrue((self.state / 'pending' / (ident + '.json')).is_file(), 'the list card is pending')
+        refused = self.door('apply-list', '--state', str(self.state), '--project', 'app', '--id', ident,
                             '--config', str(self.engine / 'config.yaml'))
         self.assertEqual(refused.returncode, 65, 'a list without a captain A is not written')
         self.assertNotIn('sensitive', (self.engine / 'config.yaml').read_text())
-        self.answer('D-app-T305-90', 'T-305')
-        p = self.door('apply-list', '--state', str(self.state), '--project', 'app', '--id', 'D-app-T305-90',
+        self.answer(ident, 'T-305')
+        (self.state / 'pending' / (ident + '.json')).unlink()
+        p = self.door('apply-list', '--state', str(self.state), '--project', 'app', '--id', ident,
                       '--config', str(self.engine / 'config.yaml'))
         self.assertEqual(p.returncode, 0, p.stderr)
 
@@ -302,6 +318,39 @@ else: sys.exit(1)
         self.assertIn('config.yaml has no projects: block', p.stderr)
         self.assertNotIn('Traceback', p.stderr)
 
+
+    # a pin written before T-305 keeps its path (T-185: the old record format runs)
+    def test_old_external_pin_keeps_one_way(self):
+        from fm_spec_pins import Pins
+        self.spec(TWO)
+        config = self.engine / 'config.yaml'
+        config.write_text(CONFIG.replace('door:\n  base:\n    - ".github/**"\n    - "**/migrations/**"\n'
+                                         '    - "*.sql"\n', ''))
+        self.assertNotIn('door:', config.read_text())
+        target = self.scratch / 'target'
+        self.run_ok('git', 'clone', '-q', '-b', 'trunk', str(self.remote), str(target))
+        pin = Pins(dict(FM_ENGINE_ROOT=str(self.engine), FM_TARGET_ROOT=str(target), FM_STATE_DIR=str(self.state),
+                        FM_EXTERNAL='1', FM_PROJECT='app', FM_BASE='trunk', FM_TASKS_DIR=str(self.home / 'tasks'),
+                        FM_DESIGN=str(self.home / 'design.md')), 'T-305').create()
+        self.assertFalse({'door_lists', 'door_ask'} & set(pin), 'the pin has the format from before T-305')
+        config.write_text(CONFIG)
+        p = self.launch()
+        self.assertEqual(p.returncode, 0, self.output)
+        self.assertEqual(self.pin()['version'], 1, 'the launcher keeps the old pin')
+        self.assertNotIn('door_lists', self.pin())
+        prompt = Path(self.env['FM_TEST_PROMPT']).read_text()
+        # the prompt from before T-305: no door section, the external first round reads and plans
+        self.assertNotIn('two-way path', prompt)
+        self.assertNotIn('\n# The door\n', prompt)
+        self.assertIn('# Read first, then ask or plan', prompt)
+        self.assertFalse((self.state / 'door-stops').exists(), 'no stop on an old pin')
+        self.assertFalse((self.state / 'pending').exists(), 'no card on an old pin')
+        gate = subprocess.run([sys.executable, str(self.engine / 'bin/lib/fm_door.py'), 'gate', '--repo', str(target),
+                               '--base', 'trunk', '--head', 'trunk'], input=json.dumps(self.pin()), env=self.env,
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+        self.assertEqual((json.loads(gate.stdout)['kind'], json.loads(gate.stdout)['reason']),
+                         ('one-way', 'An external project keeps the one-way path.'))
 
 if __name__ == '__main__':
     unittest.main(argv=[sys.argv[0], '-v', *sys.argv[2:]])

@@ -2,6 +2,7 @@
 # Shared policy reaches real merge/checkpoint entrypoints; no network.
 set -uo pipefail
 for k in $(env | sed -nE 's/^(FM_[^=]*|HERDR_[^=]*|GH_REPO)=.*$/\1/p'); do unset "$k"; done
+export HERDR_ENV=0   # T-305: it runs fm-worker.sh, which can raise a door card
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"

@@ -1933,7 +1933,9 @@ first-round plan). Gate 4 says `fail-first does not apply to a two-way head`
 and passes; CI's `fail-first` job reads the `Door: <kind>, from pin N:` line
 the launcher rendered into the pull request body from the pin
 (`GITHUB_EVENT_PATH`), says which door it read, and skips fail-first for a
-two-way door; gate 4 reading the pin stays the authority. The review checks
+two-way door; where the base config declares `door.base` (T-305), a path no
+list can classify keeps it one-way, as at gate 4, and CI names it; gate 4
+reading the pin stays the authority. The review checks
 correctness and scope only (no fail-first, style or migration asks); a REJECT
 goes back to the worker under the same round budget (§7) as a one-way task. CI, the scope gate, the designer
 review of UI pages and the merge card stay; the captain approves every merge.

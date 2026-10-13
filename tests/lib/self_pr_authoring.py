@@ -8,6 +8,8 @@ import json, re
 from pathlib import Path
 import sys
 import unittest
+import os
+os.environ['HERDR_ENV'] = '0'   # T-305: it runs fm-worker.sh, which can raise a door card
 
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
