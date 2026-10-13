@@ -659,7 +659,7 @@ def apply_list(state, project, ident, config_path):
         raise ValueError('card ' + ident + ' has no captain A; no list was written')
     globs = check_globs(proposal['sensitive'])
     config_path = Path(config_path)
-    text = write_list(config_path.read_text(), project, globs)
+    text = write_list(config_path.read_text() if config_path.is_file() else '', project, globs)
     if project_list(text, project) != globs:
         raise ValueError('the written list does not read back; config.yaml was not changed')
     temporary = config_path.with_name('.' + config_path.name + '.' + str(os.getpid()))

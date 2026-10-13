@@ -533,8 +533,10 @@ class Pins:
             # decide records why, and its task waits on a captain card.
             import fm_door
             spec_json = json.loads(snapshots['spec']['text'])
+            # an engine with no config.yaml reads as empty: no door fields
+            engine_path = self.engine / 'config.yaml'
             engine_config = (snapshots['contract']['text'] if not self.external
-                             else (self.engine / 'config.yaml').read_text())
+                             else engine_path.read_text() if engine_path.is_file() else '')
             if fm_door.asking(engine_config):
                 pin['door'], pin['door_lists'], ask = fm_door.for_pin(
                     spec_json, engine_config, self.project, self.state, self.external)

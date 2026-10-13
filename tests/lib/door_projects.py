@@ -279,6 +279,29 @@ else: sys.exit(1)
         self.assertNotEqual(p.returncode, 0, p.stdout)
         self.assertIn('no project can remove the engine door.base list', p.stderr)
 
+    # an engine with no config.yaml pins an external task as before T-305
+    def test_missing_engine_config_pins_as_before(self):
+        from fm_spec_pins import Pins
+        self.spec(TWO)
+        (self.engine / 'config.yaml').unlink()
+        target = self.scratch / 'target'
+        self.run_ok('git', 'clone', '-q', '-b', 'trunk', str(self.remote), str(target))
+        pins = Pins(dict(FM_ENGINE_ROOT=str(self.engine), FM_TARGET_ROOT=str(target), FM_STATE_DIR=str(self.state),
+                         FM_EXTERNAL='1', FM_PROJECT='app', FM_BASE='trunk', FM_TASKS_DIR=str(self.home / 'tasks'),
+                         FM_DESIGN=str(self.home / 'design.md')), 'T-305')
+        pin = pins.create()
+        self.assertEqual(pin['version'], 1)
+        self.assertFalse({'door', 'door_lists', 'door_ask'} & set(pin), 'no door fields without an engine config')
+        # nor does applying an answered list crash on a missing config: it refuses by name
+        self.door('propose-list', '--state', str(self.state), '--project', 'app', '--task', 'T-305',
+                  '--id', 'D-app-T305-91', '--globs', json.dumps(['src/keys/**']))
+        self.answer('D-app-T305-91', 'T-305')
+        p = self.door('apply-list', '--state', str(self.state), '--project', 'app', '--id', 'D-app-T305-91',
+                      '--config', str(self.engine / 'config.yaml'))
+        self.assertEqual(p.returncode, 65, p.stderr)
+        self.assertIn('config.yaml has no projects: block', p.stderr)
+        self.assertNotIn('Traceback', p.stderr)
+
 
 if __name__ == '__main__':
     unittest.main(argv=[sys.argv[0], '-v', *sys.argv[2:]])

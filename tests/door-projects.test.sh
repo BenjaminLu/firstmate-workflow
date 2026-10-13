@@ -139,6 +139,7 @@ assert_eq ok "$(ran test_hand_edited_list_counts_as_no_list)" 'a hand-edited lis
 assert_eq ok "$(ran test_missing_door_asks_the_captain)" 'door: missing door asks the captain (external)'
 assert_eq ok "$(ran test_unclassified_path_asks_the_captain)" 'door: unclassified path asks the captain'
 assert_eq ok "$(ran test_base_list_applies_to_an_external_project)" 'door: base list applies to every project (external)'
+assert_eq ok "$(ran test_missing_engine_config_pins_as_before)" 'an engine with no config.yaml pins an external task as before'
 grep -q '^OK$' "$x/out" || tail -60 "$x/out"
 safe_rm_rf "$x"
 finish
