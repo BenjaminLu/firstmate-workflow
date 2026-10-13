@@ -12,6 +12,9 @@ sys.path.insert(0, str(code/'bin/lib'))
 from fm_lifeline import start
 from external_rebuild import ExternalRebuild
 
+# The child's own carry deadline, and the most this waits on it: the release
+# below ends the wait, so a slow runner spends time, not the deadline.
+CARRY_SECONDS = 120
 fixture = ExternalRebuild()
 child = None
 fifo_fd = None
@@ -89,18 +92,25 @@ else: raise SystemExit(1)
 ''');gh.chmod(0o755)
     env=dict(fixture.env, CARRY_CODE_LOG=str(log), CARRY_CODE_FIFO=str(fifo),
              CARRY_CODE_RELEASE=str(release), CARRY_CODE_MERGED=str(merged),
-             CARRY_CODE_HEAD=fixture.prev, FM_MERGE_CARRY_SECONDS='15', FM_MERGE_CARRY_POLL='1')
+             CARRY_CODE_HEAD=fixture.prev, FM_MERGE_CARRY_SECONDS=str(CARRY_SECONDS), FM_MERGE_CARRY_POLL='1')
     child=start(['bash',str(engine/'bin/fm-merge.sh'),'--repo',str(engine),'--project','app',
         '--task','T-223','--pr','9','--expected-head','a'*40,'--bound-signature','c'*64],
         owner=os.getpid(),env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-    assert select.select([fifo_fd],[],[],10)[0], 'carry did not reach full wait'
+    # Wait on the child itself (T-306): its signal, or its end. A fixed 10 s
+    # here, and a 15 s carry deadline the child spent on a loaded runner
+    # before the release was written, turned main red on 7b9307c8.
+    early=b''
+    while fifo_fd not in select.select([fifo_fd,child.stdout],[],[])[0]:
+        chunk=os.read(child.stdout.fileno(),4096)
+        assert chunk, 'carry ended before its full wait: '+(early+child.stdout.read()).decode()
+        early+=chunk
     assert os.read(fifo_fd,4096) == b'waiting\n', 'full carry wait signal'
     waiting_rows=[json.loads(line) for line in log.read_text().splitlines()]
     assert any(r['kind']=='binding' and '/fm-merge-carry.' in r['code'] for r in waiting_rows), waiting_rows
     for path in (binding,adoption,engine/'bin/fm-emit.sh',engine/'bin/fm-cleanup.sh'):
         path.write_text('raise SystemExit("MUTATED ENGINE")\n' if path.suffix=='.py' else '#!/usr/bin/env bash\necho MUTATED ENGINE >&2\nexit 99\n')
     release.write_text(json.dumps(dict(head=fixture.prev)))
-    output=child.communicate(timeout=15)[0].decode()
+    output=(early+child.communicate(timeout=CARRY_SECONDS)[0]).decode()
     assert child.returncode==0, output
     assert 'MUTATED ENGINE' not in output, output
     rows=[json.loads(line) for line in log.read_text().splitlines()]

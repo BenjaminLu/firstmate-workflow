@@ -139,10 +139,20 @@ ci_suite_estimates() {
   done | FM_CI_TIN="$tin" awk '
     BEGIN {
       tin = ENVIRON["FM_CI_TIN"]
-      # the last line naming a suite wins; a value that is not a plain
-      # non-negative number is no recording at all
+      # The file holds the last few runs on main (T-306), so a suite may be
+      # named more than once: it takes the median of its recordings, and
+      # one slow run on a busy runner no longer moves it to another shard.
+      # A value that is not a plain non-negative number is no recording.
       if (tin != "") while ((getline line < tin) > 0) {
-        if (split(line, f, " ") >= 2 && f[2] ~ /^[0-9]+(\.[0-9]+)?$/) rec[f[1]] = f[2] + 0
+        if (split(line, f, " ") >= 2 && f[2] ~ /^[0-9]+(\.[0-9]+)?$/) {
+          v = f[2] + 0; c = ++nrec[f[1]]
+          for (a = c - 1; a >= 1 && vals[f[1], a] > v; a--) vals[f[1], a + 1] = vals[f[1], a]
+          vals[f[1], a + 1] = v
+        }
+      }
+      for (p in nrec) {
+        c = nrec[p]
+        rec[p] = (c % 2) ? vals[p, (c + 1) / 2] : (vals[p, c / 2] + vals[p, c / 2 + 1]) / 2
       }
       # A feature split retains its share of the old measured suite until
       # main records that new path. Shares are authored from source lines;
@@ -475,25 +485,38 @@ if want_stage bash && [ "${FM_CI_ASSIGNED_OUT+set}" = set ]; then
     for i in ${shard_indices[@]+"${shard_indices[@]}"}; do printf '%s\n' "${suites[$i]}"; done
   } > "$ci_assigned_out" || exit 1
 fi
-# Slowest first, so the long ones are not the last to start. The families the
-# gate has always spent longest on lead by name; the rest follow by size,
-# which is the proxy for the rest. FM_CI_JOBS=1 keeps glob order, which is
-# the one-at-a-time run exactly as it was. Only this process's shard is
-# ordered - with no --shard, shard_indices is every suite, unchanged.
+# Slowest first, so the long ones are not the last to start. With recorded
+# timings that is the same estimate the shards were balanced by (T-306):
+# naming families and file sizes started a 460-second suite late, and the
+# shard ran past its budget waiting on it. With none recorded, the families
+# the gate has always spent longest on lead by name and the rest follow by
+# size. FM_CI_JOBS=1 keeps glob order, which is the one-at-a-time run
+# exactly as it was. Only this process's shard is ordered - with no
+# --shard, shard_indices is every suite, unchanged.
 pool_order() {
-  local i t
+  local i t est unit want=' '
   if [ "$ci_jobs" -eq 1 ]; then
     for i in "${shard_indices[@]}"; do printf '%s\n' "$i"; done
     return
   fi
-  for i in "${shard_indices[@]}"; do
-    t="${suites[$i]}"
-    case "$t" in
-      tests/herdr*.test.sh|tests/reconcile.test.sh|tests/worker*.test.sh)
-        printf '%s %s\n' 999999999 "$i" ;;
-      *) printf '%s %s\n' "$(wc -c < "$t" | tr -d ' ')" "$i" ;;
-    esac
-  done | sort -k1,1nr -k2,2n | cut -d' ' -f2
+  for i in "${shard_indices[@]}"; do want="$want$i "; done
+  while read -r est i t unit; do
+    case "$want" in *" $i "*) printf '%s %s %s\n' "$unit" "$est" "$i" ;; esac
+  done < <(ci_suite_estimates) | {
+    if read -r unit est i && [ "$unit" = s ]; then
+      { printf '%s %s\n' "$est" "$i"; while read -r unit est i; do printf '%s %s\n' "$est" "$i"; done; } |
+        sort -k1,1nr -k2,2n | cut -d' ' -f2
+    else
+      for i in "${shard_indices[@]}"; do
+        t="${suites[$i]}"
+        case "$t" in
+          tests/herdr*.test.sh|tests/reconcile.test.sh|tests/worker*.test.sh)
+            printf '%s %s\n' 999999999 "$i" ;;
+          *) printf '%s %s\n' "$(wc -c < "$t" | tr -d ' ')" "$i" ;;
+        esac
+      done | sort -k1,1nr -k2,2n | cut -d' ' -f2
+    fi
+  }
 }
 # The wall clock in milliseconds, for the suite timings (T-148): whole
 # seconds recorded every 10-second suite as 0 and every 1-second one the

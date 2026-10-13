@@ -52,3 +52,4 @@ tests/herdr-credentials.test.sh tests/herdr.test.sh 0.116286592269
 tests/herdr-transport.test.sh tests/herdr.test.sh 0.115477923338
 tests/herdr-emitstatus.test.sh tests/herdr.test.sh 0.103833090733
 tests/herdr-agentlost.test.sh tests/herdr.test.sh 0.100598415009
+tests/ci-lints-hygiene.test.sh tests/ci-lints.test.sh 0.5

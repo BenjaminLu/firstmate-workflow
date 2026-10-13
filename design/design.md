@@ -3740,8 +3740,8 @@ own slice of one gate run instead of all of it:
   themselves are validated the way `FM_CI_JOBS` is — a decimal `i/n` with
   `i` from 1 to `n`, or exit 64). Every suite's weight is in one unit,
   seconds (T-148). A suite `FM_CI_TIMINGS_IN` names (a "`path seconds`"
-  line per suite, from a previous green run's artifact) takes that value,
-  zero included: a suite recorded at 0 is fast, not unknown. A suite the
+  line per suite, from the last green runs' artifacts) takes the median of
+  its lines, zero included: a suite recorded at 0 is fast, not unknown. A suite the
   file does not name — new, or the file absent — is estimated in seconds
   as its byte size times the median seconds-per-byte of the recorded
   suites; only when no suite is recorded at all is every weight its byte
@@ -3756,6 +3756,19 @@ own slice of one gate run instead of all of it:
   split (T-130's input) are readable from the job log. Longest-first
   packing keeps every shard within the longest single suite of the mean.
 
+Balanced shards and retried steps (T-306). Shards are balanced from
+measured seconds: each suite weighs its median over main's last five green
+runs, and each shard's pool of four starts its suites slowest first by that
+same weight. `tests/ci-balanced-shards.test.sh` replays 15 recorded main runs
+(`tests/lib/ci-shard-timings.tsv`) through that split and holds every shard
+to a 480 s average and a 560 s peak, under the unchanged 600 s budget; a
+suite too long for that is split, as `tests/ci-lints.test.sh` was. Only an
+external browser-tool failure is retried: the design-capture smoke step
+runs through `bin/lib/fm-tool-retry.sh`, which reruns it once, logged by
+name, when its output shows a browser protocol error and no assertion.
+Suites, Playwright specs (`retries: 0`) and every other step are never
+retried; a flaky test is fixed at its cause.
+
 The bash stage records what each suite actually took, one "`path seconds`"
 line per suite with millisecond resolution (`12.345`; bash 5's
 `EPOCHREALTIME`, else perl's `Time::HiRes`), to `FM_CI_TIMINGS_OUT` when
@@ -3764,7 +3777,7 @@ under `FM_ROOT`, so the gate still leaves nothing behind in the tree it
 judges — and only then: the plain, flag-less run pays for none of the timing
 calls. `.github/workflows/ci.yml` runs four kinds of job: `fast`; `bash`, a
 matrix of six shards; `bun`; and `e2e`. One `bash-timings` job reads the
-previous successful main run's timings artifacts once and hands the same
+last five successful main runs' timings artifacts once and hands the same
 text to all six bash shards (best effort — a first run, a fork with no read
 access, or a `gh` failure leaves all shards using the same size fallback).
 Each uploads its observed timings as `suite-timings-<shard>`, so a slow suite
