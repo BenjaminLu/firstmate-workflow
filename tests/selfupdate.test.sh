@@ -353,8 +353,8 @@ assert_eq "### M0
 printf '{"id":"T-004",\n' > "$tt/design/tasks/T-004.json"
 assert_fail "'$FM' tasks --repo '$tt'" "and refuses, rather than printing half, when a file does not parse"
 rm -f "$tt/design/tasks/T-004.json"
-assert_contains "$("$FM" tasks --repo "$ROOT" 2>&1)" "| T-090 | one file per task, and no hand-kept copy of the task list | T-065 |" \
-  "this repository's own table prints, this task included"
+assert_contains "$("$FM" tasks --repo "$tt" 2>&1)" "| T-001 | first | — |" \
+  "the table prints again once the broken file is gone"
 
 rm -rf "$tt"
 
