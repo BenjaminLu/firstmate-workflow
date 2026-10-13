@@ -1912,8 +1912,8 @@ A two-way change can be undone by a revert; a one-way change cannot (data
 formats, deleted data, public interfaces, credentials and permissions, git
 history). The captain's rule (2026-10-13): the two take different paths. A self
 task spec names its door as `door: {"kind": "two-way" | "one-way", "reason":
-"<one line>"}`; a missing door or any other shape is one-way, and nothing is
-refused over it. `bin/lib/fm_door.py` computes the effective door once, when a
+"<one line>"}`; under T-303 a missing door or any other shape is one-way, and nothing is
+refused over it (T-305 below changes this). `bin/lib/fm_door.py` computes the effective door once, when a
 pin or repin is written, and the pin keeps it as `door: {kind, reason,
 forced_by}`. The dispatch and repin cards show it in both languages, with a
 fixed rollback line (`bin/lib/fm_card_spec.py`); an author never writes it.
@@ -1954,6 +1954,37 @@ cover. A task never switches path in the middle of a pin.
 **Unchanged.** External projects, the merge card, and tasks pinned before
 T-303 keep today's path: a pin without `door` is one-way, and a pull request
 body rendered before T-303 names no pin, so CI runs fail-first for it.
+
+**Every project (T-305).** The captain's rule (2026-10-13): every project,
+external repositories included, decides each task's door, and firstmate asks
+when it cannot. The engine config.yaml's `door.base` (CI and workflow files,
+migrations, SQL files, environment files, secrets folders) applies to every
+project and no project can remove a line; the registry refuses
+`projects.<name>.door.base`. This repository adds `door.sensitive`; an external
+project adds `projects.<name>.door.sensitive`, which counts only while it
+equals `<project state>/door-list.json`, the record `fm_door.py apply-list`
+writes after the captain's A on the card that proposed it (`propose-list`).
+Registering a project writes no list; it queues one reminder event. An
+external spec carries a door like a self spec; a pin written since T-305 keeps
+`door`, the lists it was decided with (`door_lists: {base, project}`), and, when
+it cannot decide, `door_ask: {signal, en, zh-TW}`. Firstmate's own steps follow
+it: the plan round (an external two-way pin skips the T-297 round), gate 4, the
+review depth, the pin stop. The project's reviewers, CI and branch rules stay.
+
+**Cannot decide means ask (T-305).** The worker launcher holds the pin, starts
+no round and raises one captain card (`fm_door.py card`, through
+`fm-decide.sh`), naming the path or signal in en and zh-TW, when the spec names
+no door or a malformed one, or the project has no approved list (`door_ask`;
+A takes the one-way path, B revises the spec, C parks). On a two-way pin
+written since T-305, a changed path that no list can classify (a new top-level
+path, a rename, a submodule) is handled like a listed path: gate 4 names it,
+and the round's stop raises a card that offers no other path, as does
+`DOOR-CHANGE`. A dispatch card refuses a spec with no door, or a malformed one,
+and says which: firstmate writes the spec. A scope entry wider than a listed
+path raises no card; the diff check covers it. Pins written before T-305 keep
+their path until their next repin, which decides again; no running round
+switches path. An engine config.yaml without a `door.base` list keeps the
+T-303 rules (a missing door is one-way; an external project stays one-way).
 
 ### Small changes (T-277)
 
@@ -6464,7 +6495,10 @@ ships shell and Python readers for both the top-level `project:` block and
 `projects.firstmate-workflow.project`, refusing duplicate declarations. The
 self block now lives in the registry entry (T-170, following captain's card
 D-firstmate-workflow-T050-3, 2026-10-03). Old pins
-re-derive from the location at their recorded commit without repinning. Never
+re-derive from the location at their recorded commit without repinning.
+An external entry may carry `door: {sensitive: [globs]}` (T-305, §6 "The door
+picks the path"), written only by an answered captain card; the registry
+refuses any other door key, so no project removes the engine's `door.base`. Never
 maintain two conflicting contract copies or let a branch change its own pinned gates.
 
 T-139 inspects merge methods, delete-on-merge, readable protection/checks,
@@ -6607,6 +6641,11 @@ and capacity checks intact. T-139 conventions choose card versus handoff;
 T-141 never auto-merges. A recorded order is not proof of a successful merge.
 
 ### 15.5 Immutable pins and authoritative heads
+
+An external pin written since T-305 keeps its effective door, `door_lists` and
+any `door_ask`, as a self pin does (§6, "The door picks the path"); a pin that
+cannot decide holds until the captain answers its card, and an older external
+pin stays one-way until its next repin.
 
 Experimental evidence (T-264) binds the full verified project/repository,
 head/base/patch/files, exact approved input hashes, full canonical pin digest,

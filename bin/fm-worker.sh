@@ -82,19 +82,41 @@ fm_pin check --task "$TASK" ${spec_source[@]+"${spec_source[@]}"} || exit 65
 python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_round_budget.py" check --state "$FM_STATE_DIR" \
   --project "$(fm_evidence_project)" --task "$TASK" --config "$REPO/config.yaml" || exit 65
 # T-303: a round that found the door wrong stopped its pin; no further round
-# starts on it. Firstmate raises a new card, and its repin starts the next.
-if [ "$FM_EXTERNAL" = 0 ]; then
+# starts on it until the captain approves a repin. T-305: on every project,
+# and a pin that could not decide its door holds the same way until the
+# captain answers its card. The launcher raises that card once.
+door_hold() {
+  local door_stop
   door_stop="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" stopped --state "$FM_STATE_DIR" --task "$TASK")"
   case "$?" in
-    0) ;;
-    3) if [ -n "$(jq -r '.forced_by // empty' <<<"$door_stop")" ]; then
-         echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong: $(jq -r .reason <<<"$door_stop")" >&2
-       fi
-       echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong; no round starts on pin v$(jq -r .version <<<"$door_stop") until firstmate raises a new card and the captain approves a repin" >&2
-       exit 65 ;;
+    0) return 0 ;;
+    3) ;;
     *) echo "fm-worker: the door stop of $TASK does not read; no round starts" >&2; exit 65 ;;
   esac
-fi
+  _fm_wip_done=1
+  if [ "$(jq -r '.when // "round"' <<<"$door_stop")" = pin ]; then
+    echo "fm-worker: pin v$(jq -r .version <<<"$door_stop") of $TASK cannot decide its door: $(jq -r .en <<<"$door_stop") No round starts until the captain answers its card." >&2
+  else
+    if [ -n "$(jq -r '.forced_by // empty' <<<"$door_stop")" ]; then
+      echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong: $(jq -r .reason <<<"$door_stop")" >&2
+    fi
+    echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong; no round starts on pin v$(jq -r .version <<<"$door_stop") until firstmate raises a new card and the captain approves a repin" >&2
+  fi
+  door_raise_card
+  exit 65
+}
+door_raise_card() {
+  local door_card
+  if door_card="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" card --state "$FM_STATE_DIR" --task "$TASK" \
+      --project "${FM_PROJECT:-firstmate-workflow}" --repo "$REPO" 2>&1)"; then
+    [ -z "$door_card" ] || echo "fm-worker: the door of $TASK waits on captain card $door_card" >&2
+  else
+    echo "fm-worker: the door card of $TASK could not be raised: $door_card" >&2
+    ! declare -F emit >/dev/null || emit --type gate_failed --en "door card for $TASK could not be raised; firstmate raises it by hand" \
+      --tw "$TASK 的 door 決策卡無法開出；firstmate 需手動開卡"
+  fi
+}
+door_hold
 
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 fm_external_prepare || exit 65
@@ -1390,6 +1412,9 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
        esac ;;
   esac
 fi
+# T-305: a pin written in this round may not decide its door; it holds here,
+# on its card, before any adapter starts.
+if [ "$pin_rc" = 0 ] && [ -n "$FM_SPEC_PIN_JSON" ]; then door_hold; fi
 
 # T-259: only the trusted outer launcher seals publication prose, before any
 # adapter or publication. Existing/adopted self PR metadata stays untouched.
@@ -1510,10 +1535,11 @@ spec_first="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_first_round.py" "$FM_RU
 # build-first round for the suites that predate T-302 (tests/lib.sh).
 plan_mode=off; plan_state='{}'; plan_fix=''
 # T-303: the pin's door picks the path. A two-way pin has no plan round: its
-# first round builds. A one-way pin, a pin from before T-303 and an external
-# project keep the path above.
+# first round builds. A one-way pin and a pin from before T-303 keep the path
+# above. T-305: an external pin written since then follows its door too, in
+# the steps firstmate owns; an older external pin keeps the one-way path.
 door_kind=one-way; door_reason=''; door_version=''
-if [ "$FM_EXTERNAL" = 0 ] && [ -n "${FM_SPEC_PIN_JSON:-}" ]; then
+if [ -n "${FM_SPEC_PIN_JSON:-}" ] && { [ "$FM_EXTERNAL" = 0 ] || jq -e 'has("door_lists")' <<<"$FM_SPEC_PIN_JSON" >/dev/null; }; then
   door_version="$(jq -r .version <<<"$FM_SPEC_PIN_JSON")"
   door_json="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" pin <<<"$FM_SPEC_PIN_JSON")" || { _fm_wip_done=1; echo "fm-worker: the door of $TASK does not read; no round starts" >&2; exit 65; }
   door_kind="$(jq -r .kind <<<"$door_json")"; door_reason="$(jq -r .reason <<<"$door_json")"
@@ -1601,7 +1627,8 @@ fi
     jq -r '.acceptance // [] | to_entries[] | "\(.key + 1). \(.value)"' <<<"$spec"
     printf '\nFirstmate accepts the plan and records its answers. The next round builds;\n'
     printf 'the launcher starts no build round on a plan firstmate has not accepted.\n'
-  elif [ "$spec_first" = first ]; then
+  elif [ "$spec_first" = first ] && { [ "$FM_EXTERNAL" = 0 ] || [ "$door_kind" != two-way ]; }; then
+    # T-305: an external two-way pin has no plan round either; it builds.
     printf '\n---\n\n# Read first, then ask or plan\n\n'
     printf 'This is your first round on this spec: a new task, or the first round after\n'
     printf 'a repin. Before you change any file, read the approved spec (%s/spec.json)\n' "$FM_PINNED_DIR"
@@ -1626,8 +1653,13 @@ fi
       printf 'fail-first gate; the review checks correctness and scope only, and a REJECT\n'
       printf 'comes back to you under the same round budget as a one-way task. CI, the scope\n'
       printf 'gate, the designer review of UI pages and the merge card stay. A diff that touches a\n'
-      printf 'path on the sensitive list (config.yaml `door.sensitive`) is handled as one-way\n'
-      printf 'at the gates, the gate names the path, and no further round starts on this pin.\n\n'
+      printf 'path on the sensitive list (the engine base list `door.base` and the project list),\n'
+      printf 'or a path no list can classify (a new top-level path, a rename, a submodule), is\n'
+      printf 'handled as one-way at the gates, the gate names the path, and no further round\n'
+      printf 'starts on this pin until the captain answers its card.\n\n'
+      if [ "$FM_EXTERNAL" = 1 ]; then
+        printf 'The project keeps its own reviewers, CI and branch rules as they are.\n\n'
+      fi
     else
       printf 'This task takes the one-way path: the plan round, fail-first, the full review\n'
       printf 'and all six gates.\n\n'
@@ -2186,12 +2218,14 @@ if [ -n "$door_version" ] && [ -s "$say" ] \
     || { _fm_wip_done=1; echo "fm-worker: the door-change stop could not be written" >&2; exit 70; }
   echo "fm-worker: the round found the door of $TASK wrong; no further round starts on pin v$door_version" >&2
   emit --type gate_failed ${PR:+--pr "$PR"} \
-    --en "door change: no further round on pin v$door_version; firstmate raises a new card" \
-    --tw "door 判斷錯誤：pin v$door_version 不再開新一輪；firstmate 會開新卡"
+    --en "door change: no further round on pin v$door_version; the captain card asks for a revised spec" \
+    --tw "door 判斷錯誤：pin v$door_version 不再開新一輪；決策卡請船長決定是否修改 spec"
+  door_raise_card
 fi
 # T-303: a two-way round whose changes touch a path on the sensitive list is
 # one-way at the gates, and its pin stops here; the stop names the path. The
-# round is published as usual.
+# round is published as usual. T-305: so does a path no list can classify on
+# a pin written since T-305, and the stop's captain card names it.
 if [ -n "$door_version" ] && [ "$door_kind" = two-way ]; then
   door_base="$(git -C "$tree" merge-base "refs/remotes/origin/$BASE" HEAD 2>/dev/null \
     || git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null)" || door_base=''
@@ -2201,14 +2235,18 @@ if [ -n "$door_version" ] && [ "$door_kind" = two-way ]; then
   fi
   if [ "$(jq -r .kind <<<"$door_touch")" = one-way ]; then
     door_path="$(jq -r .forced_by <<<"$door_touch")"
+    door_found=()
+    [ -z "$(jq -r '.signal // empty' <<<"$door_touch")" ] \
+      || door_found=(--found "$(jq -c '{signal, en, "zh-TW", path} | with_entries(select(.value != null))' <<<"$door_touch")")
     python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" stop --state "$FM_STATE_DIR" --task "$TASK" \
       --version "$door_version" --round "$round_number" --head "$round_head" --actor "$NAME" \
-      --path "$door_path" --why "$(jq -r .reason <<<"$door_touch")" >/dev/null \
+      --path "$door_path" --why "$(jq -r .reason <<<"$door_touch")" ${door_found[@]+"${door_found[@]}"} >/dev/null \
       || { _fm_wip_done=1; echo "fm-worker: the door stop could not be written" >&2; exit 70; }
-    echo "fm-worker: the round changed $door_path, which is on the sensitive list; no further round starts on pin v$door_version" >&2
+    echo "fm-worker: the round changed $door_path: $(jq -r .reason <<<"$door_touch") No further round starts on pin v$door_version" >&2
     emit --type gate_failed ${PR:+--pr "$PR"} \
-      --en "door change: $door_path is on the sensitive list; no further round on pin v$door_version; firstmate raises a new card" \
-      --tw "door 判斷錯誤：$door_path 在敏感清單上；pin v$door_version 不再開新一輪；firstmate 會開新卡"
+      --en "door change: $(jq -r '.en // .reason' <<<"$door_touch") No further round on pin v$door_version; the captain card asks for a revised spec" \
+      --tw "door 判斷錯誤：$(jq -r '."zh-TW" // .reason' <<<"$door_touch")pin v$door_version 不再開新一輪；決策卡請船長決定是否修改 spec"
+    door_raise_card
   fi
 fi
 plan_retained=0

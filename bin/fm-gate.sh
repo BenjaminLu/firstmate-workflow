@@ -223,8 +223,10 @@ gate4() {
   pin="$(fm_pin resolve --task "$TASK")" || return 1
   # T-303: fail-first does not apply to a two-way head. The pin's door
   # decides; a changed path on the sensitive list makes the head one-way and
-  # is named here.
-  if [ "$FM_EXTERNAL" != 1 ]; then
+  # is named here. T-305: an external pin written since T-305 too, and a path
+  # no list can classify is named the same way. This is firstmate's own gate;
+  # the project's CI and branch rules stay as they are.
+  if [ "$FM_EXTERNAL" != 1 ] || jq -e 'has("door_lists")' <<<"$pin" >/dev/null; then
     local door said
     door="$(python3 "$GATE_BIN/lib/fm_door.py" gate --repo "$FM_TARGET_ROOT" --base "$BASE" --head "$BRANCH" <<<"$pin")" \
       || return 1

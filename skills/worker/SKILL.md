@@ -224,11 +224,16 @@ Your prompt names the door of your pin. A two-way door (a revert undoes the
 change) has no plan round: the first round builds, fail-first does not apply,
 and the review checks correctness and scope only; a REJECT comes back to you
 under the same round budget as a one-way task. A one-way door keeps the
-plan round, fail-first, the full review and all six gates; a spec with no door
-is one-way. A two-way diff that touches a path on `door.sensitive` in
-config.yaml is gated as one-way, the gate names the path, and the launcher
-stops the pin at the end of that round: write `DOOR-CHANGE:<task>` yourself
-when you see you need such a path.
+plan round, fail-first, the full review and all six gates. External projects
+follow the door too (T-305), in the steps firstmate owns; the project's own
+reviewers, CI and branch rules stay. A two-way diff that touches a path on the
+sensitive list (the engine's `door.base`, plus `door.sensitive` here or the
+project's approved `projects.<name>.door.sensitive`), or a path no list can
+classify (a new top-level path, a rename, a submodule), is gated as one-way,
+the gate names the path, and the launcher stops the pin at the end of that
+round for a captain card: write `DOOR-CHANGE:<task>` yourself when you see you
+need such a path. A pin whose door cannot be decided (no door in the spec, no
+approved list) starts no round until the captain answers its card.
 
 If a round finds evidence that the door is wrong (a two-way task that needs a
 data format change, deleted data, a public interface, credentials or

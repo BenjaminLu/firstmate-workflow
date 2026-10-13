@@ -958,8 +958,11 @@ fm_round_pinned reviewer "$spec" || exit 65
   printf '\n# Round %s\n' "$ROUND"
   # T-303: a two-way head's review checks correctness and scope only, under the
   # same round budget as a one-way head;
-  # a changed path on the sensitive list makes the head one-way.
-  if [ "$FM_EXTERNAL" != 1 ] && [ -n "$FM_SPEC_PIN_JSON" ] && [ "${LANE:-code}" = code ] && [ -n "$R_BASE" ]; then
+  # a changed path on the sensitive list makes the head one-way. T-305: the
+  # depth firstmate asks its own reviewer for follows an external pin written
+  # since T-305 too.
+  if [ -n "$FM_SPEC_PIN_JSON" ] && [ "${LANE:-code}" = code ] && [ -n "$R_BASE" ] \
+      && { [ "$FM_EXTERNAL" != 1 ] || jq -e 'has("door_lists")' <<<"$FM_SPEC_PIN_JSON" >/dev/null; }; then
     door="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" gate --repo "$PWD" --base "$R_BASE" --head "$R_HEAD" \
       <<<"$FM_SPEC_PIN_JSON")" || exit 65
     printf '\n# The door\n\nThis head takes the %s path: %s\n' "$(jq -r .kind <<<"$door")" "$(jq -r .reason <<<"$door")"

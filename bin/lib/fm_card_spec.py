@@ -9,9 +9,12 @@ the same JSON value, else it is refused with the field named. Keys the spec
 lacks stay as authored. The card must then carry intent, done and both node
 lists, whoever wrote them. Prints the merged details; refusals exit 65.
 
-T-303: with --config (the engine config.yaml; the self project only) each
-locale also gets the door the pin will keep, with its reason and a fixed
-rollback line. The author never writes it; fm-decide.sh refuses one.
+T-303: with --config (the engine config.yaml) each locale also gets the door
+the pin will keep, with its reason and a fixed rollback line. The author never
+writes it; fm-decide.sh refuses one. T-305: --project and --state name an
+external project, whose door uses its approved list; --purpose dispatch
+refuses a spec that names no door or a malformed one, since firstmate writes
+the spec. An engine config without `door.base` keeps the T-303 rules.
 """
 import json
 import sys
@@ -28,12 +31,21 @@ ROLLBACK = {
 }
 
 
-def door(spec, config_text):
-    """The door the pin will keep, as a card shows it in each locale."""
+def door(spec, config_text, project=None, state=None):
+    """The door the pin will keep, as a card shows it in each locale; None
+    for an external project under the T-303 rules, which shows none."""
     import fm_door
-    found = fm_door.effective(spec, config_text)
+    ask = None
+    if fm_door.asking(config_text):
+        found, _, ask = fm_door.for_pin(spec, config_text, project, state, external=state is not None)
+    elif state is not None:
+        return None
+    else:
+        found = fm_door.effective(spec, config_text)
     reasons = dict(en=found['reason'], **{'zh-TW': found['reason']})
-    if found['forced_by']:
+    if ask:
+        reasons['zh-TW'] = ask['zh-TW'] + '任務等待決策卡，並走 one-way 流程。'
+    elif found['forced_by']:
         reasons['zh-TW'] = f'範圍 {found["forced_by"]} 在敏感路徑清單上，所以任務走 one-way 流程。'
     elif found['reason'] == fm_door.NO_DOOR:
         reasons['zh-TW'] = 'spec 沒寫 door，所以任務走 one-way 流程。'
@@ -67,11 +79,29 @@ def merge(spec, details, task):
     return details
 
 
+def refuse_doorless(spec, config_text):
+    """T-305: a dispatch card refuses a spec without a door; firstmate fixes it."""
+    import fm_door
+    if not fm_door.asking(config_text):
+        return
+    _, reason = fm_door.declared(spec)
+    if reason == fm_door.NO_DOOR:
+        raise ValueError('the spec names no door; write door: {"kind": "two-way" or "one-way", "reason": "..."}')
+    if reason == fm_door.BAD_DOOR:
+        raise ValueError('the spec door is not a kind and a reason; write door: {"kind": "two-way" or "one-way", '
+                         '"reason": "..."}')
+
+
+OPTIONAL = {'--config', '--project', '--state', '--purpose'}
+
+
 def main(argv):
     args = dict(zip(argv[::2], argv[1::2]))
-    if (len(argv) not in (6, 8) or len(args) * 2 != len(argv)
-            or sorted(set(args) - {'--config'}) != ['--details', '--task', '--tasks-dir']):
-        print('usage: fm_card_spec.py --task <id> --tasks-dir <dir> --details <file> [--config <file>]', file=sys.stderr)
+    if (len(argv) % 2 or len(args) * 2 != len(argv)
+            or sorted(set(args) - OPTIONAL) != ['--details', '--task', '--tasks-dir']
+            or ('--project' in args or '--state' in args) and '--config' not in args):
+        print('usage: fm_card_spec.py --task <id> --tasks-dir <dir> --details <file> [--config <file> '
+              '[--project <name> --state <dir>]] [--purpose dispatch|repin]', file=sys.stderr)
         return 64
     task = args['--task']
     path = Path(args['--tasks-dir']) / (task + '.json')
@@ -83,11 +113,15 @@ def main(argv):
         if not isinstance(details, dict):
             raise ValueError('details must be an object')
         merged = merge(spec, details, task)
-        if '--config' in args:
-            config = Path(args['--config'])
+        config = Path(args.get('--config', ''))
+        config_text = config.read_text(encoding='utf-8') if '--config' in args and config.is_file() else ''
+        if args.get('--purpose') == 'dispatch':
+            refuse_doorless(spec, config_text)
+        shown = door(spec, config_text, args.get('--project'), args.get('--state')) if '--config' in args else None
+        if shown:
             import fm_plain
             glossary = fm_plain.load_glossary()
-            for lang, value in door(spec, config.read_text(encoding='utf-8') if config.is_file() else '').items():
+            for lang, value in shown.items():
                 merged[lang]['door'] = value
                 # the terms the door text uses are explained on the card
                 listed = merged[lang].get('glossary')
