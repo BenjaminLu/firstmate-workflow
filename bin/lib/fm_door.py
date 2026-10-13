@@ -13,8 +13,8 @@ always one-way. A two-way spec with a scope entry that itself falls inside
 one of them is pinned one-way; a two-way pin whose diff touches one is
 handled as one-way at the gates, path by path.
 
-A two-way task skips the plan round and the fail-first gate and gets one
-review round. A round whose report holds a standalone `DOOR-CHANGE:<task>`
+A two-way task skips the plan round and the fail-first gate, and its review
+checks correctness and scope only, under the same round budget. A round whose report holds a standalone `DOOR-CHANGE:<task>`
 line writes a stop for the current pin version: no further round, review or
 merge card starts on that pin, and firstmate raises a new card.
 
