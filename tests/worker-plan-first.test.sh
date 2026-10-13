@@ -17,7 +17,8 @@ jq '.acceptance = ["Why. it exists", "Done, tests. it is proven"]' "$repo/design
 cp "$d/spec.json" "$repo/design/tasks/T-Z.json"
 seed_self_pr_authoring "$repo" T-Z
 # The mock does what $FM_SEEN/mode says: plan, plan-short, plan-edit,
-# build (with its SWEPT block) or build-bare (without it).
+# build (with its SWEPT block), build-bare (without it) or report (the
+# SWEPT block alone, for the report-only round after a refused report).
 cat > "$repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
@@ -31,7 +32,7 @@ case "$mode" in
   plan|plan-edit)
     printf 'Files: src/x\n\n| 1 | see 2 | - | - |\n| 2 | tests/x.test.sh | ci | no file |\n' > "$3/.fm-say.md" ;;
   plan-short) printf 'Files: src/x\n\n| 1 | see 2 | - | - |\n' > "$3/.fm-say.md" ;;
-  build) printf 'Built.\n\nSWEPT:T-Z missing files\n  searched: ls src\n  found 1, fixed 1\n' > "$3/.fm-say.md" ;;
+  build|report) printf 'Built.\n\nSWEPT:T-Z missing files\n  searched: ls src\n  found 1, fixed 1\n' > "$3/.fm-say.md" ;;
   build-bare) printf 'Built.\n' > "$3/.fm-say.md" ;;
 esac
 M
@@ -117,9 +118,10 @@ assert_eq "$pushed" "$(remote_head)" 'worker: fix lists its class'
 assert_ne 0 "$worker_rc" 'a fix report without its class is refused'
 assert_contains "$(cat "$d/out")" 'no complete SWEPT:T-Z block' 'the refusal names the missing block'
 assert_contains "$(cat "$d/prompt-$(prompts)")" 'This round fixes a problem (reject)' 'the round after a REJECT is told to fix the class'
-run_worker build
+run_worker report
 assert_eq 0 "$worker_rc" 'a fix report with its class is published'
-assert_eq yes "$(heading "$d/prompt-$(prompts)" '# Fix the whole class')" 'a refused fix does not end the fix round'
+# T-304: the round after a refused report fixes only the report.
+assert_eq yes "$(heading "$d/prompt-$(prompts)" '# Fix only your report')" 'a refused fix does not end the fix round'
 assert_ne "$pushed" "$(remote_head)" 'the fix is pushed'
 safe_rm_rf "$d"
 

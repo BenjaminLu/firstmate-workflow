@@ -206,6 +206,14 @@ cause. Its report lists the places you checked in a `SWEPT:<task>` block, as in
 "Every finding is a class" above. On a task held to the plan, a fix round
 that changes files without a `SWEPT:` block that has a `searched:` line and a
 `found N, fixed M` line is refused before anything is published.
+Detail may sit between and after the numbers (`found 2 (the merge card),
+fixed 2`); fixed is never more than found (T-304).
+
+A round refused only for its report keeps its changes in the worktree and
+pushes nothing (T-304). The next round is report-only: its prompt gives the
+refusal and your report. Write the whole report again and change no file; a
+change is saved under `state/rescued/` and the tree is put back to the kept
+work. The launcher then publishes the kept work with the fixed report.
 
 External projects keep the T-297 round: ask and stop, or write a short plan
 into `.fm-say.md` and do the work in the same round.

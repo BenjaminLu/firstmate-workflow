@@ -11,7 +11,8 @@ older launcher goes on as before.
   fm_plan.py check-plan --spec SPEC --file NOTE
       exit 65 naming every done line the plan has no row for
   fm_plan.py check-class --task T --file NOTE
-      exit 65 when a fix report holds no complete SWEPT:<task> block
+      exit 65 when a fix report holds no complete SWEPT:<task> block, or one
+      whose fixed count is more than its found count
 
 A plan row is a table row whose first cell is a done line's number, by its
 position in the spec's acceptance list, and whose next three cells (the test,
@@ -114,21 +115,33 @@ def missing_rows(spec, note):
     return [(n, item) for n, item in enumerate(acceptance, 1) if n not in rows]
 
 
-def class_listed(task, note):
-    """At least one SWEPT:<task> block, and every one complete."""
+def class_problems(task, note):
+    """What keeps a fix report's SWEPT:<task> blocks from passing; empty when none.
+
+    Each block needs a searched: line and a found-and-fixed line. Detail may
+    sit between and after the numbers ('found 2 (the merge card), fixed 2',
+    'found 1, fixed 1 (tests/lib.sh)'), but fixed is never more than found
+    (T-304).
+    """
     marker = re.compile(r'^SWEPT:' + re.escape(task) + r'(\s|$)')
     blocks, current = [], None
     for line in note.splitlines():
         if marker.match(line.strip()):
-            current = []
+            current = (line.strip(), [])
             blocks.append(current)
         elif current is not None:
-            current.append(line)
+            current[1].append(line)
     if not blocks:
-        return False
-    return all(any(re.match(r'\s*searched:\s*\S', line) for line in block)
-               and any(re.search(r'\bfound\s+\d+,\s*fixed\s+\d+', line) for line in block)
-               for block in blocks)
+        return [f'the report lists no complete SWEPT:{task} block (searched: and found N, fixed M)']
+    problems = []
+    for head, block in blocks:
+        counts = [(int(m.group(1)), int(m.group(2))) for m in
+                  (re.search(r'\bfound\s+(\d+)\b.*?\bfixed\s+(\d+)\b', line) for line in block) if m]
+        if not (any(re.match(r'\s*searched:\s*\S', line) for line in block) and counts):
+            problems.append(f'the report lists no complete SWEPT:{task} block (searched: and found N, fixed M): {head[:80]}')
+        problems += [f'the SWEPT:{task} block says fixed {fixed} but found {found}; fixed is never more than found: {head[:80]}'
+                     for found, fixed in counts if fixed > found]
+    return problems
 
 
 def main():
@@ -153,9 +166,10 @@ def main():
                 print(f'the plan has no row for done line {number}: {item[:80]}', file=sys.stderr)
             return 65
     else:
-        if not class_listed(args.task, Path(args.file).read_text()):
-            print(f'the report lists no complete SWEPT:{args.task} block (searched: and found N, fixed M)',
-                  file=sys.stderr)
+        problems = class_problems(args.task, Path(args.file).read_text())
+        if problems:
+            for problem in problems:
+                print(problem, file=sys.stderr)
             return 65
     return 0
 
