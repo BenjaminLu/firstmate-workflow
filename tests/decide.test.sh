@@ -1068,7 +1068,6 @@ done
 raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!skills/*/rule-inventory.json' ':!bin/fm-decide.sh' \
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 # Autopilot holds ready tasks for firstmate's judgement; merge cards consume authored details.
-# T-305: a pin whose door cannot be decided raises its card through bin/lib/fm_door.py.
 assert_eq "bin/fm-retro.sh bin/fm.sh bin/lib/fm_autopilot_loop.py bin/lib/fm_door.py " "$raisers" "only fm.sh, fm-retro.sh's one retro card, the autopilot merge loop and fm_door.py's door card (T-305) raise cards (T-297 removed the spec preflight pass-budget card); readiness still needs judgment"
 # A line that is one quoted message and nothing else only prints the name; any other line naming them
 # is a call. bash prints a parsed >&2 as 1>&2 and ends a command with ;
