@@ -1075,7 +1075,6 @@ said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(1?>&2)?[[:space:
 runs() { code "$1" | grep -E -- "$names" | grep -vE -- "$said" | grep . >/dev/null; }
 assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks'" "a bare call is still a call"
 assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks\" >&2'" "a printed message is not a call"
-# config.yaml is data: its door.sensitive list names bin/fm.sh (T-303)
 named="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' ':!skills/*/rule-inventory.json' ':!config.yaml' \
   ':!bin/lib/fm_autopilot*.py' ':!bin/fm.sh' ':!bin/fm-decide.sh' ':!bin/fm-retro.sh' \
   | while read -r f; do has "$f" "$names" && printf '%s ' "$f"; done)"
