@@ -156,6 +156,17 @@ def _walk(details):
     for key in WALK_FIELDS:
         if (key in details['en']) != (key in details['zh-TW']):
             raise ValueError(key + ': required in both locales or neither')
+    # T-303: a dispatch or repin card shows the task's door alone, with no walk
+    if not any(key in details[lang] for lang in LOCALES for key in ('change_points', 'check')):
+        for lang in LOCALES:
+            door = details[lang]['door']
+            if not isinstance(door, dict) or set(door) != {'kind', 'reason', 'rollback'} or door.get('kind') not in ('one-way', 'two-way'):
+                raise ValueError(lang + '.door: expected kind, reason and rollback')
+            for key in ('reason', 'rollback'):
+                _text(door[key], lang + '.door.' + key)
+        if details['en']['door']['kind'] != details['zh-TW']['door']['kind']:
+            raise ValueError('door: locale kind must match')
+        return
     for lang in LOCALES:
         loc = details[lang]
         points = loc.get('change_points')

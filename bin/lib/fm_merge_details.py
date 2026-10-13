@@ -211,6 +211,15 @@ def build(state, project, task, pr_number, readiness=None, head=None, root=None,
                 for ident in fm_plain.find_terms(text, lang, glossary):
                     if ident not in listed:
                         listed.append(ident)
+            # T-303: the merge card does not carry the dispatch card's door,
+            # so the terms only the door text used are not listed on it
+            door = loc.get('door') if not reviewed else None
+            if isinstance(door, dict):
+                only = set(fm_plain.find_terms(' '.join(str(door.get(k, '')) for k in ('reason', 'rollback')),
+                                               lang, glossary))
+                used = {ident for _, text in fm_plain.card_texts(out)
+                        for ident in fm_plain.find_terms(text, lang, glossary)}
+                listed = [ident for ident in listed if ident not in only or ident in used]
             out['glossary'] = listed
         result[lang] = out
 

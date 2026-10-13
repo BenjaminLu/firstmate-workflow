@@ -466,7 +466,7 @@ if [ "$MODE" = request ]; then
     }
     if [ "$KIND" != merge ]; then
       jq -e 'any(.en,."zh-TW"; has("change_points") or has("door") or has("check"))' "$DETAILS" >/dev/null && {
-        echo 'fm-decide: change_points, door and check apply only to tracked merge cards; nothing was written' >&2; exit 65;
+        echo 'fm-decide: change_points, door and check apply only to tracked merge cards (a dispatch or repin card takes its door from the task spec); nothing was written' >&2; exit 65;
       }
     fi
     # T-301: a dispatch or repin card asks the captain to approve the task's
@@ -478,8 +478,11 @@ if [ "$MODE" = request ]; then
       [ -r "$HERE/lib/fm_card_spec.py" ] || { echo "fm-decide: missing $HERE/lib/fm_card_spec.py; nothing was written" >&2; exit 70; }
       spec_details="$(mktemp)" || exit 70
       trap 'rm -f "$spec_details"' EXIT
+      # T-303: a self card also shows the door the pin will keep
+      card_door=()
+      [ "${FM_EXTERNAL:-0}" = 1 ] || card_door=(--config "${FM_ENGINE_ROOT:-$REPO}/config.yaml")
       python3 "$HERE/lib/fm_card_spec.py" --task "$TASK" --tasks-dir "${FM_TASKS_DIR:-$REPO/design/tasks}" \
-        --details "$DETAILS" > "$spec_details" || exit 65
+        --details "$DETAILS" ${card_door[@]+"${card_door[@]}"} > "$spec_details" || exit 65
       DETAILS="$spec_details"
     fi
     # T-270: every card carries why, how and a glossary list and passes the

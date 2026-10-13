@@ -210,6 +210,23 @@ that changes files without a `SWEPT:` block that has a `searched:` line and a
 External projects keep the T-297 round: ask and stop, or write a short plan
 into `.fm-say.md` and do the work in the same round.
 
+## The door picks the path (T-303)
+
+Your prompt names the door of your pin. A two-way door (a revert undoes the
+change) has no plan round: the first round builds, fail-first does not apply,
+and the review checks correctness and scope only; a REJECT comes back to you
+under the same round budget as a one-way task. A one-way door keeps the
+plan round, fail-first, the full review and all six gates; a spec with no door
+is one-way. A two-way diff that touches a path on `door.sensitive` in
+config.yaml is gated as one-way, and the gate names the path.
+
+If a round finds evidence that the door is wrong (a two-way task that needs a
+data format change, deleted data, a public interface, credentials or
+permissions, or git history), write a standalone `DOOR-CHANGE:<task>` line and
+the evidence in `.fm-say.md`, and stop. The launcher publishes the round, and
+no further round starts on that pin; firstmate raises a new card with a revised
+spec. Never switch path yourself in the middle of a pin.
+
 ## Rounds
 
 Start from firstmate's approved brief supplied in the prompt and the evidence it names —

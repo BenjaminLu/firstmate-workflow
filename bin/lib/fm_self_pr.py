@@ -234,7 +234,7 @@ def repository_identity(repository, origin=''):
     return match.group(1) if match else ''
 
 
-def render(envelope, spec, head, files, repository='', created_at=None, question=None):
+def render(envelope, spec, head, files, repository='', created_at=None, question=None, pin_door=None):
     if not re.fullmatch(r'[0-9a-f]{40,64}', head): raise ValueError('invalid exact head')
     if question not in (None, 'scope', 'acceptance', 'implementation'): raise ValueError('invalid question purpose')
     draft = envelope['draft']
@@ -276,6 +276,10 @@ def render(envelope, spec, head, files, repository='', created_at=None, question
                 and isinstance(door.get('reason'), str)):
             door = None
         door_text = 'Door: '+(door['kind']+' — '+door['reason'] if door else 'not recorded')+'.'
+        if pin_door:
+            # T-303: a pinned self task's door is the pin's, the line CI reads
+            import fm_door
+            door_text = fm_door.body_line(pin_door[1], pin_door[0])
         rollback = draft.get('rollback', spec.get('rollback'))
         rollback_text = 'Rollback: '+('; '.join(k+': '+(rollback[k] if isinstance(rollback.get(k), str) else 'not recorded') for k in ('trigger','action','owner','limits'))
                                      if isinstance(rollback, dict) else 'not recorded')+'.'
@@ -354,8 +358,13 @@ def main():
                     or envelope.get('pin_unavailable_reason') != reason):
                 raise ValueError('sealed publication digest/mode mismatch')
             files = json.loads(Path(args.files).read_text()) if args.files else None
+            pin_door = None
+            if pin and not pin.get('external'):
+                import fm_door
+                pin_door = (pin['version'], fm_door.at_gate(pin, []))
             result = render(envelope, json.loads(snapshots['spec']['text']), args.head, files,
-                            repository_identity(args.repository, args.origin), question=args.question)
+                            repository_identity(args.repository, args.origin), question=args.question,
+                            pin_door=pin_door)
             if args.command == 'preview':
                 if args.pr is None or args.pr <= 0 or not all(re.fullmatch('[0-9a-f]{64}', x or '') for x in
                                           (args.old_title_sha256, args.old_body_sha256)):

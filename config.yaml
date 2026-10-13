@@ -54,6 +54,37 @@ policy:                 # what every crew round may do, whichever vendor runs it
                         # FM_CREW_UNSANDBOXED=1 in the operator's shell,
                         # never a key here.
 
+door:                   # T-303: the paths that are always a one-way door. A
+  sensitive:            # two-way self spec with a scope entry inside one is
+                        # pinned one-way; a two-way head whose diff changes one
+                        # is gated one-way, and the gate names the path. Only
+                        # the engine's list counts; a project cannot add to it.
+    # credentials and permissions, sandbox and hook rules included
+    - ".github/**"
+    - ".githooks/**"
+    - "bin/fm-sandbox.sh"
+    - "bin/lib/fm_sandbox_*.py"
+    - "bin/fm-guard.sh"
+    - "bin/fm-turnend-guard.sh"
+    - "bin/fm-install-hooks.sh"
+    - "bin/lib/fm_hooks.py"
+    - "bin/fm-auth-probe.sh"
+    - "bin/lib/fm_merge_authorization.py"
+    # data formats and migrations
+    - "bin/lib/fm_evidence.py"
+    - "bin/lib/fm_spec_pins.py"
+    - "bin/lib/fm_project_migrate.py"
+    # deletion of data
+    - "bin/fm-cleanup.sh"
+    # public interfaces
+    - "bin/fm.sh"
+    - "bin/adapters/_contract.md"
+    # git history
+    - "bin/fm-merge.sh"
+    - "bin/fm-checkpoint.sh"
+    - "bin/lib/fm-restack.sh"
+    - "bin/lib/fm_git_transfer.py"
+
 concurrency: 3          # workers in flight at once
 review_budget:          # T-276: when a task's review loop stops for the captain
   rounds: 3             # review rounds before the captain decides

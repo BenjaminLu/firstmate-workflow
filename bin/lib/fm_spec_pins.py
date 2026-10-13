@@ -527,6 +527,12 @@ class Pins:
                 pin['supersedes_legacy_reason'] = LEGACY_REASON
             if spec_approval:
                 pin['spec_approval'] = spec_approval
+            # T-303: the self door is computed once, here, and kept for the
+            # pin's whole life; a pin without it is one-way.
+            if not self.external:
+                import fm_door
+                pin['door'] = fm_door.effective(json.loads(snapshots['spec']['text']),
+                                                snapshots['contract']['text'])
             # Publish fully written bytes atomically, without replacing any record.
             with tempfile.NamedTemporaryFile(mode='w', dir=self.directory, delete=False) as out:
                 temporary = Path(out.name)

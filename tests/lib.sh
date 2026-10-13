@@ -4,6 +4,9 @@ _fails=0
 # Suites written before T-302 run a self worker's first round as a build
 # round; tests/worker-plan-first.test.sh unsets this to test the plan round.
 export FM_PLAN_FIRST=0
+# A suite never reads the door of the pull request CI runs it for (T-303):
+# bin/fm-failfirst.sh reads it from GitHub's event file.
+unset GITHUB_EVENT_PATH
 _t() { printf '    %-52s' "$1"; }
 ok()   { printf 'ok\n'; }
 bad()  { printf 'FAIL\n      %s\n' "$1"; _fails=$((_fails+1)); }
