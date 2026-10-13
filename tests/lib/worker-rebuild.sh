@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Caller/consumer globals are checked when linting the feature suites.
 # shellcheck disable=SC2034
+export HERDR_ENV=0   # T-305: it runs fm-worker.sh, which can raise a door card
 # --- a later round brings its branch up to date with the base (T-067) ----
 # Firstmate may not run git and the adapter cannot, so when main moves
 # under an open task branch and the two conflict, fm-worker.sh is the only

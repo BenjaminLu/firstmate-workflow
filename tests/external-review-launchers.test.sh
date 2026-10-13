@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # T-140 launcher regressions; tests/lib/crew_blocks.py executes real shell blocks.
 set -uo pipefail
+export HERDR_ENV=0   # T-305: it runs fm-worker.sh, which can raise a door card
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 python3 - "$ROOT" <<'PY'

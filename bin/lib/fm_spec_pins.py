@@ -527,12 +527,23 @@ class Pins:
                 pin['supersedes_legacy_reason'] = LEGACY_REASON
             if spec_approval:
                 pin['spec_approval'] = spec_approval
-            # T-303: the self door is computed once, here, and kept for the
-            # pin's whole life; a pin without it is one-way.
-            if not self.external:
-                import fm_door
-                pin['door'] = fm_door.effective(json.loads(snapshots['spec']['text']),
-                                                snapshots['contract']['text'])
+            # T-303: the door is computed once, here, and kept for the pin's
+            # whole life; a pin without it is one-way. T-305: on every
+            # project, with the lists it was decided with; a pin that cannot
+            # decide records why, and its task waits on a captain card.
+            import fm_door
+            spec_json = json.loads(snapshots['spec']['text'])
+            # an engine with no config.yaml reads as empty: no door fields
+            engine_path = self.engine / 'config.yaml'
+            engine_config = (snapshots['contract']['text'] if not self.external
+                             else engine_path.read_text() if engine_path.is_file() else '')
+            if fm_door.asking(engine_config):
+                pin['door'], pin['door_lists'], ask = fm_door.for_pin(
+                    spec_json, engine_config, self.project, self.state, self.external)
+                if ask:
+                    pin['door_ask'] = ask
+            elif not self.external:
+                pin['door'] = fm_door.effective(spec_json, snapshots['contract']['text'])
             # Publish fully written bytes atomically, without replacing any record.
             with tempfile.NamedTemporaryFile(mode='w', dir=self.directory, delete=False) as out:
                 temporary = Path(out.name)

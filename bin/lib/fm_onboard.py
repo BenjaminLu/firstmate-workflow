@@ -547,6 +547,20 @@ def register(engine, name, p):
               f'run python3 bin/lib/fm_private_names.py update --repo {engine}', file=sys.stderr)
 
 
+def door_list_reminder(engine, name):
+    """T-305: registering writes no sensitive list; it only queues a reminder
+    for firstmate to propose one on a captain card."""
+    emit=Path(__file__).resolve().parents[1]/'fm-emit.sh'
+    result=subprocess.run([str(emit),'--actor','fm-onboard','--type','autopilot_waiting','--project',name,
+                           '--data',json.dumps(dict(reason='door-list')),
+                           '--en',f'{name}: propose its sensitive list on a captain card',
+                           '--tw',f'{name}：請用決策卡提出它的敏感清單'],
+                          env=dict(os.environ,FM_ROOT=str(engine)),stdin=subprocess.DEVNULL,
+                          capture_output=True,text=True,timeout=60)
+    if result.returncode:
+        print('fm-onboard: the sensitive-list reminder was not queued: '+result.stderr.strip(),file=sys.stderr)
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser()
     parser.add_argument('command',choices=['add','edit','drift'])
@@ -618,6 +632,7 @@ def main(argv=None):
                 raise ValueError('external onboarding cannot replace the self project')
         p=approve(home,e,p,answers)
         register(engine,name,p)
+        door_list_reminder(engine,name)
         from fm_lifeline import ring, ring_state
         ring(engine, 'conventions approved')
         ring_state(home/'state', 'conventions approved')

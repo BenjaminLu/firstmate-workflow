@@ -940,6 +940,14 @@ class MechanicalLoop:
         if not stop:
             return False
         version = stop.get('version')
+        if stop.get('when') == 'pin':
+            # T-305: a pin that could not decide its door waits on its card
+            self.queue(f'door-ask-{task}-{version}', task,
+                       f'{task}: pin v{version} cannot decide its door; no review or merge card until the captain '
+                       f'answers its card. {stop.get("en", "")}'.rstrip(),
+                       f'{task}：pin v{version} 無法判定 door；船長回答決策卡前不審查也不開合併卡。'
+                       f'{stop.get("zh-TW", "")}')
+            return True
         self.queue(f'door-stop-{task}-{version}', task,
                    f'{task}: round {stop.get("round")} found the door wrong; no review or merge card on pin v{version} '
                    'until a new card and a repin',

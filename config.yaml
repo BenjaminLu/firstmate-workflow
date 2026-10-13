@@ -55,13 +55,35 @@ policy:                 # what every crew round may do, whichever vendor runs it
                         # never a key here.
 
 door:                   # T-303: the paths that are always a one-way door. A
-  sensitive:            # two-way self spec with a scope entry inside one is
+                        # two-way spec with a scope entry inside one is
                         # pinned one-way; a two-way head whose diff changes one
-                        # is gated one-way and its pin stops for a new card;
-                        # the gate and the stop name the path. Only
-                        # the engine's list counts; a project cannot add to it.
-    # credentials and permissions, sandbox and hook rules included
+                        # is gated one-way and its pin stops for a captain card;
+                        # the gate and the card name the path.
+  base:                 # T-305: every project, this one included; no project
+                        # can remove a line. An external project adds its own
+                        # list under projects.<name>.door.sensitive, written
+                        # only by an answered captain card.
+    # CI and workflow configuration
     - ".github/**"
+    - ".gitlab-ci.yml"
+    - ".gitlab/**"
+    - ".circleci/**"
+    - ".buildkite/**"
+    - "Jenkinsfile"
+    - "azure-pipelines.yml"
+    # migrations and SQL files
+    - "migrations/**"
+    - "**/migrations/**"
+    - "*.sql"
+    # environment files and secrets folders
+    - ".env"
+    - ".env.*"
+    - "**/.env"
+    - "**/.env.*"
+    - "secrets/**"
+    - "**/secrets/**"
+  sensitive:            # this repository's own list
+    # credentials and permissions, sandbox and hook rules included
     - ".githooks/**"
     - "bin/fm-sandbox.sh"
     - "bin/lib/fm_sandbox_*.py"

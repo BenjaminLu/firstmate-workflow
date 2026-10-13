@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+os.environ['HERDR_ENV'] = '0'   # T-305: it runs fm-worker.sh, which can raise a door card
 
 sys.dont_write_bytecode = True
 root = Path(sys.argv[1])

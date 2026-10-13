@@ -12,6 +12,7 @@
 # deterministic, and then asserts the shape across the scripts - which
 # is the half a behavioural test cannot reach.
 set -uo pipefail
+export HERDR_ENV=0   # T-305: it runs fm-worker.sh, which can raise a door card
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"

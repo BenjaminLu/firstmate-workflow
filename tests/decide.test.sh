@@ -1045,7 +1045,7 @@ code() {  # CODE=raw: the raw text, a cheap first pass; CODE=self: the file's ow
 has() { CODE=raw code "$1" | grep -E -- "$2" >/dev/null && code "$1" | grep -E -- "$2" >/dev/null; }
 decides() { grep -E -- 'fm-decide' <<<"$1" >/dev/null && grep -E -- '--request' <<<"$1" >/dev/null; }
 both() { grep -qE -- 'fm-decide' "$ROOT/$1" && grep -qE -- '--request' "$ROOT/$1" && decides "$(CODE=self code "$1")"; }
-names='fm_autopilot|autopilot_turn\.py|(^|[^A-Za-z0-9_-])fm\.sh|fm-retro\.sh'
+cards='fm_autopilot|autopilot_turn\.py|(^|[^A-Za-z0-9_-])fm\.sh|fm-retro\.sh'; names="$cards|fm_door\.py|/fm-worker\.sh|[\"']fm-worker\.sh[\"']"  # cards: the raisers; names adds what reaches a door card
 # What bin/ci.sh runs: bash suites, bun on *.test.ts/*.spec.ts outside tests/e2e, playwright, its stages; all pinned.
 cisrc="$(code bin/ci.sh)"
 assert_contains "$cisrc" 'suites=(tests/*.test.sh)' "ci.sh runs the bash suites under tests/"
@@ -1068,16 +1068,16 @@ done
 raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!skills/*/rule-inventory.json' ':!bin/fm-decide.sh' \
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 # Autopilot holds ready tasks for firstmate's judgement; merge cards consume authored details.
-assert_eq "bin/fm-retro.sh bin/fm.sh bin/lib/fm_autopilot_loop.py " "$raisers" "only fm.sh, fm-retro.sh's one retro card and the autopilot merge loop raise cards (T-297 removed the spec preflight pass-budget card); readiness still needs judgment"
+assert_eq "bin/fm-retro.sh bin/fm.sh bin/lib/fm_autopilot_loop.py bin/lib/fm_door.py " "$raisers" "only fm.sh, fm-retro.sh's one retro card, the autopilot merge loop and fm_door.py's door card (T-305) raise cards (T-297 removed the spec preflight pass-budget card); readiness still needs judgment"
 # A line that is one quoted message and nothing else only prints the name; any other line naming them
 # is a call. bash prints a parsed >&2 as 1>&2 and ends a command with ;
 said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(1?>&2)?[[:space:]]*;?[[:space:]]*$'
-runs() { code "$1" | grep -E -- "$names" | grep -vE -- "$said" | grep . >/dev/null; }
+runs() { code "$1" | grep -E -- "$cards" | grep -vE -- "$said" | grep . >/dev/null; }
 assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks'" "a bare call is still a call"
 assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks\" >&2'" "a printed message is not a call"
-named="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' ':!skills/*/rule-inventory.json' ':!config.yaml' \
+named="$(git -C "$ROOT" grep -lE "$cards" -- . ':!tests/' ':!design/' ':!*.md' ':!skills/*/rule-inventory.json' ':!config.yaml' \
   ':!bin/lib/fm_autopilot*.py' ':!bin/fm.sh' ':!bin/fm-decide.sh' ':!bin/fm-retro.sh' \
-  | while read -r f; do has "$f" "$names" && printf '%s ' "$f"; done)"
+  | while read -r f; do has "$f" "$cards" && printf '%s ' "$f"; done)"
 via="$(for f in $named; do runs "$f" && printf '%s ' "$f"; done)"
 assert_eq "bin/fm-autopilot.sh " "$via" "only the autopilot wrapper enters its supervisor"
 direct="$(for f in $suites; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+os.environ['HERDR_ENV'] = '0'   # T-305: it runs fm-worker.sh, which can raise a door card
 
 
 def section(path, start, end):

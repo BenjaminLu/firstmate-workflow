@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # T-303: every self task spec names its door, and the door picks the path. A
 # two-way pin's first round builds, with no plan round and no fail-first gate;
-# a one-way pin, a spec with no door, and a two-way spec or
-# diff that touches a path on the sensitive list keep the full path; a round
-# that finds the door wrong stops its pin.
+# a one-way pin and a two-way spec or diff that touches a path on the
+# sensitive list keep the full path; a round that finds the door wrong stops
+# its pin. A spec with no door waits on a captain card (T-305,
+# tests/door-projects.test.sh).
 # Feature dependencies: bin/lib/fm_door.py bin/fm-worker.sh bin/fm-gate.sh
 # bin/fm-failfirst.sh bin/lib/fm_spec_pins.py bin/lib/fm_card_spec.py
 # bin/lib/fm_autopilot_loop.py bin/lib/fm_ste.py
@@ -23,7 +24,10 @@ ONE='{"kind":"one-way","reason":"It changes a stored record format."}'
 # has that door; the mock does what $FM_SEEN/mode says
 worker_fixture() {
   d="$(fixture)"; repo="$d/repo"; GH="$(ghstub "$d")"
-  printf 'door:\n  sensitive:\n    - ".github/**"\n' >> "$repo/config.yaml"
+  # the base list puts the engine on the T-305 rules (tests/door-projects.test.sh)
+  printf 'door:\n  base:\n    - "*.sql"\n  sensitive:\n    - ".github/**"\n' >> "$repo/config.yaml"
+  # src/ is on the base, so a round's src/ file is no new top-level path (T-305)
+  mkdir -p "$repo/src"; printf 'base\n' > "$repo/src/base"; git -C "$repo" add src
   git -C "$repo" commit -qam 'the sensitive list'; git -C "$repo" push -q origin main
   printf '%s\n' '{"type":"greenlit","actor":"captain","ts":"2026-10-13T00:00:00Z"}' > "$repo/state/events.jsonl"
   jq --argjson door "$1" --argjson scope "${2:-[\"src/**\"]}" \
@@ -72,17 +76,18 @@ assert_eq '{"kind":"two-way","reason":"A revert of the merge undoes it.","forced
 safe_rm_rf "$d"
 
 # --- door: one-way and missing keep the plan -------------------------------
-for door in "$ONE" null; do
-  worker_fixture "$door"
-  run_worker build
-  # Fail-first: main records no door in the pin and names none in the prompt.
-  assert_eq one-way "$(pin_door | jq -r .kind)" "door: one-way and missing keep the plan ($door)"
-  assert_eq '' "$(remote_head)" "a first round that builds pushes nothing ($door)"
-  assert_ne 0 "$worker_rc" "a first round that builds is refused ($door)"
-  assert_eq yes "$(heading "$d/prompt-1" '# Read first, then return one plan')" "the first round is asked for a plan ($door)"
-  assert_contains "$(cat "$d/prompt-1")" 'This task takes the one-way path' "the prompt says which path ($door)"
-  safe_rm_rf "$d"
-done
+# T-305: a spec with no door no longer keeps the plan; it waits on a captain
+# card (door: missing door asks the captain, tests/door-projects.test.sh).
+door="$ONE"
+worker_fixture "$door"
+run_worker build
+# Fail-first: main records no door in the pin and names none in the prompt.
+assert_eq one-way "$(pin_door | jq -r .kind)" "door: one-way and missing keep the plan ($door)"
+assert_eq '' "$(remote_head)" "a first round that builds pushes nothing ($door)"
+assert_ne 0 "$worker_rc" "a first round that builds is refused ($door)"
+assert_eq yes "$(heading "$d/prompt-1" '# Read first, then return one plan')" "the first round is asked for a plan ($door)"
+assert_contains "$(cat "$d/prompt-1")" 'This task takes the one-way path' "the prompt says which path ($door)"
+safe_rm_rf "$d"
 assert_eq 'The spec names no door, so the task takes the one-way path.' \
   "$(python3 "$ROOT/bin/lib/fm_door.py" effective --spec <(echo '{"id":"T-Z","scope":["src/**"]}') | jq -r .reason)" \
   'a spec with no door is one-way, and says so'
@@ -97,9 +102,9 @@ jq -n '{id:"T-Z",scope:["src/**"],explain:{en:{intent:[],done:[],before_nodes:[]
   "zh-TW":{intent:[],done:[],before_nodes:[],after_nodes:[]}}}' > "$c/tasks/T-Z.json"
 jq -n '{en:{glossary:[]},"zh-TW":{glossary:[]}}' > "$c/details.json"
 card="$(python3 "$ROOT/bin/lib/fm_card_spec.py" --task T-Z --tasks-dir "$c/tasks" --details "$c/details.json" --config "$ROOT/config.yaml")"
-assert_eq 'one-way|The spec names no door, so the task takes the one-way path.' "$(jq -r '.en.door | .kind + "|" + .reason' <<<"$card")" \
-  'the dispatch card shows the door and its reason'
-assert_eq 'one-way|spec 沒寫 door，所以任務走 one-way 流程。' "$(jq -r '."zh-TW".door | .kind + "|" + .reason' <<<"$card")" \
+assert_eq 'one-way|The spec names no door. The task waits on a captain card and keeps the one-way path.' \
+  "$(jq -r '.en.door | .kind + "|" + .reason' <<<"$card")" 'the dispatch card shows the door and its reason'
+assert_eq 'one-way|spec 沒寫 door。任務等待決策卡，並走 one-way 流程。' "$(jq -r '."zh-TW".door | .kind + "|" + .reason' <<<"$card")" \
   'and its zh-TW reason'
 assert_eq '["door","round"]' "$(jq -c '.en.glossary' <<<"$card")" 'the card explains the terms its door text uses'
 jq -n '{en:{intent:[{kind:"fact",text:"It works."}],door:{kind:"two-way",reason:"A revert undoes it.",rollback:"Revert the merge."}},

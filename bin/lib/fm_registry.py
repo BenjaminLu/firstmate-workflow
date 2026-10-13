@@ -17,7 +17,8 @@ def registry():
                   file=sys.stderr); sys.exit(65)
         spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
         herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
-    FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project', 'policy', 'projection', 'ui')
+    FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project', 'policy', 'projection', 'ui',
+              'door')
     NAME = re.compile(r'[a-z0-9-]{1,24}$')
     GITHUB = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$')
 
@@ -114,6 +115,29 @@ def registry():
                         globs.append(glob)
                     if not globs: refuse(name, key, 'must list at least one glob')
                     entry[key] = globs
+                elif key == 'door':
+                    # T-305: the project's own sensitive list, written by an
+                    # answered captain card; the engine's door.base stays
+                    if value and not value.startswith('#'): refuse(name, key, 'must be a block holding sensitive:')
+                    globs, inside = [], False
+                    for item in nested:
+                        if not item.strip() or item.lstrip().startswith('#'): continue
+                        child = re.match(r'\s*([A-Za-z_]+):\s*(#.*)?$', item)
+                        if child:
+                            if child.group(1) != 'sensitive':
+                                refuse(name, 'door.' + child.group(1), 'is not a project door key; only sensitive '
+                                       'is, and no project can remove the engine door.base list')
+                            if inside: refuse(name, 'door.sensitive', 'is given twice')
+                            inside = True
+                            continue
+                        found = re.match(r'\s*-\s+(.*)$', item)
+                        if not inside or not found: refuse(name, key, 'cannot read line: ' + item.strip())
+                        glob = herdr._project_scalar(found.group(1), 'config.yaml projects.%s.door.sensitive' % name)
+                        if not glob or glob.startswith('/') or '..' in glob.split('/'):
+                            refuse(name, 'door.sensitive', "must name globs relative to the repository, not '%s'" % glob)
+                        globs.append(glob)
+                    if not globs: refuse(name, 'door.sensitive', 'must list at least one glob')
+                    entry[key] = {'sensitive': globs}
                 else:
                     if nested: refuse(name, key, 'must be a one-line value')
                     entry[key] = herdr._project_scalar(value, 'config.yaml projects.%s.%s' % (name, key))

@@ -281,6 +281,8 @@ if [ -z "$GATE_MODE" ] && [ "$verdict" != 'not applicable' ] && [ -n "${GITHUB_E
   if [ "$(jq -r .kind <<<"$door")" = two-way ]; then
     say "door: read two-way from the pull request body; fail-first does not apply"
     verdict='not applicable'; reason='the pull request body names a two-way door, and no changed path is on the sensitive list'
+  elif [ -n "$(jq -r '.unclassified // ""' <<<"$door")" ]; then
+    say "door: read $door_said from the pull request body. $(jq -r .unclassified <<<"$door") So fail-first runs"
   elif [ -n "$door_forced" ]; then
     say "door: read $door_said from the pull request body, but $door_forced is on the sensitive list, so fail-first runs"
   else

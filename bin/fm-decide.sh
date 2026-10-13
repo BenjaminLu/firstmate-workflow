@@ -478,9 +478,11 @@ if [ "$MODE" = request ]; then
       [ -r "$HERE/lib/fm_card_spec.py" ] || { echo "fm-decide: missing $HERE/lib/fm_card_spec.py; nothing was written" >&2; exit 70; }
       spec_details="$(mktemp)" || exit 70
       trap 'rm -f "$spec_details"' EXIT
-      # T-303: a self card also shows the door the pin will keep
-      card_door=()
-      [ "${FM_EXTERNAL:-0}" = 1 ] || card_door=(--config "${FM_ENGINE_ROOT:-$REPO}/config.yaml")
+      # T-303: a card also shows the door the pin will keep. T-305: an
+      # external card reads the project's approved list, and a dispatch card
+      # refuses a spec that names no door.
+      card_door=(--purpose "$PURPOSE" --config "${FM_ENGINE_ROOT:-$REPO}/config.yaml")
+      [ "${FM_EXTERNAL:-0}" != 1 ] || card_door+=(--project "$FM_PROJECT" --state "$FM_STATE_DIR")
       python3 "$HERE/lib/fm_card_spec.py" --task "$TASK" --tasks-dir "${FM_TASKS_DIR:-$REPO/design/tasks}" \
         --details "$DETAILS" ${card_door[@]+"${card_door[@]}"} > "$spec_details" || exit 65
       DETAILS="$spec_details"

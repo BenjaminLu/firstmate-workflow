@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+os.environ['HERDR_ENV'] = '0'   # T-305: it runs fm-worker.sh, which can raise a door card
 
 # --- refusal texts captured inside real round sandboxes ----------------------
 # Each was printed by the real tool inside a worker round on macOS 15 (Darwin

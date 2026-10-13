@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 import sys
+import os
+os.environ['HERDR_ENV'] = '0'   # T-305: it runs fm-worker.sh, which can raise a door card
 root, tmp = map(Path, sys.argv[1:])
 
 def function(path, name):
