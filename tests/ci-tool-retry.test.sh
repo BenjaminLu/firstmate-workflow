@@ -60,6 +60,13 @@ assert_contains "$out" "captured 6 viewports" "and its output is shown"
 
 rc=0; out="$(bash "$retry" 'design capture' 2>&1)" || rc=$?
 assert_eq "64" "$rc" "a step with no command is a usage error"
+rc=0; out="$(bash "$retry" 'design capture' -- 2>&1)" || rc=$?
+assert_eq "64" "$rc" "a step with -- and no command is a usage error"
+rc=0; out="$(bash "$retry" 'design capture' echo hi 2>&1)" || rc=$?
+assert_eq "64" "$rc" "a step without -- is a usage error"
+rc=0; out="$(bash "$retry" '' -- echo hi 2>&1)" || rc=$?
+assert_eq "64" "$rc" "a step with no name is a usage error"
+assert_contains "$out" "usage: fm-tool-retry.sh <name> -- <command...>" "and prints the usage line"
 
 # The workflow's design-capture step runs through the wrapper, by name, and
 # the Playwright suites keep no retries of their own.

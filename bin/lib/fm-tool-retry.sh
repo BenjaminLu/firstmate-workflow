@@ -8,18 +8,19 @@
 # needed one says so. Exit 64 on usage.
 set -uo pipefail
 exec </dev/null
-name="${1-}"
-if [ -z "$name" ] || [ "${2-}" != -- ] || [ $# -lt 3 ]; then
-  echo 'usage: fm-tool-retry.sh <name> -- <command...>' >&2
-  exit 64
-fi
-shift 2
+usage() { echo 'usage: fm-tool-retry.sh <name> -- <command...>' >&2; exit 64; }
+name="${1-}"; [ -n "$name" ] || usage; shift
+[ "${1-}" = -- ] || usage; shift
+[ $# -gt 0 ] || usage
 # What the browser tool says when it, not the page under test, failed.
 tool_errors='Protocol error|Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected'
 # What a failed check says; any of these and the failure is the step's own.
 assertions='AssertionError|expect\(|screenshots are missing'
 log="$(mktemp "${TMPDIR:-/tmp}/fm-tool-retry.XXXXXX")" || { echo 'fm-tool-retry: mktemp failed' >&2; exit 70; }
 trap 'rm -f "$log"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 attempt() {
   "$@" 2>&1 | tee "$log"
   return "${PIPESTATUS[0]}"
