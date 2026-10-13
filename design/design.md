@@ -1866,6 +1866,23 @@ must report at least one `SWEPT:<task>` block, each with a `searched:` line
 and `found N, fixed M`, or it is refused before anything is published. Its
 report is kept marked as refused, so the next round is still a fix round.
 
+**A refused report keeps the work (T-304).** T-303 lost a 49-minute round,
+and T-289 three, to a line like `found 2 (detail), fixed 2`. The class check
+reads detail between and after the numbers; a block still needs `searched:`
+and both numbers, and fixed is never more than found. Only the class list is
+a report rule today; a later rule can join it. A round refused for it keeps
+its changes in the worktree, pushes nothing, and writes
+`<worktrees>/<task>.kept` (the pin, the branch head, the reason, the report
+and a patch under `state/rescued/`). The next launch on the same pin and head
+keeps the tree in place, with or without a pull request (a copy still goes to
+`state/rescued/`), and runs a report-only round: its prompt gives the reason
+and the report, and the exit checkpoint publishes nothing. A change in that
+round is saved at `state/rescued/<name>.patch` and the tree is put back to the
+kept work; a report that passes publishes the kept work and drops the record.
+A repin or a moved head drops the record with one `gate_failed` event and
+takes the usual rescue. Rounds refused for their code, rebuilt rounds and
+external projects are unchanged; work rescued before T-304 stays where it is.
+
 **Rounds already in flight (T-302).** Only a run whose first round on these
 spec bytes wrote `plan-required` is held to the plan and fix-round rules, so
 a task and pull request started under an older launcher go on as before.

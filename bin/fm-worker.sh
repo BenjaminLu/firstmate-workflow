@@ -271,6 +271,11 @@ publish_wip_if_dirty() {
   [ "${_fm_wip_done}" = 1 ] && return 0
   [ -n "${tree:-}" ] && [ -d "$tree" ] && [ -n "${branch:-}" ] && [ -n "${TASK:-}" ] || return 0
   case "$branch" in main|master|HEAD|'') return 0 ;; esac
+  # T-304: kept work is published only with a report that passes.
+  if [ "${report_only:-0}" = 1 ] && [ -f "${kept_record:-}" ]; then
+    echo "fm-worker: the kept work of $TASK waits for its fixed report ($reason); nothing is published" >&2
+    return 0
+  fi
   fm_publication_policy "$tree" "$branch" || return 1
   # An uncommitted rebuild is not a checkpoint: it sits detached on the
   # base, possibly with markers, and pushing it would replace the branch.
@@ -725,17 +730,53 @@ leftover_excludes=(":(exclude).fm-prompt.md" ":(exclude).fm-say.md")
 if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
      -- . "${leftover_excludes[@]}")" ]; then
   leftover_dirty=1
+fi
+# T-304: a round refused only for its report left its work in the tree and a
+# kept record beside it. The same pin on the same head keeps that work in
+# place, with or without a pull request, and the round fixes only its report.
+# A repin or a moved head drops the record and takes the path below.
+kept_record="$FM_WORKTREES/$TASK.kept"; report_only=0; kept_json=''
+if [ -f "$kept_record" ]; then
+  kept_json="$(jq -c . "$kept_record" 2>/dev/null)" || kept_json=''
+  kept_why=''
+  if [ "$FM_EXTERNAL" = 1 ] || [ -z "$kept_json" ]; then kept_why='the kept record does not read'
+  elif [ "$leftover_dirty" = 0 ]; then kept_why='the tree holds no uncommitted work'
+  elif [ ! -s "$(jq -r .patch <<<"$kept_json")" ]; then kept_why='the saved copy of the kept work does not read'
+  elif [ "$(jq -r .pin <<<"$kept_json")" != "$pinned_version" ]; then
+    kept_why="the pin moved from v$(jq -r .pin <<<"$kept_json") to v$pinned_version"
+  elif [ "$(git -C "$tree" symbolic-ref -q --short HEAD)" != "$branch" ] \
+       || [ "$(git -C "$tree" rev-parse -q --verify HEAD)" != "$(jq -r .head <<<"$kept_json")" ] \
+       || [ "$(git rev-parse -q --verify "refs/heads/$branch")" != "$(jq -r .head <<<"$kept_json")" ]; then
+    kept_why='the branch head moved'
+  fi
+  if [ -z "$kept_why" ]; then
+    report_only=1
+  else
+    rm -f "$kept_record"; kept_json=''
+    echo "fm-worker: the kept work of a refused round is not kept in place: $kept_why" >&2
+    emit --type gate_failed ${PR:+--pr "$PR"} \
+      --en "kept work of a refused round goes back to the usual rescue: $kept_why" \
+      --tw "被拒收那一輪保留的改動改回一般的救援流程：$kept_why"
+  fi
+fi
+if [ "$leftover_dirty" = 1 ]; then
   rescue="$FM_STATE_DIR/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$(dirname "$rescue")"
   cp -R "$tree" "$rescue"
   echo "fm-worker: $tree had uncommitted work; a copy is at $rescue" >&2
-  emit --type worker_crashed --en "rescued uncommitted work to ${rescue#"$REPO"/}" \
-       --tw "把未提交的工作救到 ${rescue#"$REPO"/}"
+  if [ "$report_only" = 1 ]; then
+    emit_status "Kept a refused round's work in place; this round fixes its report; backup at ${rescue#"$REPO"/}" \
+      "保留被拒收那一輪的改動；這一輪只修報告；備份在 ${rescue#"$REPO"/}"
+  else
+    emit --type worker_crashed --en "rescued uncommitted work to ${rescue#"$REPO"/}" \
+         --tw "把未提交的工作救到 ${rescue#"$REPO"/}"
+  fi
 fi
-# Keep an unpublished, attached dirty tree as well as its recovery copy.
-# Existing PR/rebuild recovery retains its usual rescue-and-recreate path.
-if [ "$leftover_dirty" = 1 ] && [ -z "$PR" ] \
-   && [ "$(git -C "$tree" symbolic-ref -q --short HEAD)" = "$branch" ]; then
+# Keep an unpublished, attached dirty tree as well as its recovery copy, and
+# a report-only round's kept work even when its task has a pull request.
+# Other PR/rebuild recovery retains its usual rescue-and-recreate path.
+if [ "$report_only" = 1 ] || { [ "$leftover_dirty" = 1 ] && [ -z "$PR" ] \
+   && [ "$(git -C "$tree" symbolic-ref -q --short HEAD)" = "$branch" ]; }; then
   round_two=1
   branch_existed=1
 else
@@ -1490,6 +1531,8 @@ if [ "$FM_EXTERNAL" = 0 ] && [ "${FM_PLAN_FIRST:-1}" != 0 ] && [ "$door_kind" !=
   plan_mode="$(jq -r .mode <<<"$plan_state")"
   plan_fix="$(jq -r '(.fix // []) | join(", ")' <<<"$plan_state")"
 fi
+# A report-only round is still the fix round its report was refused in.
+[ "$report_only" = 0 ] || plan_fix="${plan_fix:-$(jq -r '.fix // ""' <<<"$kept_json")}"
 if [ "$plan_mode" = unaccepted ]; then
   _fm_wip_done=1
   plan_round="$(jq -r .plan_round <<<"$plan_state")"; plan_head="$(jq -r .plan_head <<<"$plan_state")"
@@ -1594,14 +1637,32 @@ fi
     printf 'evidence in `.fm-say.md`, and stop. No further round starts on this pin;\n'
     printf 'firstmate raises a new card with a revised spec.\n'
   fi
-  if [ "$plan_mode" = accepted ] && [ "$(jq -r .built <<<"$plan_state")" = false ]; then
+  if [ "$report_only" = 1 ]; then
+    printf '\n# Fix only your report\n\n'
+    printf 'Your last round was refused only for its report. Its changes are kept in\n'
+    printf 'this worktree, uncommitted, and nothing was pushed. This round fixes the\n'
+    printf 'report and changes no other file: write the whole report again into\n'
+    printf '`.fm-say.md`. The launcher then publishes the kept changes with it. A round\n'
+    printf 'that changes a file is refused: its changes are saved under state/rescued/\n'
+    printf 'and the tree is put back to the kept work.\n\n'
+    printf 'Why it was refused: %s\n\n' "$(jq -r .reason <<<"$kept_json")"
+    if [ -n "$plan_fix" ]; then
+      printf 'The report lists, for each class it fixed (detail may follow either number):\n\n'
+      printf '    SWEPT:%s <the class>\n      searched: <how you searched>\n' "$TASK"
+      printf '      <each place you checked>\n      found N, fixed M\n\n'
+    fi
+    printf 'Your refused report:\n\n````markdown\n'
+    cat "$(jq -r .report <<<"$kept_json")" 2>/dev/null || printf '(the saved report does not read)\n'
+    printf '````\n\n---\n'
+  fi
+  if [ "$report_only" = 0 ] && [ "$plan_mode" = accepted ] && [ "$(jq -r .built <<<"$plan_state")" = false ]; then
     printf '\n# Your plan was accepted\n\n'
     printf 'Firstmate accepted the plan you returned in round %s. Build it now. Its answers:\n\n' \
       "$(jq -r .plan_round <<<"$plan_state")"
     jq -r .answers <<<"$plan_state"
     printf '\n---\n'
   fi
-  if [ -n "$plan_fix" ]; then
+  if [ -n "$plan_fix" ] && [ "$report_only" = 0 ]; then
     printf '\n# Fix the whole class\n\n'
     printf 'This round fixes a problem (%s). For each one, find every other place in\n' "$plan_fix"
     printf 'the change with the same cause and fix it too. If you have questions, list\n'
@@ -2083,16 +2144,37 @@ plan_refuse() {   # plan_refuse <why, en> <why, zh-TW>: keep the note, publish n
 }
 # The round's own file changes as a patch: tracked files against the index
 # (a round cannot write the index) and every untracked file.
-plan_set_aside() {   # plan_set_aside <patch>
-  local f excludes=(-- . ":(exclude).fm-say.md" ":(exclude).fm-prompt.md" ":(exclude)design/tasks/")
+plan_excludes=(-- . ":(exclude).fm-say.md" ":(exclude).fm-prompt.md" ":(exclude)design/tasks/")
+tree_patch() {   # tree_patch <patch>: the round's file changes, the tree untouched
+  local f
   mkdir -p "$(dirname "$1")" || return 1
-  git -C "$tree" diff --binary "${excludes[@]}" > "$1" || return 1
+  git -C "$tree" diff --binary "${plan_excludes[@]}" > "$1" || return 1
   while IFS= read -r -d '' f; do
     git -C "$tree" diff --binary --no-index /dev/null "$f" >> "$1"
     [ $? -le 1 ] || return 1
-  done < <(git -C "$tree" ls-files -z -o --exclude-standard "${excludes[@]}")
-  git -C "$tree" restore --worktree "${excludes[@]}" 2>/dev/null || true
-  git -C "$tree" clean -fdq "${excludes[@]}"
+  done < <(git -C "$tree" ls-files -z -o --exclude-standard "${plan_excludes[@]}")
+}
+plan_set_aside() {   # plan_set_aside <patch> [kept patch]: save, then restore the tree to HEAD or the kept work
+  local rc=0
+  tree_patch "$1" || rc=1
+  git -C "$tree" restore --worktree "${plan_excludes[@]}" 2>/dev/null || true
+  git -C "$tree" clean -fdq "${plan_excludes[@]}"
+  [ -z "${2:-}" ] || [ ! -s "$2" ] || git -C "$tree" apply --binary "$2" || return 1
+  return "$rc"
+}
+# T-304: a round refused only for its report keeps its work in the tree; the
+# kept record beside the tree (the pin, the head, the reason, the report)
+# makes the next launch keep it in place and run a report-only round.
+kept_write() {   # kept_write <why>
+  local base="$FM_STATE_DIR/rescued/$TASK-kept"
+  _fm_wip_done=1
+  mkdir -p "$FM_STATE_DIR/rescued" || return 1
+  if [ "$report_only" = 0 ]; then tree_patch "$base.patch" || return 1; fi
+  cp "$say" "$base.md" 2>/dev/null || : > "$base.md"
+  jq -n --arg pin "$pinned_version" --arg head "$round_head" --arg reason "$1" \
+    --arg report "$base.md" --arg patch "$base.patch" --arg fix "$plan_fix" --arg run "$NAME" \
+    '{pin:$pin, head:$head, reason:$reason, report:$report, patch:$patch, fix:$fix, run:$run}' \
+    > "$kept_record.next" && mv -f "$kept_record.next" "$kept_record"
 }
 # T-303: a report that finds the door wrong stops the task on this pin. The
 # round's work and report are published as usual; no further round, review
@@ -2158,14 +2240,45 @@ if [ "$plan_mode" = plan ]; then
     exit 0
   fi
 fi
+# T-304: a report-only round changes no file. Any change is saved, the tree
+# is put back to the kept work, and the next round is report-only again.
+if [ "$report_only" = 1 ]; then
+  kept_patch="$(jq -r .patch <<<"$kept_json")"
+  kept_now="$(scratch_new)" || exit 70
+  scratch_add "$kept_now"
+  tree_patch "$kept_now" || exit 70
+  if ! cmp -s "$kept_now" "$kept_patch"; then
+    plan_patch="$FM_STATE_DIR/rescued/$NAME.patch"
+    plan_set_aside "$plan_patch" "$kept_patch" \
+      || echo "fm-worker: the round's changes could not all be set aside at $plan_patch" >&2
+    _fm_wip_done=1
+    cp "$say" "$(jq -r .report <<<"$kept_json")" 2>/dev/null || true
+    plan_refuse "a report-only round changes no file; its changes are saved at ${plan_patch#"$REPO"/} and the tree is put back to the kept work" \
+      "只修報告的一輪不改任何檔案；改動已存到 ${plan_patch#"$REPO"/}，工作樹已還原成保留的改動"
+  fi
+fi
 # T-302: a round that fixes a problem lists the places it checked for the
-# same cause, or nothing it changed is published.
+# same cause, or nothing it changed is published. T-304: only the report is
+# wrong, so the work stays in the tree for a report-only round.
 if [ -n "$plan_fix" ] && worker_changed_files; then
   class_text="$(plan_note)" || exit 70
-  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plan.py" check-class --task "$TASK" --file "$class_text" >/dev/null 2>&1 \
-    || plan_refuse "this round fixes a problem ($plan_fix), but its report has no complete SWEPT:$TASK block (searched: and found N, fixed M)" \
-         "這輪在修正問題（${plan_fix}），但報告沒有列出檢查過的同類地方"
+  class_problems="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_plan.py" check-class --task "$TASK" --file "$class_text" 2>&1)" || {
+    class_why="this round fixes a problem ($plan_fix), but its report's class list does not pass: $(printf '%s' "$class_problems" | tr '\n' ';' | sed 's/;$//')"
+    kept_tw=''
+    # A rebuilt round sits detached on the base; it keeps today's path.
+    if [ "$rebuilt" = 1 ]; then :
+    elif kept_write "$class_why"; then
+      class_why="$class_why; the work is kept in the tree and the next round fixes only the report"
+      kept_tw='；改動保留在工作樹，下一輪只修報告'
+    else
+      rm -f "$kept_record"
+      echo "fm-worker: the kept record of $TASK could not be written" >&2
+    fi
+    plan_refuse "$class_why" "這輪在修正問題（${plan_fix}），但報告的同類清單不合格${kept_tw}"
+  }
 fi
+# A report that passes publishes the kept work with it.
+[ "$report_only" = 0 ] || rm -f "$kept_record"
 # Retain first, even when no PR exists or optional publication later fails.
 # The whole note, results block included, whenever it is not empty.
 if [ -s "$say" ] && [ "$plan_retained" = 0 ]; then
