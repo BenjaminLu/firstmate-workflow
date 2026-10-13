@@ -221,6 +221,19 @@ gate4() {
   local contract pin rc
   mkdir -p "$FM_STATE_DIR/tmp" || return 1
   pin="$(fm_pin resolve --task "$TASK")" || return 1
+  # T-303: fail-first does not apply to a two-way head. The pin's door
+  # decides; a changed path on the sensitive list makes the head one-way and
+  # is named here.
+  if [ "$FM_EXTERNAL" != 1 ]; then
+    local door said
+    door="$(python3 "$GATE_BIN/lib/fm_door.py" gate --repo "$FM_TARGET_ROOT" --base "$BASE" --head "$BRANCH" <<<"$pin")" \
+      || return 1
+    said="  door $(jq -r .line <<<"$door")"
+    [ "$(jq -r .kind <<<"$door")" != two-way ] || said="$said"$'\n''  fail-first does not apply to a two-way head'
+    printf '%s\n' "$said"
+    [ -z "${GATE_TRANSCRIPT:-}" ] || printf '%s\n' "$said" >> "$GATE_TRANSCRIPT"
+    [ "$(jq -r .kind <<<"$door")" != two-way ] || return 0
+  fi
   NOT_RUNNABLE="$(jq -r '.contract.unrunnable | select(type == "string" and length > 0)' <<<"$pin")" || return 1
   [ -z "$NOT_RUNNABLE" ] || return 3
   contract="$(mktemp "$FM_STATE_DIR/tmp/gate-contract.XXXXXX")" || return 1

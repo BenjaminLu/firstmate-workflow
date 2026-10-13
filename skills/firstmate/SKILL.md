@@ -1690,6 +1690,33 @@ that both edit §15.10 itself can still meet at the end of the file. Every other
 home is mid-file. An existing spec that lists design/design.md without naming a
 section is asked about in the worker's next first round on that spec.
 
+### Doors pick the path (T-303)
+
+Every self spec names its door: `"door": {"kind": "two-way" | "one-way",
+"reason": "<one line>"}`. A revert undoes a two-way change; a data format,
+deleted data, a public interface, credentials and permissions, or git history
+make a change one-way. A spec with no door, or a door in any other shape, is
+one-way. The pin keeps the door it had when it was written (`bin/lib/fm_door.py`),
+and the dispatch and repin cards show it with its reason; do not write `door`
+on the card yourself.
+
+- Two-way: no plan round, so the first round builds; no fail-first gate; the
+  review checks correctness and scope only, and a REJECT goes back to the worker
+  under the same round budget as a one-way task. CI, the scope gate, the designer review
+  and the merge card stay, and the captain approves every merge.
+- One-way: the plan round, fail-first, the full review and all six gates.
+- `door.sensitive` in the engine config.yaml lists the paths that are always
+  one-way. A two-way spec with a scope entry inside one is pinned one-way; a
+  two-way head whose diff touches one is gated one-way, and its pin stops for
+  a new card as after `DOOR-CHANGE`. The card, the gate or the stop names the
+  path.
+- A worker that finds the door wrong writes `DOOR-CHANGE:<task>` and stops. No
+  further round, review or merge card starts on that pin. Raise a new card with
+  a revised spec; the captain's repin starts the task on its new path.
+
+External projects, the merge card, and tasks pinned before T-303 keep today's
+path.
+
 ### Plain writing in specs and cards (T-270)
 
 Write every spec, captain card, pull-request draft and commit message by

@@ -269,6 +269,25 @@ elif [ -z "$P_TEST" ]; then
   verdict='fail'; reason="config.yaml declares no project.test to run a changed suite with"
 fi
 
+# T-303: on a pull request, CI reads the door from the `Door:` line the
+# launcher rendered into the body; gate 4, reading the pin, stays the
+# authority. A two-way head runs no fail-first; a changed path on the base's
+# sensitive list keeps it one-way, and the line says which door was read.
+if [ -z "$GATE_MODE" ] && [ "$verdict" != 'not applicable' ] && [ -n "${GITHUB_EVENT_PATH:-}" ] \
+    && [ -f "$GITHUB_EVENT_PATH" ]; then
+  door="$(python3 "$FF_BIN/lib/fm_door.py" ci --event "$GITHUB_EVENT_PATH" --repo "$REPO" --base "$MB" --head "$HEAD_SHA")" \
+    || { say "the door of this pull request does not read"; exit 70; }
+  door_said="$(jq -r .said <<<"$door")"; door_forced="$(jq -r '.forced_by // ""' <<<"$door")"
+  if [ "$(jq -r .kind <<<"$door")" = two-way ]; then
+    say "door: read two-way from the pull request body; fail-first does not apply"
+    verdict='not applicable'; reason='the pull request body names a two-way door, and no changed path is on the sensitive list'
+  elif [ -n "$door_forced" ]; then
+    say "door: read $door_said from the pull request body, but $door_forced is on the sensitive list, so fail-first runs"
+  else
+    say "door: read $door_said from the pull request body; fail-first runs"
+  fi
+fi
+
 # --- the part and the report --------------------------------------------------
 # One program, two steps. `part` reads the runs of the suites this process
 # ran ($work/planned, their indices in $work/suites) into a JSON part.

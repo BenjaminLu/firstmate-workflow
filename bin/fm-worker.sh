@@ -81,6 +81,20 @@ fm_pin check --task "$TASK" ${spec_source[@]+"${spec_source[@]}"} || exit 65
 # checkout's own config.yaml holds the budget.
 python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_round_budget.py" check --state "$FM_STATE_DIR" \
   --project "$(fm_evidence_project)" --task "$TASK" --config "$REPO/config.yaml" || exit 65
+# T-303: a round that found the door wrong stopped its pin; no further round
+# starts on it. Firstmate raises a new card, and its repin starts the next.
+if [ "$FM_EXTERNAL" = 0 ]; then
+  door_stop="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" stopped --state "$FM_STATE_DIR" --task "$TASK")"
+  case "$?" in
+    0) ;;
+    3) if [ -n "$(jq -r '.forced_by // empty' <<<"$door_stop")" ]; then
+         echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong: $(jq -r .reason <<<"$door_stop")" >&2
+       fi
+       echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong; no round starts on pin v$(jq -r .version <<<"$door_stop") until firstmate raises a new card and the captain approves a repin" >&2
+       exit 65 ;;
+    *) echo "fm-worker: the door stop of $TASK does not read; no round starts" >&2; exit 65 ;;
+  esac
+fi
 
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 fm_external_prepare || exit 65
@@ -1454,7 +1468,16 @@ spec_first="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_first_round.py" "$FM_RU
 # task already in flight goes on as before. FM_PLAN_FIRST=0 keeps the
 # build-first round for the suites that predate T-302 (tests/lib.sh).
 plan_mode=off; plan_state='{}'; plan_fix=''
-if [ "$FM_EXTERNAL" = 0 ] && [ "${FM_PLAN_FIRST:-1}" != 0 ]; then
+# T-303: the pin's door picks the path. A two-way pin has no plan round: its
+# first round builds. A one-way pin, a pin from before T-303 and an external
+# project keep the path above.
+door_kind=one-way; door_reason=''; door_version=''
+if [ "$FM_EXTERNAL" = 0 ] && [ -n "${FM_SPEC_PIN_JSON:-}" ]; then
+  door_version="$(jq -r .version <<<"$FM_SPEC_PIN_JSON")"
+  door_json="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" pin <<<"$FM_SPEC_PIN_JSON")" || { _fm_wip_done=1; echo "fm-worker: the door of $TASK does not read; no round starts" >&2; exit 65; }
+  door_kind="$(jq -r .kind <<<"$door_json")"; door_reason="$(jq -r .reason <<<"$door_json")"
+fi
+if [ "$FM_EXTERNAL" = 0 ] && [ "${FM_PLAN_FIRST:-1}" != 0 ] && [ "$door_kind" != two-way ]; then
   if [ "$spec_first" = first ]; then
     python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
       "$FM_RUN_DIR/pinned/spec.json" > "$FM_RUN_DIR/plan-required" || exit 70
@@ -1552,6 +1575,24 @@ fi
   printf '\n---\n\n'
   if [ "$round_two" = 1 ]; then
     printf '\n# This is not the first round\n\nYour branch already carries your earlier work. Build on it.\n'
+  fi
+  if [ -n "$door_version" ]; then
+    printf '\n# The door\n\nPin v%s names a %s door: %s\n\n' "$door_version" "$door_kind" "$door_reason"
+    if [ "$door_kind" = two-way ]; then
+      printf 'This task takes the two-way path: no plan round, so this round builds; no\n'
+      printf 'fail-first gate; the review checks correctness and scope only, and a REJECT\n'
+      printf 'comes back to you under the same round budget as a one-way task. CI, the scope\n'
+      printf 'gate, the designer review of UI pages and the merge card stay. A diff that touches a\n'
+      printf 'path on the sensitive list (config.yaml `door.sensitive`) is handled as one-way\n'
+      printf 'at the gates, the gate names the path, and no further round starts on this pin.\n\n'
+    else
+      printf 'This task takes the one-way path: the plan round, fail-first, the full review\n'
+      printf 'and all six gates.\n\n'
+    fi
+    printf 'If this round finds evidence that the door is wrong (for example a two-way task\n'
+    printf 'needs a data format change), write a standalone `DOOR-CHANGE:%s` line and the\n' "$TASK"
+    printf 'evidence in `.fm-say.md`, and stop. No further round starts on this pin;\n'
+    printf 'firstmate raises a new card with a revised spec.\n'
   fi
   if [ "$plan_mode" = accepted ] && [ "$(jq -r .built <<<"$plan_state")" = false ]; then
     printf '\n# Your plan was accepted\n\n'
@@ -2053,6 +2094,41 @@ plan_set_aside() {   # plan_set_aside <patch>
   git -C "$tree" restore --worktree "${excludes[@]}" 2>/dev/null || true
   git -C "$tree" clean -fdq "${excludes[@]}"
 }
+# T-303: a report that finds the door wrong stops the task on this pin. The
+# round's work and report are published as usual; no further round, review
+# or merge card starts until firstmate raises a new card and a repin lands.
+if [ -n "$door_version" ] && [ -s "$say" ] \
+    && python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" marker --task "$TASK" --file "$say"; then
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" stop --state "$FM_STATE_DIR" --task "$TASK" \
+    --version "$door_version" --round "$round_number" --head "$round_head" --actor "$NAME" >/dev/null \
+    || { _fm_wip_done=1; echo "fm-worker: the door-change stop could not be written" >&2; exit 70; }
+  echo "fm-worker: the round found the door of $TASK wrong; no further round starts on pin v$door_version" >&2
+  emit --type gate_failed ${PR:+--pr "$PR"} \
+    --en "door change: no further round on pin v$door_version; firstmate raises a new card" \
+    --tw "door 判斷錯誤：pin v$door_version 不再開新一輪；firstmate 會開新卡"
+fi
+# T-303: a two-way round whose changes touch a path on the sensitive list is
+# one-way at the gates, and its pin stops here; the stop names the path. The
+# round is published as usual.
+if [ -n "$door_version" ] && [ "$door_kind" = two-way ]; then
+  door_base="$(git -C "$tree" merge-base "refs/remotes/origin/$BASE" HEAD 2>/dev/null \
+    || git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null)" || door_base=''
+  if [ -z "$door_base" ] \
+      || ! door_touch="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" touched --repo "$tree" --base "$door_base" <<<"$FM_SPEC_PIN_JSON")"; then
+    _fm_wip_done=1; echo "fm-worker: the round's paths could not be checked against the sensitive list" >&2; exit 70
+  fi
+  if [ "$(jq -r .kind <<<"$door_touch")" = one-way ]; then
+    door_path="$(jq -r .forced_by <<<"$door_touch")"
+    python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" stop --state "$FM_STATE_DIR" --task "$TASK" \
+      --version "$door_version" --round "$round_number" --head "$round_head" --actor "$NAME" \
+      --path "$door_path" --why "$(jq -r .reason <<<"$door_touch")" >/dev/null \
+      || { _fm_wip_done=1; echo "fm-worker: the door stop could not be written" >&2; exit 70; }
+    echo "fm-worker: the round changed $door_path, which is on the sensitive list; no further round starts on pin v$door_version" >&2
+    emit --type gate_failed ${PR:+--pr "$PR"} \
+      --en "door change: $door_path is on the sensitive list; no further round on pin v$door_version; firstmate raises a new card" \
+      --tw "door 判斷錯誤：$door_path 在敏感清單上；pin v$door_version 不再開新一輪；firstmate 會開新卡"
+  fi
+fi
 plan_retained=0
 if [ "$plan_mode" = plan ]; then
   if worker_changed_files; then

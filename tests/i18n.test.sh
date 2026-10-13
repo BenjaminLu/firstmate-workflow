@@ -234,7 +234,7 @@ assert_eq '自动驾驶' "$(glossary_cn autopilot term)" 'zh-CN glossary term au
 assert_eq '先失败测试' "$(glossary_cn fail-first term)" 'zh-CN glossary term fail-first'
 assert_eq '固定版本是已核准规格的冻结副本，任务用它直到船长核准修改。' "$(glossary_cn pin text)" 'zh-CN glossary text pin'
 assert_eq '待办项目是审查清单上的一个编号修改，任务必须完成它才能通过审查。' "$(glossary_cn standing-item text)" 'zh-CN glossary text standing-item'
-assert_eq '门的种类说明改动是否容易复原：双向门容易复原，单向门难以复原。' "$(glossary_cn door text)" 'zh-CN glossary text door'
+assert_eq '门说明改动是否容易复原：双向门容易，走短流程；单向门难，走完整流程。' "$(glossary_cn door text)" 'zh-CN glossary text door'
 assert_eq '先失败测试在旧程序上失败，在新程序上通过。' "$(glossary_cn fail-first text)" 'zh-CN glossary text fail-first'
 assert_eq '工作简报是 firstmate 写给工人的说明，指出下一次执行要做什么。' "$(glossary_cn brief text)" 'zh-CN glossary text brief'
 for id in pin repin standing-item gate six-gates carry door spec-ok preflight round brief autopilot board scope fail-first; do

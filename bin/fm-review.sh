@@ -956,6 +956,22 @@ fm_round_pinned reviewer "$spec" || exit 65
   cat "$FM_RUN_DIR/pinned-prompt.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
+  # T-303: a two-way head's review checks correctness and scope only, under the
+  # same round budget as a one-way head;
+  # a changed path on the sensitive list makes the head one-way.
+  if [ "$FM_EXTERNAL" != 1 ] && [ -n "$FM_SPEC_PIN_JSON" ] && [ "${LANE:-code}" = code ] && [ -n "$R_BASE" ]; then
+    door="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" gate --repo "$PWD" --base "$R_BASE" --head "$R_HEAD" \
+      <<<"$FM_SPEC_PIN_JSON")" || exit 65
+    printf '\n# The door\n\nThis head takes the %s path: %s\n' "$(jq -r .kind <<<"$door")" "$(jq -r .reason <<<"$door")"
+    if [ "$(jq -r .kind <<<"$door")" = two-way ]; then
+      printf '\nA revert undoes this change. Check correctness and scope only: does the diff do\n'
+      printf 'what the spec asks, inside its scope, without breaking what it touches? Ask for no\n'
+      printf 'fail-first evidence, style or migration. A REJECT goes back to the worker as for a\n'
+      printf 'one-way head, under the same round budget. If the diff shows that the door is\n'
+      printf 'wrong (a data format, deleted data, a public interface, credentials or\n'
+      printf 'permissions, or git history), REJECT and say so.\n'
+    fi
+  fi
 } > "$work/intro.md"
 {
   if [ "$ROUND" -ge 2 ]; then

@@ -932,8 +932,25 @@ class MechanicalLoop:
                 continue
         return None
 
+    def door_hold(self, task):
+        """T-303: a task whose current pin has a door-change stop gets no
+        review and no merge card; one event says why."""
+        import fm_door
+        stop = fm_door.stopped(self.state, task)
+        if not stop:
+            return False
+        version = stop.get('version')
+        self.queue(f'door-stop-{task}-{version}', task,
+                   f'{task}: round {stop.get("round")} found the door wrong; no review or merge card on pin v{version} '
+                   'until a new card and a repin',
+                   f'{task}：第 {stop.get("round")} 輪發現 door 判斷錯誤；pin v{version} 不再審查或開合併卡，'
+                   '等新卡與重新固定')
+        return True
+
     def launch_review(self, task, pr, round_number=1):
         from fm_autopilot import key
+        if self.door_hold(task):
+            return
         number, head = pr['number'], pr['head']['sha']
         if self.job_for('review', number, head) is not None:
             return
@@ -958,6 +975,8 @@ class MechanicalLoop:
     def launch_design_review(self, task, pr, round_number=1):
         """T-298: the designer round on this head, beside the code review."""
         from fm_autopilot import key
+        if self.door_hold(task):
+            return
         number, head = pr['number'], pr['head']['sha']
         if self.job_for('design-review', number, head) is not None:
             return
@@ -1281,6 +1300,8 @@ class MechanicalLoop:
 
     def merge_card(self, task, pr, gated_base):
         from fm_concurrent import merge_blocker
+        if self.door_hold(task):
+            return
         if hasattr(self, 'refresh_queue'): self.refresh_queue()
         if getattr(self, 'queue_mode', 'off') != 'off' and not self.queue_guard(pr): return
         if self.policy['land'] != 'card':

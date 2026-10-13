@@ -1889,6 +1889,55 @@ still call `fm_spec_pins.py preflight --require-preflight` and
 prompt, the pass budget and their tests are deleted; the code that reads and
 checks stored receipts stays.
 
+### The door picks the path (T-303)
+
+A two-way change can be undone by a revert; a one-way change cannot (data
+formats, deleted data, public interfaces, credentials and permissions, git
+history). The captain's rule (2026-10-13): the two take different paths. A self
+task spec names its door as `door: {"kind": "two-way" | "one-way", "reason":
+"<one line>"}`; a missing door or any other shape is one-way, and nothing is
+refused over it. `bin/lib/fm_door.py` computes the effective door once, when a
+pin or repin is written, and the pin keeps it as `door: {kind, reason,
+forced_by}`. The dispatch and repin cards show it in both languages, with a
+fixed rollback line (`bin/lib/fm_card_spec.py`); an author never writes it.
+
+**Sensitive paths.** The engine config.yaml's `door.sensitive` globs name the
+paths that are always one-way. A two-way spec with a scope entry that itself
+falls inside one of them is pinned one-way, and the reason names the entry. A
+two-way head whose diff changes a listed path is handled as one-way at gate 4,
+in CI and in the review, and each names the path; gate 4 only reports it. The
+worker launcher, at the end of the round that touched the path, writes the
+pin's stop with the path and its reason (as for `DOOR-CHANGE`, below), so no
+further round starts on that pin until firstmate raises a new card. A project cannot add to the
+list, and `config.yaml` itself is not on it.
+
+**The two-way path.** No plan round: the first round builds (§6, the worker's
+first-round plan). Gate 4 says `fail-first does not apply to a two-way head`
+and passes; CI's `fail-first` job reads the `Door: <kind>, from pin N:` line
+the launcher rendered into the pull request body from the pin
+(`GITHUB_EVENT_PATH`), says which door it read, and skips fail-first for a
+two-way door; gate 4 reading the pin stays the authority. The review checks
+correctness and scope only (no fail-first, style or migration asks); a REJECT
+goes back to the worker under the same round budget (§7) as a one-way task. CI, the scope gate, the designer
+review of UI pages and the merge card stay; the captain approves every merge.
+
+**The one-way path.** Exactly the path above: the plan round, fail-first, the
+full review and all six gates. The dispatch card's rollback line says the plan
+round states the rollback.
+
+**A door that was wrong.** A round that finds the door wrong (a two-way task
+that needs a data format change) writes a standalone `DOOR-CHANGE:<task>` line
+and its evidence in `.fm-say.md`, and stops. The launcher publishes the round
+as usual and writes `state/door-stops/<task>/<pin version>.json`. No further
+worker round starts on that pin (exit 65), and the autopilot raises no review
+and no merge card for it, saying why in one event. Firstmate raises a new card
+with a revised spec; its repin is a new pin version, which the stop does not
+cover. A task never switches path in the middle of a pin.
+
+**Unchanged.** External projects, the merge card, and tasks pinned before
+T-303 keep today's path: a pin without `door` is one-way, and a pull request
+body rendered before T-303 names no pin, so CI runs fail-first for it.
+
 ### Small changes (T-277)
 
 A repin (amend, captain card, repin) is right for a change of

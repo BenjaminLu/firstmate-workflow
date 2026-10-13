@@ -119,6 +119,16 @@ string instead of reading them; only a run recorded before T-116, which has no
 such fields, may have its name read from its old actor, and its round is
 unknown - the old `r<n>` was a global counter, not a round.
 
+## The door (T-303)
+
+Your prompt names the door of the head. On a two-way head (a revert undoes it),
+check correctness and scope only: does the diff do what the spec asks, inside
+its scope, without breaking what it touches? Ask for no fail-first evidence,
+style or migration. A REJECT goes back to the worker as for a one-way head,
+under the same round budget. A one-way head gets the full review above.
+If the diff shows that the door is wrong (a data format, deleted data, a public
+interface, credentials or permissions, or git history), REJECT and say so.
+
 ## Run mode
 
 A project whose `config.yaml` says `reviewer: mode: run` also gives you a fresh
