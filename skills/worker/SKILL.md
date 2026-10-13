@@ -218,7 +218,9 @@ and the review checks correctness and scope only; a REJECT comes back to you
 under the same round budget as a one-way task. A one-way door keeps the
 plan round, fail-first, the full review and all six gates; a spec with no door
 is one-way. A two-way diff that touches a path on `door.sensitive` in
-config.yaml is gated as one-way, and the gate names the path.
+config.yaml is gated as one-way, the gate names the path, and the launcher
+stops the pin at the end of that round: write `DOOR-CHANGE:<task>` yourself
+when you see you need such a path.
 
 If a round finds evidence that the door is wrong (a two-way task that needs a
 data format change, deleted data, a public interface, credentials or

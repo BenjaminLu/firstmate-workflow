@@ -87,7 +87,10 @@ if [ "$FM_EXTERNAL" = 0 ]; then
   door_stop="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" stopped --state "$FM_STATE_DIR" --task "$TASK")"
   case "$?" in
     0) ;;
-    3) echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong; no round starts on pin v$(jq -r .version <<<"$door_stop") until firstmate raises a new card and the captain approves a repin" >&2
+    3) if [ -n "$(jq -r '.forced_by // empty' <<<"$door_stop")" ]; then
+         echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong: $(jq -r .reason <<<"$door_stop")" >&2
+       fi
+       echo "fm-worker: round $(jq -r .round <<<"$door_stop") of $TASK found its door wrong; no round starts on pin v$(jq -r .version <<<"$door_stop") until firstmate raises a new card and the captain approves a repin" >&2
        exit 65 ;;
     *) echo "fm-worker: the door stop of $TASK does not read; no round starts" >&2; exit 65 ;;
   esac
@@ -1581,7 +1584,7 @@ fi
       printf 'comes back to you under the same round budget as a one-way task. CI, the scope\n'
       printf 'gate, the designer review of UI pages and the merge card stay. A diff that touches a\n'
       printf 'path on the sensitive list (config.yaml `door.sensitive`) is handled as one-way\n'
-      printf 'at the gates, and the gate names the path.\n\n'
+      printf 'at the gates, the gate names the path, and no further round starts on this pin.\n\n'
     else
       printf 'This task takes the one-way path: the plan round, fail-first, the full review\n'
       printf 'and all six gates.\n\n'
@@ -2103,6 +2106,28 @@ if [ -n "$door_version" ] && [ -s "$say" ] \
   emit --type gate_failed ${PR:+--pr "$PR"} \
     --en "door change: no further round on pin v$door_version; firstmate raises a new card" \
     --tw "door 判斷錯誤：pin v$door_version 不再開新一輪；firstmate 會開新卡"
+fi
+# T-303: a two-way round whose changes touch a path on the sensitive list is
+# one-way at the gates, and its pin stops here; the stop names the path. The
+# round is published as usual.
+if [ -n "$door_version" ] && [ "$door_kind" = two-way ]; then
+  door_base="$(git -C "$tree" merge-base "refs/remotes/origin/$BASE" HEAD 2>/dev/null \
+    || git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null)" || door_base=''
+  if [ -z "$door_base" ] \
+      || ! door_touch="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" touched --repo "$tree" --base "$door_base" <<<"$FM_SPEC_PIN_JSON")"; then
+    _fm_wip_done=1; echo "fm-worker: the round's paths could not be checked against the sensitive list" >&2; exit 70
+  fi
+  if [ "$(jq -r .kind <<<"$door_touch")" = one-way ]; then
+    door_path="$(jq -r .forced_by <<<"$door_touch")"
+    python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_door.py" stop --state "$FM_STATE_DIR" --task "$TASK" \
+      --version "$door_version" --round "$round_number" --head "$round_head" --actor "$NAME" \
+      --path "$door_path" --why "$(jq -r .reason <<<"$door_touch")" >/dev/null \
+      || { _fm_wip_done=1; echo "fm-worker: the door stop could not be written" >&2; exit 70; }
+    echo "fm-worker: the round changed $door_path, which is on the sensitive list; no further round starts on pin v$door_version" >&2
+    emit --type gate_failed ${PR:+--pr "$PR"} \
+      --en "door change: $door_path is on the sensitive list; no further round on pin v$door_version; firstmate raises a new card" \
+      --tw "door 判斷錯誤：$door_path 在敏感清單上；pin v$door_version 不再開新一輪；firstmate 會開新卡"
+  fi
 fi
 plan_retained=0
 if [ "$plan_mode" = plan ]; then

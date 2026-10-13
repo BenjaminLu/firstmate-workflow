@@ -57,7 +57,8 @@ policy:                 # what every crew round may do, whichever vendor runs it
 door:                   # T-303: the paths that are always a one-way door. A
   sensitive:            # two-way self spec with a scope entry inside one is
                         # pinned one-way; a two-way head whose diff changes one
-                        # is gated one-way, and the gate names the path. Only
+                        # is gated one-way and its pin stops for a new card;
+                        # the gate and the stop name the path. Only
                         # the engine's list counts; a project cannot add to it.
     # credentials and permissions, sandbox and hook rules included
     - ".github/**"

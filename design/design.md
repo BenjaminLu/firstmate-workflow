@@ -1905,7 +1905,10 @@ fixed rollback line (`bin/lib/fm_card_spec.py`); an author never writes it.
 paths that are always one-way. A two-way spec with a scope entry that itself
 falls inside one of them is pinned one-way, and the reason names the entry. A
 two-way head whose diff changes a listed path is handled as one-way at gate 4,
-in CI and in the review, and each names the path. A project cannot add to the
+in CI and in the review, and each names the path; gate 4 only reports it. The
+worker launcher, at the end of the round that touched the path, writes the
+pin's stop with the path and its reason (as for `DOOR-CHANGE`, below), so no
+further round starts on that pin until firstmate raises a new card. A project cannot add to the
 list, and `config.yaml` itself is not on it.
 
 **The two-way path.** No plan round: the first round builds (§6, the worker's

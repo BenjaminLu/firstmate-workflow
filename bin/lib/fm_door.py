@@ -11,7 +11,8 @@ before T-303) is one-way. External projects keep the one-way path.
 The engine config.yaml's `door.sensitive` globs name the paths that are
 always one-way. A two-way spec with a scope entry that itself falls inside
 one of them is pinned one-way; a two-way pin whose diff touches one is
-handled as one-way at the gates, path by path.
+handled as one-way at the gates, path by path, and the worker launcher writes
+a stop for the pin at the end of the round that touched it.
 
 A two-way task skips the plan round and the fail-first gate, and its review
 checks correctness and scope only, under the same round budget. A round whose report holds a standalone `DOOR-CHANGE:<task>`
@@ -23,7 +24,8 @@ merge card starts on that pin, and firstmate raises a new card.
     fm_door.py gate --repo R --base B --head H          (the pin JSON on stdin)
     fm_door.py ci --event FILE --repo R --base B --head H
     fm_door.py stopped --state S --task T               exit 3 when stopped
-    fm_door.py stop --state S --task T --version N --round N --head H --actor A
+    fm_door.py touched --repo TREE --base B             (the pin JSON on stdin)
+    fm_door.py stop --state S --task T --version N --round N --head H --actor A [--path P --why W]
     fm_door.py marker --task T --file NOTE              exit 0 when it says DOOR-CHANGE
 """
 import argparse
@@ -121,6 +123,23 @@ def changed(repo, base, head):
     return [p for p in result.stdout.decode().split('\0') if p]
 
 
+SET_ASIDE = ('.fm-say.md', '.fm-prompt.md')
+
+
+def touched(tree, base):
+    """The paths a round's worktree changes against base: committed, uncommitted
+    and untracked, without the round's note, its prompt or the pinned spec."""
+    paths = set(changed(tree, base, 'HEAD'))
+    for args in (['diff', '--no-renames', '--name-only', '-z', base],
+                 ['ls-files', '-z', '-o', '--exclude-standard']):
+        result = subprocess.run(['git', '-C', str(tree)] + args, stdin=subprocess.DEVNULL,
+                                capture_output=True, check=False)
+        if result.returncode:
+            raise ValueError('cannot list the round\'s paths: ' + result.stderr.decode(errors='replace').strip())
+        paths.update(p for p in result.stdout.decode().split('\0') if p)
+    return sorted(p for p in paths if p not in SET_ASIDE and not p.startswith('design/tasks/'))
+
+
 def body_line(door, version):
     """The `Door:` line the launcher renders from a pin into a self PR body."""
     return f'Door: {door["kind"]}, from pin {version}: {door["reason"]}'
@@ -183,13 +202,15 @@ def stopped(state, task):
         return dict(task=task, version=version)
 
 
-def write_stop(state, task, version, round_number, head, actor):
+def write_stop(state, task, version, round_number, head, actor, path_=None, why=None):
     path = stop_path(state, task, version)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return json.loads(path.read_text())
     record = dict(task=task, version=version, round=round_number, head=head, actor=actor,
                   time=datetime.now(timezone.utc).isoformat())
+    if path_:
+        record.update(forced_by=path_, reason=why or '')
     temporary = path.with_name('.' + path.name + '.' + str(os.getpid()))
     temporary.write_text(json.dumps(record) + '\n')
     os.replace(temporary, path)
@@ -202,8 +223,8 @@ def marker(task, text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['effective', 'pin', 'gate', 'ci', 'stopped', 'stop', 'marker'])
-    for name in ('spec', 'config', 'repo', 'base', 'head', 'event', 'state', 'task', 'actor', 'file'):
+    parser.add_argument('command', choices=['effective', 'pin', 'gate', 'touched', 'ci', 'stopped', 'stop', 'marker'])
+    for name in ('spec', 'config', 'repo', 'base', 'head', 'event', 'state', 'task', 'actor', 'file', 'path', 'why'):
         parser.add_argument('--' + name, default='')
     parser.add_argument('--version', type=int)
     parser.add_argument('--round', type=int, default=0)
@@ -211,8 +232,9 @@ def main():
     if args.command == 'effective':
         config = Path(args.config).read_text() if args.config and Path(args.config).is_file() else ''
         print(json.dumps(effective(json.loads(Path(args.spec).read_text()), config), ensure_ascii=False))
-    elif args.command in ('pin', 'gate'):
-        paths = changed(args.repo, args.base, args.head) if args.command == 'gate' else []
+    elif args.command in ('pin', 'gate', 'touched'):
+        paths = (changed(args.repo, args.base, args.head) if args.command == 'gate'
+                 else touched(args.repo, args.base) if args.command == 'touched' else [])
         door = at_gate(json.loads(sys.stdin.read()), paths)
         print(json.dumps(dict(door, line=line(door)), ensure_ascii=False))
     elif args.command == 'ci':
@@ -225,7 +247,8 @@ def main():
     elif args.command == 'stop':
         if args.version is None:
             raise ValueError('a stop needs the pin version')
-        print(json.dumps(write_stop(args.state, args.task, args.version, args.round, args.head, args.actor)))
+        print(json.dumps(write_stop(args.state, args.task, args.version, args.round, args.head, args.actor,
+                                    args.path or None, args.why or None)))
     else:
         return 0 if marker(args.task, Path(args.file).read_text()) else 1
     return 0

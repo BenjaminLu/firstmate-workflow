@@ -1707,8 +1707,9 @@ on the card yourself.
 - One-way: the plan round, fail-first, the full review and all six gates.
 - `door.sensitive` in the engine config.yaml lists the paths that are always
   one-way. A two-way spec with a scope entry inside one is pinned one-way; a
-  two-way head whose diff touches one is gated one-way. The card or the gate
-  names the path.
+  two-way head whose diff touches one is gated one-way, and its pin stops for
+  a new card as after `DOOR-CHANGE`. The card, the gate or the stop names the
+  path.
 - A worker that finds the door wrong writes `DOOR-CHANGE:<task>` and stops. No
   further round, review or merge card starts on that pin. Raise a new card with
   a revised spec; the captain's repin starts the task on its new path.

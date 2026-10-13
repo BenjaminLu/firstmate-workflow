@@ -39,6 +39,8 @@ cp "$2" "$FM_SEEN/prompt-$n"
 mkdir -p "$3/src"; printf 'round %s\n' "$n" > "$3/src/round-$n"
 case "$(cat "$FM_SEEN/mode")" in
   door-change) printf 'This needs a stored format change.\n\nDOOR-CHANGE:T-Z\n' > "$3/.fm-say.md" ;;
+  sensitive) mkdir -p "$3/.github/workflows"; printf 'on: push\n' > "$3/.github/workflows/new.yml"
+             printf 'Built.\n' > "$3/.fm-say.md" ;;
   *) printf 'Built.\n' > "$3/.fm-say.md" ;;
 esac
 M
@@ -148,6 +150,25 @@ assert_eq '{"kind":"one-way","forced_by":".github/workflows/ci.yml"}' "$(pin_doo
   'its pin is one-way and names the entry'
 assert_contains "$(cat "$d/prompt-1")" 'The scope entry .github/workflows/ci.yml is on the sensitive list (.github/**)' \
   'the prompt names the path'
+safe_rm_rf "$d"
+worker_fixture "$TWO"
+run_worker sensitive
+# Fail-first: main writes no stop for a two-way round that touches a listed path.
+assert_eq '.github/workflows/new.yml' "$(jq -r .forced_by "$repo/state/door-stops/T-Z/1.json" 2>/dev/null)" \
+  'door: sensitive diff stops the pin'
+assert_eq 0 "$worker_rc" 'the round that touched the path is published'
+assert_ne '' "$(remote_head)" 'its work is pushed'
+before="$(prompts)"
+run_worker build
+assert_eq 65 "$worker_rc" 'no further round starts on a pin whose diff touched a listed path'
+assert_eq "$before" "$(prompts)" 'no adapter starts on that pin'
+assert_contains "$(cat "$d/out")" 'The diff changes .github/workflows/new.yml, which is on the sensitive list (.github/**)' \
+  'the refusal names the path'
+safe_rm_rf "$d"
+worker_fixture "$TWO"
+run_worker build
+assert_eq '' "$(jq -r '.forced_by // empty' "$repo/state/door-stops/T-Z/1.json" 2>/dev/null)" \
+  'a two-way round that touches no listed path writes no stop'
 safe_rm_rf "$d"
 card="$(jq '.door = {"kind":"two-way","reason":"x"} | .scope = ["bin/fm-merge.sh"]' "$c/tasks/T-Z.json")"
 printf '%s\n' "$card" > "$c/tasks/T-Z.json"
