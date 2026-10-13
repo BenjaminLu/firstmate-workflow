@@ -48,11 +48,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/timings
-          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
-            --status success --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
-          if [ -n "$run_id" ]; then
-            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -p 'suite-timings-*' -D /tmp/timings 2>/dev/null || true
-          fi
+          # T-306: the last five green runs on main, each in a directory of
+          # its own; bin/ci.sh balances by each suite's median of them.
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --status success --limit 5 --json databaseId --jq '.[].databaseId' > /tmp/timing-runs.txt 2>/dev/null || true
+          while read -r run_id; do
+            [ -n "$run_id" ] || continue
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -p 'suite-timings-*' -D "/tmp/timings/$run_id" 2>/dev/null || true
+          done < /tmp/timing-runs.txt
           find /tmp/timings -name 'suite-timings-*.txt' -exec cat {} + > /tmp/timings.txt 2>/dev/null || true
           { echo 'timings<<FM_TIMINGS_END'; grep -v '^FM_TIMINGS_END$' /tmp/timings.txt || true; echo 'FM_TIMINGS_END'; } >> "$GITHUB_OUTPUT"
 
@@ -359,13 +362,15 @@ jobs:
         if: steps.browser.outputs.cache-hit != 'true'
         run: bunx playwright install chromium
       # T-298: the designer round's page capture uses this same browser; a
-      # page rendered at every viewport, light and dark, proves it launches
+      # page rendered at every viewport, light and dark, proves it launches.
+      # T-306: a Chromium protocol error here is the browser's, not the
+      # page's, and is retried once by name; a missing shot is not retried.
       - name: the designer's page capture renders a page
         run: |
           mkdir -p "$RUNNER_TEMP/proto"
           printf '%s\n' '<!doctype html><title>t</title><style>@media (min-width: 600px){p{margin:2em}}</style><p>ok</p>' > "$RUNNER_TEMP/proto/index.html"
           printf '{"id":"T-000"}\n' > "$RUNNER_TEMP/spec.json"
-          python3 bin/lib/fm_design.py capture --task T-000 --spec "$RUNNER_TEMP/spec.json" \
+          bash bin/lib/fm-tool-retry.sh 'design capture' -- python3 bin/lib/fm_design.py capture --task T-000 --spec "$RUNNER_TEMP/spec.json" \
             --prototype "$RUNNER_TEMP/proto" --prototype-only --out "$RUNNER_TEMP/shots"
       - name: bin/ci.sh --stage e2e
         run: bash bin/ci.sh --stage e2e
@@ -399,11 +404,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/timings
-          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
-            --status success --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
-          if [ -n "$run_id" ]; then
-            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -p 'suite-timings-*' -D /tmp/timings 2>/dev/null || true
-          fi
+          # T-306: the last five green runs on main, each in a directory of
+          # its own; bin/ci.sh balances by each suite's median of them.
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --status success --limit 5 --json databaseId --jq '.[].databaseId' > /tmp/timing-runs.txt 2>/dev/null || true
+          while read -r run_id; do
+            [ -n "$run_id" ] || continue
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -p 'suite-timings-*' -D "/tmp/timings/$run_id" 2>/dev/null || true
+          done < /tmp/timing-runs.txt
           find /tmp/timings -name 'suite-timings-*.txt' -exec cat {} + > /tmp/timings.txt 2>/dev/null || true
           { echo 'timings<<FM_TIMINGS_END'; grep -v '^FM_TIMINGS_END$' /tmp/timings.txt || true; echo 'FM_TIMINGS_END'; } >> "$GITHUB_OUTPUT"
 

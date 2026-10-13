@@ -351,6 +351,8 @@
         "tests/ci-budget.test.sh",
         "tests/ci-pool.test.sh",
         "tests/ci-lints.test.sh",
+        "tests/ci-lints-hygiene.test.sh",
+        "tests/lib/ci-plant.sh",
         "tests/ci-sharding.test.sh",
         "tests/ci-workflow.test.sh"
       ],
