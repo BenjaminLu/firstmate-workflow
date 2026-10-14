@@ -69,8 +69,9 @@ and confirm every group member's exit before recording successful drainage.
 The session is FM_SESSION_PID when it is set; else FIRSTMATE_CI_SESSION,
 which bin/ci.sh sets to each suite's own runner under a name the suites
 do not scrub; otherwise the nearest ancestor that is not a shell or an
-interpreter running one of fm's scripts, read from the kernel (/proc,
-libproc). When no ancestor can be read, it refuses (exit 70) rather than
+interpreter running one of fm's scripts - or its parent, when that is the
+harness itself (claude, codex, cursor), so a per-command helper the harness
+reaps is passed over (T-308) - read from the kernel (/proc, libproc). When no ancestor can be read, it refuses (exit 70) rather than
 guessing. A keeper watching a pid exports it as FM_SESSION_PID, so what it
 starts (the board) hands the same owner to what it starts in turn (a
 merge). A test names its own owner through FM_SESSION_PID or the gate's
@@ -241,12 +242,27 @@ def _parent_of(pid):
 CI_SESSION = 'FIRSTMATE_CI_SESSION'
 
 
+def _is_harness(command):
+    """The harness's own process (T-308): Claude Code (`claude`, or
+    `claude.exe` as its native build names itself), Codex (`codex`, or its
+    vendored `codex-<target triple>`) and Cursor (`cursor-agent`, the
+    editor's `Cursor` processes). Never a helper the harness runs per
+    command, whatever that helper is called."""
+    name = os.path.basename(command.strip().split(' ')[0] if command.strip() else '').lstrip('-')
+    return bool(re.fullmatch(r'(claude|codex|cursor|cursor-agent)(\.exe)?|'
+                             r'codex-(x86_64|aarch64|arm64)-[a-z0-9_-]+', name, re.IGNORECASE))
+
+
 def session_owner():
     """The pid of the session fm's long-lived processes belong to:
     FM_SESSION_PID, else FIRSTMATE_CI_SESSION, else the nearest ancestor
-    that is not a launcher. Never a guess: when the walk cannot read a
-    parent, reaches pid 1 or runs out of hops, it raises RuntimeError and
-    nothing is started for an owner nobody named."""
+    that is not a launcher - or that ancestor's parent, when the parent is
+    the harness itself. A harness may run each command under a short-lived
+    helper of its own (Codex's codex-linux-sandbox), in a process group it
+    reaps when the command returns (T-308): the helper is not a launcher,
+    and a board it owned would end with it. Never a guess: when the walk
+    cannot read a parent, reaches pid 1 or runs out of hops, it raises
+    RuntimeError and nothing is started for an owner nobody named."""
     for key in ('FM_SESSION_PID', CI_SESSION):
         given = os.environ.get(key, '')
         if given:
@@ -263,7 +279,12 @@ def session_owner():
             raise RuntimeError(f'no session found: the parent of {pid} cannot be read; '
                                'name one with FM_SESSION_PID')
         if not _is_launcher(command):
-            return pid
+            if _is_harness(command) or parent <= 1:
+                return pid
+            # the helper's parent decides; one that cannot be read leaves
+            # the helper, as before T-308
+            _, above = _parent_of(parent)
+            return parent if _is_harness(above) else pid
         pid = parent
     raise RuntimeError('no session found within 64 ancestors; name one with FM_SESSION_PID')
 

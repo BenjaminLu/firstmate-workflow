@@ -304,6 +304,10 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 <script src="watch.js"></script>
 <script src="game.js"></script>
 <script>
+// T-308: the page's own script runs in a scope of its own, as every board
+// page script does, so no name it declares can collide with another script's.
+// The body stays at the left margin so its functions read as before.
+(() => {
 // the lanes come from the server, in lifecycle order
 const laneKey = k => "lane" + k[0].toUpperCase() + k.slice(1);
 // every string the reader sees comes from the dictionary; zh-CN is derived
@@ -1745,6 +1749,9 @@ fetch("/api/i18n").then(r => r.json()).then(dd => { DICT = dd; })
     connect();
     fetch(STATE_URL).then(r => r.json()).then(render).catch(() => {});
   });
+// the page's entry points that the browser tests drive, and nothing else
+Object.assign(window, { render, answer, cardKind, cn });
+})();
 </script>
 <script src="board.js"></script>
 </body>
