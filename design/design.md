@@ -3742,9 +3742,12 @@ own slice of one gate run instead of all of it:
   seconds (T-148). A suite `FM_CI_TIMINGS_IN` names (a "`path seconds`"
   line per suite, from the last green runs' artifacts) takes the median of
   its lines, zero included: a suite recorded at 0 is fast, not unknown. A suite the
-  file does not name — new, or the file absent — is estimated in seconds
-  as its byte size times the median seconds-per-byte of the recorded
-  suites; only when no suite is recorded at all is every weight its byte
+  file does not name — new, or the file absent — is estimated in seconds:
+  a new child of a split takes its share of the parent (`tests/lib/suite-splits.tsv`)
+  and the parent loses that share; any other suite takes its byte size times
+  the median seconds-per-byte of the recorded suites. Neither weighs less
+  than the 90th percentile of the recorded suites, and the pool starts them
+  first (T-307); only when no suite is recorded at all is every weight its byte
   size, and then no two units meet in one sort. So a newly added suite
   still gets a duration and a deterministic shard, with no file to update
   by hand. On `main` 9e4194d the two units were mixed: timings were whole
@@ -3752,17 +3755,29 @@ own slice of one gate run instead of all of it:
   weighed as their thousands of bytes, and took three shards alone while
   the other 31 suites ran on the fourth for 9m13s. Each shard prints one
   line, `ci: shard i/n: K suites, predicted Xs; mean Ys; longest suite
-  <path> Zs`, so a shard's predicted load and a suite too long for any
-  split (T-130's input) are readable from the job log. Longest-first
-  packing keeps every shard within the longest single suite of the mean.
+  <path> Zs; predicted job time Ws`, so a shard's summed load, its job
+  time and a suite too long for any split (T-130's input) are readable
+  from the job log. Longest-first packing keeps every shard within the
+  longest single suite of the mean. The predicted job time replays the
+  shard's weights, in the order its pool starts them, through four at a
+  time (a runner's four vCPUs) and adds 53 s of job setup, fitted on run
+  38454069859.
 
 Balanced shards and retried steps (T-306). Shards are balanced from
 measured seconds: each suite weighs its median over main's last five green
 runs, and each shard's pool of four starts its suites slowest first by that
-same weight. `tests/ci-balanced-shards.test.sh` replays 15 recorded main runs
-(`tests/lib/ci-shard-timings.tsv`) through that split and holds every shard
-to a 480 s average and a 560 s peak, under the unchanged 600 s budget; a
-suite too long for that is split, as `tests/ci-lints.test.sh` was. Only an
+same weight. One file computes the weights, the split, the pool order and
+the predicted job time: `bin/lib/fm_ci_shards.py`, which `bin/ci.sh` runs
+for `--shard`, `--plan` and its pool (T-307). Before T-307 a suite no green
+run had recorded (`tests/door-projects.test.sh`, 244 s) was weighed at 23 s
+by its size and started last, and shard 6 took 657 s.
+`tests/ci-balanced-shards.test.sh` feeds main run 38454069859's timings
+(`tests/lib/fixtures/ci-shards-38454069859/`) to that file through
+`tests/lib/ci_shard_model.py`, checks that `bin/ci.sh --plan` gives the
+same split and job time, and holds every shard to a predicted 520 s of
+job time and the slowest to 120 s over the fastest, under the unchanged
+600 s budget; a suite too long for that is split, as
+`tests/ci-lints.test.sh` was. Only an
 external browser-tool failure is retried: the design-capture smoke step
 runs through `bin/lib/fm-tool-retry.sh`, which reruns it once, logged by
 name, when its output shows a browser protocol error and no assertion.
