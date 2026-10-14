@@ -2,7 +2,7 @@
 """Check main's recorded suite timings against the shard split CI makes (T-307).
 
   ci_shard_model.py --root TREE --timings FILE [--shards 6] [--limit 520]
-                    [--gap 120] [--replay FILE]
+                    [--gap 120] [--replay FILE [--suites-of-replay]]
 
 The split and its predicted job times come from bin/lib/fm_ci_shards.py,
 the code bin/ci.sh runs; nothing here keeps a copy of it. Each shard's
@@ -13,6 +13,8 @@ predicted job time, so the load the model checks is the load CI uses.
 from the last green runs on main). With --replay, the split made from
 --timings is also replayed on the seconds --replay recorded, in each
 shard's pool order, the way a run of that split would have gone.
+--suites-of-replay plans only the suites --replay recorded, so a past run
+is split over its own suites and not over suites added since.
 
 Prints one line per shard and exits 1 when a suite is in no shard or in
 two, ci.sh disagrees with the model, a shard is predicted over --limit
@@ -37,9 +39,15 @@ def main():
     ap.add_argument('--limit', type=float, default=520)
     ap.add_argument('--gap', type=float, default=120)
     ap.add_argument('--replay')
+    ap.add_argument('--suites-of-replay', action='store_true')
     a = ap.parse_args()
+    if a.suites_of_replay and not a.replay:
+        ap.error('--suites-of-replay needs --replay')
     root = Path(a.root).resolve()
     suites = sorted(str(p.relative_to(root)) for p in (root / 'tests').glob('*.test.sh'))
+    real = fm_ci_shards.read_timings(a.replay) if a.replay else {}
+    if a.suites_of_replay:
+        suites = [s for s in suites if s in real]
     timings = fm_ci_shards.read_timings(a.timings)
     shards, est, unit = fm_ci_shards.plan(root, suites, timings, a.shards)
     failed = False
@@ -51,7 +59,6 @@ def main():
     if unit != 's':
         print('ci: shard split: no suite in --timings was recorded')
         return 1
-    real = fm_ci_shards.read_timings(a.replay) if a.replay else {}
     for n, shard in enumerate(shards, 1):
         env = dict(os.environ, FM_ROOT=str(root), FM_CI_TIMINGS_IN=a.timings)
         got = subprocess.run(['bash', str(root / 'bin/ci.sh'), '--plan', f'{n}/{a.shards}', '--', *suites],

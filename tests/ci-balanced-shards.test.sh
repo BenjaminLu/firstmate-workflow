@@ -47,9 +47,10 @@ assert_lacks "$out" "ci: shard split:" "ci: shard split matches model: no suite 
 awk -F'\t' 'NR == 1 || /^#/ {next} $1 == "suite" {for (k = 2; k <= NF; k++) if ($k ~ /^(38404511160|38397698016|38296822603|38263343674|38242844766)$/) want[k] = 1; next}
   {for (k in want) if ($k != "-") print $1, $k}' "$ROOT/tests/lib/ci-shard-timings.tsv" > "$t/ci-input.txt"
 assert_lacks "$(cat "$t/ci-input.txt")" "door-projects" "the input CI read for run 38454069859 has no time for tests/door-projects.test.sh"
+# A replay of that run splits that run's suites; suites added since would repack it.
 rc=0
 out="$(python3 "$ROOT/tests/lib/ci_shard_model.py" --root "$ROOT" --timings "$t/ci-input.txt" --replay "$t/run.txt" \
-  --shards "$shards" --limit 520 --gap 120 2>&1)" || rc=$?
+  --suites-of-replay --shards "$shards" --limit 520 --gap 120 2>&1)" || rc=$?
 printf '%s\n' "$out" | sed 's/^/      /'
 assert_eq "0" "$rc" "ci: shard split matches model: CI's own input for run 38454069859 splits within the limits"
 over="$(sed -n 's/.*replayed on --replay \([0-9]*\)s.*/\1/p' <<<"$out" | awk '$1 > 520' | head -1)"
