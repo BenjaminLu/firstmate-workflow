@@ -17,7 +17,7 @@
 #   FM_CI_TIMINGS_IN=path  previous per-suite durations ("path seconds" per
 #                        line) used to balance --shard; 0 is a real, fast
 #                        duration, and a suite missing from it is estimated
-#                        in seconds from its byte size and the recorded rate
+#                        in seconds (bin/lib/fm_ci_shards.py, T-307)
 #   FM_CI_TIMINGS_OUT=path the bash stage writes the durations it observed
 #                        here, in the same format, to the millisecond
 #   FM_CI_ASSIGNED_OUT=path writes the bash assignment before any suite runs:
@@ -118,106 +118,31 @@ if [ -n "$ci_shard" ]; then
 fi
 want_stage() { [ -z "$ci_stage" ] || [ "$ci_stage" = "$1" ]; }
 
-# How long each suite is expected to take, for --shard to balance by, in
-# one unit - seconds - for every suite (T-148). A suite FM_CI_TIMINGS_IN
-# names ("path seconds" per line) takes that value, zero included: a suite
-# recorded at 0 is fast, not unknown. A suite it does not name - new, or
-# the file absent - is estimated in seconds too: its byte size times the
-# median seconds-per-byte of the suites that were recorded. Only when no
-# suite was recorded at all is every estimate its byte size, and then no
-# two units meet in one sort. Mixing them is what put three 10-second
-# suites alone on three shards and the other 31 on the fourth: recorded
-# as 0, read as unknown, and weighed as thousands of "seconds" of bytes.
-# Prints "<estimate> <index> <path> <unit>" per suite, the unit "s", or
-# "B" for that all-bytes case.
-ci_suite_estimates() {
-  local i sz tin=''
-  if [ -n "${FM_CI_TIMINGS_IN:-}" ] && [ -r "$FM_CI_TIMINGS_IN" ]; then tin="$FM_CI_TIMINGS_IN"; fi
-  for i in "${!suites[@]}"; do
-    sz="$(wc -c < "${suites[$i]}" 2>/dev/null | tr -d ' ')"
-    printf '%s %s %s\n' "$i" "${sz:-0}" "${suites[$i]}"
-  done | FM_CI_TIN="$tin" awk '
-    BEGIN {
-      tin = ENVIRON["FM_CI_TIN"]
-      # The file holds the last few runs on main (T-306), so a suite may be
-      # named more than once: it takes the median of its recordings, and
-      # one slow run on a busy runner no longer moves it to another shard.
-      # A value that is not a plain non-negative number is no recording.
-      if (tin != "") while ((getline line < tin) > 0) {
-        if (split(line, f, " ") >= 2 && f[2] ~ /^[0-9]+(\.[0-9]+)?$/) {
-          v = f[2] + 0; c = ++nrec[f[1]]
-          for (a = c - 1; a >= 1 && vals[f[1], a] > v; a--) vals[f[1], a + 1] = vals[f[1], a]
-          vals[f[1], a + 1] = v
-        }
-      }
-      for (p in nrec) {
-        c = nrec[p]
-        rec[p] = (c % 2) ? vals[p, (c + 1) / 2] : (vals[p, c / 2] + vals[p, c / 2 + 1]) / 2
-      }
-      # A feature split retains its share of the old measured suite until
-      # main records that new path. Shares are authored from source lines;
-      # they conserve the parent time and do not claim unmeasured savings.
-      splitfile = "tests/lib/suite-splits.tsv"
-      while ((getline line < splitfile) > 0) {
-        if (split(line, f, " ") == 3 && f[3] ~ /^(0(\.[0-9]+)?|1(\.0+)?)$/ &&
-            f[3] + 0 > 0 && !(f[1] in rec) && (f[2] in rec))
-          rec[f[1]] = rec[f[2]] * f[3]
-      }
-      close(splitfile)
-    }
-    { idx[NR] = $1; size[NR] = $2 + 0; path[NR] = $3; n = NR }
-    END {
-      k = 0
-      for (r = 1; r <= n; r++) if ((path[r] in rec) && size[r] > 0) rate[++k] = rec[path[r]] / size[r]
-      for (a = 2; a <= k; a++) {
-        v = rate[a]
-        for (b = a - 1; b >= 1 && rate[b] > v; b--) rate[b + 1] = rate[b]
-        rate[b + 1] = v
-      }
-      if (k == 0) med = 1
-      else if (k % 2) med = rate[(k + 1) / 2]
-      else med = (rate[k / 2] + rate[k / 2 + 1]) / 2
-      unit = k ? "s" : "B"
-      for (r = 1; r <= n; r++) {
-        est = (path[r] in rec) ? rec[path[r]] : size[r] * med
-        printf "%.3f %s %s %s\n", est, idx[r], path[r], unit
-      }
-    }'
-}
-# --shard i/n: which of the suites this process runs. Longest-processing-time
-# bin packing - suites taken slowest first, each to whichever of the n
-# buckets is lightest so far - so every suite lands in exactly one bucket
-# and the buckets come out balanced, not just evenly counted: no bucket
-# ends more than the longest single suite above the mean. Ties (equal
-# estimates) break on the suite's own index, so the assignment is the same
-# on every run and every shard agrees on where each suite went. Prints
-# "i <index>" for each suite of shard <want>, then one "s <summary>" line
-# of what it predicts, so a slow shard, or a suite too long for any split,
-# is visible by name in the job's log; then "p <load> <longest> <unit>",
-# shard <want>'s predicted load and the longest suite in it, and the same
-# as "b <load> <longest> <unit>" for each of the n shards, in shard order.
-# With <only>, only the suites whose index is below it are packed: --plan
-# puts the suites it was given first, and every other suite is there only
-# so the seconds-per-byte rate is the one the bash shards are estimated by.
+# --shard i/n: which of the suites this process runs, and in what order its
+# pool starts them. bin/lib/fm_ci_shards.py is the one place this is
+# computed (T-307), for --shard, --plan and the pool alike, and
+# tests/lib/ci_shard_model.py checks that same code on main's recorded
+# timings. Each suite is weighed in seconds: the median of its recordings in
+# FM_CI_TIMINGS_IN (0 is fast, not unknown, T-148); a suite with none takes
+# its share of a split parent, which loses that share, or its size times the
+# recorded seconds per byte - never below the 90th percentile of the
+# recorded suites, and started first, so a new suite is neither packed as a
+# light one nor left to start last. With nothing recorded, every weight is
+# the suite's byte size. Suites are packed slowest first, each to the
+# lightest shard, ties to the lower index, so the assignment is the same on
+# every run and every shard agrees on where each suite went. Prints
+# "i <index>" for each suite of shard <want> in the order its pool starts
+# them, then one "s <summary>" line of what it predicts - the shard's summed
+# seconds, and its job time: the suites replayed through a runner's pool
+# plus the job's setup - so a slow shard, or a suite too long for any
+# split, is visible by name in the job's log; then "p <load> <longest>
+# <unit>", shard <want>'s summed load and the longest suite in it, and the
+# same as "b <load> <longest> <unit>" for each of the n shards, in shard
+# order. With <only>, only the suites whose index is below it are packed:
+# --plan puts the suites it was given first, and every other suite is there
+# only so the rates the estimates use are the ones the bash shards use.
 shard_suites() {   # shard_suites <want 1..n> <n> [only]
-  local want="$1" total="$2" only="${3-}"
-  ci_suite_estimates | sort -k1,1nr -k2,2n | awk -v want="$want" -v total="$total" -v only="$only" '
-    only != "" && $2 + 0 >= only + 0 { next }
-    {
-      if (!seen++) { longest = $1; longp = $3; unit = $4 == "s" ? "s" : " bytes"; u = $4 }
-      minb = 1
-      for (b = 2; b <= total; b++) if (load[b] < load[minb]) minb = b
-      load[minb] += $1; sum += $1
-      if ($1 + 0 > mx[minb] + 0) mx[minb] = $1
-      if (minb == want) { print "i " $2; count++ }
-    }
-    END {
-      if (!seen) { unit = "s"; u = "s"; longp = "(none)" }
-      printf "s shard %d/%d: %d suites, predicted %.1f%s; mean %.1f%s; longest suite %s %.1f%s\n", \
-        want, total, count, load[want], unit, sum / total, unit, longp, longest, unit
-      printf "p %.3f %.3f %s\n", load[want], mx[want], u
-      for (b = 1; b <= total; b++) printf "b %.3f %.3f %s\n", load[b], mx[b], u
-    }'
+  python3 "$_fm_code_dir/lib/fm_ci_shards.py" split "$1" "$2" "${3-}" -- ${suites[@]+"${suites[@]}"}
 }
 # --plan i/n -- <suite>... (T-158): the fail-first shards split the changed
 # suites the way --shard splits the bash suites - the same estimates, from
@@ -485,38 +410,22 @@ if want_stage bash && [ "${FM_CI_ASSIGNED_OUT+set}" = set ]; then
     for i in ${shard_indices[@]+"${shard_indices[@]}"}; do printf '%s\n' "${suites[$i]}"; done
   } > "$ci_assigned_out" || exit 1
 fi
-# Slowest first, so the long ones are not the last to start. With recorded
-# timings that is the same estimate the shards were balanced by (T-306):
-# naming families and file sizes started a 460-second suite late, and the
-# shard ran past its budget waiting on it. With none recorded, the families
-# the gate has always spent longest on lead by name and the rest follow by
-# size. FM_CI_JOBS=1 keeps glob order, which is the one-at-a-time run
-# exactly as it was. Only this process's shard is ordered - with no
-# --shard, shard_indices is every suite, unchanged.
+# The order the pool starts a shard's suites in is the order shard_suites
+# gives them (T-307): unrecorded suites first, then slowest first by the
+# estimates the shards were balanced by (T-306: naming families and file
+# sizes started a 460-second suite late, and the shard ran past its budget
+# waiting on it). With none recorded, the families the gate has always
+# spent longest on lead by name and the rest follow by size. FM_CI_JOBS=1
+# keeps shard_indices as they are, which with no --shard is glob order, the
+# one-at-a-time run exactly as it was. With no --shard, every suite is one
+# shard of one.
 pool_order() {
-  local i t est unit want=' '
-  if [ "$ci_jobs" -eq 1 ]; then
+  local i
+  if [ "$ci_jobs" -eq 1 ] || [ -n "$ci_shard_n" ]; then
     for i in "${shard_indices[@]}"; do printf '%s\n' "$i"; done
     return
   fi
-  for i in "${shard_indices[@]}"; do want="$want$i "; done
-  while read -r est i t unit; do
-    case "$want" in *" $i "*) printf '%s %s %s\n' "$unit" "$est" "$i" ;; esac
-  done < <(ci_suite_estimates) | {
-    if read -r unit est i && [ "$unit" = s ]; then
-      { printf '%s %s\n' "$est" "$i"; while read -r unit est i; do printf '%s %s\n' "$est" "$i"; done; } |
-        sort -k1,1nr -k2,2n | cut -d' ' -f2
-    else
-      for i in "${shard_indices[@]}"; do
-        t="${suites[$i]}"
-        case "$t" in
-          tests/herdr*.test.sh|tests/reconcile.test.sh|tests/worker*.test.sh)
-            printf '%s %s\n' 999999999 "$i" ;;
-          *) printf '%s %s\n' "$(wc -c < "$t" | tr -d ' ')" "$i" ;;
-        esac
-      done | sort -k1,1nr -k2,2n | cut -d' ' -f2
-    fi
-  }
+  shard_suites 1 1 | sed -n 's/^i //p'
 }
 # The wall clock in milliseconds, for the suite timings (T-148): whole
 # seconds recorded every 10-second suite as 0 and every 1-second one the

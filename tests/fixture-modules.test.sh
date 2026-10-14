@@ -36,7 +36,7 @@ PY
 c="$work/config"
 config_modules_fixture "$c"
 assert_eq 0 "$?" "config_modules_fixture copies its set"
-for f in fm_registry.py fm_config_values.py fm_config_tasks.py fm_config_runtime.py fm_ci_checks.py; do
+for f in fm_registry.py fm_config_values.py fm_config_tasks.py fm_config_runtime.py fm_ci_checks.py fm_ci_shards.py; do
   assert_ok "[ -f '$c/lib/$f' ]" "the config set lands bin/lib/$f in <dest>/lib/"
 done
 assert_eq "" "$(imports_cleanly "$c")" "every module of the config set imports from the destination alone"

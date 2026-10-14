@@ -1,6 +1,6 @@
 # T-306: per-suite seconds from the suite-timings-* artifacts of the last 15
 # completed CI runs on main before 2026-10-14 (oldest first), one column a
-# run; "-" where a suite did not exist yet. Read by tests/lib/ci_shard_model.py.
+# run; "-" where a suite did not exist yet. Read by tests/ci-balanced-shards.test.sh.
 suite	38141941102	38151031527	38188712035	38191438810	38200260909	38230531754	38234935934	38242844766	38263343674	38296822603	38304013976	38312245614	38329528079	38397698016	38404511160
 tests/adapter-login.test.sh	33.983	35.49	45.096	51.643	46.407	26.648	46.476	45.795	46.357	31.513	31.643	46.829	48.169	42.368	34.073
 tests/adapter-many-runs.test.sh	-	-	-	-	-	-	16.031	15.129	15.829	11.159	15.736	16.124	15.601	14.792	8.677
