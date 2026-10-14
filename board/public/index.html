@@ -1750,7 +1750,7 @@ fetch("/api/i18n").then(r => r.json()).then(dd => { DICT = dd; })
     fetch(STATE_URL).then(r => r.json()).then(render).catch(() => {});
   });
 // the page's entry points that the browser tests drive, and nothing else
-Object.assign(window, { render, answer, cardKind });
+Object.assign(window, { render, answer, cardKind, cn });
 })();
 </script>
 <script src="board.js"></script>

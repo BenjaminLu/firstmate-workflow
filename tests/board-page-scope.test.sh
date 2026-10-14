@@ -67,6 +67,25 @@ check('board: every script the page loads is checked',
       bool(named) and all(src in scripts for src in named), named)
 check('board: the page has its own inline script checked',
       any(name.startswith('index.html inline') for name in scripts))
+# the browser tests reach page names through window, an indirect eval or a
+# string evaluate; a name the inline script declares in its own scope must
+# then be on window too, or a later wrap hides it from them (cn, T-308)
+reached = set()
+for spec in sorted((root / 'tests/e2e').rglob('*.ts')):
+    text = spec.read_text()
+    reached.update(re.findall(r'\(window as any\)\.([A-Za-z_$][\w$]*)', text))
+    reached.update(re.findall(r"""\beval\(\s*['"]([A-Za-z_$][\w$]*)['"]\s*\)""", text))
+    for body in re.findall(r'page\.evaluate\(\s*"([^"]*)"', text):
+        # free names only: no string contents, properties or arrow parameters
+        body = re.sub(r"'[^']*'|`[^`]*`", "''", body)
+        params = set(re.findall(r'([A-Za-z_$][\w$]*)\s*=>', body))
+        reached.update(set(re.findall(r'(?<![\w$.])[A-Za-z_$][\w$]*', body)) - params)
+inline = ''.join(page_scope.page_scripts(html))
+declared = {n for n in reached
+            if re.search(r'\b(?:const|let|var|function|async function)\s+' + re.escape(n) + r'\b', inline)}
+exported = set(page_scope.window_names(inline))
+check('board: every page name a browser test reaches is on window',
+      bool(declared) and declared <= exported, sorted(declared - exported))
 
 for name, passed, detail in checks:
     print(f"    {name:<52} {'ok' if passed else 'FAIL'}")
