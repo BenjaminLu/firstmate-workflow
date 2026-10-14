@@ -7,7 +7,7 @@ if [ ! -d "$ROOT/node_modules/@playwright/test" ]; then
   echo "FAIL capture: $ROOT/node_modules has no Playwright; run bun install --frozen-lockfile" >&2
   exit 1
 fi
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/fm-test.XXXXXX")" || { echo "FAIL capture: mktemp failed" >&2; exit 70; }
 trap 'rm -rf "$TMP"' EXIT
 # A code snapshot, like state/snapshots/code-*: bin only, no node_modules.
 mkdir -p "$TMP/code/bin" "$TMP/head"
