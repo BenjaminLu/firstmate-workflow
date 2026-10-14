@@ -3745,9 +3745,10 @@ own slice of one gate run instead of all of it:
   file does not name — new, or the file absent — is estimated in seconds:
   a new child of a split takes its share of the parent (`tests/lib/suite-splits.tsv`)
   and the parent loses that share; any other suite takes its byte size times
-  the median seconds-per-byte of the recorded suites. Neither weighs less
-  than the 90th percentile of the recorded suites, and the pool starts them
-  first (T-307); only when no suite is recorded at all is every weight its byte
+  the median seconds-per-byte of the recorded suites and weighs no less
+  than their 90th percentile. The pool starts both kinds first (T-307); a
+  split child with a share counts as recorded, and only when no suite is
+  recorded or has a share is every weight its byte
   size, and then no two units meet in one sort. So a newly added suite
   still gets a duration and a deterministic shard, with no file to update
   by hand. On `main` 9e4194d the two units were mixed: timings were whole

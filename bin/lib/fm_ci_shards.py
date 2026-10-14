@@ -11,12 +11,13 @@ Each suite's estimate, in seconds: the median of its recordings in
 FM_CI_TIMINGS_IN ("path seconds" per line, the last green runs on main).
 A suite with no recording takes its share of a split parent
 (tests/lib/suite-splits.tsv), and the parent loses that share; any other
-takes its byte size times the median seconds per byte. Neither suite may
-weigh less than UNKNOWN_FLOOR_PERCENTILE of the recorded suites (a file
-that is not a *.test.sh suite, which --plan may be given, may), and the pool
-starts them first, so a new suite is neither under-weighted nor started
+takes its byte size times the median seconds per byte, and may not weigh
+less than UNKNOWN_FLOOR_PERCENTILE of the recorded suites (a file that is
+not a *.test.sh suite, which --plan may be given, may). The pool starts
+both kinds first, so a new suite is neither under-weighted nor started
 late (T-307: a 244 s suite estimated at 23 s ran last and took shard 6 to
-657 s). With no recording at all, every estimate is the suite's byte size.
+657 s). With neither a recording nor a share, every estimate is the suite's
+byte size.
 
 The split is longest-processing-time packing of those estimates: slowest
 first, each to the shard with the lightest summed load, ties to the lower
@@ -68,11 +69,10 @@ def read_splits(root):
             cells = line.split()
             if len(cells) != 3:
                 continue
-            try:
-                share = float(cells[2])
-            except ValueError:
+            if not re.fullmatch(r'0(\.[0-9]+)?|1(\.0+)?', cells[2]):
                 continue
-            if 0 < share <= 1:
+            share = float(cells[2])
+            if share > 0:
                 rows.append((cells[0], cells[1], share))
     return rows
 
@@ -92,10 +92,10 @@ def estimates(root, suites, timings):
         except OSError:
             sizes.append(0)
     rec = {suite: timings[suite] for suite in suites if suite in timings}
-    if suites and not rec:
-        return [(float(size), False) for size in sizes], 'B'
     # A split child no run recorded takes its share of the parent, and the
-    # parent keeps only the rest: CI's split and its pool weigh both.
+    # parent keeps only the rest: CI's split and its pool weigh both. This
+    # comes first, as in the old ci.sh: a child with a share counts as
+    # recorded, so a plan of only split children is still in seconds.
     derived, base, given = {}, dict(timings), {}
     for child, parent, share in read_splits(root):
         if child in timings or child in derived or parent not in base:
@@ -103,18 +103,25 @@ def estimates(root, suites, timings):
         derived[child] = base[parent] * share
         base.setdefault(child, derived[child])
         given[parent] = given.get(parent, 0.0) + derived[child]
-    rates = sorted(rec[s] / size for s, size in zip(suites, sizes) if s in rec and size)
+    known = {s: rec[s] if s in rec else derived[s] for s in suites if s in rec or s in derived}
+    if suites and not known:
+        return [(float(size), False) for size in sizes], 'B'
+    rates = sorted(known[s] / size for s, size in zip(suites, sizes) if s in known and size)
     rate = statistics.median(rates) if rates else 0.0
+    # the floor is only for a suite with neither a recording nor a share
     floor = percentile(rec.values(), UNKNOWN_FLOOR_PERCENTILE)
     out = []
     for suite, size in zip(suites, sizes):
         if suite in rec:
             out.append((round(max(0.0, rec[suite] - given.get(suite, 0.0)), 3), True))
         else:
-            est = derived[suite] - given.get(suite, 0.0) if suite in derived else size * rate
-            # the floor is for a suite; --plan may also be given other files
-            if suite.endswith('.test.sh'):
-                est = max(est, floor)
+            if suite in derived:
+                est = max(0.0, derived[suite] - given.get(suite, 0.0))
+            else:
+                est = size * rate
+                # the floor is for a suite; --plan may also be given other files
+                if suite.endswith('.test.sh'):
+                    est = max(est, floor)
             out.append((round(est, 3), False))
     return out, 's'
 
