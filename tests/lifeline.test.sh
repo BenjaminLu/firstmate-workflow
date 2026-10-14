@@ -253,6 +253,31 @@ except RuntimeError as e: print("fm-lifeline: " + str(e), file=sys.stderr); sys.
         self.assertEqual('', refused.stdout, 'no pid is printed for an owner nobody named')
         self.assertIn('cannot be read', refused.stderr)
 
+    def test_a_per_command_helper_of_the_harness_is_passed_over(self):
+        # T-308: a harness that runs each command under a helper of its own
+        # (Codex's codex-linux-sandbox) and reaps it once the command returns
+        # owns what the command leaves running, not the helper; any other
+        # nearest non-launcher stays the session, as before
+        def chain(*names):
+            # ancestors from the caller's parent up: pid 100, 101, ... then pid 1
+            table = {os.getppid(): (100, 'python3')}
+            for i, name in enumerate(names):
+                table[100 + i] = (100 + i + 1 if i + 1 < len(names) else 1, name)
+            return lambda pid: table.get(pid, (None, ''))
+        cases = [
+            (('bash', 'codex-linux-sandbox', 'codex', 'zsh'), 102, 'Codex, through its helper'),
+            (('bash', 'codex-linux-sandbox', 'codex-aarch64-apple-darwin', 'node'), 102, 'Codex, vendored build'),
+            (('zsh', 'claude.exe', 'zsh'), 101, 'Claude Code, directly'),
+            (('bash', 'Cursor Helper (Plugin)', 'Cursor'), 101, 'Cursor, which is itself the harness'),
+            (('bash', 'xargs', 'python3', 'bash', 'claude.exe'), 101, 'xargs under a harness stays the session'),
+            (('bash', 'tmux', 'login'), 101, 'no harness: the nearest non-launcher'),
+        ]
+        for names, want, why in cases:
+            with self.subTest(why), mock.patch.dict(os.environ), \
+                    mock.patch.object(life, '_parent_of', chain(*names)):
+                os.environ.pop('FM_SESSION_PID', None); os.environ.pop('FIRSTMATE_CI_SESSION', None)
+                self.assertEqual(want, life.session_owner(), why)
+
     def test_the_session_is_read_from_the_kernel_without_ps(self):
         # xargs is not a launcher, so it is the session of what runs under
         # it; ps is refused. On macOS (uname Darwin) the parent comes from

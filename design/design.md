@@ -2559,6 +2559,16 @@ button, in the prototype's style, names the theme it switches to ("Dark" or
 title and accessible label follow the language switch. Storage reads and writes for the
 theme and language tolerate denied storage and keep working for the session.
 
+**Page scripts keep their own scope (T-308).** Classic scripts on one page share
+one global scope, so a second `const t` stops that script and every script after
+it. Every board page script, the inline one included, runs inside a function
+scope of its own; its top level holds at most one upper-case exported name
+(`SHIP`, `DIAGRAM`, `WATCH`, the served `TASK_GRAMMAR`) and anything else it
+shares is set on `window` by name. `tests/board-page-scope.test.sh` reads each
+script's top level, and `tests/e2e/board-page-errors.spec.ts` loads the page in
+every variant (default, `?project=`, each language, read-only and signed-in tab)
+and fails on any page error.
+
 | Token | Light | Dark |
 |---|---|---|
 | `--chart` | #EEF2F0 | #0E1824 |
@@ -4056,6 +4066,19 @@ guesses: when a parent cannot be read, the walk reaches pid 1, or it runs
 a long-lived process never ends up owned by the shell that launched it. A keeper watching a pid exports it as `FM_SESSION_PID`, so the board
 hands its own owner on to what it starts. A process that must outlive its
 starter names the longer-lived owner it belongs to, never none.
+
+*The board's owner under each harness (T-308).* Under Claude Code the walk
+reaches the `claude` process itself; Cursor's agent runs commands from its own
+`Cursor` or `cursor-agent` process, which is the owner as well. Codex may run each
+command under a helper of its own (`codex-linux-sandbox`) in a process group it
+kills once the command returns. That helper is not a launcher, so when the
+nearest non-launcher's parent is the harness itself (`claude`, `codex`,
+`codex-<target>`, `cursor`, `cursor-agent`), the parent is the session: the board
+outlives the reaped helper and ends with the harness. A sandbox that refuses network
+listeners (Codex's, by default) cannot host the board: `fm-session.sh start`
+checks for one before the board's start, and when no board already answers on
+the port it exits 69 with the reason and the fix (run it again outside the
+sandbox, or `fm.sh board` from the captain's own terminal).
 A review resolves `session-owner` before its first managed launch and before
 identity allocation, then exports the returned pid as
 `FM_SESSION_PID`. Later launches retain that owner even if the starting shell
