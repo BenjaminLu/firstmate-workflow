@@ -38,7 +38,11 @@ def capture_server(root):
     env = dict(os.environ)
     # The exported head has no dependencies installed. The capture launcher
     # already has Playwright; Bun hooks can resolve it without changing head.
-    env['NODE_PATH'] = str(Path(__file__).resolve().parents[2] / 'node_modules')
+    # A code snapshot has none of its own, so fall back to the checkout's.
+    modules = [Path(__file__).resolve().parents[2] / 'node_modules']
+    modules += [Path(os.environ[k]) / 'node_modules'
+                for k in ('FM_ROOT', 'FM_ENGINE_ROOT') if os.environ.get(k)]
+    env['NODE_PATH'] = str(next((m for m in modules if m.is_dir()), modules[0]))
     with tempfile.TemporaryFile() as log:
         proc = start(['bash', str(hook)], owner=None, cwd=root, env=env,
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
